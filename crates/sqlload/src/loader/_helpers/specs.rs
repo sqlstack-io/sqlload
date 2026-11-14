@@ -316,6 +316,8 @@ pub(crate) fn build_spec(
         strategy_origin,
         unique_key,
         key_from_primary_key,
+        settings_at: None,
+        unique_key_at: None,
         naming: nesting.naming,
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)

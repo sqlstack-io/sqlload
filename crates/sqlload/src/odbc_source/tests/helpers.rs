@@ -21,6 +21,7 @@ pub(crate) fn table(schema: &str, name: &str, columns: &[&str]) -> SourceTable {
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
+        split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
     }

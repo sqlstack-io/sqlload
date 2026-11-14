@@ -1,7 +1,10 @@
-use crate::loader::_helpers::render::{merged_errors, view_lines};
-use crate::loader::models::PlanView;
-use crate::loader::tests::helpers::plan_items;
-use crate::loader::tests::test_types::{MergedErrorsTestCase, ViewLinesTestCase};
+use crate::loader::_helpers::render::{merged_errors, text_view, view_lines};
+use crate::loader::_helpers::table_plan::blocked_table;
+use crate::loader::models::{PlanView, ProjectPlan};
+use crate::loader::tests::helpers::{masked_files_route, plan_items, python_spec, streamed_route};
+use crate::loader::tests::test_types::{
+    MergedErrorsTestCase, RouteLinesTestCase, RoutedTable, ViewLinesTestCase,
+};
 
 #[test]
 fn given_a_plan_view_when_printing_it_then_it_follows_the_sqb_plan_layout() {
@@ -106,6 +109,7 @@ fn given_a_plan_view_when_printing_it_then_it_follows_the_sqb_plan_layout() {
             retryable: false,
             summary: test_case.summary.to_owned(),
             selected: test_case.selected,
+            destinations: Vec::new(),
             objects: plan_items(test_case.objects),
             loads: plan_items(test_case.loads),
             skipped: Vec::new(),
@@ -170,5 +174,82 @@ fn given_tables_stopped_for_the_same_reasons_when_printing_errors_then_they_shar
             .map(|item| item.name)
             .collect();
         assert_eq!(names, test_case.expected_names, "{}", test_case.description);
+    }
+}
+
+#[test]
+fn given_tables_on_their_destinations_when_printing_the_plan_then_each_destination_is_named_and_each_route_names_it_when_there_are_several()
+ {
+    let test_cases = [
+        RouteLinesTestCase {
+            description: "one destination: named once, and every table keeps its route",
+            tables: &[
+                RoutedTable {
+                    name: "a",
+                    target: "dev",
+                    route: streamed_route,
+                },
+                RoutedTable {
+                    name: "b",
+                    target: "dev",
+                    route: masked_files_route,
+                },
+            ],
+            expected_lines: &[
+                "to  DuckDB dev",
+                "route   read as Arrow -> DuckDB takes Arrow",
+                "route   read parquet into Arrow -> DuckDB takes Arrow",
+            ],
+        },
+        RouteLinesTestCase {
+            description: "two destinations: one to line each, and every route names its destination",
+            tables: &[
+                RoutedTable {
+                    name: "a",
+                    target: "dev",
+                    route: streamed_route,
+                },
+                RoutedTable {
+                    name: "b",
+                    target: "lakehouse",
+                    route: masked_files_route,
+                },
+            ],
+            expected_lines: &[
+                "to  DuckDB dev",
+                "to  DuckDB lakehouse",
+                "route   DuckDB dev: read as Arrow -> DuckDB takes Arrow",
+                "route   DuckDB lakehouse: read parquet into Arrow -> DuckDB takes Arrow",
+            ],
+        },
+    ];
+    let spec = python_spec("{}").expect("spec");
+    for test_case in test_cases {
+        let tables = test_case
+            .tables
+            .iter()
+            .map(|routed| {
+                let mut spec = spec.clone();
+                spec.destination.table = routed.name.to_owned();
+                spec.target = routed.target.to_owned();
+                let mut table = blocked_table(&spec, Vec::new());
+                table.schema.blocked = None;
+                table.route = Some((routed.route)());
+                table
+            })
+            .collect();
+        let plan = ProjectPlan {
+            tables,
+            ..ProjectPlan::default()
+        };
+        let lines: Vec<String> = view_lines(&text_view(&plan))
+            .into_iter()
+            .filter(|line| line.starts_with("to  ") || line.contains("── route"))
+            .map(|line| {
+                line.trim_start_matches(['│', '├', '└', '─', ' '])
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(lines, test_case.expected_lines, "{}", test_case.description);
     }
 }

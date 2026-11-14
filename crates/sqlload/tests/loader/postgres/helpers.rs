@@ -240,3 +240,86 @@ COMMIT;
 
 /// Each contact under its loaded names, with its last change and whether it is deleted.
 pub(crate) const DLT_CRM_CHECK: &str = "SELECT string_agg(contact_id || ':' || full_name || ':' || is_active || ':' || _sqlload_op || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY contact_id) FROM raw.crm__contacts";
+
+/// Sources beside the `postgres_cdc` ones that `load --follow` must refuse to follow with: a source read whole, one with no `write_strategy`, and a `postgres_cdc` source with a table that does not plan.
+pub(crate) const PLAIN_SOURCE: &str = r#"
+[sources.plain]
+kind = "postgres"
+connection = "pg"
+include = ["public.items"]
+write_strategy = "replace"
+
+[sources.plain.tables."public.items"]
+description = "Items, read whole."
+
+[sources.unset]
+kind = "postgres"
+connection = "pg"
+include = ["public.orders"]
+
+[sources.half]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.items", "public.orders"]
+publication = "half_pub"
+
+[sources.half.tables."public.orders"]
+description = "Orders, captured."
+columns = { tags = "text" }
+
+[sources.half.tables."public.items"]
+description = "Items, keyed by a column outside the primary key."
+unique_key = ["name"]
+"#;
+
+/// Each way `load --follow` refuses to start, and a `--max-duration` without it.
+pub(crate) const FOLLOW_REFUSED: [CdcStep; 6] = [
+    step(
+        "",
+        &["load", "app", "unset", "--follow", "--max-duration", "3s"],
+        "",
+        (
+            false,
+            "since the replication slot would move past the changes of one left out; fix the errors above, or leave them out to follow the rest: --exclude unset",
+        ),
+    ),
+    step(
+        "",
+        &["load", "half", "--follow", "--max-duration", "3s"],
+        "",
+        (
+            false,
+            "fix the errors above, or leave them out to follow the rest: the failing tables of half in exclude under [sources.half]",
+        ),
+    ),
+    step(
+        "",
+        &["load", "app", "log", "--follow"],
+        "",
+        (
+            false,
+            "load --follow follows one postgres_cdc source per process",
+        ),
+    ),
+    step(
+        "",
+        &["load", "app", "plain", "--follow"],
+        "",
+        (
+            false,
+            "plain__items is not captured, so load them without --follow, or leave them out: --exclude plain__items",
+        ),
+    ),
+    step(
+        "",
+        &["plan", "app", "--follow"],
+        "",
+        (false, "--follow and --max-duration apply to load only"),
+    ),
+    step(
+        "",
+        &["load", "app", "--max-duration", "3s"],
+        "",
+        (false, "--follow"),
+    ),
+];

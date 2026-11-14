@@ -2,6 +2,7 @@
 
 use crate::routing::_helpers::deliver::deliver_arrow;
 use crate::routing::_helpers::stores::destination_pulls;
+use crate::routing::constants::LOADER_READS_BECAUSE;
 use crate::routing::errors::RouteError;
 use crate::routing::models::{FileSet, ReaderOffer, Route, RouteOverrides, Step, WriterAccepts};
 
@@ -68,7 +69,7 @@ pub(crate) fn other_reads(
             files,
             writer,
             overrides,
-            &format!("SQLLoad reads the files because {reason}"),
+            &format!("{LOADER_READS_BECAUSE} {reason}"),
         ),
         (false, None, _) => loader_reads(
             files,

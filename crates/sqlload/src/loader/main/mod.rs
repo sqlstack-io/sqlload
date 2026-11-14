@@ -10,7 +10,6 @@ pub(in crate::loader) mod _plan_files;
 pub mod apply_project;
 pub mod connect_targets;
 pub mod debug_project;
-pub mod failing_sources;
 pub mod files_columns;
 pub mod json_report;
 pub mod load_tables;

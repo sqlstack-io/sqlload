@@ -265,19 +265,19 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: None,
                         check_query: IDS,
-                        show: "batch   ",
+                        show: "commits ",
                     },
                     BatchedRun {
                         source_change: "INSERT INTO public.events VALUES (6, 'f'), (7, 'g');",
                         destination_change: "",
                         end_cursor: None,
                         check_query: IDS,
-                        show: "batch   ",
+                        show: "commits ",
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 1,2,3,4,5 | batch   3 windows of 2, one commit each, up to the source's maximum 5 (read at plan)",
-                    "ok => 1,2,3,4,5,6,7 | batch   2 windows of 2, one commit each, up to the source's maximum 7 (read at plan)",
+                    "ok => 1,2,3,4,5 | commits 3 windows of 2, one commit each, up to the source's maximum 5 (read at plan)",
+                    "ok => 1,2,3,4,5,6,7 | commits 2 windows of 2, one commit each, up to the source's maximum 7 (read at plan)",
                 ],
             },
             BatchedScenarioTestCase {
@@ -291,9 +291,9 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     destination_change: "",
                     end_cursor: Some("2026-01-03"),
                     check_query: IDS,
-                    show: "batch   ",
+                    show: "commits ",
                 }],
-                expected_outcomes: &["ok => 1,2 | batch   2 windows of 1day, one commit each"],
+                expected_outcomes: &["ok => 1,2 | commits 2 windows of 1day, one commit each"],
             },
             BatchedScenarioTestCase {
                 description: "so does one given as RFC 3339; the plan notes the snapshot held open",
@@ -324,7 +324,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: Some("3"),
                         check_query: IDS,
-                        show: "batch   ",
+                        show: "commits ",
                     },
                     BatchedRun {
                         source_change: "",
@@ -342,7 +342,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 1,2,3 | batch   one commit for the whole read (batch_size = \"none\")",
+                    "ok => 1,2,3 | commits once, at the end of the read (batch_size = \"none\")",
                     "raw.app__events: DuckDB => 1,2,3",
                     "ok => 1,2,3,4,5,6",
                 ],
@@ -359,7 +359,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                         destination_change: "",
                         end_cursor: None,
                         check_query: IDS,
-                        show: "batch   ",
+                        show: "commits ",
                     },
                     BatchedRun {
                         source_change: "DELETE FROM public.events WHERE id = 4;",
@@ -377,7 +377,7 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     },
                 ],
                 expected_outcomes: &[
-                    "ok => 1,2,3,4,5 | batch   about every 1 GB, in at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range",
+                    "ok => 1,2,3,4,5 | commits about every 1 GB, in at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range",
                     "ok => 1,2,3,5",
                     "raw.app__events: DuckDB => 1,2,3,5,6",
                 ],
@@ -408,10 +408,10 @@ fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_st
                     destination_change: "",
                     end_cursor: None,
                     check_query: IDS,
-                    show: "batch   ",
+                    show: "commits ",
                 }],
                 expected_outcomes: &[
-                    "ok => 1,2 | batch   one commit for the whole read (a text cursor, which the source and destination may sort differently)",
+                    "ok => 1,2 | commits once, at the end of the read (a text cursor, which the source and destination may sort differently)",
                 ],
             },
             BatchedScenarioTestCase {

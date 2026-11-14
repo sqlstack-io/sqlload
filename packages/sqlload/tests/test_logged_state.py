@@ -241,10 +241,10 @@ def test_given_a_logged_table_when_loading_twice_then_the_second_run_resumes_fro
 
 def test_given_a_logged_table_when_planning_then_the_plan_shows_the_logged_position(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)
-	assert "state   logged: no runs logged yet" in ok(project, "plan", "api__pages")
+	assert "reads   everything: no run is logged yet" in ok(project, "plan", "api__pages")
 	give(project, "pages", [[{"n": 1}]])
 	ok(project, "load", "api__pages")
-	assert "state   logged: state 1 (run " in ok(project, "plan", "api__pages")
+	assert "reads   logged state 1 (run " in ok(project, "plan", "api__pages")
 
 
 def test_given_the_run_log_insert_fails_when_loading_then_neither_the_data_nor_the_state_moves(tmp_path: Path) -> None:
@@ -350,7 +350,7 @@ def test_given_a_backfill_when_loading_a_logged_table_then_it_is_logged_without_
 	give(project, "events", [{"id": 0, "at": "2026-01-01T00:00:00Z"}])
 	ok(project, "load", "--start-cursor", "2025-12-01T00:00:00Z", "--end-cursor", "2026-01-02T00:00:00Z", "api__events")
 	assert [event for event, *_ in runs(project, "api__events")] == ["run", "backfill"]
-	assert "state   logged: at 2026-01-03 00:00:00.000000+00" in ok(project, "plan", "api__events")
+	assert "reads   logged at 2026-01-03 00:00:00.000+00, state not set (run " in ok(project, "plan", "api__events")
 
 
 def test_given_a_files_target_when_loading_twice_then_records_are_objects_and_the_second_run_resumes(tmp_path: Path) -> None:
@@ -376,7 +376,7 @@ def test_given_a_files_load_that_stops_after_committing_when_loading_again_then_
 	failed = sqlload(project, "load", "api__pages")
 	records.chmod(0o700)
 	assert failed.returncode == 1, failed.stdout
-	assert "state   logged: state 2" in ok(project, "plan", "api__pages")
+	assert "reads   logged state 2 (run " in ok(project, "plan", "api__pages")
 	give(project, "pages", [[{"n": 1}], [{"n": 2}], [{"n": 3}]])
 	ok(project, "load", "api__pages")
 	assert seen(project, "pages")["state"] == 2
@@ -499,7 +499,7 @@ def test_given_a_pending_reset_when_an_end_cursor_backfill_runs_then_the_reset_i
 	give(project, "events", [])
 	ok(project, "load", "--end-cursor", "2026-01-06T00:00:00Z", "api__events")
 	assert [event for event, *_ in runs(project, "api__events")] == ["run", "reset", "backfill"]
-	assert "(state reset at" in ok(project, "plan", "api__events")
+	assert "(state reset " in ok(project, "plan", "api__events")
 
 
 def test_given_no_selection_when_resetting_state_then_it_is_refused(tmp_path: Path) -> None:

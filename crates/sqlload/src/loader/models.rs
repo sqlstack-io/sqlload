@@ -20,6 +20,8 @@ use crate::files_source::models::{
     AfterLoad, AfterLoadReport, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile,
     TextChecks,
 };
+use crate::loader::_helpers::render::problem_item;
+use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
@@ -95,6 +97,10 @@ pub struct TableSpec {
     pub unique_key: Vec<String>,
     /// Whether `unique_key` is the primary key the source reports, set as `"{primary_key}"`.
     pub key_from_primary_key: bool,
+    /// Where the table's settings are written in the project file, as `sqlload.toml:93`: its `[sources.*.tables]` entry, else its source's section.
+    pub settings_at: Option<String>,
+    /// Where its `unique_key` is written in the project file, as `sqlload.toml:46`.
+    pub unique_key_at: Option<String>,
     /// What a merge does with rows of one commit sharing `unique_key`.
     pub on_duplicate_keys: OnDuplicateKeys,
     /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
@@ -259,6 +265,8 @@ pub struct FilesSource {
 pub struct SkippedTable {
     pub source_name: String,
     pub source_table: String,
+    /// The name `plan` shows it by: its destination's display name, as `schema.table`.
+    pub destination: String,
     pub reason: String,
 }
 
@@ -280,8 +288,8 @@ pub struct FoundSources<'a> {
     pub plan: ProjectPlan,
     /// The sources whose tables could not be listed, selected or not, so the tables they would load are unknown.
     pub unresolved: Vec<String>,
-    /// The destination table and source of each files source skipped as drained (see [`DrainedFiles`]), names a selector may use.
-    pub drained: Vec<(String, String)>,
+    /// The destination table, its display name and the source of each files source skipped as drained (see [`DrainedFiles`]): names a selector may use.
+    pub drained: Vec<String>,
 }
 
 /// The settings for tables of one project, before any destination is read.
@@ -291,6 +299,10 @@ pub struct ResolvedTables {
     pub skipped: Vec<SkippedTable>,
     /// Problems with one table's settings, as `source_table: problem`.
     pub problems: Vec<String>,
+    /// Each of `problems` about one table, with the display name of the table it would load into.
+    pub problem_names: Vec<(String, String)>,
+    /// Each of `problems` about one table, with where that table's settings are written (see [`TableSpec::settings_at`]), if known.
+    pub problem_places: Vec<(String, Option<String>)>,
     /// Warnings about reaching the source, such as reading it in plain text.
     pub warnings: Vec<String>,
     /// A files source whose folder `after_load` emptied, when the selection takes it.
@@ -438,6 +450,38 @@ pub struct ProjectPlan {
     pub retryable_problems: Vec<String>,
     /// The sources with a problem in `problems`, which a table's problem names only by its `schema.table`.
     pub failed_sources: std::collections::BTreeSet<String>,
+    /// Each of `problems` about one table, with the display name of the table it would load into, which `plan` names it by; the n-th of a text goes with the n-th of `problems` with that text.
+    pub problem_names: Vec<(String, String)>,
+    /// Each of `problems` about one table, with where that table's settings are written if known, which its `fix` starts with; paired as `problem_names` are.
+    pub problem_places: Vec<(String, Option<String>)>,
+    /// What each in-scope source that could not be read holds up, by source name.
+    pub unread_sources: BTreeMap<String, UnreadSource>,
+    /// Each warning that a source could not be read so tables may share a destination with it, and what it is about.
+    pub unread_sharing: Vec<UnreadSharing>,
+}
+
+/// The tables a source that could not be read would load, as far as its settings name them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnreadSource {
+    /// The display names of the tables it names itself: exactly in `include`, under `tables`, or a files source's one table.
+    pub tables: Vec<String>,
+    /// Whether its `include` also has patterns, whose tables are unknown.
+    pub patterns: bool,
+    /// The connection it reads through.
+    pub connection: String,
+    /// The `${ENV:NAME}` variables that connection's settings read.
+    pub variables: Vec<String>,
+}
+
+/// A warning that sources could not be read, so tables may share a destination table with them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnreadSharing {
+    /// The warning as `plan.warnings` holds it.
+    pub warning: String,
+    /// The sources that could not be read.
+    pub sources: Vec<String>,
+    /// The display names of the tables whose check it holds up.
+    pub tables: Vec<String>,
 }
 
 impl ProjectPlan {
@@ -450,6 +494,35 @@ impl ProjectPlan {
                 .problems
                 .iter()
                 .all(|problem| self.retryable_problems.contains(problem))
+    }
+
+    /// The source of each error the plan stops on, without repeats: a blocked table's, the source a problem names (`[sources.<name>]...`), and each source recorded with a table problem. A problem with the project as a whole or a connection names none, as only fixing it gets past it.
+    pub fn failing_sources(&self) -> Vec<String> {
+        let mut sources: Vec<String> = Vec::new();
+        let named = self.problems.iter().filter_map(|problem| {
+            let subject = problem_item(problem).name;
+            let inner = subject.strip_prefix("[sources.")?;
+            Some(inner.split(['.', ']']).next().unwrap_or(inner).to_owned())
+        });
+        let blocked = self
+            .tables
+            .iter()
+            .filter(|table| table.schema.blocked.is_some())
+            .map(|table| table.spec.source_name.clone());
+        for source in blocked
+            .chain(named)
+            .chain(self.failed_sources.iter().cloned())
+        {
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+        sources
+    }
+
+    /// The sources the plan running now has finished checking, for the line `plan` shows while it works.
+    pub fn planned_sources() -> usize {
+        PLANNED_SOURCES.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The plan without its `postgres_cdc` tables, which load together per source rather than one by one.
@@ -713,6 +786,10 @@ pub struct Publisher {
     /// Arrow bytes of the batch so far, which measure it when the writer stages no files.
     pub arrow_bytes: usize,
     pub batch_rows: u64,
+    /// When the last `table_progress` event went out, so a long batch reports its rows as they arrive.
+    pub progressed_at: std::time::Instant,
+    /// A child table's publisher, filled by its parent's load, which sends no events of its own: events name only the tables `plan` names.
+    pub child: bool,
     /// Rows staged so far, the next row's `_sqlload_row` when a merge dedupes by source order.
     pub staged_ordinal: i64,
     /// Rows in `staging` not committed yet, and what they replace.
@@ -892,6 +969,9 @@ pub struct PlanView {
     /// The counts after `Plan ready`, nonzero clauses only.
     pub summary: String,
     pub selected: usize,
+    /// `plan`'s `to` lines: each destination the tables load into, as `Snowflake analytics`.
+    #[serde(skip)]
+    pub destinations: Vec<String>,
     pub objects: Vec<PlanItem>,
     pub loads: Vec<PlanItem>,
     pub skipped: Vec<PlanItem>,

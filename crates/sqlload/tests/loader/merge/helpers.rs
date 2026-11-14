@@ -46,7 +46,7 @@ const RULES: [DedupeRule; 4] = [
     DedupeRule {
         description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
         settings: "on_duplicate_keys = \"fail\"",
-        expected_error: "the loaded rows repeat its unique_key: 2 value(s) of (sensor) appear in more than one row",
+        expected_error: "the loaded rows repeat its unique_key: 2 values of (sensor) appear in more than one row",
         expected_plan: "",
     },
 ];

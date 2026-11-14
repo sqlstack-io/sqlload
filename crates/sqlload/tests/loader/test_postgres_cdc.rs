@@ -10,7 +10,9 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
-use crate::postgres_helpers::{DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, run_cdc_scenario};
+use crate::postgres_helpers::{
+    DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, FOLLOW_REFUSED, PLAIN_SOURCE, run_cdc_scenario,
+};
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -629,87 +631,6 @@ const FOLLOWED_LOG: [CdcStep; 3] = [
 const FOLLOW_AFTER_FIRST: [CdcStep; 5] = crashed_batch(FOLLOW_APP, "batch-after-first-table");
 
 const FOLLOW_LOG_BEFORE_CONFIRM: [CdcStep; 5] = crashed_batch(FOLLOW_LOG, "batch-before-confirm");
-
-const PLAIN_SOURCE: &str = r#"
-[sources.plain]
-kind = "postgres"
-connection = "pg"
-include = ["public.items"]
-write_strategy = "replace"
-
-[sources.plain.tables."public.items"]
-description = "Items, read whole."
-
-[sources.unset]
-kind = "postgres"
-connection = "pg"
-include = ["public.orders"]
-
-[sources.half]
-kind = "postgres_cdc"
-connection = "pg"
-include = ["public.items", "public.orders"]
-publication = "half_pub"
-
-[sources.half.tables."public.orders"]
-description = "Orders, captured."
-columns = { tags = "text" }
-
-[sources.half.tables."public.items"]
-description = "Items, keyed by a column outside the primary key."
-unique_key = ["name"]
-"#;
-
-const FOLLOW_REFUSED: [CdcStep; 6] = [
-    step(
-        "",
-        &["load", "app", "unset", "--follow", "--max-duration", "3s"],
-        "",
-        (
-            false,
-            "since the replication slot would move past the changes of one left out; fix the errors above, or leave them out to follow the rest: --exclude unset",
-        ),
-    ),
-    step(
-        "",
-        &["load", "half", "--follow", "--max-duration", "3s"],
-        "",
-        (
-            false,
-            "fix the errors above, or leave them out to follow the rest: the failing tables of half in exclude under [sources.half]",
-        ),
-    ),
-    step(
-        "",
-        &["load", "app", "log", "--follow"],
-        "",
-        (
-            false,
-            "load --follow follows one postgres_cdc source per process",
-        ),
-    ),
-    step(
-        "",
-        &["load", "app", "plain", "--follow"],
-        "",
-        (
-            false,
-            "plain__items is not captured, so load them without --follow, or leave them out: --exclude plain__items",
-        ),
-    ),
-    step(
-        "",
-        &["plan", "app", "--follow"],
-        "",
-        (false, "--follow and --max-duration apply to load only"),
-    ),
-    step(
-        "",
-        &["load", "app", "--max-duration", "3s"],
-        "",
-        (false, "--follow"),
-    ),
-];
 
 /// Waits up to 15 seconds for slot `sqlload_app` to stream.
 const AWAIT_STREAMING: &str = "DO $$ BEGIN FOR attempt IN 1..150 LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app' AND active); PERFORM pg_sleep(0.1); END LOOP; END $$;";

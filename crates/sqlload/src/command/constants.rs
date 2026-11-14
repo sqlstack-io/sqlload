@@ -14,3 +14,12 @@ pub const RETRYABLE_EXIT: u8 = 75;
 
 /// The stack a command runs on: a Linux main thread's default, 8 MiB, on every system.
 pub const COMMAND_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+/// What `load` adds to the plan's closing line, since it leaves out the Loads and Skipped trees.
+pub const PLAN_TREE_HINT: &str = "(sqlload plan shows the tree)";
+
+/// The fewest columns a wrapped line's further lines keep for text; a field starting further right wraps under an earlier one.
+pub const WRAP_ROOM: usize = 20;
+
+/// The narrowest terminal a line is wrapped for; a narrower one gets each line as it is.
+pub const MIN_WRAP_WIDTH: usize = 2;

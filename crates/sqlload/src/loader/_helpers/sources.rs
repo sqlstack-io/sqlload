@@ -9,7 +9,6 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
-use crate::adapters::files::models::FolderClaim;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
 use crate::auth::main::google_token_cache_file::google_token_cache_file;
 use crate::auth::models::GoogleUser;
@@ -42,9 +41,12 @@ use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
-use crate::loader::_helpers::destination::table_folder;
+use crate::loader::_helpers::destination::folder_claims;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
-use crate::loader::_helpers::resolve::{NameRule, resolve_tables, source_target};
+use crate::loader::_helpers::resolve::{
+    NameRule, display_name, resolve_tables, source_target, spec_names, target_display_name,
+    unread_source,
+};
 use crate::loader::_helpers::run_log::merged_files;
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::{
@@ -52,8 +54,8 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
-    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS,
-    PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX, SOURCE_BATCH_ROWS,
+    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READERS, PRIMARY_KEY_PLACEHOLDER,
+    RELOAD_FIX, SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -62,6 +64,7 @@ use crate::loader::models::{
 };
 use crate::loader::models::{FoundSource, FoundSources};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
+use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
@@ -99,6 +102,10 @@ use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
 use crate::ssh_tunnel::models::SshTunnel;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
+
+/// The sources the plan running now has finished checking, which only the line `plan` shows on a terminal reads.
+pub(crate) static PLANNED_SOURCES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 /// A client for a source's Postgres connection, and what protects it.
 pub(crate) async fn connect_source(
@@ -159,14 +166,19 @@ pub(crate) fn files_location(
         .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// The Postgres connections a table's read uses: several for a large Postgres table read whole and in no order (windows and cursor-ordered reads keep one connection).
+/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order (windows and cursor-ordered reads keep one connection).
 pub(crate) fn source_readers(table: &TablePlan) -> usize {
     let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
     let postgres = table.spec.python.is_none()
         && table.spec.files.is_none()
         && table.spec.sheet.is_none()
         && table.spec.warehouse_source.is_none();
-    match whole && postgres && table.spec.source_table.estimated_bytes >= PARALLEL_READ_MIN_BYTES {
+    let large = table
+        .spec
+        .source_table
+        .split_pages
+        .is_some_and(|pages| pages >= SPLIT_READ_MIN_PAGES);
+    match whole && postgres && large {
         true => PARALLEL_READERS,
         false => 1,
     }
@@ -584,6 +596,7 @@ async fn sheets_tables(
         }
         warnings.extend(read.warnings);
         tables.push(SourceTable {
+            split_pages: None,
             schema: String::new(),
             name,
             columns: read
@@ -1547,14 +1560,7 @@ pub(crate) async fn source_ends(
                 })
         });
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
-            && selected(
-                options,
-                (
-                    source_name,
-                    &spec.destination.table,
-                    &spec.source_table.qualified_name(),
-                ),
-            );
+            && selected(options, (source_name, &spec_names(spec)));
         let Some(column) = integer_cursor.filter(|_| wanted) else {
             continue;
         };
@@ -1574,28 +1580,15 @@ pub(crate) async fn source_ends(
     Ok(specs)
 }
 
-/// Each of `specs`' destination name and `schema.table`, which selectors may name.
-pub(crate) fn destination_names(specs: &[TableSpec]) -> Vec<(String, String)> {
-    specs
-        .iter()
-        .map(|spec| {
-            (
-                spec.destination.table.clone(),
-                spec.source_table.qualified_name(),
-            )
-        })
-        .collect()
-}
-
 /// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
 pub(crate) fn unmatched_selectors(
     project: &ProjectConfig,
     options: &PlanOptions,
-    names: &[(String, String)],
+    names: &[String],
 ) -> Vec<String> {
     let known: Vec<&str> = names
         .iter()
-        .flat_map(|(destination, source_table)| [destination.as_str(), source_table.as_str()])
+        .map(String::as_str)
         .chain(project.sources.keys().map(String::as_str))
         .collect();
     options
@@ -1612,13 +1605,13 @@ pub(crate) fn unmatched_selectors(
         .collect()
 }
 
-/// Whether `--select` picks a table and `--exclude` does not, each by source name, destination name or `schema.table`; no `--select` picks every table.
-pub(crate) fn selected(
-    options: &PlanOptions,
-    (source, destination, source_table): (&str, &str, &str),
-) -> bool {
+/// Whether `--select` picks a table and `--exclude` does not, each by source name or one of the table's `names` (its destination name, the destination's display name, or its source's `schema.table`; empty ones match nothing); no `--select` picks every table.
+pub(crate) fn selected(options: &PlanOptions, (source, names): (&str, &[String])) -> bool {
     let picks = |selector: &String| {
-        selector == source || selector == destination || selector == source_table
+        selector == source
+            || names
+                .iter()
+                .any(|name| !name.is_empty() && name == selector)
     };
     (options.select.is_empty() || options.select.iter().any(picks))
         && !options.exclude.iter().any(picks)
@@ -1688,7 +1681,14 @@ fn drained_files(
         schema: target.schema,
         table: table_name((source_name, source), name, (&listed, rule)),
     };
-    let in_scope = selected(options, (source_name, &table.table, source_name));
+    let shown = display_name(target.warehouse, &table);
+    let in_scope = selected(
+        options,
+        (
+            source_name,
+            &[table.table.clone(), shown.clone(), source_name.to_owned()],
+        ),
+    );
     if target.path.is_some() {
         return ResolvedTables {
             problems: in_scope
@@ -1712,9 +1712,8 @@ fn drained_files(
             skipped: SkippedTable {
                 source_name: source_name.to_owned(),
                 source_table: source_name.to_owned(),
-                reason: format!(
-                    "no files to load in {path}: after_load deleted or moved the ones already loaded"
-                ),
+                destination: shown,
+                reason: format!("no files to load in {path}{DRAINED_REASON}"),
             },
             problem: format!(
                 "[sources.{source_name}]: no files to load in {path}, and {} was never loaded: after_load skips an emptied folder only once its table exists; check the source's path and connection",
@@ -1733,7 +1732,7 @@ pub(crate) fn source_in_scope(
     listed: Option<&[SourceTable]>,
 ) -> bool {
     let Some(discovered) = listed else {
-        return selected(options, (source_name, "", ""))
+        return selected(options, (source_name, &[]))
             || (!options
                 .exclude
                 .iter()
@@ -1744,12 +1743,20 @@ pub(crate) fn source_in_scope(
                     .any(|selector| !project.sources.contains_key(selector)));
     };
     let found: Vec<String> = discovered.iter().map(SourceTable::qualified_name).collect();
-    let (target_naming, limit) = source_target(project, source).map_or((None, None), |target| {
+    let target = source_target(project, source);
+    let (target_naming, limit) = target.as_ref().map_or((None, None), |target| {
         (
             target.naming,
             sql_adapter(target.warehouse).max_identifier_length(),
         )
     });
+    let names = |destination: String, qualified: String| {
+        let shown = match (&target, destination.is_empty()) {
+            (Ok(target), false) => target_display_name(target, destination.clone()),
+            _ => String::new(),
+        };
+        [destination, shown, qualified]
+    };
     let unset = TableSettings::default();
     let rule = |overrides: Option<&TableOverride>| {
         (
@@ -1775,24 +1782,24 @@ pub(crate) fn source_in_scope(
                 }
                 _ => String::new(),
             };
-            (destination, qualified.clone())
+            names(destination, qualified.clone())
         });
-    let tables: Vec<(String, String)> = discovered
+    let tables: Vec<[String; 3]> = discovered
         .iter()
         .map(|table| {
             let overrides = source.tables.get(&table.qualified_name());
             let name = overrides.and_then(|overrides| overrides.name.as_deref());
-            (
+            names(
                 table_name((source_name, source), name, (table, rule(overrides))),
                 table.qualified_name(),
             )
         })
         .chain(named)
         .collect();
-    (tables.is_empty() && selected(options, (source_name, "", "")))
-        || tables.iter().any(|(destination, qualified)| {
-            selected(options, (source_name, destination, qualified))
-        })
+    (tables.is_empty() && selected(options, (source_name, &[])))
+        || tables
+            .iter()
+            .any(|names| selected(options, (source_name, names)))
 }
 
 /// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
@@ -1818,18 +1825,25 @@ pub(crate) async fn admit_tables(
             (true, NewTables::Skip, true) => plan.skipped.push(SkippedTable {
                 source_name: source_name.clone(),
                 source_table: qualified,
+                destination: display_name(spec.warehouse, &spec.destination),
                 reason: "new table (new_tables = \"skip\") has settings but is not approved; add it to include".to_owned(),
             }),
             (true, NewTables::Skip, false) => plan.skipped.push(SkippedTable {
                 source_name: source_name.clone(),
                 source_table: qualified,
+                destination: display_name(spec.warehouse, &spec.destination),
                 reason: "new table (new_tables = \"skip\"); add it to include to sync it".to_owned(),
             }),
             (true, NewTables::Fail, _) => {
                 plan.failed_sources.insert(source_name.clone());
-                plan.problems.push(format!(
+                let problem = format!(
                     "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
+                );
+                plan.problem_names.push((
+                    problem.clone(),
+                    display_name(spec.warehouse, &spec.destination),
                 ));
+                plan.problems.push(problem);
             }
             _ => {
                 if let Some(problem) = missing_description(source_name, source, &spec.source_table)
@@ -1905,6 +1919,10 @@ pub(crate) async fn found_sources<'a>(
                 Err(problem) => {
                     found.unresolved.push(source_name.clone());
                     if let Some(problem) = problem {
+                        found.plan.unread_sources.insert(
+                            source_name.clone(),
+                            unread_source(project, (source_name, source)),
+                        );
                         if problem.retryable {
                             found.plan.retryable_problems.push(problem.message.clone());
                         }
@@ -1938,9 +1956,11 @@ pub(crate) async fn found_sources<'a>(
         if shared {
             found.unresolved.push(source.name.clone());
         }
-        found
-            .drained
-            .push((drained.table.table.clone(), source.name.clone()));
+        found.drained.extend([
+            drained.table.table.clone(),
+            drained.skipped.destination.clone(),
+            source.name.clone(),
+        ]);
         drained_specs.extend(drained.spec);
         if !drained.in_scope {
             continue;
@@ -1969,34 +1989,4 @@ pub(crate) async fn found_sources<'a>(
     }
     found.configured.extend(drained_specs);
     Ok(found)
-}
-
-/// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
-fn folder_claims(
-    specs: &[TableSpec],
-    files: Option<&FilesSource>,
-    destinations: &BTreeMap<String, Destination>,
-) -> Vec<FolderClaim> {
-    let mut claims: Vec<FolderClaim> = Vec::new();
-    for spec in specs {
-        let Some(target) = destinations.get(&spec.target).and_then(files_destination) else {
-            continue;
-        };
-        let name = format!(
-            "{}.{}",
-            spec.source_name,
-            spec.source_table.qualified_name()
-        );
-        if let Ok(path) = table_folder(spec, target) {
-            claims.push(FolderClaim {
-                id: name.clone(),
-                name,
-                folder: path.folder,
-                template: spec.destination_path.clone().unwrap_or_default(),
-                schema: spec.source_table.schema.clone(),
-                source: files.map(|files| files.location.clone()),
-            });
-        }
-    }
-    claims
 }

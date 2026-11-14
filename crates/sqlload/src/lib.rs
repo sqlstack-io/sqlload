@@ -26,11 +26,13 @@ pub mod files_source;
 pub mod http;
 pub mod http_source;
 pub mod kafka;
+pub mod load_events;
 pub mod load_naming;
 pub mod loader;
 pub mod masking;
 pub mod metrics;
 pub mod naming;
+pub mod number_text;
 #[cfg(feature = "odbc")]
 pub mod odbc_source;
 pub mod parquet_parts;

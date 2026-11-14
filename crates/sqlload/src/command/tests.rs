@@ -4,6 +4,8 @@ mod blocking_threads;
 mod helpers;
 #[path = "tests/test_load_options.rs"]
 mod load_options;
+#[path = "tests/test_load_output.rs"]
+mod load_output;
 #[path = "tests/test_loader_commands.rs"]
 mod loader_commands;
 #[path = "tests/test_output.rs"]

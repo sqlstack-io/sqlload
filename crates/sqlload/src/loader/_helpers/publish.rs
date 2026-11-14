@@ -60,12 +60,15 @@ use crate::files_source::main::batch_footers::batch_footers;
 use crate::files_source::main::batch_headers::batch_headers;
 use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::AfterLoad;
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
 
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::unnested_table;
@@ -86,6 +89,7 @@ use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
+use crate::loader::constants::PROGRESS_EVERY;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
@@ -125,10 +129,8 @@ use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_source::models::UnloadedFiles;
 use crate::store_paths::models::Location;
-use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
-use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::main::take_lease::take_lease;
 use crate::table_lease::models::Lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
@@ -148,7 +150,6 @@ use bytes::Bytes;
 use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 
 use crate::loader::_helpers::table_plan::{
     added_constants, is_direct, publishes_once, pulls_unloaded,
@@ -625,6 +626,8 @@ impl Publisher {
             batch: 1,
             arrow_bytes: 0,
             batch_rows: 0,
+            progressed_at: std::time::Instant::now(),
+            child: false,
             staged_ordinal: 0,
             waiting_rows: 0,
             waiting_range: None,
@@ -662,6 +665,7 @@ impl Publisher {
         if self.files.is_some() && self.children.is_none() {
             self.batch_rows += masked.num_rows() as u64;
             self.arrow_bytes += masked.get_array_memory_size();
+            self.report_rows();
             return self.stage_files(masked).await;
         }
         let ids = row_ids(&self.table, &masked).map_err(LoaderError::Invalid)?;
@@ -737,6 +741,7 @@ impl Publisher {
         };
         self.batch_rows += batch.num_rows() as u64;
         self.arrow_bytes += batch.get_array_memory_size();
+        self.report_rows();
         if self.files.is_some() {
             return self.stage_files(batch).await;
         }
@@ -748,6 +753,26 @@ impl Publisher {
             ((&self.load_id, self.batch), (self.direct, self.builds)),
         );
         self.writer.write_batch(&target, batch).await
+    }
+
+    /// A `table_progress` event for the batch being read, with the rows so far, at most once per `PROGRESS_EVERY`; a batch's end reports it anyway (see [`Self::flush_batch`]).
+    fn report_rows(&mut self) {
+        if self.progressed_at.elapsed() < PROGRESS_EVERY {
+            return;
+        }
+        self.progressed_at = std::time::Instant::now();
+        self.report(EventKind::TableProgress {
+            unit: "batch".to_owned(),
+            count: self.batch,
+            rows: self.committed_rows + self.waiting_rows + self.batch_rows,
+        });
+    }
+
+    /// Send `kind` for this table; a child table's publisher sends nothing (see [`Publisher::child`]).
+    fn report(&self, kind: EventKind) {
+        if !self.child {
+            emit(Some(&self.table.outcome_name()), kind);
+        }
     }
 
     /// The `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
@@ -806,6 +831,11 @@ impl Publisher {
                 (&self.destination, None),
             ))
             .await?;
+        }
+        if !self.direct && pending {
+            self.report(EventKind::TableCommitting {
+                rows: self.waiting_rows + self.committed_rows,
+            });
         }
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,
@@ -917,6 +947,12 @@ impl Publisher {
         self.batch_rows = 0;
         self.arrow_bytes = 0;
         self.writer.next_batch();
+        self.progressed_at = std::time::Instant::now();
+        self.report(EventKind::TableProgress {
+            unit: "batch".to_owned(),
+            count: self.batch - 1,
+            rows: self.committed_rows + self.waiting_rows,
+        });
         Ok(())
     }
 
@@ -1930,44 +1966,4 @@ async fn replace_files(
     }
     delete_files(folder, keys).await?;
     Ok(clear_pending(folder, file_id).await?)
-}
-
-/// Refresh `lease` every `LEASE_REFRESH` until the returned guard is dropped, and the task doing it, which a release awaits so no refresh in flight extends the lease after it; a refresh that fails only warns, as the next commit checks the lease again before it deletes anything.
-fn keep_in_background(
-    folder: &OpenFolder,
-    lease: &Lease,
-) -> (tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>) {
-    let stop = CancellationToken::new();
-    let (stopped, folder, lease) = (stop.clone(), folder.clone(), lease.clone());
-    let renewal = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                () = stopped.cancelled() => return,
-                () = tokio::time::sleep(LEASE_REFRESH) => {}
-            }
-            match keep_lease(&folder, &lease, lease_now()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(lost)) => {
-                    tracing::warn!(folder = %folder.location, "{lost}");
-                    return;
-                }
-                Err(error) => {
-                    tracing::warn!(%error, folder = %folder.location, "cannot refresh the table's lease; retrying");
-                }
-            }
-        }
-    });
-    (stop.drop_guard(), renewal)
-}
-
-/// The table's own folder, where its lease lives: the live folder, also while the load writes a staged one.
-fn leased_folder(sink: &FilesSink) -> &OpenFolder {
-    sink.swap.as_ref().map_or(&sink.folder, |swap| &swap.live)
-}
-
-/// Release `lease` after the load, best effort: one left behind expires on its own.
-async fn give_back(folder: &OpenFolder, lease: &Lease) {
-    if let Err(error) = release_lease(folder, lease).await {
-        tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
-    }
 }

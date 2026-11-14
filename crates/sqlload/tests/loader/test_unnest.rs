@@ -16,7 +16,7 @@ use sqlload::column_types::models::Warehouse;
 use sqlload::loader::main::connect_targets::connect_targets;
 
 use crate::helpers::{
-    described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload,
+    described_project, duckdb_execute, duckdb_text, load_ndjson_runs, run_async, run_sqlload, words,
 };
 use crate::test_types::{
     ClearRowsTestCase, FilesTargetUnnestTestCase, NamedLikeTestCase, RekeyedTestCase,
@@ -450,7 +450,10 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         std::fs::write(&config, text).map_err(|error| error.to_string())?;
         let (ok, output) = run_sqlload(&config, &["plan"], ("", ""))?;
         assert_eq!(
-            (ok, output.contains(test_case.expected_problem)),
+            (
+                ok,
+                words(&output).contains(&words(test_case.expected_problem))
+            ),
             (test_case.expected_ok, true),
             "{}: {output}",
             test_case.description

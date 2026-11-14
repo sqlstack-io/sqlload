@@ -392,6 +392,10 @@ pub enum Credential {
 /// Requests spaced `interval` apart, shared across jobs.
 #[derive(Debug)]
 pub struct Limiter {
+    /// The connection whose `rate_limit` this is, named in its load events.
+    pub connection: String,
+    /// The limit as configured, such as `5/s`.
+    pub rate: String,
     pub interval: Duration,
     pub next: Mutex<Instant>,
 }

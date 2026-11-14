@@ -1,8 +1,8 @@
-use crate::command::_helpers::output::paint;
-use crate::command::tests::test_types::PaintTestCase;
+use crate::command::_helpers::output::{paint, wrapped};
+use crate::command::tests::test_types::{PaintTestCase, WrapTestCase};
 
 #[test]
-fn given_a_line_of_plan_or_load_output_when_painting_it_then_only_headings_errors_warnings_and_the_outcome_take_colour()
+fn given_a_line_of_plan_or_load_output_when_painting_it_then_only_headings_errors_warnings_the_outcome_and_loaded_take_colour()
  {
     let test_cases = [
         PaintTestCase {
@@ -21,14 +21,24 @@ fn given_a_line_of_plan_or_load_output_when_painting_it_then_only_headings_error
             expected_line: "\x1b[33mWarnings (1)\x1b[0m",
         },
         PaintTestCase {
-            description: "a complete plan is green",
+            description: "a complete plan has its label green and bold, its counts plain",
             line: "✓ Plan complete  1 selected",
-            expected_line: "\x1b[32m✓ Plan complete  1 selected\x1b[0m",
+            expected_line: "\x1b[32m\x1b[1m✓ Plan complete\x1b[0m  1 selected",
+        },
+        PaintTestCase {
+            description: "a load with failures has its label red and bold",
+            line: "✗ Completed with failures  1 loaded, 1 failed",
+            expected_line: "\x1b[38;5;167m\x1b[1m✗ Completed with failures\x1b[0m  1 loaded, 1 failed",
         },
         PaintTestCase {
             description: "a failed table in the tally is red",
             line: "failed   RAW.A  boom",
             expected_line: "\x1b[38;5;167mfailed   RAW.A  boom\x1b[0m",
+        },
+        PaintTestCase {
+            description: "a loaded table in the tally has only its first word green, so its position stays readable",
+            line: "loaded  raw.a  13 rows 2.2s  updated_at now 2026-11-14",
+            expected_line: "\x1b[32mloaded\x1b[0m  raw.a  13 rows 2.2s  updated_at now 2026-11-14",
         },
         PaintTestCase {
             description: "an item, a detail and a JSON document stay plain",
@@ -45,6 +55,47 @@ fn given_a_line_of_plan_or_load_output_when_painting_it_then_only_headings_error
         assert_eq!(
             paint(test_case.line.to_owned()),
             test_case.expected_line,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_line_wider_than_the_terminal_when_wrapping_it_then_it_breaks_at_spaces_under_its_field()
+{
+    let test_cases = [
+        WrapTestCase {
+            description: "a column note in a tree carries the branches down, its own too as more columns follow, and starts under the note",
+            line: "│   ├── updated_at  timestamp_tz    -> TIMESTAMP  (stored as a UTC instant; the offset is not kept)",
+            width: 90,
+            expected_lines: "│   ├── updated_at  timestamp_tz    -> TIMESTAMP  (stored as a UTC instant; the offset is\n│   │                                             not kept)",
+        },
+        WrapTestCase {
+            description: "a failed table's reason continues under the reason, not under the verb",
+            line: "failed  raw.returns  checks.min_rows failed: 50,000 rows staged, fewer than the 100,000 required; nothing was published",
+            width: 72,
+            expected_lines: "failed  raw.returns  checks.min_rows failed: 50,000 rows staged, fewer\n                     than the 100,000 required; nothing was published",
+        },
+        WrapTestCase {
+            description: "a line that fits is left alone",
+            line: "loaded  raw.a  13 rows 2.2s",
+            width: 72,
+            expected_lines: "loaded  raw.a  13 rows 2.2s",
+        },
+    ];
+    for test_case in test_cases {
+        let wrapped = wrapped(test_case.line, test_case.width);
+        assert!(
+            wrapped
+                .iter()
+                .all(|part| part.chars().count() <= test_case.width),
+            "{}: {wrapped:#?}",
+            test_case.description
+        );
+        assert_eq!(
+            wrapped.join("\n"),
+            test_case.expected_lines,
             "{}",
             test_case.description
         );

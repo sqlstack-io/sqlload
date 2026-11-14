@@ -7,6 +7,8 @@ const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const REFUSING_TARGET: &str = "[connections.pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"loader\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[targets.dev]\nconnection = \"pg\"\nloader_schema = \"raw\"\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"lake\"\npath = \"orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n[connections.lake]\nkind = \"filesystem\"\nroot = '{root}'\n";
 const UNREACHABLE_SOURCE: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.app]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\npassword = \"p\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[sources.app]\nkind = \"postgres\"\nconnection = \"app\"\ndestination = \"dev\"\ninclude = [\"public.*\"]\n";
+/// `UNREACHABLE_SOURCE` with its password read from `${ENV:HOME}`, which is always set.
+const UNREACHABLE_FROM_ENV: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.app]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = 1\nuser = \"u\"\npassword = \"${ENV:HOME}\"\ndatabase = \"app\"\nsslmode = \"disable\"\n[sources.app]\nkind = \"postgres\"\nconnection = \"app\"\ndestination = \"dev\"\ninclude = [\"public.*\"]\n";
 
 #[test]
 fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_to_install_the_python_package()
@@ -122,9 +124,13 @@ fn given_a_files_source_into_a_files_target_when_planning_then_an_overlapping_fo
             test_case.single_file
         );
         let output = run_without_host(&project, &["plan"]);
+        let words = output
+            .split_whitespace()
+            .filter(|word| *word != "│")
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            output.contains(test_case.expected_problem)
-                && output.ends_with(test_case.expected_exit),
+            words.contains(test_case.expected_problem) && output.ends_with(test_case.expected_exit),
             "{}: {output}",
             test_case.description
         );
@@ -166,6 +172,13 @@ fn given_a_failure_a_rerun_may_pass_when_loading_then_it_exits_75_and_says_so_el
             project: UNREACHABLE_SOURCE,
             argv: &["plan"],
             expected_output: "cannot connect to Postgres at 127.0.0.1:1",
+            expected_exit: "exit 75",
+        },
+        ExitCodeTestCase {
+            description: "text: the fix names the variable the connection's settings read",
+            project: UNREACHABLE_FROM_ENV,
+            argv: &["plan"],
+            expected_output: "fix     check HOME (connection app); sqlload debug tests every connection",
             expected_exit: "exit 75",
         },
         ExitCodeTestCase {

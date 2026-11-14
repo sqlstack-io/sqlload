@@ -23,6 +23,7 @@ use crate::loader::tests::test_types::{
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::python_sources::models::PythonSource;
+use crate::routing::models::{FileFormat, FileSet, Route, Step, Store};
 use crate::schema_plan::models::LiveColumn;
 
 /// The columns of the inferred table, as `name:type` joined by commas.
@@ -47,6 +48,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
+        split_pages: None,
         listed_keys: Vec::new(),
     };
     let live: Vec<LiveColumn> = test_case
@@ -381,6 +383,7 @@ pub(crate) fn refused_bounds_runs(
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
+        split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
     };
@@ -415,4 +418,27 @@ pub(crate) fn refused_bounds_runs(
         .map_err(|error| error.to_string())?
         .block_on(refused_bounds(&plan, "erp", stub));
     Ok((problem, runs))
+}
+
+/// The route of a table whose source streams rows into Arrow.
+pub(crate) fn streamed_route() -> Route {
+    Route {
+        steps: vec![Step::ReadArrow, Step::DestinationTakesArrow],
+        reason: "the source streams rows".to_owned(),
+    }
+}
+
+/// The route of a table whose files SQLLoad must read itself, as a column is masked.
+pub(crate) fn masked_files_route() -> Route {
+    Route {
+        steps: vec![
+            Step::UseFiles(FileSet {
+                store: Store::Local("drop/".to_owned()),
+                format: FileFormat::Parquet,
+            }),
+            Step::FileReader(FileFormat::Parquet),
+            Step::DestinationTakesArrow,
+        ],
+        reason: "SQLLoad reads the files because email is masked with hmac".to_owned(),
+    }
 }

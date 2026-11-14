@@ -5,7 +5,7 @@ use crate::helpers::{
     after_sample, gzip, local_store, plain, run_async, run_text_files_scenario, seaweedfs_store,
     zstd,
 };
-use crate::test_types::{TextFile, TextFilesRun, TextFilesScenarioTestCase};
+use crate::test_types::{PipedOutputTestCase, TextFile, TextFilesRun, TextFilesScenarioTestCase};
 
 const EVENTS_NOV_3: TextFile = TextFile {
     key: "day=2026-11-03/part-0.ndjson.gz",
@@ -353,7 +353,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
                         encode: plain,
                     }],
                     expected_error: "",
-                    expected_plan: "day from 2026-11-03 (destination maximum)",
+                    expected_plan: "reads   day >= 2026-11-03 (warehouse maximum)",
                 },
             ],
             check_query: "SELECT string_agg(id || ':' || day, ',' ORDER BY id) FROM raw.scores",
@@ -421,4 +421,55 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_plan_and_load_piped_when_colour_is_left_on_then_no_output_has_an_escape_code()
+-> Result<(), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("drop/orders")).map_err(|error| error.to_string())?;
+    std::fs::write(root.join("drop/orders/a.csv"), "id,qty\n1,2\n2,3\n")
+        .map_err(|error| error.to_string())?;
+    let config = root.join("sqlload.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{root}/out.duckdb\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Orders.\"\nconnection = \"files\"\npath = \"drop/orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\nchecks = {{ min_rows = 5 }}\n",
+            root = root.display()
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    let test_cases = [
+        PipedOutputTestCase {
+            description: "plan piped",
+            args: &["plan"],
+            expected_table: "orders",
+        },
+        PipedOutputTestCase {
+            description: "load piped, with the live block forced on and events on stderr",
+            args: &["load", "--progress", "always", "--events", "jsonl"],
+            expected_table: "orders",
+        },
+    ];
+    for test_case in test_cases {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+            .arg("--config")
+            .arg(&config)
+            .args(test_case.args)
+            .env_remove("NO_COLOR")
+            .output()
+            .map_err(|error| error.to_string())?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !text.contains('\u{1b}') && text.contains(test_case.expected_table),
+            "{}: {text:?}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

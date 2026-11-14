@@ -1,9 +1,10 @@
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
+use crate::files_helpers::run_source_row_upgrade;
 use crate::helpers::{
     local_store, run_async, run_files_scenario, run_large_partition, run_merge_case,
-    run_source_row_upgrade, seaweedfs_store,
+    seaweedfs_store,
 };
 use crate::test_types::SourceRowUpgradeTestCase;
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
@@ -311,12 +312,20 @@ fn given_a_table_from_before_source_rows_when_loading_again_then_the_column_is_a
         SourceRowUpgradeTestCase {
             description: "by default",
             settings: "",
+            new_file: true,
             expected_rows: "1:-,2:-,3:1",
         },
         SourceRowUpgradeTestCase {
             description: "on_schema_change = fail is not blocked: it is the loader's own column",
             settings: "on_schema_change = \"fail\"",
+            new_file: true,
             expected_rows: "1:-,2:-,3:1",
+        },
+        SourceRowUpgradeTestCase {
+            description: "with no new file the change is still made: the table is not skipped as up to date",
+            settings: "",
+            new_file: false,
+            expected_rows: "1:-,2:-",
         },
     ];
     run_async(async {
@@ -581,7 +590,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 2_000,
                         }],
                         loads: true,
-                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
+                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
                         expected_plan: "",
                     },
                 ],
@@ -616,7 +625,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         modified_secs: 1_000,
                     }],
                     loads: true,
-                    expected_error: "drop/a.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (5)",
+                    expected_error: "drop/a.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (5)",
                     expected_plan: "",
                 }],
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
@@ -645,7 +654,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                                 modified_secs: 3_000,
                             },
                         ],
-                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
+                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
                         loads: true,
                         expected_plan: "",
                     },
@@ -830,7 +839,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
                 ],
                 expected_error: "",
                 loads: true,
-                expected_plan: "1 batch of whole partitions, up to 1,000 files or about 1 GB per commit",
+                expected_plan: "1 batch, up to 1,000 files or about 1 GB per commit",
             }],
             check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY v) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = '_sqlload_runs')",
             expected_result: "1:a,1:b|0",

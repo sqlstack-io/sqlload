@@ -73,11 +73,13 @@ Objects (1)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: id ← {primary_key})
+└── raw.app__orders                                 merge (unique_key: id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
-    └── cursor  updated_at first run, everything
+    ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
+    ├── reads   updated_at: first run, everything
+    ├── columns 5
+    └── commits once, at the end of the read (updated_at isn't read in order)
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
 
@@ -86,11 +88,13 @@ const PINNED_DESCRIBE: &str = "id BIGINT YES|label VARCHAR YES|amount DECIMAL(10
 const PINNED_SECOND_PLAN: &str = "Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: id ← {primary_key})
+└── raw.app__orders                                 merge (unique_key: id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
-    └── cursor  updated_at from 2026-11-02 10:00:00.000000+00 (destination maximum)
+    ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
+    ├── reads   updated_at >= 2026-11-02 10:00:00.000+00 (warehouse maximum)
+    ├── columns 5
+    └── commits once, at the end of the read (updated_at isn't read in order)
 
 ✓ Plan complete  1 selected, 1 to load";
 
@@ -202,24 +206,28 @@ Objects (1)                                         sqlload apply
     └── + _dlt_load_id, _loaded_at, _dlt_id
 
 Loads (1)                                           sqlload load
-└── app__orders_v2                                  merge (unique_key: order_id)
+└── raw.app__orders_v2                              merge (unique_key: order_id)
     ├── source  postgres  app  public.Orders-V2
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
-    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
-    └── cursor  seq first run, from cursor_start 0
+    ├── key     from unique_key; the source reports the same primary key
+    ├── reads   seq >= 0 (first run, from cursor_start)
+    ├── columns 4, named by naming = \"dlt\": OrderID -> order_id, Seq -> seq, ...
+    ├── commits 3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
+    └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
 
 const DLT_SECOND_PLAN: &str = "Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
-└── app__orders_v2                                  merge (unique_key: order_id)
+└── raw.app__orders_v2                              merge (unique_key: order_id)
     ├── source  postgres  app  public.Orders-V2
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
-    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
-    └── cursor  seq from 2 (destination maximum)
+    ├── key     from unique_key; the source reports the same primary key
+    ├── reads   seq >= 2 (warehouse maximum)
+    ├── columns 4, named by naming = \"dlt\": OrderID -> order_id, Seq -> seq, ...
+    ├── commits 2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
+    └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 to load";
 
@@ -426,7 +434,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 select: "tenant_b",
                 untouched_tenant: "a",
                 unreadable: "",
-                expected_cursor: "cursor  updated_at empty table, everything",
+                expected_cursor: "reads   updated_at: empty table, everything",
                 expected_warning: "",
                 expected_values: "a:1:a-one,a:2:a-two,b:1:b-one,b:3:b-three",
             },
@@ -436,7 +444,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 select: "app",
                 untouched_tenant: "b",
                 unreadable: "",
-                expected_cursor: "cursor  updated_at from 2026-11-06 10:00:00.000000+00 (destination maximum)",
+                expected_cursor: "reads   updated_at >= 2026-11-06 10:00:00.000+00 (warehouse maximum)",
                 expected_warning: "",
                 expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three",
             },
@@ -446,7 +454,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 select: "tenant_b",
                 untouched_tenant: "a",
                 unreadable: "",
-                expected_cursor: "cursor  updated_at from 2026-11-02 10:00:00.000000+00 (destination maximum)",
+                expected_cursor: "reads   updated_at >= 2026-11-02 10:00:00.000+00 (warehouse maximum)",
                 expected_warning: "",
                 expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three,b:4:b-four",
             },
@@ -456,7 +464,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
                 select: "tenant_b",
                 untouched_tenant: "a",
                 unreadable: "app",
-                expected_cursor: "cursor  updated_at from 2026-11-03 10:00:00.000000+00 (destination maximum)",
+                expected_cursor: "reads   updated_at >= 2026-11-03 10:00:00.000+00 (warehouse maximum)",
                 expected_warning: "app could not be read, so tenant_b.b.orders may share a destination table with it",
                 expected_values: "a:1:a-one-changed,a:2:a-two,b:1:b-one,b:3:b-three,b:4:b-four,b:5:b-five",
             },
@@ -528,7 +536,7 @@ fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_k
             description: "a constant added to an append table of its own: its NULLs in earlier rows don't restart the cursor, so no row loads twice",
             before: ADDED_CONSTANT_BEFORE,
             after: ADDED_CONSTANT_AFTER,
-            expected_cursor: "cursor  id after 2 (destination maximum)",
+            expected_cursor: "reads   id > 2 (warehouse maximum)",
             check_query: ADDED_CONSTANT_ROWS_QUERY,
             expected_result: "1:one:,2:two:",
         }];
@@ -643,8 +651,13 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
             };
             let outcome = load_selected(&project, &destinations, &[]).await;
             let error = outcome.err().unwrap_or_default();
+            let words = error
+                .split_whitespace()
+                .filter(|word| *word != "│")
+                .collect::<Vec<_>>()
+                .join(" ");
             assert!(
-                error.contains(test_case.expected_error)
+                words.contains(test_case.expected_error)
                     && error.is_empty() == test_case.expected_error.is_empty(),
                 "{}: {error}",
                 test_case.description

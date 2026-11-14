@@ -451,6 +451,8 @@ pub(crate) struct SourceRowUpgradeTestCase {
     pub(crate) description: &'static str,
     /// TOML added to the source.
     pub(crate) settings: &'static str,
+    /// Whether the second load has a new file to read; without one the table is otherwise up to date.
+    pub(crate) new_file: bool,
     /// Each row's id and row number, `-` for NULL.
     pub(crate) expected_rows: &'static str,
 }
@@ -1204,4 +1206,12 @@ pub(crate) struct NamedLikeTestCase {
     pub(crate) parent_id: &'static str,
     /// Rows left in `orders__notes/orders__x__items/orders__tags/orders__items`.
     pub(crate) expected_result: &'static str,
+}
+
+/// A command run with its output piped, and a table its output must name.
+pub(crate) struct PipedOutputTestCase {
+    pub(crate) description: &'static str,
+    /// The arguments after `--config sqlload.toml`.
+    pub(crate) args: &'static [&'static str],
+    pub(crate) expected_table: &'static str,
 }

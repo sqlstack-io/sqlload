@@ -82,6 +82,20 @@ pub(crate) struct ViewLinesTestCase {
     pub(crate) expected_output: &'static str,
 }
 
+/// A table of one plan: its name, its target, and the route its rows take.
+pub(crate) struct RoutedTable {
+    pub(crate) name: &'static str,
+    pub(crate) target: &'static str,
+    pub(crate) route: fn() -> crate::routing::models::Route,
+}
+
+/// Tables of one plan, and the plan's `to` and `route` lines.
+pub(crate) struct RouteLinesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) tables: &'static [RoutedTable],
+    pub(crate) expected_lines: &'static [&'static str],
+}
+
 /// Errors items before merging, and each merged item's name.
 pub(crate) struct MergedErrorsTestCase {
     pub(crate) description: &'static str,

@@ -1,6 +1,6 @@
 use sqlload_testkit::fake_sheets::main::start_fake_sheets::start_fake_sheets;
 
-use crate::helpers::{duckdb_text, run_async, run_sqlload};
+use crate::helpers::{duckdb_text, run_async, run_sqlload, words};
 use crate::sheets_helpers::{
     duplicated_tabs, edited_tabs, first_tabs, project_text, retyped_tabs, run_with_cache,
     user_project_text,
@@ -58,7 +58,7 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
             fake.state.lock().refuse_requests = test_case.refused_reads;
             let (succeeded, output) = run_sqlload(&config, &["load"], ("", ""))?;
             assert!(
-                succeeded && output.contains(test_case.expected_output),
+                succeeded && words(&output).contains(&words(test_case.expected_output)),
                 "{}:\n{output}",
                 test_case.description
             );
@@ -118,7 +118,7 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
                 .map_err(|error| error.to_string())?;
             let (succeeded, output) = run_sqlload(&config, &["plan"], ("", ""))?;
             assert!(
-                !succeeded && output.contains(test_case.expected_output),
+                !succeeded && words(&output).contains(&words(test_case.expected_output)),
                 "{}:\n{output}",
                 test_case.description
             );
@@ -181,7 +181,7 @@ fn given_a_google_user_connection_when_loading_then_its_refresh_token_reads_and_
             let grants = fake.state.lock().grants.clone();
             assert!(
                 code == Some(test_case.expected_code)
-                    && output.contains(test_case.expected_output)
+                    && words(&output).contains(&words(test_case.expected_output))
                     && output
                         .contains(&format!("\"retryable\": {}", test_case.expected_code == 75))
                     && grants.is_empty() == test_case.expected_grant.is_none()
