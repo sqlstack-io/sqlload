@@ -17,8 +17,6 @@ pub(crate) struct SelectFilesTestCase {
     pub(crate) loaded: &'static [(&'static str, &'static str)],
     /// Whether loaded files leave the folder (`after_load`).
     pub(crate) removed: bool,
-    /// Whether the destination records loaded files' versions.
-    pub(crate) versions_known: bool,
     pub(crate) cursor_type: Option<ColumnType>,
     pub(crate) bounds: (Option<&'static str>, Option<&'static str>),
     /// The keys chosen, or the error text.

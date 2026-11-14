@@ -1258,25 +1258,30 @@ pub(crate) async fn plan_files(
         false => None,
     };
     let skips_loaded = spec.strategy == WriteStrategy::Append;
-    if skips_loaded
-        && request.live.is_some()
-        && !live_has(request.live, SOURCE_FILE_COLUMN)
-        && !request.options.reload
-    {
-        return Ok(Err(format!(
-            "the table has no {SOURCE_FILE_COLUMN} column, so append cannot tell which files are loaded and would load them all again; {}",
-            column_fix(spec.warehouse)
-        )));
-    }
-    if skips_loaded
-        && !request
-            .written
-            .iter()
-            .any(|name| name == SOURCE_FILE_COLUMN)
-    {
-        return Ok(Err(format!(
-            "{SOURCE_FILE_COLUMN} must be loaded: append uses it to skip files already loaded"
-        )));
+    let append_columns = [
+        (
+            SOURCE_FILE_COLUMN,
+            "which files are loaded and would load them all again",
+            "skip files already loaded",
+        ),
+        (
+            SOURCE_VERSION_COLUMN,
+            "a file rewritten in place, or a new file under a loaded name, from one already loaded",
+            "tell a file rewritten in place, or a new file under a loaded name, from one already loaded; stop excluding it",
+        ),
+    ];
+    for (column, missing, needed) in append_columns.into_iter().filter(|_| skips_loaded) {
+        if request.live.is_some() && !live_has(request.live, column) && !request.options.reload {
+            return Ok(Err(format!(
+                "the table has no {column} column, so append cannot tell {missing}; {}",
+                column_fix(spec.warehouse)
+            )));
+        }
+        if !request.written.iter().any(|name| name == column) {
+            return Ok(Err(format!(
+                "{column} must be loaded: append uses it to {needed}"
+            )));
+        }
     }
     let live_has = |column: &str| live_has(request.live, column);
     let loaded: Vec<LoadedFile> =
@@ -1306,7 +1311,6 @@ pub(crate) async fn plan_files(
         location: &location,
         loaded: &loaded,
         removed: spec.after_load != AfterLoad::Keep,
-        versions_known: live_has(SOURCE_VERSION_COLUMN),
         cursor,
         from: request.bounds.0,
         to: request.bounds.1,

@@ -1201,15 +1201,35 @@ def test_given_non_finite_floats_in_an_arrow_list_when_loading_then_a_pinned_arr
 	assert query(project, 'SELECT id, xs::VARCHAR FROM "RAW".shop__inferred ORDER BY id') == [(1, "[null,null,null,1.5]"), (2, None), (3, "[null]")]
 
 
-def test_given_an_int_array_pinned_over_arrow_float_lists_when_planning_then_the_cut_is_noted(tmp_path: Path) -> None:
-	data = "__import__('pyarrow').table({'id': [1], 'xs': [[1.5, 2.0]]})"
+def test_given_an_int_array_pinned_over_arrow_float_lists_of_whole_numbers_when_loading_then_they_load_without_a_note(tmp_path: Path) -> None:
+	data = "__import__('pyarrow').table({'id': [1], 'xs': [[1.0, 2.0]]})"
 	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': 'array(int)'}})(lambda ctx: [{data}])\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 0, planned.stderr
-	assert "xs array(int)   -> BIGINT[]  (float elements of Arrow and Parquet lists are cut to whole numbers)" in planned.stdout, planned.stdout
+	assert "xs array(int)   -> BIGINT[]\n" in planned.stdout, planned.stdout
 	load(project)
 	assert query(project, 'SELECT xs::VARCHAR FROM "RAW".shop__t') == [("[1, 2]",)]
+
+
+@pytest.mark.parametrize(
+	("data", "column_type", "message"),
+	[
+		("__import__('pyarrow').table({'id': [1], 'xs': [[2.0, 1.5]]})", "array(int)", "an element holds 1.5, which int64 can't hold without losing digits"),
+		("__import__('pyarrow').table({'id': [1], 'xs': [[1.25, 1.239]]})", "array(decimal(10,2))", "an element holds 1.239, which decimal(10,2) can't hold without losing digits"),
+		("{'id': 1, 'xs': [1.25, 1.239]}", "array(decimal(10,2))", "holds 1.239, which decimal(10,2) can't hold without losing digits"),
+	],
+	ids=["arrow-floats-into-int", "arrow-floats-into-decimal", "dict-list-into-decimal"],
+)
+def test_given_an_array_pin_when_an_element_would_lose_digits_then_the_load_fails_and_nothing_loads(
+	tmp_path: Path, data: str, column_type: str, message: str
+) -> None:
+	module = f"import sqlload as sl\nshop = sl.source('shop')\nshop.table(description='Test table.', name='t', columns={{'xs': '{column_type}'}})(lambda ctx: [{data}])\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert message in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(0,)]
 
 
 @pytest.mark.parametrize(

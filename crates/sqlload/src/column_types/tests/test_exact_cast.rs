@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use arrow_array::{Decimal128Array, Float32Array, Float64Array, Int64Array, StringArray};
 use arrow_cast::display::array_value_to_string;
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Field};
 
 use crate::column_types::main::exact_cast::exact_cast;
+use crate::column_types::tests::helpers::float_lists;
 use crate::column_types::tests::test_types::{ExactCastErrorTestCase, ExactCastTestCase};
 
 #[test]
@@ -45,6 +46,18 @@ fn given_a_pinned_narrower_type_when_every_value_fits_exactly_then_it_converts()
             input: Arc::new(Int64Array::from(vec![-7])),
             to: DataType::Int16,
             expected_value: "-7",
+        },
+        ExactCastTestCase {
+            description: "a sliced list is held only to the elements of its own rows",
+            input: float_lists(&[&[1.5], &[2.0]]).slice(1, 1),
+            to: DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            expected_value: "[2]",
+        },
+        ExactCastTestCase {
+            description: "a list of whole floats converts to a list of integers",
+            input: float_lists(&[&[1.0, 2.0]]),
+            to: DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            expected_value: "[1, 2]",
         },
     ];
     for test_case in test_cases {
@@ -89,6 +102,12 @@ fn given_a_pinned_narrower_type_when_a_value_would_lose_digits_then_the_cast_fai
             ),
             to: DataType::Decimal128(10, 2),
             expected_message: "holds 12.345, which decimal(10,2) can't hold without losing digits",
+        },
+        ExactCastErrorTestCase {
+            description: "a list element with a fraction into a list of integers fails",
+            input: float_lists(&[&[2.0, 1.5]]),
+            to: DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            expected_message: "an element holds 1.5, which int64 can't hold without losing digits",
         },
     ];
     for test_case in test_cases {

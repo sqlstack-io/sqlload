@@ -93,10 +93,11 @@ Arrays come from:
 - Python lists, in dicts or in Arrow data.
 
 A value that doesn't convert to `T`, such as `"abc"` in an `array(int)`, fails the load rather than
-loading as NULL. From JSON text, `1.5` in an `array(int)` fails. Elements of a Parquet or Arrow
-list don't yet get the exact check a pinned column gets: floats pinned `array(int)` are cut to whole
-numbers (from 0.29.0, `plan` notes this on the column), and extra decimal places are rounded to
-the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
+loading as NULL. Elements convert as a pinned column of `T` would, so from 0.45.0 an element that
+`T` can't hold exactly fails the load, naming it: `1.5` in an `array(int)`, or `1.239` in an
+`array(decimal(10,2))`, from JSON text, Python lists, Arrow lists or Parquet lists alike. Before
+0.45.0, float elements of Arrow and Parquet lists pinned `array(int)` were cut to whole numbers
+(which `plan` noted), and extra decimal places were rounded to the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
 0.29.0, a list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
 converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values. In
 Python dicts, in Arrow lists that load as `json`, and in a table whose batches mix dicts and Arrow

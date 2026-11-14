@@ -165,8 +165,6 @@ pub struct FileSelection<'a> {
     pub loaded: &'a [LoadedFile],
     /// Whether loaded files leave the folder once they load (`after_load`), so a loaded name at another version is a new file, not one rewritten in place.
     pub removed: bool,
-    /// Whether the destination records loaded files' versions (it has `_sqlload_source_version`), so a loaded file without one is an error rather than skipped.
-    pub versions_known: bool,
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,
