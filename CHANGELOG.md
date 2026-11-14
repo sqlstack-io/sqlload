@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.50.0](https://github.com/sqlstack-io/sqlload/compare/v0.49.0...v0.50.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **http:** a field or key_path path using [*], .*, a filter, a slice, .. or a bracket in a key name now fails before any request instead of loading NULL (or reading a key literally named with brackets). Use [n] or [-1] for one item, or select the list's items as rows.
+
+### Features
+
+* **http:** read list items by index in field paths, and refuse path syntax that loaded NULL ([#249](https://github.com/sqlstack-io/sqlload/issues/249)) ([64f1025](https://github.com/sqlstack-io/sqlload/commit/64f1025a7825ca60f643e27d11f277d8c8772554))
+
 ## [0.49.0](https://github.com/sqlstack-io/sqlload/compare/v0.48.0...v0.49.0) (2026-11-14)
 
 
