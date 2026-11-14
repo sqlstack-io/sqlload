@@ -121,6 +121,12 @@ How `rest_api` settings map:
   connections are retried, honouring `Retry-After`; `retries=` on `sl.http` sets how many times.
 - An API that returns each row as a list of cells, such as a spreadsheet's, is `cells=sl.cells(...)`;
   see [Rows of cells](/docs/sources/python/#rows-of-cells).
+- `include_from_parent` is `sl.key(name)` in a fan-out's `fields`. Records an adapter reshapes in
+  Python, such as one flat row per Jira change history with its issue's ID, are a `select` through
+  both lists with `sl.parent`: `select="$.issueChangeLogs[*].changeHistories[*]"` and
+  `fields={"issue_id": sl.parent("$.issueId"), "created": sl.field("$.created", parse="epoch_ms"), ...}`,
+  with `key_path=sl.parent("$.issueId")` to check each history belongs to an issue the request
+  asked for. See [Values from around the row](/docs/sources/python/#values-from-around-the-row).
 
 ## Files: filesystem to a files source
 

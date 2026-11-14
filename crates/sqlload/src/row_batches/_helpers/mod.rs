@@ -3,6 +3,7 @@ pub(crate) mod cells;
 pub(crate) mod flatten;
 pub(crate) mod json_document;
 pub(crate) mod json_seed;
+pub(crate) mod parsed;
 pub(crate) mod projected;
 pub(crate) mod projection_seed;
 pub(crate) mod unnest;

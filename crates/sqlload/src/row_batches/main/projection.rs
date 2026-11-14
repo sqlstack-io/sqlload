@@ -1,11 +1,12 @@
 //! A projection of JSON row objects: which values load, under which column names.
 
+use crate::row_batches::_helpers::parsed::format_problem;
 use crate::row_batches::_helpers::projected::{column_name, names_field, path, path_tree};
-use crate::row_batches::models::{ProjectedField, Projection};
+use crate::row_batches::models::{FieldSpec, ProjectedField, Projection};
 
-/// The projection `fields` (column name, path such as `$.address.city`, whether required) and `keep_record` describe, `None` when neither is given, or why it can't be read.
+/// The projection `fields` and `keep_record` describe, `None` when neither is given, or why it can't be read.
 pub fn projection(
-    fields: Option<&[(String, String, bool)]>,
+    fields: Option<&[FieldSpec]>,
     keep_record: Option<&str>,
 ) -> Result<Option<Projection>, String> {
     let fields = match (fields, keep_record) {
@@ -26,12 +27,17 @@ pub fn projection(
     }
     let projected = fields
         .iter()
-        .map(|(name, text, required)| {
+        .map(|field| {
+            if let Some(problem) = field.parse.as_ref().and_then(format_problem) {
+                return Err(format!("fields[{:?}]: {problem}", field.name));
+            }
             Ok(ProjectedField {
-                name: column_name(name)?,
-                path: path(text)?,
-                text: text.clone(),
-                required: *required,
+                name: column_name(&field.name)?,
+                path: path(&field.path)?,
+                text: field.path.clone(),
+                required: field.required,
+                parse: field.parse.clone(),
+                on_error: field.on_error,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

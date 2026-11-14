@@ -6,6 +6,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
 
+use crate::row_batches::models::FieldSpec;
+
 /// A job a table function built with `sl.http(...)`: run entirely in Rust, its pages parsed like `sl.json(...)` bytes.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -52,6 +54,24 @@ pub struct Request {
     /// What a response without the `select` path means.
     #[serde(default)]
     pub select_missing: SelectMissing,
+    /// In a fan-out, where each record's key is, checked against the keys its request sent.
+    #[serde(default)]
+    pub key_path: Option<KeyPath>,
+}
+
+/// `fan_out(key_path=...)`: a path to each record's key, from the record or an object around it (`sl.parent`).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KeyPath {
+    pub path: String,
+    #[serde(default)]
+    pub from: crate::row_batches::models::FieldFrom,
+}
+
+/// What a fan-out request's rows take from the request rather than the response: its key's fields, for `sl.key`, and, for `key_path`, the key values it sent (as text).
+#[derive(Debug, Clone, Default)]
+pub struct RowContext {
+    pub key: Map<String, Value>,
+    pub sent: Option<Vec<String>>,
 }
 
 /// What a response without a request's `select` path means: an error (an API answering an error with a 200 status looks like this), or, chosen for APIs that leave empty lists out, no rows.
@@ -120,22 +140,19 @@ pub enum Location {
     Body,
 }
 
+/// A page requested ahead (`read_ahead`), with what it fetched.
+#[derive(Debug)]
+pub struct AheadPage {
+    pub call: PageCall,
+    pub fetched: Result<Option<Fetched>, crate::python_sources::errors::ReadError>,
+}
+
 /// One request of a page: its method, URL and JSON body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageCall {
     pub method: Method,
     pub url: reqwest::Url,
     pub body: Option<Value>,
-}
-
-/// One projected column of a job's rows.
-#[derive(Debug, Clone, Deserialize)]
-pub struct FieldSpec {
-    pub name: String,
-    /// Such as `$.address.city`.
-    pub path: String,
-    #[serde(default)]
-    pub required: bool,
 }
 
 /// A request per key of `over`.
@@ -293,6 +310,9 @@ pub enum Paginator {
         limit: u64,
         #[serde(default)]
         location: Location,
+        /// Pages requested at once after a full first page, their rows still loaded in page order; `None` reads one at a time.
+        #[serde(default)]
+        read_ahead: Option<u64>,
     },
     /// `param` counts pages from `start`; ends at an empty page.
     PageNumber {
@@ -300,6 +320,9 @@ pub enum Paginator {
         start: u64,
         #[serde(default)]
         location: Location,
+        /// As `Offset`'s.
+        #[serde(default)]
+        read_ahead: Option<u64>,
     },
     /// The token at `pointer` in the response goes back as `param`; ends when it is missing, null or empty.
     Cursor {
@@ -335,6 +358,8 @@ pub struct HttpPage {
 pub struct Selector {
     pub rows: Vec<String>,
     pub field: Option<String>,
+    /// Past the first list (`[*]`), the path on from each of its items to the rows, through more lists (`[*]`), such as `changeHistories`, `[*]` for `$.issueChangeLogs[*].changeHistories[*]`; empty when the rows are the first list's items.
+    pub within: Vec<String>,
 }
 
 /// A connection resolved for requests: its base URL, headers and credentials.

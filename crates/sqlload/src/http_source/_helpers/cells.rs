@@ -17,7 +17,7 @@ pub(crate) fn cells_problem(cells: &Cells) -> Option<String> {
             format!("cells path {path:?} is not a path such as \"$.cells\" or \"$.value\"")
         });
         match parsed {
-            Ok(parsed) if parsed.field.is_none() => {}
+            Ok(parsed) if parsed.field.is_none() && parsed.within.is_empty() => {}
             Ok(_) => {
                 return Some(format!(
                     "cells path {path:?} cannot pick from a list with [*]"

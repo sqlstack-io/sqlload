@@ -5,38 +5,50 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 
+use std::collections::VecDeque;
+
 use reqwest::Url;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::http_source::_helpers::cells::pivoted_rows;
 use crate::http_source::_helpers::fetch::fetch;
 use crate::http_source::_helpers::job::request_projection;
+use crate::http_source::_helpers::reshaped::{reshapes, wrapped_projection, wrapped_rows};
 use crate::http_source::_helpers::selector::{
     missing_path, pointer_text, pointer_value, selected_node, selector,
 };
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{
-    Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request,
-    SelectMissing, Selector,
+    AheadPage, Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request,
+    RowContext, SelectMissing, Selector,
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested that many at a time, each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up, and is aborted when the run ends), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
 pub(crate) async fn paginate(
     calls: &Calls,
-    request: &Request,
+    (request, context): (&Request, &RowContext),
     path: &str,
     pages: &Sender<HttpPage>,
 ) -> Result<(), ReadError> {
     let rows = selector(request.select.as_deref())?;
-    let projection = request_projection(request)?;
+    let reshaped = reshapes(request, &rows);
+    let own = request_projection(request)?;
+    let projection = match reshaped {
+        true => wrapped_projection(request)?,
+        false => own.clone(),
+    };
     let rows_path = Some(rows.rows.join(".")).filter(|path| !path.is_empty());
     let first = request_url(&calls.endpoint.base_url, path)?;
     let mut call = page_call(request, &first, start_values(&request.paginator))?;
     let mut seen: HashSet<(Url, Option<String>)> = HashSet::new();
     let mut previous: Option<u64> = None;
     let mut names: Option<CellNames> = None;
+    let ahead = read_ahead(&request.paginator);
+    let mut in_flight: VecDeque<AbortOnDropHandle<AheadPage>> = VecDeque::new();
+    let mut queued: u64 = 1;
     for step in 1_u64.. {
         let shown = redacted(
             &format!("{} {}", call.method.as_str(), call.url),
@@ -49,7 +61,40 @@ pub(crate) async fn paginate(
             )
             .into());
         }
-        let Some(fetched) = fetch(calls, &call).await? else {
+        let fetched = match (step, ahead) {
+            (1, _) | (_, 1) => fetch(calls, &call).await?,
+            _ => {
+                while queued < step + ahead - 1 {
+                    queued += 1;
+                    let ahead_call = counted_call(request, &first, queued)?;
+                    let ahead_calls = calls.clone();
+                    in_flight.push_back(AbortOnDropHandle::new(tokio::spawn(async move {
+                        let fetched = fetch(&ahead_calls, &ahead_call).await;
+                        AheadPage {
+                            call: ahead_call,
+                            fetched,
+                        }
+                    })));
+                }
+                let next =
+                    match in_flight.pop_front() {
+                        Some(handle) => Some(handle.await.map_err(|error| {
+                            format!("{shown}: a page read ahead stopped: {error}")
+                        })?),
+                        None => None,
+                    };
+                match next {
+                    Some(ahead) if ahead.call == call => ahead.fetched?,
+                    Some(_) | None => {
+                        return Err(format!(
+                            "{shown}: the pages read ahead fell out of order with the paginator"
+                        )
+                        .into());
+                    }
+                }
+            }
+        };
+        let Some(fetched) = fetched else {
             return Ok(());
         };
         let digest = counted(&request.paginator).then(|| digest(&fetched.bytes));
@@ -90,6 +135,12 @@ pub(crate) async fn paginate(
                 names = used;
                 (text.into_bytes(), None)
             }
+            (None, Some(document)) if reshaped => (
+                wrapped_rows(document, &rows, (request, own.as_ref()), context)
+                    .map_err(|error| format!("{shown}: {error}"))?
+                    .into_bytes(),
+                None,
+            ),
             (Some(_), None) | (None, _) => (fetched.bytes, rows_path.clone()),
         };
         let page = HttpPage {
@@ -205,7 +256,8 @@ fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Val
         | Paginator::Cursor { .. }
         | Paginator::Offset { .. }
         | Paginator::PageNumber { .. } => true,
-    } || request.cells.is_some();
+    } || request.cells.is_some()
+        || reshapes(request, rows);
     match reads_body {
         true => serde_json::from_slice(bytes)
             .map(Some)
@@ -229,6 +281,42 @@ fn digest(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
+}
+
+/// How many pages an offset or page-number paginator keeps in flight: its `read_ahead`, else 1, as every other paginator reads one page at a time.
+fn read_ahead(paginator: &Paginator) -> u64 {
+    match paginator {
+        Paginator::Offset { read_ahead, .. } | Paginator::PageNumber { read_ahead, .. } => {
+            read_ahead.map_or(1, |pages| pages.max(1))
+        }
+        Paginator::Single
+        | Paginator::NextLink { .. }
+        | Paginator::LinkHeader
+        | Paginator::Cursor { .. } => 1,
+    }
+}
+
+/// The request for the `step`th page of an offset or page-number paginator, which `next_call` reaches from the page before it: offset `(step - 1) * limit`, or page `start + step - 1`.
+fn counted_call(request: &Request, first: &Url, step: u64) -> Result<PageCall, String> {
+    let values = match &request.paginator {
+        Paginator::Offset {
+            param,
+            limit_param,
+            limit,
+            ..
+        } => vec![
+            (param.clone(), Value::from((step - 1) * limit)),
+            (limit_param.clone(), Value::from(*limit)),
+        ],
+        Paginator::PageNumber { param, start, .. } => {
+            vec![(param.clone(), Value::from(start + step - 1))]
+        }
+        Paginator::Single
+        | Paginator::NextLink { .. }
+        | Paginator::LinkHeader
+        | Paginator::Cursor { .. } => start_values(&request.paginator),
+    };
+    page_call(request, first, values)
 }
 
 /// The paginator's values on the first request.

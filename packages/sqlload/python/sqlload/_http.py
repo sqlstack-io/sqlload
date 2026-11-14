@@ -10,7 +10,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from sqlload._data import Fields, field_list
+from sqlload._data import Field, Fields, field_list
 from sqlload._declare import Source
 
 #: Default retries of a request that failed with a transport error, 429 or a 5xx.
@@ -75,33 +75,57 @@ def single() -> Paginator:
 	return Paginator({"kind": "single"})
 
 
-def next_link(pointer: str) -> Paginator:
+def next_link(pointer: str, *, read_ahead: int | None = None) -> Paginator:
 	"""The next page's URL at `pointer` in the body (such as `"$.next"`); ends when missing, null or empty."""
+	_no_read_ahead("sl.next_link", read_ahead)
 	return Paginator({"kind": "next_link", "pointer": pointer})
 
 
-def link_header() -> Paginator:
+def link_header(*, read_ahead: int | None = None) -> Paginator:
 	"""The `Link` header's `rel="next"` URL."""
+	_no_read_ahead("sl.link_header", read_ahead)
 	return Paginator({"kind": "link_header"})
 
 
-def offset(param: str = "offset", *, limit: int, limit_param: str = "limit", location: str = "query") -> Paginator:
+def offset(
+	param: str = "offset", *, limit: int, limit_param: str = "limit", location: str = "query", read_ahead: int | None = None
+) -> Paginator:
 	"""`param` counts rows from 0 by `limit`; ends at a page with fewer than `limit` rows.
 
-	With `location="body"`, `param` and `limit_param` are paths in the POST's JSON body, such as `"$.page.offset"`."""
-	return Paginator({"kind": "offset", "param": param, "limit_param": limit_param, "limit": limit, "location": _location(location)})
+	With `location="body"`, `param` and `limit_param` are paths in the POST's JSON body, such as `"$.page.offset"`.
+	With `read_ahead=N`, the pages after a full first page are requested N at a time and still loaded in page order."""
+	return Paginator(
+		{"kind": "offset", "param": param, "limit_param": limit_param, "limit": limit, "location": _location(location), **_read_ahead(read_ahead)}
+	)
 
 
-def page_number(param: str = "page", *, start: int = 1, location: str = "query") -> Paginator:
-	"""`param` counts pages from `start`; ends at an empty page. With `location="body"`, `param` is a path in the JSON body."""
-	return Paginator({"kind": "page_number", "param": param, "start": start, "location": _location(location)})
+def page_number(param: str = "page", *, start: int = 1, location: str = "query", read_ahead: int | None = None) -> Paginator:
+	"""`param` counts pages from `start`; ends at an empty page. With `location="body"`, `param` is a path in the JSON body.
+
+	With `read_ahead=N`, the pages after a full first page are requested N at a time and still loaded in page order."""
+	return Paginator({"kind": "page_number", "param": param, "start": start, "location": _location(location), **_read_ahead(read_ahead)})
 
 
-def cursor(pointer: str, param: str, *, location: str = "query") -> Paginator:
+def cursor(pointer: str, param: str, *, location: str = "query", read_ahead: int | None = None) -> Paginator:
 	"""The token at `pointer` in the response goes back as query parameter `param`; ends when missing, null or empty.
 
 	With `location="body"`, `param` is a path in the POST's JSON body, such as `"$.page.cursor"`."""
+	_no_read_ahead("sl.cursor", read_ahead)
 	return Paginator({"kind": "cursor", "pointer": pointer, "param": param, "location": _location(location)})
+
+
+def _read_ahead(read_ahead: int | None) -> dict[str, Any]:
+	"""`read_ahead` as a paginator field, left out when unset so paginators without it are unchanged."""
+	if read_ahead is not None and (isinstance(read_ahead, bool) or not isinstance(read_ahead, int)):
+		raise TypeError(f"read_ahead takes a whole number of pages, not {read_ahead!r}")
+	return {} if read_ahead is None else {"read_ahead": read_ahead}
+
+
+def _no_read_ahead(paginator: str, read_ahead: int | None) -> None:
+	if read_ahead is not None:
+		raise ValueError(
+			f"{paginator} cannot take read_ahead: each page's address comes from the page before it; read_ahead needs sl.offset or sl.page_number"
+		)
 
 
 def _location(location: str) -> str:
@@ -260,6 +284,7 @@ class Http:
 		cells: Cells | None = None,
 		batch: int | None = None,
 		select_missing: str = "fail",
+		key_path: str | Field | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -273,14 +298,31 @@ class Http:
 		a value that is just `"{id}"` takes the key as it is (a number stays a number), and `plan` checks a level
 		above gives every one. `batch=1000` sends up to 1000 keys per request instead, each such value holding the
 		list of the batch's keys (`{"ids": "{id}"}` sends `{"ids": [1, 2, 3]}`); each batch is one request,
-		retried as a whole. `select_missing` is as for `paginate`."""
+		retried as a whole. `select_missing` is as for `paginate`.
+
+		`key_path="$.issueId"` (from each record, or `sl.parent("$.issueId")` from an object around it) fails the
+		table when a record's key is not among the keys its request sent (with `batch=`, the batch's), catching an
+		API that answers for other keys."""
 		if isinstance(over, (str, bytes)):
 			raise TypeError("fan_out over= takes a paginate or fan_out job or a list of values, not one string")
 		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
 		batched = {} if batch is None else {"batch": batch}
-		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), **_select_missing(select_missing), "over": over_spec, "concurrency": concurrency, **batched})
+		return Job(
+			{
+				"kind": "fan_out",
+				**request,
+				**projected,
+				**_key(key),
+				**_cells(cells),
+				**_select_missing(select_missing),
+				**_key_path(key_path),
+				"over": over_spec,
+				"concurrency": concurrency,
+				**batched,
+			}
+		)
 
 	def _request(
 		self,
@@ -323,10 +365,21 @@ def _select_missing(select_missing: str) -> dict[str, Any]:
 	return {} if select_missing == "fail" else {"select_missing": select_missing}
 
 
+def _key_path(key_path: str | Field | None) -> dict[str, Any]:
+	"""`key_path` as a job field, left out when unset so jobs without it are unchanged."""
+	if key_path is None:
+		return {}
+	if isinstance(key_path, str):
+		return {"key_path": {"path": key_path}}
+	if isinstance(key_path, Field) and key_path.source is not None and key_path.source.get("kind") == "parent":
+		return {"key_path": {"path": key_path.path, "from": dict(key_path.source)}}
+	raise TypeError(f'key_path takes a path such as "$.issueId" or sl.parent(...), not {key_path!r}')
+
+
 def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:
 	listed = field_list(fields)
 	return {
-		"fields": None if listed is None else [{"name": name, "path": path, "required": required} for name, path, required in listed],
+		"fields": listed,
 		"keep_record": keep_record,
 	}
 

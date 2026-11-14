@@ -82,6 +82,33 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             expected_problems: &["sl.offset limit must be at least 1"],
         },
         JobProblemsTestCase {
+            description: "a page-number read-ahead of zero pages",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"page_number","param":"p","start":1,"read_ahead":0}}"#,
+            expected_problems: &["read_ahead must be at least 1 page"],
+        },
+        JobProblemsTestCase {
+            description: "a read-ahead of more pages than the cap",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":10,"read_ahead":101}}"#,
+            expected_problems: &[
+                "read_ahead 101 is more than 100 pages at once; most APIs refuse that many open requests",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a cursor pointer through a list",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"cursor","pointer":"$.meta[*].next","param":"after"}}"#,
+            expected_problems: &[
+                "paginator pointer \"$.meta[*].next\" is not a path such as \"$.next\" or \"$.meta.next_cursor\"",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "key_path on a fan-out that feeds keys to the level below, and key_path at the whole record",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$"},"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/p/{x}","paginator":{"kind":"single"},"select":"$.items[*].id","concurrency":1,"key_path":{"path":"$.x"},"over":{"kind":"values","values":[1]}}}"#,
+            expected_problems: &[
+                "fan_out's over picks keys with its select; key_path checks the records of the fan-out that loads rows",
+                "key_path \"$\" is not a path such as \"$.issueId\"; use dotted field names after \"$\"",
+            ],
+        },
+        JobProblemsTestCase {
             description: "a paginate selecting a key field",
             job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id"}"#,
             expected_problems: &[

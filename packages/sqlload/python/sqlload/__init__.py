@@ -28,7 +28,7 @@ import shutil
 import sysconfig
 from importlib.metadata import version
 
-from sqlload._data import checkpoint, field, json, ndjson
+from sqlload._data import checkpoint, field, json, key, ndjson, parent
 from sqlload._http import (
 	Cells,
 	Http,
@@ -70,6 +70,7 @@ __all__ = [
 	"field",
 	"http",
 	"json",
+	"key",
 	"link_header",
 	"ndjson",
 	"next_link",
@@ -78,6 +79,7 @@ __all__ = [
 	"oauth2_refresh_token",
 	"offset",
 	"page_number",
+	"parent",
 	"single",
 	"source",
 	"table",

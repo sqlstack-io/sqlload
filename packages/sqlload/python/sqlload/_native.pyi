@@ -31,7 +31,7 @@ class JsonData:
 		*,
 		lines: bool = False,
 		path: str | None = None,
-		fields: list[tuple[str, str, bool]] | None = None,
+		fields: str | None = None,
 		keep_record: str | None = None,
 	) -> JsonData: ...
 	@property

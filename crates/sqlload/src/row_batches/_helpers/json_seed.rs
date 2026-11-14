@@ -3,8 +3,9 @@ use serde::de::{DeserializeSeed, Deserializer, Error as _, MapAccess, SeqAccess,
 use serde_json::value::RawValue;
 
 use crate::row_batches::_helpers::cells::number_cell;
+use crate::row_batches::_helpers::parsed::{parsed, shown};
 use crate::row_batches::_helpers::projection_seed::projected_values;
-use crate::row_batches::models::{Cell, Projection, RowColumns};
+use crate::row_batches::models::{BadValue, Cell, Projection, RowColumns};
 
 /// Collects parsed rows and hands them to `on_rows` every `batch_rows` rows.
 pub(crate) struct RowSink<F: FnMut(RowColumns) -> Result<(), String>> {
@@ -89,6 +90,22 @@ impl<F: FnMut(RowColumns) -> Result<(), String>> RowSink<F> {
                     field.name, field.text
                 ));
             }
+            let cell = match (&field.parse, cell) {
+                (Some(parse), cell) if cell != Cell::Null => {
+                    match (parsed(&cell, parse), field.on_error) {
+                        (Ok(cell), _) => cell,
+                        (Err(_), BadValue::Null) => Cell::Null,
+                        (Err(expected), BadValue::Fail) => {
+                            return Err(format!(
+                                "row {row}: field {} holds {}, which is not {expected}; fix the value, or set on_error=\"null\" on its sl.field to load NULL",
+                                field.name,
+                                shown(value.map_or("null", |value| value.get()))
+                            ));
+                        }
+                    }
+                }
+                (_, cell) => cell,
+            };
             columns.push(&field.name, cell);
         }
         if let Some(kept) = &projection.keep_record {

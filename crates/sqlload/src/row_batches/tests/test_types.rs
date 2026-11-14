@@ -53,8 +53,8 @@ pub(crate) struct ProjectionTestCase {
     pub(crate) description: &'static str,
     pub(crate) layout: JsonLayout,
     pub(crate) batch_rows: usize,
-    /// Column, path and whether required, as `sl.json(..., fields=...)` passes them.
-    pub(crate) fields: Option<&'static [(&'static str, &'static str, bool)]>,
+    /// The `sl.field` specs as `sl.json(..., fields=...)` passes them, a JSON list.
+    pub(crate) fields: Option<&'static str>,
     pub(crate) keep_record: Option<&'static str>,
     pub(crate) text: &'static str,
     /// Each batch rendered as `schema / rows`, or the error text.
