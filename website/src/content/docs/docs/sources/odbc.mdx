@@ -187,11 +187,12 @@ escape values, such as
 
 From 0.47.0, a timestamp bound has the fractional digits the driver describes for its column: three
 for milliseconds (1 to 3 digits), six for microseconds (4 to 6). Before, it always had seven, which
-a driver may refuse for a column with fewer. A bound with more digits than the column, such as a
-`--start-cursor` of `10:00:00.1235` on a millisecond column, moves onto the column's digits so it
-selects the same rows: down after `>`, up for `>=` and `<`. When the driver describes the column
-with no digits, as MySQL Connector/ODBC describes every `DATETIME(n)`, or with seven or more, the
-bound keeps every digit, as before. SQL Server keeps its own handling: a timestamp binds with seven
+a driver may refuse for a column with fewer. A bound with more digits than that, such as a
+`--start-cursor` of `10:00:00.1235` on a millisecond column, or a maximum from a driver that
+describes fewer digits than its values hold, keeps every digit and is never rounded, so it selects
+exactly the rows it did before. When the driver describes the column with no digits, as MySQL
+Connector/ODBC describes every `DATETIME(n)`, or with seven or more, the bound keeps every digit,
+as before. SQL Server keeps its own handling: a timestamp binds with seven
 digits, compared as `datetime2(7)`, except against a legacy `datetime`, which stores 1/300 s ticks
 that its driver reads rounded to milliseconds, so its bounds go as ISO 8601 text
 (`2026-01-31T23:59:59.997`) in the column's own precision, which SQL Server converts to the
@@ -212,7 +213,7 @@ cursor_bounds = "literals"
 
 | Cursor | Bound |
 |--------|-------|
-| Timestamp without a time zone | `{ts '2026-01-31 23:59:59.997'}`, with the column's fractional digits, moved onto them as above; when the driver describes none, the fewest of 0, 3, 6 or 9 that keep the value |
+| Timestamp without a time zone | `{ts '2026-01-31 23:59:59.997'}`, with the column's fractional digits when the bound has no more (as above), else the fewest of 0, 3, 6 or 9 that keep every digit |
 | Date | `{d '2026-01-31'}` |
 | Number | `41`, as with parameters |
 | Text | `'o''brien'`, in single quotes with each quote doubled |
@@ -220,21 +221,22 @@ cursor_bounds = "literals"
 It covers every bound: after the destination's maximum, `--start-cursor`, `--end-cursor`,
 `cursor_start`, `lookback` and each `batch_size` window. Keep the default on SQL Server: its
 `{ts}` escape is a `datetime`, which rounds milliseconds to 1/300 s. A text bound holding a
-backslash reads differently on a database that treats a backslash in a string as an escape, as
-MySQL does by default.
+backslash is refused under literals, as a database that treats a backslash in a string as an
+escape, MySQL by default, would read it as another value; bind it as a parameter instead.
 
 ### Checked at plan
 
 From 0.47.0, `plan` (and `load`, which plans first) checks each ODBC table whose text, date or
 timestamp cursor binds: it runs the table's query once with bounds that select no rows,
-`"updated_at" > v AND "updated_at" < v` with `v` the planned lower bound, and fetches nothing. When
-the driver refuses the bounds but takes them written the other way, the table fails and the error
-names the setting:
+`"updated_at" > v AND "updated_at" < v AND 1 = 0`, with `v` the planned lower bound (else the upper
+bound, else a fixed value of the cursor's type), and fetches nothing. When the driver refuses the
+bounds but takes them written the other way, and refuses them again its own way, the table fails
+and the error names the setting:
 
 ```text
 Errors (1)
 └── items
-    └── reason  the ODBC driver refuses the cursor updated_at's bounds as parameters ([HY000] …) but takes them as ODBC escapes; set cursor_bounds = "literals" on source erp
+    └── reason  the ODBC driver refuses the cursor updated_at's bounds as parameters ([HY000] …) but takes them as ODBC escapes; set cursor_bounds = "literals" on source erp or its table entry
 ```
 
 When both ways fail, the error shows both of the driver's errors.
