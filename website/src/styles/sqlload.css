@@ -273,20 +273,24 @@ starlight-toc a[aria-current='true']:hover {
 	color: var(--sld-fg);
 }
 
-/* Tables */
+/* Tables: full width, in a box (src/docs-tables.mjs) that scrolls sideways when a table can't fit. */
+.sld-table {
+	--sld-scroll-shadow: color-mix(in srgb, var(--sld-fg) 16%, transparent);
+	overflow-x: auto;
+	/* A shadow on a side with more table to scroll to; the covers move with the table and hide it at the ends. */
+	background:
+		linear-gradient(to right, var(--sld-bg) 40%, transparent) left / 2rem 100% no-repeat local,
+		linear-gradient(to left, var(--sld-bg) 40%, transparent) right / 2rem 100% no-repeat local,
+		radial-gradient(farthest-side at 0 50%, var(--sld-scroll-shadow), transparent) left / 0.75rem 100% no-repeat scroll,
+		radial-gradient(farthest-side at 100% 50%, var(--sld-scroll-shadow), transparent) right / 0.75rem 100% no-repeat scroll;
+}
+
 .sl-markdown-content table {
 	display: table;
 	width: 100%;
 	border-collapse: collapse;
 	font-size: 14px;
 	line-height: 1.5;
-}
-
-@media (max-width: 50rem) {
-	.sl-markdown-content table {
-		display: block;
-		overflow-x: auto;
-	}
 }
 
 .sl-markdown-content :is(th, td) {
@@ -300,7 +304,6 @@ starlight-toc a[aria-current='true']:hover {
 	background: transparent;
 	color: var(--sld-fg);
 	font-weight: 600;
-	white-space: nowrap;
 	border-bottom-color: var(--sld-line-strong);
 }
 
@@ -312,8 +315,14 @@ starlight-toc a[aria-current='true']:hover {
 	color: var(--sld-muted);
 }
 
-.sl-markdown-content td:first-child code {
+/* A key in the first column never wraps; a signature or message there wraps only between words. */
+.sl-markdown-content td:first-child code,
+.sl-markdown-content code.sld-words > span {
 	white-space: nowrap;
+}
+
+.sl-markdown-content td:first-child code.sld-words {
+	white-space: normal;
 }
 
 /* Search */
