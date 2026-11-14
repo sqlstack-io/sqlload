@@ -272,7 +272,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
                 "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
                 "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
                 CH_DELTA_INSERT,
-                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"(isNull(`id`), assumeNotNull(`id`)) IN (SELECT isNull(`id`), assumeNotNull(`id`) FROM `raw`.`app__accounts__sqlload_staging_load1_swap`)\"}}",
+                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"(isNull(`id`), ifNull(`id`, defaultValueOfArgumentType(assumeNotNull(`id`)))) IN (SELECT isNull(`id`), ifNull(`id`, defaultValueOfArgumentType(assumeNotNull(`id`))) FROM `raw`.`app__accounts__sqlload_staging_load1_swap`)\"}}",
                 "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
             ],
         },

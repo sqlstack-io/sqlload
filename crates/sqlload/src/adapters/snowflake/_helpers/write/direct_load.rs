@@ -32,7 +32,7 @@ use crate::loader::models::TableSpec;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
-/// Load `batch` by having Snowflake `COPY` its files itself: from the external stage the writer loads through where it covers them, otherwise, with `copy_to_internal_stage`, after uploading them unchanged to `@~` (removed once copied). Fails where the batch's own footers do not allow an exact load: files never fall back to SQLLoad. `None` when neither applies.
+/// Load `batch` by having Snowflake `COPY` its files itself: from the external stage the writer loads through where it covers them, otherwise, with `copy_to_internal_stage`, after uploading them unchanged to `@~` (removed once copied). Fails where the batch's own footers do not allow an exact load: files never fall back to SQLLoad. A batch hashing a column is copied into a temporary table and hashed from it: into the build table; into the staging table under a mode matching keys (a merge), so the commit checks the keys (`null_keys`, `on_duplicate_keys`) and the table's checks before it writes them; otherwise into the table itself. `None` when neither applies.
 impl SnowflakeWriter {
     pub(in crate::adapters) async fn copy_files(
         &mut self,
@@ -174,15 +174,24 @@ impl SnowflakeWriter {
             > MAX_SCRIPT_BYTES;
         if hashes || oversized {
             let id = staging_id(batch.target.load_id, chrono::Utc::now().naive_utc());
-            let held = held_types(batch.write_columns);
+            let keyed = batch
+                .target
+                .staging
+                .cloned()
+                .filter(|_| !batch.target.builds && batch.mode.staged_key().is_some());
+            let carried = match keyed {
+                Some(_) => staged_as_text(batch.target.columns),
+                None => batch.write_columns.to_vec(),
+            };
+            let held = held_types(&carried);
             let (staging, create) = SnowflakeSql.render_create_staging_table(
                 &spec.destination,
                 &held,
                 &format!("{id}_hashed"),
             );
             let create = create.replacen("TRANSIENT TABLE", "TEMPORARY TABLE", 1);
-            let columns = filled_columns(spec, (read, batch.live), batch.write_columns, literals);
-            let bare = staged_as_text(batch.write_columns);
+            let columns = filled_columns(spec, (read, batch.live), &carried, literals);
+            let bare = staged_as_text(&carried);
             let hashed: Vec<String> = spec
                 .masked
                 .columns
@@ -194,7 +203,8 @@ impl SnowflakeWriter {
                 .target
                 .staging
                 .cloned()
-                .filter(|_| batch.target.builds);
+                .filter(|_| batch.target.builds)
+                .or(keyed);
             let mode = match (&build, batch.mode) {
                 (Some(_), _) => &WriteMode::Append,
                 (None, WriteMode::Replace | WriteMode::Recreate) => {

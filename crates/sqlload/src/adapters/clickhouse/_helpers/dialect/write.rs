@@ -148,7 +148,7 @@ pub(crate) fn write_statements(
     ]
 }
 
-/// The key columns of `mode` (a merge's `unique_key`, a `delete_insert`'s `replace_key`), as the `IN` choosing the rows a delta replaces lists them: a column whose values may be NULL as whether it is NULL and its value, so a NULL matches a NULL (the `IN` also runs in a lightweight `DELETE`, a mutation, which ignores a session's `transform_null_in`), and a default value (`''`, `0`) does not.
+/// The key columns of `mode` (a merge's `unique_key`, a `delete_insert`'s `replace_key`), as the `IN` choosing the rows a delta replaces lists them: a column whose values may be NULL as whether it is NULL and its value, a NULL replaced by its type's default (`assumeNotNull` gives only the type there, as its value for a NULL is undefined), so a NULL matches a NULL (the `IN` also runs in a lightweight `DELETE`, a mutation, which ignores a session's `transform_null_in`), and a default value (`''`, `0`) does not.
 fn displaced_keys(adapter: &ClickHouseSql, mode: &WriteMode) -> String {
     let keys: Vec<String> = mode
         .matched_keys()
@@ -156,7 +156,9 @@ fn displaced_keys(adapter: &ClickHouseSql, mode: &WriteMode) -> String {
         .map(|(key, nullable)| {
             let name = adapter.render_identifier(key);
             match nullable {
-                true => format!("isNull({name}), assumeNotNull({name})"),
+                true => format!(
+                    "isNull({name}), ifNull({name}, defaultValueOfArgumentType(assumeNotNull({name})))"
+                ),
                 false => name,
             }
         })

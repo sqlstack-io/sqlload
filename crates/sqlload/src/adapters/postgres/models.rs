@@ -29,6 +29,21 @@ pub struct PostgresDestination {
     pub ddl: Arc<tokio::sync::Mutex<()>>,
 }
 
+/// An existing table's unique indexes on a merge key, as `KEY_INDEX_SQL` reads them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct KeyIndexes {
+    /// How many unique indexes `ON CONFLICT` can use on exactly the key.
+    pub(crate) count: i64,
+    /// How many of them treat NULLs as equal (`NULLS NOT DISTINCT`).
+    pub(crate) nulls_equal: i64,
+    /// The names of the others, joined by `, `.
+    pub(crate) others: String,
+    /// The statements that drop the others, joined by `; `: `ALTER TABLE ... DROP CONSTRAINT` for one backing a primary key or unique constraint, `DROP INDEX` otherwise.
+    pub(crate) drops: String,
+    /// The key columns the table declares NOT NULL (as stored), which never hold NULL whatever the source says.
+    pub(crate) not_null: Vec<String>,
+}
+
 /// One table's write session on Postgres: each batch is sent by binary `COPY` into the temporary staging table on the table's own session.
 #[derive(Debug)]
 pub struct PostgresWriter {

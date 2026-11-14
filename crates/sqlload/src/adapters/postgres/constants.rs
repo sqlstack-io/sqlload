@@ -25,16 +25,30 @@ pub const COPY_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub const NO_INTERNAL_STAGE_COPY: &str =
     "copy_to_internal_stage is for Snowflake targets; Postgres takes the rows by binary COPY";
 
-/// The unique indexes `ON CONFLICT` can use for a key: valid, checked immediately, not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order). Their count, how many treat NULLs as equal (`NULLS NOT DISTINCT`, read through `to_jsonb` as the column is missing before Postgres 15), and the names of the others.
+/// The unique indexes `ON CONFLICT` can use for a key: valid, checked immediately, not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order). Their count, how many treat NULLs as equal (`NULLS NOT DISTINCT`, read through `to_jsonb` as the column is missing before Postgres 15), the names of the others, the statements dropping them (the constraint an index backs, or the index), and the key columns the table declares NOT NULL.
 pub const KEY_INDEX_SQL: &str = "
-SELECT count(*),
-       count(*) FILTER (WHERE COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false)),
+SELECT count(i.indexrelid),
+       count(i.indexrelid) FILTER (WHERE x.nulls_equal),
        COALESCE(string_agg(format('%I.%I', n.nspname, ic.relname), ', ' ORDER BY ic.relname)
-         FILTER (WHERE NOT COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false)), '')
+         FILTER (WHERE NOT x.nulls_equal), ''),
+       COALESCE(string_agg(CASE WHEN con.conname IS NULL THEN format('DROP INDEX %I.%I', n.nspname, ic.relname)
+                                ELSE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', n.nspname, c.relname, con.conname) END,
+                           '; ' ORDER BY ic.relname)
+         FILTER (WHERE NOT x.nulls_equal), ''),
+       ARRAY(
+         SELECT a.attname::text FROM pg_catalog.pg_attribute a
+         JOIN pg_catalog.pg_class t ON t.oid = a.attrelid
+         JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+         WHERE tn.nspname = $1 AND t.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+           AND a.attnotnull AND a.attname = ANY ($3::text[])
+         ORDER BY a.attname COLLATE \"C\"
+       )
 FROM pg_catalog.pg_index i
 JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
 JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL (SELECT COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false) AS nulls_equal) x
+LEFT JOIN pg_catalog.pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u')
 WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indisvalid AND i.indimmediate
   AND i.indpred IS NULL AND i.indexprs IS NULL
   AND ARRAY(

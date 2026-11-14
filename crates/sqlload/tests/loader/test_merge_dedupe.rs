@@ -17,18 +17,18 @@ use crate::test_types::{
     ReplaceKeyTargetTestCase,
 };
 
-/// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value.
+/// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value, and the empty key (`/`) apart from the NULL one.
 const NULL_KEY_ROWS: [&str; 3] = [
-    "bolt/s1:1,bolt/NULL:2,NULL/NULL:3",
-    "bolt/s1:11,bolt/NULL:12,NULL/NULL:13",
-    "bolt/s1:21,bolt/NULL:22,NULL/NULL:23",
+    "/:4,bolt/s1:1,bolt/NULL:2,NULL/NULL:3",
+    "/:14,bolt/s1:11,bolt/NULL:12,NULL/NULL:13",
+    "/:24,bolt/s1:21,bolt/NULL:22,NULL/NULL:23",
 ];
 
 /// [`NULL_KEY_ROWS`] on Postgres 15, followed by the unique index SQLLoad created, which treats NULLs as equal.
 const POSTGRES_NULL_KEY_ROWS: [&str; 3] = [
-    "bolt/s1:1,bolt/NULL:2,NULL/NULL:3 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
-    "bolt/s1:11,bolt/NULL:12,NULL/NULL:13 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
-    "bolt/s1:21,bolt/NULL:22,NULL/NULL:23 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+    "/:4,bolt/s1:1,bolt/NULL:2,NULL/NULL:3 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+    "/:14,bolt/s1:11,bolt/NULL:12,NULL/NULL:13 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+    "/:24,bolt/s1:21,bolt/NULL:22,NULL/NULL:23 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
 ];
 
 /// What `delete_insert` on `updated_at` with `replace_key = ["le_version"]` holds after each load: P01 replaced whole (line C gone, though its rows lie below the cursor), P02 read again, P00 untouched, and the line without a version replaced by the new one, a NULL matching a NULL.

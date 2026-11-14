@@ -102,10 +102,10 @@ pub(crate) async fn run_dedupe_case(
         .map_err(|error| error.to_string())
 }
 
-/// `public.stock`, keyed by `(company, item, site)` with no constraint: one key whole, one without a site, one without an item or a site.
+/// `public.stock`, keyed by `(company, item, site)` with no constraint: one key whole, one without a site, one without an item or a site, and one whose item and site are empty, which must not match the NULLs.
 const STOCK_SETUP: &str = "
 CREATE TABLE public.stock (company text, item text, site text, qty int8);
-INSERT INTO public.stock VALUES ('acme', 'bolt', 's1', 1), ('acme', 'bolt', NULL, 2), ('acme', NULL, NULL, 3);
+INSERT INTO public.stock VALUES ('acme', 'bolt', 's1', 1), ('acme', 'bolt', NULL, 2), ('acme', NULL, NULL, 3), ('acme', '', '', 4);
 ";
 
 /// The change made to `public.stock` after each load: every row's `qty` grows by 10.

@@ -48,8 +48,8 @@ pub(crate) struct NullKeysProblemTestCase {
     pub(crate) nullable: &'static [&'static str],
     /// `server_version_num` and the version as Postgres prints it.
     pub(crate) version: (i32, &'static str),
-    /// The table's unique indexes on the key: how many, how many treat NULLs as equal, and the names of the others; `None` for a table not created yet.
-    pub(crate) indexes: Option<(i64, i64, &'static str)>,
+    /// The table's unique indexes on the key: how many, how many treat NULLs as equal, the names of the others and the statements dropping them; `None` for a table not created yet.
+    pub(crate) indexes: Option<(i64, i64, &'static str, &'static str)>,
     /// Text the problem holds; `None` when the merge can run.
     pub(crate) expected_problem: Option<&'static str>,
 }

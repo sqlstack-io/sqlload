@@ -176,6 +176,14 @@ impl SqlAdapter for PostgresSql {
         format!("TRUNCATE {}", self.render_qualified_name(staging))
     }
 
+    /// A key column that may be NULL compared as `=` or both NULL: Postgres cannot hash, merge or index a join on `IS NOT DISTINCT FROM`, so it runs one as a nested loop over every row, while it can drive this form through an index on the key.
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("({left} = {right} OR ({left} IS NULL AND {right} IS NULL))"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     /// `INSERT ... ON CONFLICT (key) DO UPDATE`, which needs a unique index or constraint on exactly the key; the staged rows are first kept to one per key when the mode dedupes; otherwise a key repeated within them fails the statement, changing nothing.
     fn render_merge(
         &self,

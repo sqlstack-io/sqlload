@@ -511,6 +511,60 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 check_query: MERGE_CHECK,
                 expected_result: "1:a2|3",
             },
+            FilesMergeTestCase {
+                description: "an existing table whose key is a NOT NULL primary key merges a files source, whose columns may all be NULL, through that primary key, without asking for an index treating NULLs as equal",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[
+                            "CREATE SCHEMA raw",
+                            "CREATE TABLE raw.scores (id int8 PRIMARY KEY, v text)",
+                            "INSERT INTO raw.scores VALUES (1, 'old'), (3, 'kept')",
+                        ],
+                        files: &[MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n2,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "merge (unique_key: id; repeated keys fail; NULLs in keys match)",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n2,b\n",
+                            modified_secs: 2_000,
+                        }],
+                        expected_error: "",
+                        loads: true,
+                        expected_plan: "1 file, one commit each",
+                    },
+                ],
+                check_query: MERGE_CHECK,
+                expected_result: "1:a,2:b,3:kept|2",
+            },
+            FilesMergeTestCase {
+                description: "an existing table whose key may be NULL, unique through a constraint treating NULLs as distinct, is refused with an index to create concurrently and the constraint to drop, which DROP INDEX cannot",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[
+                        "CREATE SCHEMA raw",
+                        "CREATE TABLE raw.scores (id int8 UNIQUE, v text)",
+                    ],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n1,a\n",
+                        modified_secs: 1_000,
+                    }],
+                    expected_error: "create one that treats them as equal, CREATE UNIQUE INDEX CONCURRENTLY ON \"raw\".\"scores\" (\"id\") NULLS NOT DISTINCT, then ALTER TABLE raw.scores DROP CONSTRAINT scores_id_key",
+                    loads: true,
+                    expected_plan: "",
+                }],
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+                expected_result: "0",
+            },
         ];
         for test_case in &test_cases {
             client

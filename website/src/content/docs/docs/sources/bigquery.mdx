@@ -66,8 +66,11 @@ which bills nothing. A `[sources.marts.tables."dataset.table"]` entry sets optio
 its own, it doesn't add the table.
 
 A source needs at least one `include` pattern or one query table. A `merge` table merges on the
-primary key the table declares with `unique_key = "{primary_key}"`, or on the columns you name. A
-table's description becomes the table's description.
+primary key the table declares with `unique_key = "{primary_key}"`, or on the columns you name.
+BigQuery doesn't enforce primary keys, and from 0.51.0 `plan` refuses `"{primary_key}"` when a key
+column is `NULLABLE`, as it usually is; name the `unique_key` columns then (see
+[NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys)). A table's description becomes
+the table's description.
 
 ## How tables are read
 
