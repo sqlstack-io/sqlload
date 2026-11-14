@@ -40,6 +40,7 @@ sql = "SELECT id, name FROM sales.items WHERE id > 2400"
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  DuckDB local
 
 Objects (2)                                         sqlload apply
 ├── raw.erp__items                                  create table
@@ -55,13 +56,16 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── erp__items                                      merge (unique_key: id)
+├── raw.erp__items                                  merge (unique_key: id)
 │   ├── source  odbc  erp  sales.items
 │   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── cursor  updated_at first run, everything
-└── erp__recent                                     replace
+│   ├── reads   updated_at: first run, everything
+│   └── commits once, at the end of the read (updated_at isn't read in order)
+└── raw.erp__recent                                 replace
     ├── source  odbc  erp  query recent
     └── route   read as Arrow -> DuckDB takes Arrow
+
+✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
 
 ## Connection
@@ -161,8 +165,11 @@ database's `INFORMATION_SCHEMA` lists a key the driver didn't report, the error 
 $ sqlload plan
 …
 Errors (1)
-└── items
-    ├── reason  items (kind = "odbc"): unique_key = "{primary_key}", but the source reports no primary key for the table. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)
+└── raw.erp__items                                  no key to merge on
+    ├── reason  items (kind = "odbc"): unique_key = "{primary_key}", but the source reports no
+    │           primary key for the table. The ODBC driver reported no primary key, but the
+    │           database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is
+    │           wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)
     └── fix     name the key columns, such as unique_key = ["id"]
 
 ✗ Plan failed with errors

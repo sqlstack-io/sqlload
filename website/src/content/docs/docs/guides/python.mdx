@@ -94,15 +94,18 @@ def orders(ctx: sl.Context):
 ```
 
 ```console
+$ sqlload plan
+…
+└── raw.shop__orders                                merge (unique_key: order_id)
+    ├── source  python  sources/shop.py (shop)
+…
+    ├── schema  columns inferred on first load
+…
 $ sqlload load
 …
-└── shop__orders                                    merge (unique_key: order_id)
-    ├── source  python  sources/shop.py (shop)
-    ├── schema  columns inferred on first load
-    ├── route   read as Arrow -> DuckDB takes Arrow
-…
 created  raw.shop__orders  6 columns
-loaded   raw.shop__orders  2 rows  0.0s
+loaded  raw.shop__orders      2 rows 0.0s
+…
 ```
 
 The table loads into `shop__orders`: `{source}__{table}`, unless the source or table sets
@@ -160,11 +163,12 @@ def order_items(ctx):
 $ sqlload load
 …
 created  raw.shop__order_items  5 columns
-loaded   raw.shop__order_items  10 rows  1.2s
+loaded  raw.shop__order_items     10 rows 1.2s
 created  raw.shop__orders       5 columns
-loaded   raw.shop__orders       5 rows  1.0s
+loaded  raw.shop__orders           5 rows 1.0s
 
 ✓ Completed  2 loaded, 15 rows, 1.2s
+└── slowest      raw.shop__order_items 1.2s
 ```
 
 `paginate` reads every page of a path; `fan_out` requests a path once per key, here each order's

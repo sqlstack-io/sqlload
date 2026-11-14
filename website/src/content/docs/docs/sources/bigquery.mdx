@@ -36,15 +36,15 @@ write_strategy = "append"
 
 ```console
 $ sqlload plan
+…
 Loads (2)                                           sqlload load
-├── marts__events                                   append (cursor: event_at)
+├── raw.marts__events                               append (cursor: event_at)
 │   ├── source  bigquery  marts  marts.events
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── cursor  event_at after 2026-11-08 23:59:58.120000+00 (destination maximum)
-└── marts__recent                                   append (cursor: ordered_at)
+│   └── reads   event_at > 2026-11-08 23:59:58+00 (warehouse maximum)
+└── raw.marts__recent                               append (cursor: ordered_at)
     ├── source  bigquery  marts  query recent
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── cursor  ordered_at after 2026-11-08 23:41:07.500000+00 (destination maximum)
+    └── reads   ordered_at > 2026-11-08 23:41:07+00 (warehouse maximum)
+…
 ```
 
 ## Connection

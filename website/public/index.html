@@ -89,9 +89,9 @@ Objects (2)                                         sqlload apply
 Loads (1)                                           sqlload load
 └── orders                                          replace
     ├── source  files  s3://your-bucket/sqlload/orders/  parquet
-    ├── files   10 to read of 10 listed
     ├── route   <span class="ok">Snowflake COPYs directly from s3://your-bucket/sqlload/orders/ (nothing through the loader)</span>
-    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; <span class="dim">…</span>
+    ├── files   10 to read of 10 listed
+    └── batch   1 batch, up to 1,000 files or about 1 GB per commit
 
 <span class="ok">✓ Plan complete  1 selected, 2 objects to create, 1 to load</span>
 created  @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  stage on s3://your-bucket/sqlload/

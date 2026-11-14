@@ -34,28 +34,13 @@ SQLLoad is written in Rust. Python is needed only for Python sources.
 
 ```console
 $ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-Plan ready  1 selected, 1 object to create, 1 to load
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
 
-Objects (1)                                         sqlload apply
-└── raw.orders                                      create table
-    ├── order_id   int            -> BIGINT
-    ├── customer   text           -> VARCHAR
-    ├── total      float          -> DOUBLE
-    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
-
-Loads (1)                                           sqlload load
-└── orders                                          replace
-    ├── source  files  orders/  parquet
-    ├── files   1 to read of 1 listed
-    ├── route   DuckDB reads directly from orders/ (nothing through the loader)
-    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
-
-✓ Plan complete  1 selected, 1 object to create, 1 to load
 created  raw.orders  9 columns
-loaded   raw.orders  3 rows  0.0s
+loaded  raw.orders      3 rows 0.0s
 
-✓ Completed  1 loaded, 3 rows, 0.0s
+✓ Completed  1 loaded, 3 rows, 0.1s
+└── slowest      raw.orders 0.0s
 ```
 
 ## What it does

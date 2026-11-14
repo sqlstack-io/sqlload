@@ -43,16 +43,20 @@ Under `append`, each run loads only the files it hasn't loaded yet, by `_sqlload
 After one more file arrives:
 
 ```console
-$ sqlload load
+$ sqlload plan
 …
-└── events_log                                      append
+└── raw.events_log                                  append
     ├── source  files  lake/events/  parquet
     ├── files   1 new of 4 listed
     ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
-    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
+    └── batch   1 batch, up to 1,000 files or about 1 GB per commit
 
 ✓ Plan complete  1 selected, 1 to load
-loaded   raw.events_log  3 rows  0.0s
+$ sqlload load
+✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+
+loaded  raw.events_log      3 rows 0.0s
+…
 ```
 
 A file rewritten in place after it loaded fails the table, with the fix. When files change, load
@@ -77,17 +81,21 @@ cursor_column = "dt"
 ```
 
 ```console
-$ sqlload load
+$ sqlload plan
 …
-└── events                                          delete_insert (cursor: dt)
+└── raw.events                                      delete_insert (cursor: dt)
     ├── source  files  lake/events/  parquet
+    ├── reads   dt >= 2026-11-08 (warehouse maximum)
     ├── files   2 new of 3 listed
-    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
-    ├── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
-    └── cursor  dt from 2026-11-08 (destination maximum)
+    ├── commits 1 batch, up to 1,000 files or about 1 GB per commit
+    └── route   DuckDB reads directly from lake/events/ (nothing through the loader)
 
 ✓ Plan complete  1 selected, 1 to load
-loaded   raw.events  6 rows  0.0s
+$ sqlload load
+✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+
+loaded  raw.events      6 rows 0.0s
+…
 ```
 
 A partition is never split across commits. For values in folder and file names that aren't

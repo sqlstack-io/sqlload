@@ -111,8 +111,10 @@ The connection is an ordinary [`postgres` connection](/docs/configuration/#postg
 
 ```console
 Errors (1)
-└── app__orders
-    └── reason  tags: kind = "postgres_cdc" streams text[] values as the source wrote them, which the snapshot normalises as jsonb; pin it with columns = { tags = "text" }, or exclude it
+└── raw.app__orders
+    └── reason  tags: kind = "postgres_cdc" streams text[] values as the source wrote them, which
+                the snapshot normalises as jsonb; pin it with columns = { tags = "text" }, or
+                exclude it
 ```
 
 ### 3. Plan, apply and load
@@ -124,6 +126,7 @@ export PGPASSWORD=secret
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  DuckDB local
 
 Objects (2)                                         sqlload apply
 ├── raw.app__customers                              create table
@@ -140,28 +143,28 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  snapshot copy, then apply changes, soft deletes (key: customer_id)
+├── raw.app__customers                              snapshot copy, then apply changes, soft deletes (key: customer_id)
 │   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── batch   about every 1 GB
-└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
+│   └── route   read as Arrow -> DuckDB takes Arrow
+└── raw.app__orders                                 snapshot copy, then apply changes, soft deletes (key: order_id)
     ├── source  postgres_cdc  app  public.orders  slot sqlload_app
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── batch   about every 1 GB
+    └── route   read as Arrow -> DuckDB takes Arrow
 
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
 
 `sqlload apply` creates the tables. The first `sqlload load` creates the slot, `sqlload_app`, and
-copies every table under its snapshot (the plan is cut here):
+copies every table under its snapshot:
 
 ```console
 $ sqlload load
-…
-loaded   raw.app__customers  50 rows  0.2s
-loaded   raw.app__orders     1,000 rows  0.2s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+
+loaded  raw.app__customers     50 rows 0.2s
+loaded  raw.app__orders     1,000 rows 0.2s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.3s
+└── slowest      raw.app__customers 0.2s
 ```
 
 ### 4. Load the changes
@@ -178,11 +181,13 @@ the next load reads just those three changes:
 
 ```console
 $ sqlload load
-…
-loaded   raw.app__customers  0 rows  0.2s
-loaded   raw.app__orders     3 rows  0.2s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
 
-✓ Completed  2 loaded, 3 rows, 0.2s
+loaded  raw.app__customers      0 rows 0.2s
+loaded  raw.app__orders         3 rows 0.2s
+
+✓ Completed  2 loaded, 3 rows, 0.3s
+└── slowest      raw.app__customers 0.2s
 ```
 
 In `raw.app__orders`, the deleted order is kept and marked:
@@ -245,7 +250,7 @@ long ago its newest change committed. The two changes to one order load as one r
   ```
 
   The same column gained again, with nothing written in between, stops it.
-- **Only a whole plan follows.** From 0.50.0, a plan with errors in any selected source or table
+- **Only a whole plan follows.** From 0.51.0, a plan with errors in any selected source or table
   doesn't start it, since following the rest would move the slot past the changes of what didn't
   plan, and they'd be lost for good. It prints the plan with each error and its fix, then says how
   to leave them out to follow the rest: `--exclude <source>` for another source, or the table
@@ -307,10 +312,9 @@ GRANT SELECT ON refunds TO loader;
 ```console
 $ sqlload plan
 …
-└── app__refunds                                    snapshot copy, then apply changes, soft deletes (key: refund_id)
-    ├── source  postgres_cdc  app  public.refunds  slot sqlload_app
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── batch   about every 1 GB
+└── raw.app__refunds                                snapshot copy, then apply changes, soft deletes (key: refund_id)
+    └── source  postgres_cdc  app  public.refunds  slot sqlload_app
+…
 ```
 
 SQLLoad adds a new table to its own publication, `sqlload_<source>`, which needs a user that owns
@@ -320,7 +324,12 @@ stops:
 ```console
 $ sqlload load
 …
-failed   raw.app__refunds    publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
+failed  raw.app__customers  publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
+failed  raw.app__orders     publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
+failed  raw.app__refunds    publication app_changes does not publish "public"."refunds"; add them with ALTER PUBLICATION "app_changes" ADD TABLE "public"."refunds"
+
+✗ Completed with failures  3 failed, 0.1s
+…
 ```
 
 After `ALTER PUBLICATION app_changes ADD TABLE refunds;` as the owner, and `sqlload apply` to
@@ -330,11 +339,12 @@ changes, here one update to an order:
 ```console
 $ sqlload load
 …
-loaded   raw.app__customers  0 rows  0.4s
-loaded   raw.app__orders     1 rows  0.4s
-loaded   raw.app__refunds    20 rows  0.4s
+loaded  raw.app__customers      0 rows 0.4s
+loaded  raw.app__orders         1 row  0.4s
+loaded  raw.app__refunds       20 rows 0.4s
 
-✓ Completed  3 loaded, 21 rows, 0.4s
+✓ Completed  3 loaded, 21 rows, 0.5s
+└── slowest      raw.app__customers 0.4s
 ```
 
 A table leaving `include` still needs `--resnapshot`. If it joins again later while its destination
@@ -342,7 +352,7 @@ table still holds rows captured before that, the load stops rather than replace 
 asking:
 
 ```console
-failed   raw.app__refunds    rows captured before slot sqlload_app was recreated are still in app__refunds; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone
+failed  raw.app__refunds    rows captured before slot sqlload_app was recreated are still in app__refunds; copying those tables alone would replace them without asking, so run `sqlload load --resnapshot` to copy every table again (it asks first), or drop the tables from the destination to copy them alone
 ```
 
 Drop the destination table and run `sqlload apply`, and the next load copies it alone. An empty
@@ -355,7 +365,8 @@ creates it again and copies it:
 ```console
 $ sqlload plan
 …
-└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
+├── raw.app__orders                                 snapshot copy, then apply changes, soft deletes (key: order_id)
+…
 ```
 
 `sqlload load` creates the table, copies its 1,000 rows, and applies the other tables' changes.
@@ -395,10 +406,13 @@ $ sqlload load --resnapshot
 error: --resnapshot rebuilds app__customers, app__orders from the whole source, replacing what they hold; confirm it in a terminal, or add --yes
 $ sqlload load --resnapshot --yes
 …
-loaded   raw.app__customers  50 rows  0.2s
-loaded   raw.app__orders     1,000 rows  0.2s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+
+loaded  raw.app__customers     50 rows 0.2s
+loaded  raw.app__orders     1,000 rows 0.2s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.3s
+└── slowest      raw.app__customers 0.2s
 ```
 
 ### Reloading
@@ -410,23 +424,27 @@ is an ordinary `postgres` source next to `app`:
 
 ```console
 $ sqlload load --reload --yes
-…
 Errors (1)
-└── app__customers, app__orders
+└── raw.app__customers, raw.app__orders
     └── reason  a postgres_cdc table is copied again with --resnapshot, not --reload
 
 ✗ Plan failed with errors  3 selected, 1 object to create, 1 to load
-loaded   raw.shop__products  30 rows  0.0s
+
+created  raw.shop__products  4 columns
+loaded  raw.shop__products     30 rows 0.0s
 
 ✓ Completed  1 loaded, 30 rows, 0.1s
+└── slowest      raw.shop__products 0.0s
 ```
 
 To reload only the other tables, leave the source out:
 
 ```console
 $ sqlload load --reload --yes --exclude app
-…
-loaded   raw.shop__products  30 rows  0.0s
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+
+loaded  raw.shop__products     30 rows 0.0s
 
 ✓ Completed  1 loaded, 30 rows, 0.1s
+└── slowest      raw.shop__products 0.0s
 ```

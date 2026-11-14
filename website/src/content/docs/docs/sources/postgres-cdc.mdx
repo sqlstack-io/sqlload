@@ -63,6 +63,7 @@ loader_schema = "raw"
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  Databricks lakehouse
 
 Objects (2)                                         sqlload apply
 ├── raw.app__customers                              create table
@@ -79,14 +80,12 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_lsn, _op, _committed_at, _deleted_at, _load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  snapshot copy, then apply changes, soft deletes (key: customer_id)
+├── raw.app__customers                              snapshot copy, then apply changes, soft deletes (key: customer_id)
 │   ├── source  postgres_cdc  app  public.customers  slot sqlload_app
-│   ├── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
-│   └── batch   about every 1 GB
-└── app__orders                                     snapshot copy, then apply changes, soft deletes (key: order_id)
+│   └── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
+└── raw.app__orders                                 snapshot copy, then apply changes, soft deletes (key: order_id)
     ├── source  postgres_cdc  app  public.orders  slot sqlload_app
-    ├── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
-    └── batch   about every 1 GB
+    └── route   read as Arrow -> Parquet -> PUT to /Volumes/main/raw/stage -> COPY INTO
 
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
@@ -96,7 +95,7 @@ with `deletes = "hard"`, `apply changes, hard deletes`.
 
 Databricks' Statement Execution API commits every statement on its own, so each table's batch is
 written by one statement, after its rows are staged as Parquet in the volume and copied in with
-`COPY INTO`, as the plan's `route` shows:
+`COPY INTO`, as each table's `route` shows:
 
 - **`merge`** is one `MERGE` on the key. A truncate in the batch is that `MERGE`'s
   `WHEN NOT MATCHED BY SOURCE` clause, which marks (soft deletes) or removes (hard deletes) the
@@ -143,7 +142,6 @@ $ sqlload plan
     ├── source  postgres_cdc  app  public.orders  slot sqlload_app
     ├── files   lake/app/orders/  parquet (zstd)
     ├── schema  first files, 12 columns
-    ├── batch   about every 1 GB
     └── note    each batch of changes adds new files; a snapshot copy (the first load, a table joining the source, or --resnapshot) writes its files, then deletes every older file in the folder
 ```
 
@@ -154,17 +152,21 @@ from [step 4](/docs/guides/postgres-cdc/#4-load-the-changes):
 
 ```console
 $ sqlload load
-…
-loaded   lake/app/customers/  50 rows  0.2s
-loaded   lake/app/orders/     1,000 rows  0.2s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+
+loaded  lake/app/customers/     50 rows 0.2s
+loaded  lake/app/orders/     1,000 rows 0.2s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.2s
+└── slowest      lake/app/customers/ 0.2s
 $ sqlload load
-…
-loaded   lake/app/customers/  0 rows  0.3s
-loaded   lake/app/orders/     3 rows  0.3s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+
+loaded  lake/app/customers/      0 rows 0.3s
+loaded  lake/app/orders/         3 rows 0.3s
 
 ✓ Completed  2 loaded, 3 rows, 0.3s
+└── slowest      lake/app/customers/ 0.3s
 ```
 
 Then read the folder with DuckDB:
@@ -207,13 +209,15 @@ ORDER BY order_id, _sqlload_lsn;
 These are refused at `plan`:
 
 ```console
-└── public.customers, public.orders
-    └── reason  a files target takes kind = "postgres_cdc" only with cdc_mode = "changelog": Parquet files are append-only, so changes cannot be merged into rows
+└── app__customers, app__orders
+    └── reason  a files target takes kind = "postgres_cdc" only with cdc_mode = "changelog": Parquet
+                files are append-only, so changes cannot be merged into rows
 ```
 
 ```console
 └── app__customers, app__orders
-    └── reason  a postgres_cdc table writes one changelog, not partition folders; remove the cursor placeholder from its path
+    └── reason  a postgres_cdc table writes one changelog, not partition folders; remove the cursor
+                placeholder from its path
 ```
 
 `--reload` is refused for a captured table too; `--resnapshot` copies it again (see
@@ -262,7 +266,7 @@ If loads stop running, the slot keeps WAL until the disk fills. To cap it, set P
 `max_slot_wal_keep_size`. A slot past the cap is marked `lost`, and the next load stops:
 
 ```console
-failed   raw.app__orders     slot sqlload_app lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again
+failed  raw.app__orders     slot sqlload_app lost WAL it had not confirmed, so changes are missing; run `sqlload load --resnapshot` to drop and recreate it and copy every table again
 ```
 
 SQLLoad never drops a slot on its own, except under `--resnapshot`. When you remove a source, drop
@@ -310,7 +314,7 @@ table now holds:
   the stream can't tell from a rename. Run a load between the two.
 
 ```console
-failed   raw.app__customers  column tier of app__customers was added with a default (or as an identity or generated column), which fills existing rows without changes to stream; run `sqlload load --resnapshot` to copy every table again, or exclude the column
+failed  raw.app__customers  column tier of app__customers was added with a default (or as an identity or generated column), which fills existing rows without changes to stream; run `sqlload load --resnapshot` to copy every table again, or exclude the column
 ```
 
 A column added while a load runs stops that load before anything is written; run it again.
@@ -326,26 +330,31 @@ refused:
 
 ```console
 $ sqlload load app__orders
-…
 Errors (1)
-└── app__orders
-    └── reason  this selection leaves out public.customers of source app, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source
+└── raw.app__orders
+    └── reason  this selection leaves out public.customers of source app, whose changes share its
+                one slot and would be skipped; select the whole source, or move those tables to
+                another postgres_cdc source
+…
 ```
 
 A table without a primary key:
 
 ```console
 Errors (1)
-└── public.events
-    └── reason  public.events has no primary key; kind = "postgres_cdc" captures tables with one in this release (publishing a table without a replica identity makes Postgres refuse its updates and deletes); add a primary key, or exclude it
+└── raw.app__events
+    └── reason  public.events has no primary key; kind = "postgres_cdc" captures tables with one in
+                this release (publishing a table without a replica identity makes Postgres refuse
+                its updates and deletes); add a primary key, or exclude it
 ```
 
 A BigQuery target:
 
 ```console
 Errors (1)
-└── public.customers, public.orders
-    └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into files targets as a changelog, in this release; not BigQuery or ClickHouse
+└── raw.app__customers, raw.app__orders
+    └── reason  kind = "postgres_cdc" loads into DuckDB, Snowflake and Databricks targets, and into
+                files targets as a changelog, in this release; not BigQuery or ClickHouse
 ```
 
 A files target with `merge`, or a `{cursor}` path: see [Into Parquet files](#into-parquet-files).

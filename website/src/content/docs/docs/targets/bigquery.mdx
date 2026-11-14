@@ -56,6 +56,7 @@ connection and target above with `default_target = "bq"`:
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  BigQuery bq
 
 Objects (2)                                         sqlload apply
 ├── raw.app__customers                              create table
@@ -73,15 +74,13 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  merge (unique_key: customer_id ← {primary_key})
+├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
 │   ├── source  postgres  app  public.customers
-│   ├── route   read as Arrow -> BigQuery takes Arrow
-│   └── batch   about every 1 GB
-└── app__orders                                     merge (unique_key: order_id ← {primary_key})
+│   └── route   read as Arrow -> BigQuery takes Arrow
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> BigQuery takes Arrow
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
-    └── cursor  updated_at first run, everything
+    └── reads   updated_at: first run, everything
 
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
@@ -94,10 +93,11 @@ created  raw.app__orders     7 columns
 
 $ sqlload load
 …
-loaded   raw.app__customers  50 rows  0.1s
-loaded   raw.app__orders     1,000 rows  0.1s
+loaded  raw.app__customers     50 rows 0.1s
+loaded  raw.app__orders     1,000 rows 0.1s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.1s
+└── slowest      raw.app__orders 0.1s
 ```
 
 ## How rows arrive
@@ -129,7 +129,7 @@ Each statement is its own query job and commits on its own. The run record commi
 `replace` loads the whole source into a build table, then swaps it in:
 
 ```console
-└── app__orders                                     replace
+└── raw.app__orders                                 replace
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> BigQuery takes Arrow
     └── batch   about 1 GB at a time into a new table, swapped in once at the end

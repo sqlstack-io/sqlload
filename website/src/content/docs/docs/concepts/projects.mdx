@@ -53,7 +53,8 @@ Postgres and files sources, the decorator for Python ones.
 | `sqlload apply` | Creates or changes destination tables, as the plan shows. Never loads data. |
 | `sqlload load` | Loads the selected tables. Creates any table that doesn't exist yet. |
 
-`apply` and `load` plan first and print the plan, so the output always shows what ran and why. One
+`apply` and `load` plan first. `apply` prints the plan, and `load` its closing line with any errors
+and warnings, so the output always shows what ran and why. One
 broken table doesn't stop the others. A table the plan lists under `Errors` is left out, and a
 table whose load fails gets a `failed` line. Every other table still loads, and the command exits
 1.
@@ -79,14 +80,18 @@ With no selector, every table is selected.
 A source's problems, such as a refused setting, a Postgres server it can't reach, or an invalid
 `include` pattern, fail only commands that select something from it. From 0.22.0, `sqlload load
 shop` still loads while another source's server is down; a bare `sqlload load` loads the rest,
-prints the problem under `Errors`, and exits 1:
+prints the problem under `Errors`, and exits 75, as running it again may get past an unreachable
+server. When the connection's settings read `${ENV:NAME}` variables, `fix` names them:
 
 ```console
 $ sqlload load
-…
 Errors (1)
-└── [sources.billing]
-    └── reason  cannot connect to Postgres at localhost:5499/postgres: error connecting to server: Connection refused (os error 111)
+└── billing                                         can't connect
+    ├── reason  cannot connect to Postgres at localhost:5499/postgres: error connecting to server:
+    │           Connection refused (os error 111)
+    ├── fix     check BILLING_PASSWORD (connection billing); sqlload debug tests every connection
+    └── blocks  any table its include patterns match
+…
 ```
 
 ## Table names
