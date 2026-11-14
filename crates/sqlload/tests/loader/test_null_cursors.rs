@@ -4,7 +4,8 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::models::PlanOptions;
 
-use crate::helpers::{described_project, duckdb_project, run_async, run_batched, run_once, words};
+use crate::batched_helpers::run_batched;
+use crate::helpers::{described_project, duckdb_project, run_async, run_once, words};
 use crate::test_types::{BatchedRun, BatchedScenarioTestCase, NullCursorPlanTestCase};
 
 /// `public.t`: row 2 has no `updated_at`, only a `created_at`.
@@ -24,7 +25,9 @@ const RUNS: &[BatchedRun] = &[
     BatchedRun {
         source_change: "SELECT 1",
         destination_change: "",
+        start_cursor: None,
         end_cursor: None,
+        reload: false,
         check_query: ROWS,
         show: "",
     },
@@ -33,14 +36,18 @@ const RUNS: &[BatchedRun] = &[
             INSERT INTO public.t VALUES (4, 'd', NULL, '2026-11-05 10:00:00+00');
             UPDATE public.t SET v = 'a2', updated_at = '2026-11-03 10:00:00+00' WHERE id = 1;",
         destination_change: "",
+        start_cursor: None,
         end_cursor: None,
+        reload: false,
         check_query: ROWS,
         show: "",
     },
     BatchedRun {
         source_change: "UPDATE public.t SET v = 'b3', updated_at = '2026-11-06 10:00:00+00' WHERE id = 2;",
         destination_change: "",
+        start_cursor: None,
         end_cursor: None,
+        reload: false,
         check_query: ROWS,
         show: "",
     },

@@ -30,9 +30,9 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys, OnDuplicateKeys,
-    SortDirection, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage,
-    UnnestSetting, WriteStrategy,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    OnDuplicateKeys, SortDirection, SourceConfig, SourceKind, StateMode, TableOverride,
+    TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -1585,4 +1585,29 @@ pub(crate) fn flattened_object_problems(
         }
     }
     Ok(problems)
+}
+
+/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
+pub(crate) fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
+    let mut columns: Vec<String> = Vec::new();
+    for name in spec.cursor.as_ref()?.columns() {
+        let column = spec
+            .source_table
+            .columns
+            .iter()
+            .find(|column| column.name == name)?;
+        if !matches!(
+            column.column_type,
+            Ok(ColumnType::Int | ColumnType::SmallInt)
+        ) {
+            return None;
+        }
+        columns.push(
+            column
+                .source_spelling
+                .clone()
+                .unwrap_or_else(|| column.name.clone()),
+        );
+    }
+    Some(columns)
 }

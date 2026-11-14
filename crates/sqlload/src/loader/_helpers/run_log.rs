@@ -18,7 +18,8 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
-use crate::files_source::models::LoadedFile;
+use crate::files_source::constants::VERSION_SEPARATOR;
+use crate::files_source::models::{DataFile, LoadedFile};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::loaded_file;
 use crate::loader::errors::LoaderError;
@@ -510,4 +511,37 @@ fn newest_stamp(table: &TablePlan) -> Option<&str> {
 
 fn record_json(record: &RunRecord) -> Result<String, LoaderError> {
     serde_json::to_string(record).map_err(|error| LoaderError::Invalid(error.to_string()))
+}
+
+/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
+pub(crate) fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
+    let location = table
+        .spec
+        .files
+        .as_ref()
+        .map(|files| files.location.to_string())
+        .unwrap_or_default();
+    files
+        .iter()
+        .map(|data| {
+            format!(
+                "{location}{}{VERSION_SEPARATOR}{}",
+                data.file.relative_key,
+                data.file.version()
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
+pub(crate) fn in_file(merged: &str, error: LoaderError) -> LoaderError {
+    let name = merged
+        .rsplit_once(VERSION_SEPARATOR)
+        .map_or(merged, |(name, _)| name);
+    let text = format!("{name}: {error}");
+    match error.is_retryable() {
+        true => LoaderError::Transient(text),
+        false => LoaderError::Invalid(text),
+    }
 }

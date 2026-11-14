@@ -25,8 +25,8 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange, OutputEncoding,
-    Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange,
+    OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};

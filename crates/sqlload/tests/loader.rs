@@ -2,6 +2,8 @@
 
 #[path = "loader/after_load/helpers.rs"]
 mod after_load_helpers;
+#[path = "loader/batched/helpers.rs"]
+mod batched_helpers;
 #[path = "loader/bigquery/helpers.rs"]
 mod bigquery_helpers;
 #[path = "loader/clickhouse/helpers.rs"]

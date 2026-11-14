@@ -48,6 +48,7 @@ use crate::loader::_helpers::resolve::{
     unread_source,
 };
 use crate::loader::_helpers::run_log::{logs_files, merged_files, unchanged_files};
+use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::{
     flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
@@ -1533,31 +1534,6 @@ fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRe
         filter,
         batch_rows: SOURCE_BATCH_ROWS,
     }
-}
-
-/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
-fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
-    let mut columns: Vec<String> = Vec::new();
-    for name in spec.cursor.as_ref()?.columns() {
-        let column = spec
-            .source_table
-            .columns
-            .iter()
-            .find(|column| column.name == name)?;
-        if !matches!(
-            column.column_type,
-            Ok(ColumnType::Int | ColumnType::SmallInt)
-        ) {
-            return None;
-        }
-        columns.push(
-            column
-                .source_spelling
-                .clone()
-                .unwrap_or_else(|| column.name.clone()),
-        );
-    }
-    Some(columns)
 }
 
 /// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.

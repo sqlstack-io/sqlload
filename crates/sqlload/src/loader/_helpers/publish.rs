@@ -52,7 +52,7 @@ use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::batch_columns::batch_columns;
@@ -80,6 +80,7 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::merged_record;
+use crate::loader::_helpers::run_log::{in_file, merged_file_text};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
@@ -1626,39 +1627,6 @@ async fn feed(
 /// Whether `table` loads a files source's files one commit and run record per file: a merge, or `delete_insert` by `replace_key` (see [`logs_files`]).
 pub(crate) fn records_files(table: &TablePlan) -> bool {
     table.files.is_some() && logs_files(&table.spec)
-}
-
-/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
-fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
-    let location = table
-        .spec
-        .files
-        .as_ref()
-        .map(|files| files.location.to_string())
-        .unwrap_or_default();
-    files
-        .iter()
-        .map(|data| {
-            format!(
-                "{location}{}{VERSION_SEPARATOR}{}",
-                data.file.relative_key,
-                data.file.version()
-            )
-        })
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
-fn in_file(merged: &str, error: LoaderError) -> LoaderError {
-    let name = merged
-        .rsplit_once(VERSION_SEPARATOR)
-        .map_or(merged, |(name, _)| name);
-    let text = format!("{name}: {error}");
-    match error.is_retryable() {
-        true => LoaderError::Transient(text),
-        false => LoaderError::Invalid(text),
-    }
 }
 
 async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), LoaderError> {

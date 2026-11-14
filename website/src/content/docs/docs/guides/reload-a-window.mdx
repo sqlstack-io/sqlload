@@ -70,6 +70,9 @@ date is in the window is deleted from the destination too.
   …
   ```
 
+- From 0.51.0, `--reload --start-cursor` rebuilds the table from that point instead, and drops older
+  rows; see [Reloading](/docs/cli/load/#reloading).
+
 ## Without `lookback_from`
 
 Without `lookback_from = "now"`, `lookback` counts back from the destination's maximum of the

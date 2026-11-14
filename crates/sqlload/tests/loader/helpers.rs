@@ -26,11 +26,11 @@ use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
 use crate::test_types::{
-    BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
-    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
-    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, ReplacedKeysTestCase, RouteFiles,
-    RouteOutcome, RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition,
-    WrittenRow, WrittenRun,
+    CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase, FilesScenario,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
+    MetadataRoundTripTestCase, ParquetFile, ReplacedKeysTestCase, RouteFiles, RouteOutcome,
+    RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
+    WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -207,78 +207,6 @@ pub(crate) async fn load_with_options(
         .is_empty()
         .then_some(())
         .ok_or_else(|| failures.join("\n"))
-}
-
-/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, or ok> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
-pub(crate) async fn run_batched(
-    client: &Client,
-    port: u16,
-    test_case: &BatchedScenarioTestCase,
-) -> Result<Vec<String>, String> {
-    client
-        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
-        .await
-        .map_err(|error| error.to_string())?;
-    client
-        .batch_execute(test_case.setup)
-        .await
-        .map_err(|error| error.to_string())?;
-    let text = duckdb_project(port, test_case.settings);
-    let project = described_project(&text).await?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
-        return Err("no DuckDB destination".to_owned());
-    };
-    let mut outcomes: Vec<String> = Vec::new();
-    for run in test_case.runs {
-        client
-            .batch_execute(run.source_change)
-            .await
-            .map_err(|error| error.to_string())?;
-        let hand_edits: Vec<String> = run
-            .destination_change
-            .split_terminator(';')
-            .map(str::to_owned)
-            .collect();
-        execute(duckdb, hand_edits)
-            .await
-            .map_err(|error| error.to_string())?;
-        let options = PlanOptions {
-            end_cursor: run.end_cursor.map(str::to_owned),
-            batch_bytes: test_case.batch_bytes,
-            concurrency: test_case.concurrency,
-            ..PlanOptions::default()
-        };
-        let plan = plan_project(&project, &destinations, &options)
-            .await
-            .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
-        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
-        apply_project(&plan, &destinations)
-            .await
-            .map_err(|error| error.to_string())?;
-        let error = load_with_options(&project, &plan, &destinations, &options)
-            .await
-            .err()
-            .map_or_else(
-                || "ok".to_owned(),
-                |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
-            );
-        let result = single_text(duckdb, run.check_query.to_owned())
-            .await
-            .map_err(|error| error.to_string())?
-            .unwrap_or_default();
-        let shown = lines
-            .iter()
-            .filter(|_| !run.show.is_empty())
-            .filter_map(|line| line.split_once(run.show))
-            .map(|(_, rest)| format!(" | {}{rest}", run.show))
-            .collect::<String>();
-        outcomes.push(format!("{error} => {result}{shown}"));
-    }
-    Ok(outcomes)
 }
 
 /// The rendered plan, or the error that stopped it.
