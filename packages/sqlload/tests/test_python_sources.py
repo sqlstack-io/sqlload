@@ -1342,7 +1342,7 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 2, "v": "x"}])
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
-	assert "the loaded rows repeat its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert "the loaded rows repeat its unique_key: 1 value of (id) appears in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__rows"') == [(0,)]
 
 

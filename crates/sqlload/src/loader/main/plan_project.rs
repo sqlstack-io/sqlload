@@ -11,6 +11,8 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::progress::PLANNED_SOURCES;
 use crate::loader::_helpers::python::python_table;
+use crate::loader::_helpers::render::up_to_date;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{
     admit_tables, destination_names, found_sources, selected, source_ends, spec_names,
     unmatched_selectors,
@@ -21,7 +23,7 @@ use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
 use crate::loader::models::{
-    FilesSource, FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec,
+    FilesSource, FoundSource, PlanOptions, ProjectPlan, SkippedTable, TablePlan, TableSpec,
 };
 use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
 
@@ -77,11 +79,27 @@ pub async fn plan_project(
         .await?;
         PLANNED_SOURCES.fetch_add(1, Ordering::Relaxed);
     }
-    Ok(block_conflicts(
+    Ok(skip_up_to_date(block_conflicts(
         plan,
         (&claims, &configured, &drained),
         (project, options),
-    ))
+    )))
+}
+
+/// The plan with each files table that has nothing new to read moved to `skipped`, so `load` reads nothing for it (see [`up_to_date`]).
+fn skip_up_to_date(mut plan: ProjectPlan) -> ProjectPlan {
+    let (current, tables): (Vec<TablePlan>, Vec<TablePlan>) = std::mem::take(&mut plan.tables)
+        .into_iter()
+        .partition(|table| table.schema.blocked.is_none() && up_to_date(table).is_some());
+    plan.tables = tables;
+    plan.skipped
+        .extend(current.iter().map(|table| SkippedTable {
+            source_name: table.spec.source_name.clone(),
+            source_table: table.spec.source_table.qualified_name(),
+            destination: display_name(table.spec.warehouse, &table.spec.destination),
+            reason: up_to_date(table).unwrap_or_default(),
+        }));
+    plan
 }
 
 /// One source's `specs`: the selected ones planned against their destinations, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.

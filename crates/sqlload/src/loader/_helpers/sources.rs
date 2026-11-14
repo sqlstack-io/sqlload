@@ -54,8 +54,8 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
-    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS,
-    PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX, SOURCE_BATCH_ROWS,
+    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READERS, PRIMARY_KEY_PLACEHOLDER,
+    RELOAD_FIX, SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -64,6 +64,7 @@ use crate::loader::models::{
 };
 use crate::loader::models::{FoundSource, FoundSources};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
+use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
@@ -161,14 +162,19 @@ pub(crate) fn files_location(
         .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// The Postgres connections a table's read uses: several for a large Postgres table read whole and in no order (windows and cursor-ordered reads keep one connection).
+/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order (windows and cursor-ordered reads keep one connection).
 pub(crate) fn source_readers(table: &TablePlan) -> usize {
     let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
     let postgres = table.spec.python.is_none()
         && table.spec.files.is_none()
         && table.spec.sheet.is_none()
         && table.spec.warehouse_source.is_none();
-    match whole && postgres && table.spec.source_table.estimated_bytes >= PARALLEL_READ_MIN_BYTES {
+    let large = table
+        .spec
+        .source_table
+        .split_pages
+        .is_some_and(|pages| pages >= SPLIT_READ_MIN_PAGES);
+    match whole && postgres && large {
         true => PARALLEL_READERS,
         false => 1,
     }
@@ -586,6 +592,7 @@ async fn sheets_tables(
         }
         warnings.extend(read.warnings);
         tables.push(SourceTable {
+            split_pages: None,
             schema: String::new(),
             name,
             columns: read

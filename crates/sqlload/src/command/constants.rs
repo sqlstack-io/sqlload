@@ -17,3 +17,6 @@ pub const COMMAND_STACK_BYTES: usize = 8 * 1024 * 1024;
 
 /// What `load` adds to the plan's closing line, since it leaves out the Loads and Skipped trees.
 pub const PLAN_TREE_HINT: &str = "(sqlload plan shows the tree)";
+
+/// The fewest columns a wrapped line's further lines keep for text; a field starting further right wraps under an earlier one.
+pub const WRAP_ROOM: usize = 20;

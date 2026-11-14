@@ -47,6 +47,15 @@ pub(crate) fn usual_details(tables: &[&TablePlan], items: &[PlanItem]) -> HashMa
         .collect()
 }
 
+/// Details any table can have, which a plan of several tables leaves out even when no other table shares them: the batches of a table read whole.
+const DEFAULT_DETAILS: [(&str, &str); 2] = [
+    ("batch", "about every 1 GB"),
+    (
+        "batch",
+        "about 1 GB at a time into a new table, swapped in once at the end",
+    ),
+];
+
 /// The details an incremental table's `reads` and `commits` stand in for.
 const REPLACED_LABELS: [&str; 3] = ["cursor", "state", "batch"];
 
@@ -68,7 +77,10 @@ pub(crate) fn text_item(
         .into_iter()
         .filter(|detail| match detail.label.as_str() {
             label if incremental && REPLACED_LABELS.contains(&label) => false,
-            label => one || usual.get(label) != Some(&detail.text),
+            label => {
+                one || (usual.get(label) != Some(&detail.text)
+                    && !DEFAULT_DETAILS.contains(&(label, detail.text.as_str())))
+            }
         })
         .collect();
     let after_source = details

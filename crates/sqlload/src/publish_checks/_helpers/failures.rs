@@ -3,9 +3,10 @@
 use crate::adapters::contract::models::{CheckQuery, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::text_values::text_values;
+use crate::loader::_helpers::render::thousands;
 use crate::loader::errors::LoaderError;
 use crate::project::models::{CheckName, TableChecks};
-use crate::publish_checks::_helpers::names::not_published;
+use crate::publish_checks::_helpers::names::{counted_rows, not_published};
 use crate::publish_checks::constants::{EXAMPLE_CHARS, PERCENT};
 use crate::publish_checks::models::CheckedCommit;
 
@@ -29,14 +30,21 @@ pub(crate) async fn failures(
         if *nulls > 0 {
             failures.push((
                 CheckName::NotNull,
-                format!("{nulls} row(s) have no {column}"),
+                match nulls {
+                    1 => format!("1 row has no {column}"),
+                    _ => format!("{} have no {column}", counted_rows(*nulls)),
+                },
             ));
         }
     }
     if let Some(minimum) = checks.min_rows.filter(|minimum| staged < *minimum) {
         failures.push((
             CheckName::MinRows,
-            format!("{staged} row(s) staged, fewer than the {minimum} required"),
+            format!(
+                "{} staged, fewer than the {} required",
+                counted_rows(staged),
+                thousands(minimum)
+            ),
         ));
     }
     if let Some(limit) = checks.max_row_drop.filter(|_| commit.exists) {
@@ -46,7 +54,9 @@ pub(crate) async fn failures(
             failures.push((
                 CheckName::MaxRowDrop,
                 format!(
-                    "the table would go from {live} to {staged} rows, losing more than {limit}%"
+                    "the table would go from {} to {}, losing more than {limit}%",
+                    thousands(live),
+                    counted_rows(staged)
                 ),
             ));
         }
@@ -75,8 +85,16 @@ pub(crate) async fn repeated_keys(
     Ok(Some((
         CheckName::Unique,
         format!(
-            "{repeated} value(s) of ({}) appear in more than one row, such as ({})",
+            "{} of ({}) {} in more than one row, such as ({})",
+            match repeated {
+                1 => "1 value".to_owned(),
+                _ => format!("{} values", thousands(repeated)),
+            },
             key.join(", "),
+            match repeated {
+                1 => "appears",
+                _ => "appear",
+            },
             examples.join("), (")
         ),
     )))

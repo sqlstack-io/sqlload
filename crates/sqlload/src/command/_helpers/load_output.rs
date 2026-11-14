@@ -153,9 +153,9 @@ pub(crate) fn change_tally_line(line: &str, name_width: usize) -> String {
     tally_line((verb, name), detail.trim_start(), name_width)
 }
 
-/// What `load` prints of its plan before it starts: the closing line, pointing a complete plan to `sqlload plan`, and the Objects, Errors and Warnings sections when there are any; the Loads and Skipped trees and the `Plan ready` line are `plan`'s.
+/// What `load` prints of its plan before it starts: the closing line, pointing a complete plan to `sqlload plan`, and the Errors and Warnings sections when there are any; the Objects, Loads and Skipped trees and the `Plan ready` line are `plan`'s (and Objects `apply`'s), and the `created` and `altered` lines follow.
 pub(crate) fn start_lines(plan_lines: Vec<String>) -> Vec<String> {
-    let dropped = ["Plan ready", "Loads (", "Skipped ("];
+    let dropped = ["Plan ready", "Objects (", "Loads (", "Skipped ("];
     let mut kept: Vec<String> = Vec::new();
     for section in plan_lines.split(String::is_empty) {
         let first = section.first().map_or("", String::as_str);

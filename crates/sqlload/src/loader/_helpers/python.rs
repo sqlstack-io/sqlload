@@ -29,6 +29,7 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
+use crate::loader::_helpers::render::thousands;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
@@ -133,6 +134,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             }
         }
         tables.push(SourceTable {
+            split_pages: None,
             schema: String::new(),
             name: name.clone(),
             columns,
@@ -1089,7 +1091,8 @@ fn empty_problem(table: &TablePlan) -> Result<(), LoaderError> {
     });
     match minimum {
         Some(minimum) => Err(LoaderError::Invalid(format!(
-            "checks.min_rows failed: 0 row(s) staged, fewer than the {minimum} required; nothing was published"
+            "checks.min_rows failed: 0 rows staged, fewer than the {} required; nothing was published",
+            thousands(minimum)
         ))),
         None => Ok(()),
     }

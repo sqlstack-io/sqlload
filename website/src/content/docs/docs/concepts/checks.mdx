@@ -28,7 +28,7 @@ commit publishes none of its rows: the table keeps what it held, and the staging
 The table's error names each failed check:
 
 ```text
-checks.unique failed: 1 value(s) of (customer_id) appear in more than one row, such as (2); nothing was published
+checks.unique failed: 1 value of (customer_id) appears in more than one row, such as (2); nothing was published
 ```
 
 A check listed in `warn` logs its failure and publishes the rows anyway. `warn` can only name

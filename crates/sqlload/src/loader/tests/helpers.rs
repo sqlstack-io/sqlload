@@ -47,6 +47,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
+        split_pages: None,
         listed_keys: Vec::new(),
     };
     let live: Vec<LiveColumn> = test_case
@@ -381,6 +382,7 @@ pub(crate) fn refused_bounds_runs(
         indexed_columns: Vec::new(),
         estimated_rows: -1,
         estimated_bytes: -1,
+        split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
     };

@@ -91,6 +91,7 @@ pub(crate) fn listed_table((dataset, table): (String, String), found: &Value) ->
     }
     let direct = READ_API_TABLES.contains(&found["type"].as_str().unwrap_or_default());
     SourceTable {
+        split_pages: None,
         schema: dataset,
         name: table,
         columns,

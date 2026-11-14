@@ -175,7 +175,7 @@ $ sqlload load --events jsonl 2>&1 >/dev/null
 {"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.263Z","event":"run_started","selected":2,"to_load":2}
 {"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.266Z","table":"raw.items","event":"table_started","strategy":"replace"}
 …
-{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.286Z","table":"raw.items","event":"table_failed","reason":"checks.min_rows failed: 1 row(s) staged, fewer than the 1000 required; nothing was published","retryable":false,"elapsed_ms":18}
+{"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.286Z","table":"raw.items","event":"table_failed","reason":"checks.min_rows failed: 1 row staged, fewer than the 1,000 required; nothing was published","retryable":false,"elapsed_ms":18}
 {"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.289Z","table":"raw.orders","event":"table_done","rows":3,"elapsed_ms":22}
 {"schema_version":0,"run_id":"bb60bf2a-…","at":"2026-11-14T17:05:37.290Z","event":"run_finished","loaded":1,"failed":1,"not_started":0,"rows":3,"elapsed_ms":62,"exit_code":1}
 ```

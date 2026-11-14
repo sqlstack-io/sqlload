@@ -31,6 +31,8 @@ pub struct SourceTable {
     /// The planner's row estimate (`pg_class.reltuples`); negative when never analysed.
     pub estimated_rows: i64,
     pub estimated_bytes: i64,
+    /// The table's pages when a read can split it over connections by `ctid` (a plain table on Postgres 14+); `None` otherwise.
+    pub split_pages: Option<i64>,
     /// The table's own comment in the source (`COMMENT ON TABLE`), the description of a discovered table.
     pub comment: Option<String>,
     /// The primary key and unique constraints the database lists for a table whose driver reported no primary key (ODBC, from `INFORMATION_SCHEMA`), which point at the driver's key lookup; empty otherwise.
@@ -48,6 +50,7 @@ impl SourceTable {
     /// A table of `columns` without a schema, key, indexes, estimates or comment, as a files source's.
     pub fn of_columns(name: String, columns: Vec<SourceColumn>) -> Self {
         Self {
+            split_pages: None,
             schema: String::new(),
             name,
             columns,

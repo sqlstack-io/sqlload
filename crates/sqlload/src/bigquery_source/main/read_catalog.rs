@@ -25,6 +25,7 @@ pub async fn read_catalog(
                 BigQuerySourceError::Invalid(format!("query table {name}: {error}"))
             })?;
         tables.push(SourceTable {
+            split_pages: None,
             schema: String::new(),
             name: name.clone(),
             columns: fields.iter().map(source_column).collect(),

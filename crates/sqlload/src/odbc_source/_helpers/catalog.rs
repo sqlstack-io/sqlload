@@ -63,6 +63,7 @@ pub(crate) fn source_table(
     primary_key: Vec<String>,
 ) -> SourceTable {
     SourceTable {
+        split_pages: None,
         schema,
         name,
         columns,

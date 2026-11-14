@@ -566,9 +566,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     if source_readers(table) > 1 {
         details.push(detail(
             "note",
-            format!(
-                "read over up to {PARALLEL_READERS} connections in one snapshot, each a range of the table's pages, when it is a plain table of 128 MiB or more on Postgres 14+"
-            ),
+            format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
     details.extend(
@@ -923,19 +921,23 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
     sections(plan, false)
 }
 
-/// The plan as `plan` prints it: as `plan_view`, with tables named as they land and sorted by that name, an up-to-date files table skipped, and each load's details sharpened by `text_item`.
+/// The plan as `plan` prints it: as `plan_view`, with tables named as they land and sorted by that name, and each load's details sharpened by `text_item`.
 pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
     sections(plan, true)
 }
 
-/// A files table with no new file to read, which `plan` skips as up to date: the reason it gives, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`.
-fn up_to_date(table: &TablePlan) -> Option<String> {
+/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range, which clears that range even with no file in it.
+pub(crate) fn up_to_date(table: &TablePlan) -> Option<String> {
     let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
-    let incremental = !matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let incremental =
+        table.exists && !matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
     let ranged = table
         .cursor_note
         .as_deref()
         .is_some_and(|note| note.contains("--start-cursor") || note.contains("--end-cursor"));
+    if ranged && matches!(table.mode, WriteMode::DeleteInsert { .. }) {
+        return None;
+    }
     (incremental && read.files.is_empty()).then(|| {
         let files = format!(
             "{} files in {} ({})",
@@ -956,9 +958,6 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         .iter()
         .filter(|table| table.schema.blocked.is_none())
         .collect();
-    let (loading, current): (Vec<&TablePlan>, Vec<&TablePlan>) = ready
-        .iter()
-        .partition(|table| !text || up_to_date(table).is_none());
     let mut stages: Vec<&PlannedStage> = Vec::new();
     for table in &ready {
         if let Some(stage) = &table.planned_stage
@@ -1003,10 +1002,10 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
     let clauses = [
         (creates, ("object to create", "objects to create")),
         (alters, ("to alter", "to alter")),
-        (loading.len(), ("to load", "to load")),
-        (plan.skipped.len() + current.len(), ("skipped", "skipped")),
+        (ready.len(), ("to load", "to load")),
+        (plan.skipped.len(), ("skipped", "skipped")),
     ];
-    let selected = plan.tables.len() - current.len();
+    let selected = plan.tables.len();
     let mut summary = vec![format!("{selected} selected")];
     summary.extend(
         clauses
@@ -1025,13 +1024,13 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
             .chain(changed.iter().map(|table| object_item(table)))
             .collect(),
         loads: match text {
-            false => loading.iter().map(|table| load_item(table)).collect(),
+            false => ready.iter().map(|table| load_item(table)).collect(),
             true => {
-                let items: Vec<PlanItem> = loading.iter().map(|table| load_item(table)).collect();
-                let usual = usual_details(&loading, &items);
-                let one = plan.tables.len() == 1;
+                let items: Vec<PlanItem> = ready.iter().map(|table| load_item(table)).collect();
+                let usual = usual_details(&ready, &items);
+                let one = plan.tables.len() == 1 && plan.skipped.is_empty();
                 sorted(
-                    loading
+                    ready
                         .iter()
                         .zip(items)
                         .map(|(table, item)| text_item(table, item, one, &usual))
@@ -1057,10 +1056,6 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
                         };
                         skipped_item(skipped.destination.clone(), reason)
                     })
-                    .chain(current.iter().filter_map(|table| {
-                        let name = display_name(table.spec.warehouse, &table.spec.destination);
-                        up_to_date(table).map(|reason| skipped_item(name, reason))
-                    }))
                     .collect(),
             ),
         },
