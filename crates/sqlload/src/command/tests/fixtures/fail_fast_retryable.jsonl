@@ -1,0 +1,19 @@
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.037Z","event":"run_started","selected":13,"to_load":13}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.074Z","table":"tracker.issues","event":"table_started","strategy":"merge"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.111Z","table":"tracker.issues","event":"table_progress","unit":"page","count":1,"rows":13}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.148Z","event":"rate_limited","connection":"tracker","rate":"5/s","wait_ms":180}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.185Z","table":"tracker.issues","event":"table_committing","rows":13}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.222Z","table":"tracker.issues","event":"table_done","rows":13,"elapsed_ms":2200,"position":"updated_at now 2026-11-14 07:42:15+00"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.259Z","table":"workforce.paycodes","event":"table_done","rows":233,"elapsed_ms":2200}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.296Z","table":"tracker.issue_changelogs","event":"table_done","rows":13,"elapsed_ms":2300,"position":"state now 2026-11-14T06:53:12Z"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.333Z","table":"grid.stock_sheet","event":"table_failed","reason":"HTTP 503 service unavailable · 6 attempts","retryable":true,"elapsed_ms":1000}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.370Z","table":"proofs.proof_versions","event":"table_failed","reason":"HTTP 503 service unavailable · 6 attempts","retryable":true,"elapsed_ms":1000}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.407Z","table":"proofs.proofs","event":"table_done","rows":42,"elapsed_ms":2300}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.444Z","table":"workforce.people","event":"table_done","rows":304,"elapsed_ms":4600}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.481Z","table":"proofs.proof_activities","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.518Z","table":"procure.invoices","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.555Z","table":"files.receipts","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.592Z","table":"files.prices","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.629Z","table":"files.customers","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.666Z","table":"files.stock_counts","event":"table_not_started","reason":"not started: --fail-fast stopped the load after grid.stock_sheet failed"}
+{"schema_version":0,"run_id":"5f0c2a1e-8d4b-4c71-9a3e-2b6f1d0c7e94","at":"2026-11-14T07:49:41.703Z","event":"run_finished","loaded":5,"failed":2,"not_started":6,"rows":605,"elapsed_ms":5400,"exit_code":75}

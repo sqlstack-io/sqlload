@@ -422,3 +422,44 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
         Ok(())
     })
 }
+
+#[test]
+fn given_plan_and_load_piped_when_colour_is_left_on_then_no_output_has_an_escape_code()
+-> Result<(), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("drop/orders")).map_err(|error| error.to_string())?;
+    std::fs::write(root.join("drop/orders/a.csv"), "id,qty\n1,2\n2,3\n")
+        .map_err(|error| error.to_string())?;
+    let config = root.join("sqlload.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{root}/out.duckdb\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Orders.\"\nconnection = \"files\"\npath = \"drop/orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\nchecks = {{ min_rows = 5 }}\n",
+            root = root.display()
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    for args in [
+        &["plan"][..],
+        &["load", "--progress", "always", "--events", "jsonl"][..],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+            .arg("--config")
+            .arg(&config)
+            .args(args)
+            .env_remove("NO_COLOR")
+            .output()
+            .map_err(|error| error.to_string())?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !text.contains('\u{1b}') && text.contains("orders"),
+            "{args:?} piped: {text:?}"
+        );
+    }
+    Ok(())
+}

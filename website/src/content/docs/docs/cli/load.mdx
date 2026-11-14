@@ -196,6 +196,7 @@ The events are version 0: names and fields can still change in a minor release u
 | `table_not_started` | `reason`, such as the table that stopped a [`--fail-fast`](#stopping-at-the-first-failure) load. |
 | `run_finished` | `loaded`, `failed`, `not_started`, `rows`, `elapsed_ms` and `exit_code`. |
 
-On a terminal, `load` also draws a live block of running tables on standard error. `--progress
-never` leaves it out and `--progress always` draws it anyway; the default, `auto`, draws it only on
-a terminal and without `--json` or `--log-format json`.
+On a terminal, `load` also draws a live block of running tables on standard error. The default,
+`--progress auto`, leaves it out under `--json` or `--log-format json`; `--progress always` draws it
+on a terminal anyway, and `--progress never` leaves it out. Output that isn't a terminal never has
+the block or colours.
