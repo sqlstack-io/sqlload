@@ -1,7 +1,7 @@
 name: Website
 
-# Builds the website and checks its links and content. It deploys nothing; hosting builds the site
-# from website/ on its own.
+# Builds the website and checks its links, content and layout. It deploys nothing; hosting builds
+# the site from website/ on its own.
 on:
   pull_request:
     paths:
@@ -39,3 +39,6 @@ jobs:
         run: npm run build
       - name: Check links
         run: python3 scripts/check_links.py dist
+      # Every docs page at 1280px and 390px, in the runner's Chrome.
+      - name: Check layout
+        run: node scripts/check-layout.mjs dist
