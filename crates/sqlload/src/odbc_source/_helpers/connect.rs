@@ -39,14 +39,19 @@ fn unloadable_library(message: &str) -> Option<&str> {
     path.starts_with('/').then_some(path)
 }
 
-/// What to check when unixODBC couldn't load `path`: the registration when no such file exists, and the error when it can't be read; otherwise the static thread-local storage the library is built for (its dynamic section's STATIC_TLS flag), which glibc can't give a library loaded late when it reaches thread-locals already in use, and the libraries it needs.
+/// What to check when unixODBC couldn't load `path`: the registration when no such file exists (with the fix when it's in a multiarch folder instead), and the error when it can't be read; otherwise the static thread-local storage the library is built for (its dynamic section's STATIC_TLS flag), which glibc can't give a library loaded late when it reaches thread-locals already in use, and the libraries it needs.
 fn loader_reason(path: &str) -> Option<String> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Some(format!(
-                "The driver library {path} doesn't exist: correct the Driver= line that registers the driver in odbcinst.ini."
-            ));
+            return Some(match multiarch_library(path) {
+                Some((installed, prefix, arch)) => format!(
+                    "The driver library {path} doesn't exist, but {installed} does: the driver's Debian package registers it under {prefix}//odbc/, a packaging bug in MySQL Connector/ODBC's Debian 13 package. Correct the registration with: sudo sed -i 's#{prefix}//odbc/#{prefix}/{arch}/odbc/#' /etc/odbcinst.ini"
+                ),
+                None => format!(
+                    "The driver library {path} doesn't exist: correct the Driver= line that registers the driver in odbcinst.ini."
+                ),
+            });
         }
         Err(error) => return Some(format!("The driver library {path} can't be read: {error}.")),
     };
@@ -59,6 +64,19 @@ fn loader_reason(path: &str) -> Option<String> {
             "The driver library {path} exists, so a library it needs is missing or doesn't load: `ldd {path}` lists them."
         )
     })
+}
+
+/// For a library registered as `<prefix>//odbc/<file>`, as MySQL's Debian 13 package registers its drivers, the same file in a multiarch folder `<prefix>/<arch>-linux-gnu/odbc/`: its path, the prefix and the multiarch folder's name.
+fn multiarch_library(path: &str) -> Option<(String, &str, String)> {
+    let (prefix, file) = path.split_once("//odbc/")?;
+    std::fs::read_dir(prefix)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|arch| arch.ends_with("-linux-gnu"))
+        .map(|arch| (format!("{prefix}/{arch}/odbc/{file}"), arch))
+        .find(|(installed, _)| std::path::Path::new(installed).is_file())
+        .map(|(installed, arch)| (installed, prefix, arch))
 }
 
 /// Whether a 64-bit little-endian ELF file's dynamic section sets DF_STATIC_TLS in DT_FLAGS.

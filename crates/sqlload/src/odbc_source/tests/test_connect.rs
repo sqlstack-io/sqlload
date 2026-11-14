@@ -15,6 +15,18 @@ fn given_a_driver_library_unixodbc_cannot_load_when_connecting_then_the_error_sa
             expected_reason: "The driver library {path} doesn't exist: correct the Driver= line that registers the driver in odbcinst.ini.",
         },
         ConnectErrorTestCase {
+            description: "a path under //odbc/ whose file is in a multiarch folder, as MySQL's Debian 13 package registers it, names the file and the sed that fixes the registration",
+            file: ("x86_64-linux-gnu/odbc/libmyodbc9w.so", Vec::new()),
+            library: "/odbc/libmyodbc9w.so",
+            expected_reason: "The driver library {path} doesn't exist, but {folder}/x86_64-linux-gnu/odbc/libmyodbc9w.so does: the driver's Debian package registers it under {folder}//odbc/, a packaging bug in MySQL Connector/ODBC's Debian 13 package. Correct the registration with: sudo sed -i 's#{folder}//odbc/#{folder}/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini",
+        },
+        ConnectErrorTestCase {
+            description: "a path under //odbc/ whose file is in no multiarch folder names the registration to correct",
+            file: ("x86_64-linux-gnu/odbc/libother.so", Vec::new()),
+            library: "/odbc/libmissing.so",
+            expected_reason: "The driver library {path} doesn't exist: correct the Driver= line that registers the driver in odbcinst.ini.",
+        },
+        ConnectErrorTestCase {
             description: "a path that can't be read, a folder here, gives the reason rather than calling it missing",
             file: ("libunused.so", Vec::new()),
             library: ".",
@@ -42,8 +54,11 @@ fn given_a_driver_library_unixodbc_cannot_load_when_connecting_then_the_error_sa
     let folder = tempfile::tempdir().expect("temporary folder");
     for test_case in test_cases {
         let (written, bytes) = &test_case.file;
-        std::fs::write(folder.path().join(written), bytes).expect("write the file");
-        let path = folder.path().join(test_case.library).display().to_string();
+        let file = folder.path().join(written);
+        std::fs::create_dir_all(file.parent().expect("a folder")).expect("make the folder");
+        std::fs::write(file, bytes).expect("write the file");
+        let root = folder.path().display().to_string();
+        let path = format!("{root}/{}", test_case.library);
         let connection_string = Secret(format!("Driver={path};"));
         let reader = odbc_reader(
             (Some(&connection_string), None),
@@ -58,7 +73,12 @@ fn given_a_driver_library_unixodbc_cannot_load_when_connecting_then_the_error_sa
             .map(|(_, reason)| reason.trim_start().to_owned());
         assert_eq!(
             reason,
-            Some(test_case.expected_reason.replace("{path}", &path)),
+            Some(
+                test_case
+                    .expected_reason
+                    .replace("{path}", &path)
+                    .replace("{folder}", &root)
+            ),
             "{}: {error:?}",
             test_case.description
         );
