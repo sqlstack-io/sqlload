@@ -10,12 +10,22 @@ readme = "README.md"
 exclude = ["tests/"]
 repository.workspace = true
 rust-version.workspace = true
+# `sqll` is a launcher for this one.
+default-run = "sqlload"
 
 [[bin]]
 name = "sqlload"
 path = "src/main.rs"
 required-features = ["cli"]
 # The library and the executable share a name; document only the library.
+doc = false
+
+# `sqll`, a short name for `sqlload`: a small launcher that runs the `sqlload` beside it, linking
+# none of the library, so the sqlload-cli wheel carries one copy of the CLI.
+[[bin]]
+name = "sqll"
+path = "src/bin/sqll.rs"
+required-features = ["cli"]
 doc = false
 
 [features]

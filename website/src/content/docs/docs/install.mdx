@@ -25,6 +25,9 @@ Two packages provide the same `sqlload` command. Install only one of them, becau
 | `sqlload` | A native Python extension. Each platform has one wheel, built for Python's stable ABI (abi3), which runs on every CPython from 3.10. Its `sqlload` command runs the loader in the same process as your Python sources. | Yes |
 | `sqlload-cli` | The same command as a standalone executable, without Python. | No |
 
+From 0.48.0, both packages also install `sqll`, a short name for `sqlload`: `sqll plan` is
+`sqlload plan`. These docs keep writing `sqlload`.
+
 Use `sqlload` if any table is defined in Python ([Python sources](/docs/guides/python/)). Use
 `sqlload-cli` where Python isn't available and every source is declared in `sqlload.toml`.
 

@@ -282,6 +282,7 @@ jobs:
           if [[ "${RUNNER_OS}" == "Windows" ]]; then bin=smoke/Scripts; fi
           "${bin}/python" -m pip install --quiet dist/sqlload-*.whl
           "${bin}/sqlload" --help
+          "${bin}/sqll" --help > /dev/null
           "${bin}/python" -c "import sqlload, sqlload._native"
           "${bin}/python" .github/scripts/interrupt_python_load.py
           python -m venv smoke-cli
@@ -289,6 +290,7 @@ jobs:
           if [[ "${RUNNER_OS}" == "Windows" ]]; then cli=smoke-cli/Scripts; fi
           "${cli}/python" -m pip install --quiet dist/sqlload_cli-*.whl
           "${cli}/sqlload" --version
+          "${cli}/sqll" --version
           # ODBC through each wheel's driver manager: on Linux in a container with no unixODBC (the
           # runner image has one), on macOS once Homebrew's is removed, on Windows odbc32.dll.
           case "${RUNNER_OS}" in

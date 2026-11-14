@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 /// Load data into warehouses: the Kafka exporter, and the loader for projects with [sources].
 #[derive(Debug, Parser)]
-#[command(name = "sqlload", version, about)]
+#[command(name = "sqlload", bin_name = "sqlload", version, about)]
 pub struct Cli {
     /// The configuration file.
     #[arg(
