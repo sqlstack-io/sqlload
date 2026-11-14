@@ -101,7 +101,7 @@ jobs:
         run: |
           "${BIN}/sqlload" --help > /dev/null
           "${BIN}/python" -c "import sqlload, sqlload._native"
-          "${BIN}/python" -I .github/scripts/smoke_published_wheel.py "${VERSION}" "${BIN}/sqlload" "${CLI}/sqlload"
+          "${BIN}/python" -I .github/scripts/smoke_published_wheel.py "${VERSION}" "${BIN}/sqlload" "${CLI}/sqlload" --lone-shim "${CLI}/sqll"
       - name: Check the ODBC driver manager
         shell: bash
         run: |

@@ -14,23 +14,24 @@ use crate::http_source::_helpers::cells::cells_problem;
 use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter};
 use crate::http_source::_helpers::oauth::token_url;
 use crate::http_source::_helpers::pages::{paginate, set_at};
-use crate::http_source::_helpers::selector::{selected_rows, selector};
+use crate::http_source::_helpers::reshaped::reshapes;
+use crate::http_source::_helpers::selector::{enclosing_levels, selected_rows, selector};
 use crate::http_source::_helpers::urls::{
     body_placeholders, filled_body, filled_path, placeholders, redacted,
 };
 use crate::python_sources::errors::ReadError;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
-use crate::row_batches::models::{Projection, ProjectionRules};
+use crate::row_batches::models::{FieldFrom, Projection, ProjectionRules};
 use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http_source::constants::{
-    BODY_DROPPING_REDIRECTS, JOB_THREADS, MAX_REDIRECTS, PAGES_AHEAD, SHOWN_KEYS,
+    BODY_DROPPING_REDIRECTS, JOB_THREADS, MAX_READ_AHEAD, MAX_REDIRECTS, PAGES_AHEAD, SHOWN_KEYS,
 };
 use crate::http_source::models::{
-    Auth, Calls, FanKey, FanOut, FieldSpec, HttpJob, HttpPage, KeyFeed, Location, Method, Over,
-    Paginator, Request, Selector, Sink, StatusAction,
+    Auth, Calls, FanKey, FanOut, HttpJob, HttpPage, KeyFeed, Location, Method, Over, Paginator,
+    Request, RowContext, Selector, Sink, StatusAction,
 };
 
 /// Every problem the job's definition has, found before any request, including projected rows that break the table's `rules`.
@@ -61,21 +62,102 @@ pub(crate) fn job_problems(job: &HttpJob, rules: ProjectionRules<'_>) -> Vec<Str
     problems.extend(rows.key.as_ref().map(|key| {
         format!("key={key:?} names the keys a job gives as a fan_out's over; this job loads rows")
     }));
+    problems.extend(context_problems(job));
     problems
+}
+
+/// Why the job's fields that read from around each row (`sl.parent`, `sl.key`) or its `key_path` can't work, if they can't.
+fn context_problems(job: &HttpJob) -> Vec<String> {
+    let (request, fan_out) = match job {
+        HttpJob::Paginate(request) => (request.as_ref(), None),
+        HttpJob::FanOut(fan_out) => (&fan_out.request, Some(fan_out.as_ref())),
+    };
+    let select = request.select.as_deref().unwrap_or("$");
+    let rows = match selector(request.select.as_deref()) {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+    let mut problems: Vec<String> = Vec::new();
+    let reads = request
+        .fields
+        .iter()
+        .flatten()
+        .map(|field| (format!("fields[{:?}]", field.name), &field.from))
+        .chain(
+            request
+                .key_path
+                .iter()
+                .map(|key_path| ("key_path".to_owned(), &key_path.from)),
+        );
+    for (what, from) in reads {
+        match from {
+            FieldFrom::Row => {}
+            FieldFrom::Parent { levels: 0 } => {
+                problems.push(format!("{what}: sl.parent levels must be at least 1"));
+            }
+            FieldFrom::Parent { levels } => {
+                let available = enclosing_levels(&rows);
+                if *levels > available {
+                    problems.push(format!(
+                        "{what}: sl.parent(levels={levels}) needs {levels} objects around each row, but select {select:?} passes through {available}"
+                    ));
+                }
+            }
+            FieldFrom::Key { name } => problems.extend(row_key_problem(&what, name, fan_out)),
+        }
+    }
+    if fan_out.is_none() && request.key_path.is_some() {
+        problems.push(
+            "key_path checks each record against the keys its fan_out request sent; a paginate sends none"
+                .to_owned(),
+        );
+    }
+    if let Some(key_path) = &request.key_path {
+        problems.extend(key_path_problem(&key_path.path));
+    }
+    if request.cells.is_some() && reshapes(request, &rows) {
+        problems.push(format!(
+            "cells pivots each row's cells, so it can't combine with sl.parent, sl.key, key_path or select {select:?} through more than one list"
+        ));
+    }
+    problems
+}
+
+/// Why `key_path`'s `path` can't be read, if it can't: it must name fields from `$`, as `$.issueId` does, with no list.
+fn key_path_problem(path: &str) -> Option<String> {
+    let problem = Some(format!(
+        "key_path {path:?} is not a path such as \"$.issueId\"; use dotted field names after \"$\""
+    ));
+    match selector(Some(path)) {
+        Ok(read) if read.field.is_none() && read.within.is_empty() && !read.rows.is_empty() => None,
+        Ok(_) | Err(_) => problem,
+    }
+}
+
+/// Why field `what`'s `sl.key(name)` can't work in `fan_out` (none for a paginate), if it can't: no fan-out, a batch, or a name no level's keys have.
+fn row_key_problem(what: &str, name: &str, fan_out: Option<&FanOut>) -> Option<String> {
+    let Some(fan_out) = fan_out else {
+        return Some(format!(
+            "{what}: sl.key reads the key a fan_out request was made for; a paginate has none"
+        ));
+    };
+    if fan_out.batch.is_some() {
+        return Some(format!(
+            "{what}: sl.key({name:?}) can't tell which of a batch's keys a row is for, as one request carries many; read the key from a response field or sl.parent instead"
+        ));
+    }
+    let provided = provided_keys(&fan_out.over, &fan_out_placeholders(&fan_out.request));
+    (!provided.iter().any(|key| key == name)).then(|| {
+        format!(
+            "{what}: sl.key({name:?}) names no key of this fan-out; its keys are {}",
+            provided.join(", ")
+        )
+    })
 }
 
 /// The projection `request`'s `fields` and `keep_record` describe, if any.
 pub(crate) fn request_projection(request: &Request) -> Result<Option<Projection>, String> {
-    let fields = request.fields.as_deref().map(field_triples);
-    projection(fields.as_deref(), request.keep_record.as_deref())
-}
-
-/// Each field as (column, path, required).
-fn field_triples(fields: &[FieldSpec]) -> Vec<(String, String, bool)> {
-    fields
-        .iter()
-        .map(|field| (field.name.clone(), field.path.clone(), field.required))
-        .collect()
+    projection(request.fields.as_deref(), request.keep_record.as_deref())
 }
 
 /// Why the rows' `select` names a key field, which only fan_out's over reads, if it does.
@@ -133,13 +215,37 @@ fn paginator_problem(paginator: &Paginator) -> Option<String> {
     match paginator {
         Paginator::NextLink { pointer } | Paginator::Cursor { pointer, .. } => {
             match selector(Some(pointer)) {
-                Ok(parsed) if parsed.field.is_none() && !parsed.rows.is_empty() => None,
+                Ok(parsed)
+                    if parsed.field.is_none()
+                        && parsed.within.is_empty()
+                        && !parsed.rows.is_empty() =>
+                {
+                    None
+                }
                 Ok(_) | Err(_) => Some(format!(
                     "paginator pointer {pointer:?} is not a path such as \"$.next\" or \"$.meta.next_cursor\""
                 )),
             }
         }
         Paginator::Offset { limit: 0, .. } => Some("sl.offset limit must be at least 1".to_owned()),
+        Paginator::Offset {
+            read_ahead: Some(0),
+            ..
+        }
+        | Paginator::PageNumber {
+            read_ahead: Some(0),
+            ..
+        } => Some("read_ahead must be at least 1 page".to_owned()),
+        Paginator::Offset {
+            read_ahead: Some(pages),
+            ..
+        }
+        | Paginator::PageNumber {
+            read_ahead: Some(pages),
+            ..
+        } if *pages > MAX_READ_AHEAD => Some(format!(
+            "read_ahead {pages} is more than {MAX_READ_AHEAD} pages at once; most APIs refuse that many open requests"
+        )),
         Paginator::Offset { .. }
         | Paginator::Single
         | Paginator::LinkHeader
@@ -186,7 +292,11 @@ fn body_problems(request: &Request) -> Vec<String> {
         );
     }
     problems.extend(paths.iter().filter_map(|path| match selector(Some(path)) {
-        Ok(parsed) if parsed.field.is_none() && named_fields(&parsed.rows) => None,
+        Ok(parsed)
+            if parsed.field.is_none() && parsed.within.is_empty() && named_fields(&parsed.rows) =>
+        {
+            None
+        }
         Ok(_) | Err(_) => Some(format!(
             "body path {path:?} is not a path such as \"$.page.cursor\""
         )),
@@ -365,8 +475,11 @@ fn level_problems(fan_out: &FanOut) -> Vec<String> {
     problems
 }
 
-/// Why `picker`, which feeds keys to the level below, cannot have `fields` or `keep_record`, if it has them.
+/// Why `picker`, which feeds keys to the level below, cannot have `fields`, `keep_record`, `cells` or `key_path`, if it has them.
 fn picker_problem(picker: &Request) -> Option<String> {
+    if picker.key_path.is_some() {
+        return Some("fan_out's over picks keys with its select; key_path checks the records of the fan-out that loads rows".to_owned());
+    }
     match (picker.fields.is_some() || picker.keep_record.is_some(), picker.cells.is_some()) {
         (true, _) => Some("fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows".to_owned()),
         (false, true) => Some("fan_out's over picks keys with its select; cells are for the fan-out's own rows".to_owned()),
@@ -476,7 +589,8 @@ async fn run_job(
     match job {
         HttpJob::Paginate(request) => {
             let calls = request_calls(&request, &connections, &http)?;
-            paginate(&calls, &request, &request.path, &pages).await
+            let context = RowContext::default();
+            paginate(&calls, (&request, &context), &request.path, &pages).await
         }
         HttpJob::FanOut(fan_out) => {
             run_fan_out(*fan_out, &connections, &http, Sink::Pages(pages)).await
@@ -645,6 +759,29 @@ fn shown_keys(request: &Request, keys: &[FanKey], batched: bool) -> String {
     }
 }
 
+/// What the rows of `request` for `keys` take from the request: the key's fields for `sl.key` (none for a batch, which `plan` refuses `sl.key` on), and, with `key_path`, the values of the placeholders the keys filled.
+fn row_context(request: &Request, (keys, batched): (&[FanKey], bool)) -> RowContext {
+    let names = fan_out_placeholders(request);
+    let mut values: Vec<String> = Vec::new();
+    for key in keys {
+        for name in &names {
+            match key.fields.get(name) {
+                Some(Value::String(text)) => values.push(text.clone()),
+                Some(other) => values.push(other.to_string()),
+                None => {}
+            }
+        }
+    }
+    let sent = request.key_path.as_ref().map(|_| values);
+    RowContext {
+        key: match (batched, keys.first()) {
+            (false, Some(key)) => key.fields.clone(),
+            (true, _) | (_, None) => Map::new(),
+        },
+        sent,
+    }
+}
+
 /// A fan-out level's run, boxed so a level can run the level above it.
 type LevelRun<'a> = Pin<Box<dyn Future<Output = Result<(), ReadError>> + Send + 'a>>;
 
@@ -673,6 +810,7 @@ async fn fan_out_key(
         return Ok(());
     };
     let path = filled_path(&request.path, &key.fields)?;
+    let context = row_context(request, (keys, batched));
     let filled: Request;
     let request = match &request.json_body {
         Some(body) => {
@@ -686,12 +824,13 @@ async fn fan_out_key(
         None => request,
     };
     match sink {
-        Sink::Pages(pages) => paginate(calls, request, &path, pages).await,
+        Sink::Pages(pages) => paginate(calls, (request, &context), &path, pages).await,
         Sink::Keys(keys) => {
             let picker = key_picker(request)?;
             let (page_sender, page_receiver) = channel::<HttpPage>(PAGES_AHEAD);
             let shown = path.clone();
-            let pager = async move { paginate(calls, request, &path, &page_sender).await };
+            let pager =
+                async move { paginate(calls, (request, &context), &path, &page_sender).await };
             let secrets = calls.endpoint.current_secrets();
             let forward = forward_keys(page_receiver, &picker, (key, &shown, Some(&secrets)), keys);
             let (paged, forwarded) = tokio::join!(pager, forward);
@@ -744,7 +883,10 @@ async fn feed_keys(
             let path = over.path.clone();
             let secrets = nested.then(|| calls.endpoint.current_secrets());
             let (page_sender, page_receiver) = channel::<HttpPage>(PAGES_AHEAD);
-            let pager = async move { paginate(&calls, &over, &over.path, &page_sender).await };
+            let pager = async move {
+                let context = RowContext::default();
+                paginate(&calls, (&over, &context), &over.path, &page_sender).await
+            };
             let root = FanKey::default();
             let forward = forward_keys(
                 page_receiver,

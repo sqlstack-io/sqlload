@@ -12,6 +12,16 @@ rule_paths = [
 select = ["FPRS", "XSL"]
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSR701"
+path = "crates/sqlload/src/bin/sqll.rs"
+reason = "sqll is a launcher for the sqlload executable beside it and must not link the sqlload library, so its few lines live in the bin rather than behind a library main/ entry."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSR702"
+path = "crates/sqlload/src/bin/sqll.rs"
+reason = "sqll is a launcher for the sqlload executable beside it and must not link the sqlload library, so its main cannot delegate to a library main/ entry."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSS201"
 path = "crates/sqlload/src/auth/models.rs"
 symbols = ["Secret"]

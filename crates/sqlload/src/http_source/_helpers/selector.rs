@@ -1,4 +1,4 @@
-//! Reading `select` and paginator pointers: `$`, `$.a.b`, and `$.a[*].b` for keys.
+//! Reading `select` and paginator pointers: `$`, `$.a.b`, `$.a[*].b` for keys, and `$.a[*].b[*]` for rows inside lists.
 
 use serde_json::Value;
 
@@ -15,17 +15,91 @@ pub(crate) fn selector(text: Option<&str>) -> Result<Selector, String> {
         )
     };
     let rest = text.strip_prefix('$').ok_or_else(invalid)?;
-    let (rows, field) = match rest.split_once("[*]") {
-        Some((rows, field)) => (rows, Some(field.strip_prefix('.').ok_or_else(invalid)?)),
+    let (rows, after) = match rest.split_once("[*]") {
+        Some((rows, after)) => (rows, Some(after)),
         None => (rest, None),
     };
     let rows = segments(rows).ok_or_else(invalid)?;
-    let field = match field {
-        Some(field) if is_name(field) => Some(field.to_owned()),
-        Some(_) => return Err(invalid()),
-        None => None,
+    let (field, within) = match after.map(|after| (after, after.strip_prefix('.'))) {
+        None => (None, Vec::new()),
+        Some((_, Some(name))) if is_name(name) => (Some(name.to_owned()), Vec::new()),
+        Some((_, Some(path))) => (None, within_segments(path).ok_or_else(invalid)?),
+        Some((_, None)) => return Err(invalid()),
     };
-    Ok(Selector { rows, field })
+    Ok(Selector {
+        rows,
+        field,
+        within,
+    })
+}
+
+/// The path after a select's first `[*]` (its leading dot gone), as segments with `[*]` for each list it goes through.
+fn within_segments(text: &str) -> Option<Vec<String>> {
+    let mut found: Vec<String> = Vec::new();
+    for part in text.split('.') {
+        let (mut name, mut lists) = (part, 0);
+        while let Some(rest) = name.strip_suffix("[*]") {
+            (name, lists) = (rest, lists + 1);
+        }
+        found.extend(indexed(name)?);
+        found.extend(std::iter::repeat_n("[*]".to_owned(), lists));
+    }
+    Some(found)
+}
+
+/// The rows `selector` reaches in `document` through its lists, each with the objects its path leaves by a field name, nearest first, so the document is last.
+pub(crate) fn rows_with_parents<'a>(
+    document: &'a Value,
+    selector: &Selector,
+) -> Vec<(&'a Value, Vec<&'a Value>)> {
+    let mut path: Vec<&str> = selector.rows.iter().map(String::as_str).collect();
+    if !selector.within.is_empty() {
+        path.push("[*]");
+        path.extend(selector.within.iter().map(String::as_str));
+    }
+    walk(document, &path, Vec::new())
+}
+
+/// The rows at `path` under `node`, each with the objects around it, `parents` (nearest first) those above `node`.
+fn walk<'a>(
+    node: &'a Value,
+    path: &[&str],
+    parents: Vec<&'a Value>,
+) -> Vec<(&'a Value, Vec<&'a Value>)> {
+    match path.split_first() {
+        None => match node {
+            Value::Array(items) => items.iter().map(|item| (item, parents.clone())).collect(),
+            Value::Null => Vec::new(),
+            other => vec![(other, parents)],
+        },
+        Some((&"[*]", rest)) => {
+            let mut found: Vec<(&'a Value, Vec<&'a Value>)> = Vec::new();
+            for item in node.as_array().into_iter().flatten() {
+                found.extend(walk(item, rest, parents.clone()));
+            }
+            found
+        }
+        Some((segment, rest)) => {
+            let mut parents = parents;
+            if !segment.starts_with('[') {
+                parents.insert(0, node);
+            }
+            match step(node, segment) {
+                Some(next) => walk(next, rest, parents),
+                None => Vec::new(),
+            }
+        }
+    }
+}
+
+/// How many objects are around each row `selector` reaches, for `sl.parent`: one per field name its path steps by.
+pub(crate) fn enclosing_levels(selector: &Selector) -> usize {
+    selector
+        .rows
+        .iter()
+        .chain(&selector.within)
+        .filter(|segment| !segment.starts_with('['))
+        .count()
 }
 
 fn segments(text: &str) -> Option<Vec<String>> {

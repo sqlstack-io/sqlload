@@ -59,3 +59,6 @@ pub const SECRET_HEADER_WORDS: &[&str] = &[
 
 /// Key values a failed batch's error shows before it gives only their count.
 pub const SHOWN_KEYS: usize = 5;
+
+/// The most pages `read_ahead` keeps requested at once.
+pub const MAX_READ_AHEAD: u64 = 100;

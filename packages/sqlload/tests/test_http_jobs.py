@@ -57,6 +57,17 @@ GRID = {
 class Api(BaseHTTPRequestHandler):
 	"""A stub shop API; `self.server.log` records every request's path and auth header."""
 
+	def changelog(self, path: str, body: dict[str, Any]) -> None:
+		"""Jira-shaped change histories of the issues `$.ids` names, one issue a page, paged by `$.next`: issue n has histories
+		n*10 and n*10+1, created at epoch milliseconds; the page envelope counts the request's ids. `/v1/changelog-wrong` answers
+		the second page for issue 99; `/v1/changelog-noid` leaves out issue 11's `issueId`."""
+		ids, page = body["ids"], int(body.get("next") or 0)
+		issue = 99 if path.endswith("-wrong") and page == 1 else ids[page]
+		histories = [{"id": issue * 10 + k, "created": 1_700_000_000_000 + k * 1_500, "items": [{"field": "status", "to": str(k)}]} for k in range(2)]
+		more = page + 1 < len(ids)
+		log: dict[str, Any] = {"changeHistories": histories} if path.endswith("-noid") and issue == 11 else {"issueId": str(issue), "changeHistories": histories}
+		self.reply(200, {"total": len(ids), "issueChangeLogs": [log], "next": str(page + 1) if more else None})
+
 	def lookup(self, path: str, body: dict[str, Any]) -> None:
 		"""The items of the orders a body names, by `$.ids` (a list) or `$.order.id`; `/v1/lookup-flaky` answers 503 the first time a batch holds order 4."""
 		ids = body["ids"] if "ids" in body else [body["order"]["id"]]
@@ -79,6 +90,8 @@ class Api(BaseHTTPRequestHandler):
 		route = {
 			"/v1/next": self.next_link,
 			"/v1/offset": self.offset,
+			"/v1/ahead": self.ahead,
+			"/v1/ahead_short": self.ahead,
 			"/v1/pages": self.page_number,
 			"/v1/cursor": self.cursor,
 			"/v1/link": self.link,
@@ -143,6 +156,8 @@ class Api(BaseHTTPRequestHandler):
 			return self.reply(moved[0], {}, {"Location": moved[1]})
 		if url.path in ("/v1/lookup", "/v1/lookup-flaky"):
 			return self.lookup(url.path, body)
+		if url.path in ("/v1/changelog", "/v1/changelog-wrong", "/v1/changelog-noid"):
+			return self.changelog(url.path, body)
 		after = body.get("filter", {}).get("after") or 0
 		rows = [row for row in ORDERS if row["order_id"] > after]
 		page = body.get("page", {})
@@ -222,6 +237,29 @@ class Api(BaseHTTPRequestHandler):
 	def offset(self, query: dict[str, str]) -> None:
 		start, limit = int(query["offset"]), int(query["limit"])
 		self.reply(200, ORDERS[start : start + limit])
+
+	def ahead(self, query: dict[str, str]) -> None:
+		"""Offset pages of the orders for reading ahead, logging each request's offset and arrival in `self.server.ahead` and each answer's offset
+		in `ahead_answered`, with the most requests open at once in `most_open`. Offset 2 answers slowly, so the pages after it answer first;
+		offset 4 answers 503 the first time; on `/v1/ahead_short` offset 4 holds one row, so the paging ends there although offset 6 has more."""
+		server = self.server
+		start, limit = int(query["offset"]), int(query["limit"])
+		with server.ahead_lock:  # type: ignore[attr-defined]
+			server.ahead.append((start, time.monotonic()))  # type: ignore[attr-defined]
+			server.open += 1  # type: ignore[attr-defined]
+			server.most_open = max(server.most_open, server.open)  # type: ignore[attr-defined]
+		try:
+			if start == 2:
+				time.sleep(0.4)
+			if start == 4 and not server.ahead_failed:  # type: ignore[attr-defined]
+				server.ahead_failed = True  # type: ignore[attr-defined]
+				return self.reply(503, {}, {"Retry-After": "0"})
+			short = self.path.startswith("/v1/ahead_short") and start == 4
+			self.reply(200, ORDERS[start : start + (1 if short else limit)])
+		finally:
+			with server.ahead_lock:  # type: ignore[attr-defined]
+				server.open -= 1  # type: ignore[attr-defined]
+				server.ahead_answered.append(start)  # type: ignore[attr-defined]
 
 	def tree(self, path: str, query: dict[str, str]) -> None:
 		"""Three levels: orders after `after`, three a page; order o's items `o*10+k` for k < o % 3 (none for 3 and 6, 404 for 4); an item's notes,
@@ -326,6 +364,8 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server.log = []  # type: ignore[attr-defined]
 	server.bodies = []  # type: ignore[attr-defined]
 	server.flaky = 0  # type: ignore[attr-defined]
+	server.ahead, server.ahead_answered, server.ahead_lock = [], [], threading.Lock()  # type: ignore[attr-defined]
+	server.open, server.most_open, server.ahead_failed = 0, 0, False  # type: ignore[attr-defined]
 	server.lookup_failed = False  # type: ignore[attr-defined]
 	server.refused = 0  # type: ignore[attr-defined]
 	server.oauth = {}  # type: ignore[attr-defined]
@@ -635,15 +675,17 @@ def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: P
 	assert api.log == []  # type: ignore[attr-defined]
 
 
-def test_given_offset_paging_when_the_api_caps_its_pages_below_limit_then_the_load_fails_naming_the_page_size(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/capped', paginator=sl.offset(limit=5))\n")
+@pytest.mark.parametrize("read_ahead", ["", ", read_ahead=3"], ids=["one-page-at-a-time", "reading-ahead"])
+def test_given_offset_paging_when_the_api_caps_its_pages_below_limit_then_the_load_fails_naming_the_page_size(tmp_path: Path, api: ThreadingHTTPServer, read_ahead: str) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/capped', paginator=sl.offset(limit=5{read_ahead}))\n")
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "the first page held 3 rows, fewer than limit 5, but the API returned 3 more at offset 3, so it caps its pages at 3 rows; set limit=3" in done.stdout + done.stderr, done.stdout + done.stderr
 
 
-def test_given_offset_paging_when_a_short_first_page_is_the_whole_table_then_one_more_request_confirms_the_end(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/offset', paginator=sl.offset(limit=10))\n")
+@pytest.mark.parametrize("read_ahead", ["", ", read_ahead=3"], ids=["one-page-at-a-time", "reading-ahead"])
+def test_given_offset_paging_when_a_short_first_page_is_the_whole_table_then_one_more_request_confirms_the_end(tmp_path: Path, api: ThreadingHTTPServer, read_ahead: str) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/offset', paginator=sl.offset(limit=10{read_ahead}))\n")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
@@ -656,6 +698,43 @@ def test_given_a_fan_out_over_a_capped_api_when_one_key_ends_on_a_short_page_the
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "/v1/capped?offset=0&limit=5: the first page held 3 rows, fewer than limit 5, but the API returned 3 more at offset 3" in done.stdout + done.stderr, done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("path", "expected_orders"),
+	[("/ahead", [order["order_id"] for order in ORDERS]), ("/ahead_short", [1, 2, 3, 4, 5])],
+	ids=["to-the-last-page", "stops-at-a-short-page-with-later-pages-in-flight"],
+)
+def test_given_read_ahead_when_later_pages_answer_first_and_one_is_retried_then_rows_load_in_page_order(
+	tmp_path: Path, api: ThreadingHTTPServer, path: str, expected_orders: list[int]
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('{path}', paginator=sl.offset(limit=2, read_ahead=3))\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert [order for (order,) in query(project, 'SELECT order_id FROM "RAW".shop__t')] == expected_orders
+	answered = api.ahead_answered  # type: ignore[attr-defined]
+	assert answered.index(4) < answered.index(2) and answered.index(6) < answered.index(2), answered
+	assert [start for start, _ in api.ahead].count(4) == 2  # type: ignore[attr-defined]
+	assert 2 <= api.most_open <= 3, api.most_open  # type: ignore[attr-defined]
+
+
+def test_given_read_ahead_and_a_rate_limit_when_loading_then_every_request_waits_its_turn(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	tables = "limited = sl.http(shop, auth=sl.bearer(), rate_limit='10/s')\n\n@shop.table(description='T.')\ndef t(ctx):\n    return limited.paginate('/ahead', paginator=sl.offset(limit=1, read_ahead=4))\n"
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
+	arrivals = sorted(at for _, at in api.ahead)  # type: ignore[attr-defined]
+	assert api.most_open >= 2 and min(later - earlier for earlier, later in zip(arrivals, arrivals[1:])) >= 0.08, arrivals  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("paginator", ["sl.cursor('$.meta.next', 'after', read_ahead=2)", "sl.next_link('$.next', read_ahead=2)", "sl.link_header(read_ahead=2)"])
+def test_given_a_token_paginator_when_it_asks_to_read_ahead_then_the_load_fails_before_any_request(tmp_path: Path, api: ThreadingHTTPServer, paginator: str) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/cursor', paginator={paginator})\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "cannot take read_ahead: each page's address comes from the page before it; read_ahead needs sl.offset or sl.page_number" in done.stdout + done.stderr
+	assert api.log == []  # type: ignore[attr-defined]
 
 
 def test_given_offset_paging_when_the_api_rounds_the_offset_to_a_page_then_a_short_first_page_is_the_end(tmp_path: Path, api: ThreadingHTTPServer) -> None:
@@ -1068,6 +1147,104 @@ def tree_project(tmp_path: Path, api: ThreadingHTTPServer, notes: str, *, after:
 
 
 NOTES = "api.fan_out('/tree/orders/{order_id}/items/{item_id}/notes', over=items, concurrency=3, paginator=sl.page_number('page'), select='$.items')"
+
+
+CHANGELOG = (
+	"api.fan_out('/{route}', over=[10, 11, 12], method='POST', json_body={{'ids': '{{id}}'}}, batch=2, "
+	"paginator=sl.cursor('$.next', '$.next', location='body'), select='$.issueChangeLogs[*].changeHistories[*]', "
+	"fields={{'issue_id': sl.parent('$.issueId'), 'ids_sent': sl.parent('$.total', levels=2), 'history_id': sl.field('$.id', required=True), "
+	"'created': sl.field('$.created', parse='epoch_ms'), 'items': '$.items'}}, key_path=sl.parent('$.issueId'))"
+)
+
+
+def test_given_a_select_through_two_lists_when_loading_then_each_history_carries_its_issue_the_envelope_and_a_parsed_time(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {CHANGELOG.format(route='changelog')}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	rows = query(project, 'SELECT issue_id, ids_sent, history_id, epoch_ms(created), items FROM "RAW".shop__t ORDER BY history_id')
+	expected = [(str(issue), sent, issue * 10 + k, 1_700_000_000_000 + k * 1_500, f'[{{"field":"status","to":"{k}"}}]') for issue, sent in ((10, 2), (11, 2), (12, 1)) for k in range(2)]
+	assert [(issue, sent, history, created, items.replace(" ", "")) for issue, sent, history, created, items in rows] == expected
+	assert sorted(body["ids"] for path, _, body in api.bodies) == [[10, 11], [10, 11], [12]]  # type: ignore[attr-defined]
+
+
+def test_given_key_path_when_a_page_inside_a_batch_answers_for_another_key_then_the_load_fails_naming_it(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {CHANGELOG.format(route='changelog-wrong')}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "a record's key 99 at key_path $.issueId is not among the keys its request sent (10, 11), so the API answered for another key" in done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("required", "expected"),
+	[("False", [("10", 100), ("10", 101), (None, 110), (None, 111), ("12", 120), ("12", 121)]), ("True", "field issue_id needs a value at $.issueId, and the row has none")],
+	ids=["loads-null", "required-fails"],
+)
+def test_given_sl_parent_when_the_enclosing_object_lacks_the_value_then_required_decides(tmp_path: Path, api: ThreadingHTTPServer, required: str, expected: Any) -> None:
+	job = (
+		"api.fan_out('/changelog-noid', over=[10, 11, 12], method='POST', json_body={'ids': '{id}'}, batch=3, "
+		"paginator=sl.cursor('$.next', '$.next', location='body'), select='$.issueChangeLogs[*].changeHistories[*]', "
+		f"fields={{'issue_id': sl.parent('$.issueId', required={required}), 'history_id': '$.id'}})"
+	)
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	if isinstance(expected, str):
+		assert done.returncode == 1 and expected in done.stdout + done.stderr, done.stdout + done.stderr
+		return
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT issue_id, history_id FROM "RAW".shop__t ORDER BY history_id') == expected
+
+
+def test_given_sl_key_when_loading_one_and_two_fan_out_levels_then_each_row_carries_its_requests_keys(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	notes = NOTES.replace("select='$.items')", "select='$.items', fields={'o': sl.key('order_id'), 'i': sl.key('item_id'), 'note': '$.note'})")
+	items = "items_only = api.fan_out('/tree/orders/{order_id}/items', over=orders, select='$.items', on_status={404: 'skip'}, fields={'o': sl.key('order_id'), 'item': '$.item_id'})\n"
+	project = tree_project(tmp_path, api, notes)
+	tables = (project / "sources" / "shop.py").read_text()
+	(project / "sources" / "shop.py").write_text(tables + "\n\n@shop.table(description='Items.')\ndef items(ctx):\n" + textwrap.indent(TREE.replace("AFTER", "None").replace("ON_STATUS", "{404: 'skip'}") + items, "    ") + "    return items_only\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	expected = sorted((item // 10, item, f"{item}-{page}-{n}") for item in TREE_ITEMS for page in (1, 2) for n in range(2))
+	assert query(project, 'SELECT o, i, note FROM "RAW".shop__notes ORDER BY i, note') == expected
+	assert query(project, 'SELECT o, item FROM "RAW".shop__items ORDER BY item') == [(item // 10, item) for item in TREE_ITEMS]
+
+
+@pytest.mark.parametrize(
+	("fields", "extra", "expected_text"),
+	[
+		("{'o': sl.key('order')}", "", "fields[\"o\"]: sl.key(\"order\") names no key of this fan-out; its keys are order_id, item_id"),
+		("{'up': sl.parent('$.x', levels=2)}", "", "fields[\"up\"]: sl.parent(levels=2) needs 2 objects around each row, but select \"$.items\" passes through 1"),
+		("{'o': sl.key('item_id')}", "batch=2, ", "fields[\"o\"]: sl.key(\"item_id\") can't tell which of a batch's keys a row is for"),
+	],
+	ids=["a-key-no-level-has", "more-parent-levels-than-select-has", "a-key-in-a-batch"],
+)
+def test_given_a_field_reading_around_rows_that_cannot_work_when_loading_then_it_fails_before_any_request(
+	tmp_path: Path, api: ThreadingHTTPServer, fields: str, extra: str, expected_text: str
+) -> None:
+	notes = NOTES.replace("select='$.items')", f"{extra}select='$.items', fields={fields})")
+	if extra:
+		notes = notes.replace("'/tree/orders/{order_id}/items/{item_id}/notes'", "'/notes', method='POST', json_body={'ids': '{item_id}'}")
+	done = sqlload(tree_project(tmp_path, api, notes), "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
+	assert api.log == [] and api.bodies == []  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+	("field", "expected"),
+	[
+		("sl.field('$.when', parse={'date': '%d/%m/%Y'}, on_error='null')", [(1, "2026-12-31"), (2, None)]),
+		("sl.field('$.when', parse={'date': '%d/%m/%Y'})", "row 2: field when holds \"2026-12-31\", which is not a date in the format \"%d/%m/%Y\""),
+	],
+	ids=["on-error-null-loads-null", "a-bad-value-fails-naming-it"],
+)
+def test_given_parse_in_sl_json_when_a_value_does_not_parse_then_on_error_decides(tmp_path: Path, api: ThreadingHTTPServer, field: str, expected: Any) -> None:
+	rows = '[{"id": 1, "when": "31/12/2026"}, {"id": 2, "when": "2026-12-31"}]'
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    yield sl.json({rows!r}, fields={{'id': '$.id', 'when': {field}}})\n")
+	done = sqlload(project, "load")
+	if isinstance(expected, str):
+		assert done.returncode == 1 and expected in done.stdout + done.stderr, done.stdout + done.stderr
+		return
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT id, CAST("when" AS VARCHAR) FROM "RAW".shop__t ORDER BY id') == expected
 
 
 def test_given_three_fan_out_levels_when_loading_then_each_note_is_read_under_its_own_order_and_item(tmp_path: Path, api: ThreadingHTTPServer) -> None:

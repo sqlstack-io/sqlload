@@ -3,6 +3,7 @@ use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
 use crate::row_batches::models::JsonLayout;
 use crate::row_batches::models::ProjectionRules;
+use crate::row_batches::models::{BadValue, FieldFrom, FieldSpec};
 use crate::row_batches::tests::helpers::read_projected;
 use crate::row_batches::tests::test_types::{ProjectionProblemTestCase, ProjectionTestCase};
 
@@ -10,15 +11,125 @@ use crate::row_batches::tests::test_types::{ProjectionProblemTestCase, Projectio
 fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_names() {
     let test_cases = [
         ProjectionTestCase {
+            description: "parse turns epoch seconds, millisecond text and microseconds into UTC timestamps",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"s","path":"$.s","parse":{"kind":"epoch_s"}},{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"}},{"name":"us","path":"$.us","parse":{"kind":"epoch_us"}}]"#,
+            ),
+            keep_record: None,
+            text: "{\"s\":1700000000,\"ms\":\"1700000000123\",\"us\":1700000000123456}\n{\"s\":null}\n",
+            expected_batches: Ok(&[
+                "s:Timestamp(µs, \"UTC\"),ms:Timestamp(µs, \"UTC\"),us:Timestamp(µs, \"UTC\") / 2023-11-14T22:13:20Z|2023-11-14T22:13:20.123Z|2023-11-14T22:13:20.123456Z; NULL|NULL|NULL",
+            ]),
+        },
+        ProjectionTestCase {
+            description: "parse reads text with a format as a wall-clock timestamp, an instant when it has an offset, or a date",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%d/%m/%Y %H:%M"}},{"name":"inst","path":"$.at_z","parse":{"kind":"timestamp","format":"%d/%m/%Y %H:%M %z"}},{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%m/%Y"}}]"#,
+            ),
+            keep_record: None,
+            text: "{\"at\":\"14/11/2026 08:05\",\"at_z\":\"14/11/2026 08:05 +0100\",\"day\":\"31/12/2026\"}\n",
+            expected_batches: Ok(&[
+                "at:Timestamp(µs),inst:Timestamp(µs, \"UTC\"),day:Date32 / 2026-11-14T08:05:00|2026-11-14T07:05:00Z|2026-12-31",
+            ]),
+        },
+        ProjectionTestCase {
+            description: "a value parse can't read fails the read, naming the row, field, value and format",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%m/%Y"}}]"#,
+            ),
+            keep_record: None,
+            text: "{\"day\":\"31/12/2026\"}\n{\"day\":\"2026-12-31\"}\n",
+            expected_batches: Err(
+                "line 2: row 2: field day holds \"2026-12-31\", which is not a date in the format \"%d/%m/%Y\"; fix the value, or set on_error=\"null\" on its sl.field to load NULL",
+            ),
+        },
+        ProjectionTestCase {
+            description: "with on_error null, a value parse can't read loads NULL",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"},"on_error":"null"}]"#,
+            ),
+            keep_record: None,
+            text: "{\"ms\":\"soon\"}\n{\"ms\":0}\n",
+            expected_batches: Ok(&["ms:Timestamp(µs, \"UTC\") / NULL; 1970-01-01T00:00:00Z"]),
+        },
+        ProjectionTestCase {
+            description: "an epoch past the year 9999 doesn't convert, so it loads NULL rather than turning the column into text",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"},"on_error":"null"}]"#,
+            ),
+            keep_record: None,
+            text: "{\"ms\":1700000000123456}\n{\"ms\":1700000000123}\n",
+            expected_batches: Ok(&["ms:Timestamp(µs, \"UTC\") / NULL; 2023-11-14T22:13:20.123Z"]),
+        },
+        ProjectionTestCase {
+            description: "%#z reads Z as UTC, and %.f a fraction of the seconds",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%Y-%m-%dT%H:%M:%S%.f%#z"}}]"#,
+            ),
+            keep_record: None,
+            text: "{\"at\":\"2026-11-14T08:05:00.123456Z\"}\n{\"at\":\"2026-11-14T08:05:00.5+01:00\"}\n",
+            expected_batches: Ok(&[
+                "at:Timestamp(µs, \"UTC\") / 2026-11-14T08:05:00.123456Z; 2026-11-14T07:05:00.500Z",
+            ]),
+        },
+        ProjectionTestCase {
+            description: "%f, which reads nanoseconds here, is refused before any row",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%H:%M:%S.%f"}}]"#,
+            ),
+            keep_record: None,
+            text: "{}\n",
+            expected_batches: Err(
+                "fields[\"at\"]: parse format \"%H:%M:%S.%f\" has %f, which reads nanoseconds here; write %.f for a fraction after a dot, as in \"%H:%M:%S%.f\" for 08:05:00.123456",
+            ),
+        },
+        ProjectionTestCase {
+            description: "a padded %-f reads nanoseconds too and is refused the same way",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%H:%M:%S.%-f"}}]"#,
+            ),
+            keep_record: None,
+            text: "{}\n",
+            expected_batches: Err(
+                "fields[\"at\"]: parse format \"%H:%M:%S.%-f\" has %f, which reads nanoseconds here; write %.f for a fraction after a dot, as in \"%H:%M:%S%.f\" for 08:05:00.123456",
+            ),
+        },
+        ProjectionTestCase {
+            description: "a format with an unknown directive is refused before any row",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%Q"}}]"#,
+            ),
+            keep_record: None,
+            text: "{}\n",
+            expected_batches: Err(
+                "fields[\"day\"]: parse format \"%d/%Q\" has a directive that is not a strftime one such as %Y, %m, %d, %H, %M, %S or %z",
+            ),
+        },
+        ProjectionTestCase {
             description: "renames, a nested path and a key with a dash load in fields order; other keys are dropped",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[
-                ("id", "$.id", false),
-                ("account_code", "$.code", false),
-                ("updated_at", "$.updated-at", false),
-                ("city", "$.address.city", false),
-            ]),
+            fields: Some(
+                r#"[{"name":"id","path":"$.id"},{"name":"account_code","path":"$.code"},{"name":"updated_at","path":"$.updated-at"},{"name":"city","path":"$.address.city"}]"#,
+            ),
             keep_record: None,
             text: "{\"code\":\"A1\",\"id\":7,\"address\":{\"city\":\"Leeds\",\"zip\":\"LS1\"},\"updated-at\":\"2026-01-02T03:04:05Z\",\"noise\":1}\n",
             expected_batches: Ok(&[
@@ -29,7 +140,9 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a missing key, a path through a scalar and a null all load NULL",
             layout: JsonLayout::Document,
             batch_rows: 10,
-            fields: Some(&[("id", "$.id", false), ("city", "$.address.city", false)]),
+            fields: Some(
+                r#"[{"name":"id","path":"$.id"},{"name":"city","path":"$.address.city"}]"#,
+            ),
             keep_record: None,
             text: "[{\"id\":1,\"address\":\"none\"},{\"id\":2},{\"id\":3,\"address\":{\"city\":null}},{\"id\":4,\"address\":{\"city\":\"York\"}}]",
             expected_batches: Ok(&["id:Int64,city:Utf8 / 1|NULL; 2|NULL; 3|NULL; 4|York"]),
@@ -38,7 +151,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "keep_record adds the whole object as compact JSON, keys in source order",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("id", "$.id", false)]),
+            fields: Some(r#"[{"name":"id","path":"$.id"}]"#),
             keep_record: Some("raw_json"),
             text: "{\"z\": 1, \"id\": 5, \"tags\": [\"a\", \"b c\"]}\n",
             expected_batches: Ok(&[
@@ -49,7 +162,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a nested object projected whole is JSON",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("address", "$.address", false)]),
+            fields: Some(r#"[{"name":"address","path":"$.address"}]"#),
             keep_record: None,
             text: "{\"address\":{\"city\":\"Leeds\"}}\n",
             expected_batches: Ok(&["address:Utf8(json) / {\"city\":\"Leeds\"}"]),
@@ -58,7 +171,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a required field without a value fails, naming the row and the path",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("id", "$.id", true)]),
+            fields: Some(r#"[{"name":"id","path":"$.id","required":true}]"#),
             keep_record: None,
             text: "{\"id\":1}\n{\"id\":null}\n",
             expected_batches: Err(
@@ -69,7 +182,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a path without $ is refused",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("id", "id", false)]),
+            fields: Some(r#"[{"name":"id","path":"id"}]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(
@@ -80,7 +193,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "an empty key is refused",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("id", "$.a..b", false)]),
+            fields: Some(r#"[{"name":"id","path":"$.a..b"}]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(
@@ -91,7 +204,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "keep_record clashing with a field is refused",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("raw", "$.raw", false)]),
+            fields: Some(r#"[{"name":"raw","path":"$.raw"}]"#),
             keep_record: Some("RAW"),
             text: "{}\n",
             expected_batches: Err("keep_record \"RAW\" is also a field's name; pick another"),
@@ -111,7 +224,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "no fields and no keep_record is refused",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[]),
+            fields: Some(r#"[]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(
@@ -122,7 +235,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a row that is not an object still fails",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[("id", "$.id", false)]),
+            fields: Some(r#"[{"name":"id","path":"$.id"}]"#),
             keep_record: None,
             text: "[1]\n",
             expected_batches: Err("line 1: expected a JSON object"),
@@ -131,7 +244,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a required field names the row counted across batches, not within one",
             layout: JsonLayout::Lines,
             batch_rows: 2,
-            fields: Some(&[("id", "$.id", true)]),
+            fields: Some(r#"[{"name":"id","path":"$.id","required":true}]"#),
             keep_record: None,
             text: "{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n{}\n",
             expected_batches: Err(
@@ -142,11 +255,9 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a repeated key keeps its last copy, below it too; an escaped key matches its text",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[
-                ("city", "$.address.city", false),
-                ("zip", "$.address.zip", false),
-                ("dash", "$.a-b", false),
-            ]),
+            fields: Some(
+                r#"[{"name":"city","path":"$.address.city"},{"name":"zip","path":"$.address.zip"},{"name":"dash","path":"$.a-b"}]"#,
+            ),
             keep_record: None,
             text: "{\"address\":{\"city\":\"Leeds\",\"zip\":\"LS1\"},\"address\":{\"city\":\"York\"},\"a\\u002db\":7}\n",
             expected_batches: Ok(&["city:Utf8,zip:Null,dash:Int64 / York|NULL|7"]),
@@ -155,12 +266,9 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "many fields under one object and the object itself all load from one row",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(&[
-                ("all", "$", false),
-                ("x", "$.a.b.x", false),
-                ("y", "$.a.b.y", false),
-                ("b", "$.a.b", false),
-            ]),
+            fields: Some(
+                r#"[{"name":"all","path":"$"},{"name":"x","path":"$.a.b.x"},{"name":"y","path":"$.a.b.y"},{"name":"b","path":"$.a.b"}]"#,
+            ),
             keep_record: None,
             text: "{\"a\":{\"b\":{\"y\":2,\"x\":1}}}\n",
             expected_batches: Ok(&[
@@ -308,10 +416,17 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
         },
     ];
     for test_case in test_cases {
-        let fields: Vec<(String, String, bool)> = test_case
+        let fields: Vec<FieldSpec> = test_case
             .fields
             .iter()
-            .map(|name| ((*name).to_owned(), format!("$.{name}"), false))
+            .map(|name| FieldSpec {
+                name: (*name).to_owned(),
+                path: format!("$.{name}"),
+                required: false,
+                parse: None,
+                on_error: BadValue::Fail,
+                from: FieldFrom::Row,
+            })
             .collect();
         let flatten: Vec<String> = test_case
             .flatten

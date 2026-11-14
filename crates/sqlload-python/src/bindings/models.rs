@@ -11,7 +11,7 @@ use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use sqlload::row_batches::main::conform_batch::conform_batch;
 use sqlload::row_batches::main::projection::projection;
 use sqlload::row_batches::main::settled_schema::settled_schema;
-use sqlload::row_batches::models::{JsonLayout, Projection};
+use sqlload::row_batches::models::{FieldSpec, JsonLayout, Projection};
 
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{Polled, TableBatches};
@@ -29,16 +29,20 @@ pub struct JsonData {
 
 #[pymethods]
 impl JsonData {
-    /// `data` as one JSON document (rows at dotted `path`, or the whole document), or as NDJSON when `lines`; `fields` (column, path, required) and `keep_record` project each row.
+    /// `data` as one JSON document (rows at dotted `path`, or the whole document), or as NDJSON when `lines`; `fields` (a JSON list of `sl.field` specs: name, path, required, parse, on_error) and `keep_record` project each row.
     #[new]
     #[pyo3(signature = (data, *, lines = false, path = None, fields = None, keep_record = None))]
     fn new(
         data: PyBackedBytes,
         lines: bool,
         path: Option<String>,
-        fields: Option<Vec<(String, String, bool)>>,
+        fields: Option<String>,
         keep_record: Option<String>,
     ) -> PyResult<Self> {
+        let fields = fields
+            .map(|text| serde_json::from_str::<Vec<FieldSpec>>(&text))
+            .transpose()
+            .map_err(|error| PyValueError::new_err(format!("fields: {error}")))?;
         let projection =
             projection(fields.as_deref(), keep_record.as_deref()).map_err(PyValueError::new_err)?;
         let layout = match (lines, &path) {

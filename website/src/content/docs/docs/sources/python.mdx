@@ -57,6 +57,7 @@ Unknown settings raise `TypeError` when the module is imported.
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
 | `flatten` | table | Top-level objects to expand one level into `<object>__<key>` columns. |
+| `unnest`, `max_depth` | table | As in [`sqlload.toml`](/docs/configuration/#table-settings): the list fields whose items become child tables, such as `unnest=["items"]` or `"all"`, and how many levels deep. See [Nested data](/docs/concepts/nested-data/). |
 | `mask`, `exclude_columns`, `allow_columns` | table (the last two also source) | As for other sources. |
 | `table_name`, `destination_path` | source or table | Destination name template, and folder in a files target. |
 | `connection`, `destination`, `schema`, `mask_key`, `parallel_tables` | source | Its connection, target, schema, HMAC key, and whether tables sharing a client may load at once. |
@@ -187,6 +188,55 @@ def accounts(ctx):
   flattening a field makes. A job whose `fields` leave it out fails before any request; `sl.json`
   and `sl.ndjson` data fails before it is parsed.
 - A fan-out's `over` picks keys with its `select` and takes no `fields`.
+- From 0.48.0, `sl.field(path, parse=...)` converts the value, from a closed list:
+  `"epoch_s"`, `"epoch_ms"` and `"epoch_us"` turn a number (or numeric text) into a UTC
+  `timestamp_tz`; `{"timestamp": "%d/%m/%Y %H:%M"}` reads text with a strftime format, as a
+  `timestamp_ntz`, or a `timestamp_tz` when the format has an offset (`%z`, or `%#z`, which also
+  takes `Z`); `{"date": "%d/%m/%Y"}` reads a date. A fraction of a second is `%.f`, as in
+  `"%H:%M:%S%.f"`; Python's `%f` is refused, as it reads nanoseconds here. A value outside the years
+  1 to 9999 doesn't convert.
+  A value that doesn't convert fails the table, naming the row, the field and the value, or loads
+  NULL with `on_error="null"`. Anything else belongs downstream or in a Python table that yields rows.
+
+#### Values from around the row
+
+From 0.48.0, an `sl.http` job's fields can read beyond the row itself, all in Rust. This loads one
+row per Jira change history, each with its issue's ID, without `unnest` or a downstream view:
+
+```python
+api.fan_out(
+    "/rest/api/3/changelog/bulkfetch", over=updated, method="POST",
+    json_body={"issueIdsOrKeys": "{id}"}, batch=1000,
+    paginator=sl.cursor("$.nextPageToken", "$.nextPageToken", location="body"),
+    select="$.issueChangeLogs[*].changeHistories[*]",
+    fields={
+        "issue_id": sl.parent("$.issueId", required=True),
+        "history_id": sl.field("$.id", required=True),
+        "created": sl.field("$.created", parse="epoch_ms"),
+        "items": "$.items",
+    },
+    key_path=sl.parent("$.issueId"),
+)
+```
+
+- `select` can go through more than one list: `$.issueChangeLogs[*].changeHistories[*]` loads each
+  history of each issue. A select ending in one name after a list, such as `$.items[*].id`, still
+  picks keys for a fan-out's `over`.
+- `sl.parent(path, levels=1)` reads from the nearest object around the row that `select` passes
+  through by name, here the issue; `levels=2` reads from the next one out, and the outermost is the
+  response itself, so `sl.parent("$.total", levels=2)` reads the page's envelope. It takes
+  `required`, `parse` and `on_error` as `sl.field` does. A job asking for more levels than its
+  `select` has fails before any request.
+- `sl.key(name)` is the value of key field `name` that the row's fan-out request was made for, from
+  any level above, for an API whose records don't repeat it:
+  `fields={"version_id": sl.key("version_id"), "activity_id": "$.id"}`. A name no level provides
+  fails before any request, and so does `sl.key` with `batch=`, where one request carries many keys;
+  read the key from a response field or `sl.parent` instead.
+- `key_path` on `fan_out` (a path from each record, or `sl.parent(...)`) fails the table when a
+  record's key isn't among the keys its request sent (with `batch=`, the batch's), naming the key,
+  for an API that answers for other keys.
+- `sl.parent` and `sl.key` read an `sl.http` job's rows; `sl.json` and `sl.ndjson` refuse them, and
+  `cells` can't combine with them.
 
 ## The context
 
@@ -229,8 +279,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
 | `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. From 0.45.0, when a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). |
-| `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0. |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query", read_ahead=None)` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0, `read_ahead` from 0.48.0 (see [Reading pages ahead](#reading-pages-ahead)). From 0.45.0, when a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). |
+| `sl.page_number(param="page", *, start=1, location="query", read_ahead=None)` | Counts pages; ends at an empty page. `location` is from 0.36.0, `read_ahead` from 0.48.0. |
 | `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
 
 | Cells | Columns |
@@ -255,6 +305,23 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### Reading pages ahead
+
+From 0.48.0, `read_ahead=N` on `sl.offset` or `sl.page_number` keeps up to `N` page requests open at once
+(at most 100),
+which shortens a backfill over an API with slow pages:
+
+```python
+api.paginate("/invoices", paginator=sl.offset(limit=50, read_ahead=20))
+```
+
+The first page is read alone, so a short first page is checked as without `read_ahead`. After a full first page,
+the next `N` pages are requested together, each through the shared `rate_limit` and retries, and their rows load
+strictly in page order. The run ends at the first short (or, for `sl.page_number`, empty) page, and the requests
+already sent past it are dropped, so an API may see up to `N` requests more than the pages loaded.
+`sl.cursor`, `sl.next_link` and `sl.link_header` refuse `read_ahead`, as each page's address comes from the page
+before it.
 
 ### A missing select path
 

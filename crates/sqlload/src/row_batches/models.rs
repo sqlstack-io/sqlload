@@ -180,6 +180,56 @@ pub struct ProjectionRules<'a> {
     pub naming: (Naming, Option<usize>),
 }
 
+/// One column of `fields=` as a table function names it (`sl.field(...)`): its path, such as `$.address.city`, whether every row needs a value there, and how that value converts.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct FieldSpec {
+    pub name: String,
+    pub path: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub parse: Option<Parse>,
+    #[serde(default)]
+    pub on_error: BadValue,
+    /// What `path` starts from: the row, or, in an `sl.http` job, an object around it or the request's key.
+    #[serde(default)]
+    pub from: FieldFrom,
+}
+
+/// Where a field's path starts: the row (`sl.field`), the `levels`th object around it that `select` passes through, nearest first (`sl.parent`, the response document outermost), or the key field `name` of the fan-out request that read it (`sl.key`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FieldFrom {
+    #[default]
+    Row,
+    Parent {
+        levels: usize,
+    },
+    Key {
+        name: String,
+    },
+}
+
+/// `sl.field(parse=...)`, a closed set of conversions: epoch seconds, milliseconds or microseconds (a number or numeric text) to a UTC timestamp, or text read with a strftime `format` as a timestamp or a date.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Parse {
+    EpochS,
+    EpochMs,
+    EpochUs,
+    Timestamp { format: String },
+    Date { format: String },
+}
+
+/// What a value that `parse` can't convert does: fail the read, naming the field and the value, or load NULL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BadValue {
+    #[default]
+    Fail,
+    Null,
+}
+
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedField {
@@ -189,6 +239,8 @@ pub struct ProjectedField {
     pub text: String,
     /// A row without a value at `path` fails the read rather than loading NULL.
     pub required: bool,
+    pub parse: Option<Parse>,
+    pub on_error: BadValue,
 }
 
 /// Builds compact JSON text for nested values, escaping strings as serde_json does.

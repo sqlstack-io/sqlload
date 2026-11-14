@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import sys
+import sysconfig
 import time
 from pathlib import Path
 
@@ -46,6 +47,24 @@ def test_given_plan_json_when_the_config_cannot_be_used_then_stdout_is_one_json_
 	done = run("plan", "--json", "-c", str(tmp_path / config_name))
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert json.loads(done.stdout)["error"]["code"] == "config", done.stdout + done.stderr
+
+
+@pytest.mark.parametrize(
+	("args", "expected_code"),
+	[
+		pytest.param(("--version",), 0, id="version"),
+		pytest.param(("debug", "--no-connection", "-c", "PROJECT"), 0, id="a command on a project"),
+		pytest.param(("plan", "--json", "-c", "MISSING"), 1, id="a failing plan"),
+		pytest.param(("--no-such-flag",), 2, id="a usage error"),
+	],
+)
+def test_given_the_sqll_script_when_run_then_it_is_the_sqlload_cli_under_a_short_name(project: Path, tmp_path: Path, args: tuple[str, ...], expected_code: int) -> None:
+	scripts = Path(sysconfig.get_path("scripts"))
+	named = {"PROJECT": str(project), "MISSING": str(tmp_path / "missing.toml")}
+	command = [named.get(arg, arg) for arg in args]
+	runs = [subprocess.run([str(scripts / name), *command], capture_output=True, text=True) for name in ("sqlload", "sqll")]
+	assert (runs[1].returncode, runs[1].stdout, runs[1].stderr) == (runs[0].returncode, runs[0].stdout, runs[0].stderr)
+	assert runs[1].returncode == expected_code, runs[1].stdout + runs[1].stderr
 
 
 def test_given_the_version_when_imported_then_it_matches_the_package() -> None:

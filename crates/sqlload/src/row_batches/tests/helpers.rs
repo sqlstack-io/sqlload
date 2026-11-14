@@ -16,7 +16,7 @@ use crate::row_batches::main::json_rows::json_rows;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::settled_schema::settled_schema;
-use crate::row_batches::models::{JsonLayout, JsonRead};
+use crate::row_batches::models::{FieldSpec, JsonLayout, JsonRead};
 use crate::row_batches::tests::test_types::{
     FlattenBatchTestCase, JsonRowsTestCase, ProjectionTestCase,
 };
@@ -72,12 +72,10 @@ pub(crate) fn read_json(test_case: &JsonRowsTestCase) -> Result<Vec<String>, Str
 
 /// The batches `json_rows` produces for the projection test case, rendered; a projection that can't be built is its error.
 pub(crate) fn read_projected(test_case: &ProjectionTestCase) -> Result<Vec<String>, String> {
-    let fields: Option<Vec<(String, String, bool)>> = test_case.fields.map(|fields| {
-        fields
-            .iter()
-            .map(|(name, path, required)| ((*name).to_owned(), (*path).to_owned(), *required))
-            .collect()
-    });
+    let fields: Option<Vec<FieldSpec>> = test_case
+        .fields
+        .map(|text| serde_json::from_str(text).map_err(|error| error.to_string()))
+        .transpose()?;
     let read = JsonRead {
         layout: test_case.layout,
         path: None,
