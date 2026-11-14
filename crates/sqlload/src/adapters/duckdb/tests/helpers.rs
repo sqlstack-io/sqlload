@@ -259,6 +259,7 @@ pub(crate) fn merged_rows(
     ];
     let mode = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
+        not_null_keys: Vec::new(),
         dedupe: Some(MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
             sort: sort.map(|highest| ("score".to_owned(), highest)),

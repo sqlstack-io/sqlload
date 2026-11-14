@@ -221,7 +221,7 @@ fn given_each_odbc_driver_when_tables_merge_on_a_primary_key_it_does_not_report_
             absent: &["unique_key = [\"code\"]"],
         },
         OdbcKeylessTestCase {
-            description: "MySQL through Connector/ODBC, which reports a unique index as the primary key, so only the table without a key is refused",
+            description: "MySQL through Connector/ODBC, which reports a unique index on a nullable column as the primary key: the table without a key is refused, and so is that one, as its NULL rows are different rows a merge matching NULLs would merge into one",
             database: OdbcDatabase::MySql,
             driver: ("", ""),
             tables: ("logs", "codes"),
@@ -231,7 +231,8 @@ fn given_each_odbc_driver_when_tables_merge_on_a_primary_key_it_does_not_report_
             ],
             expected_reasons: &[
                 "logs (kind = \"odbc\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table\n",
-                "Errors (1)",
+                "codes (kind = \"odbc\"): unique_key = \"{primary_key}\" takes the key the source reports, (code), and code can be NULL there",
+                "Errors (2)",
             ],
             absent: &[],
         },

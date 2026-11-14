@@ -25,9 +25,9 @@ use crate::loader::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
-    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
-    WriteStrategy,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullKeys, OnDuplicateKeys,
+    SortDirection, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage,
+    UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -239,6 +239,14 @@ pub(crate) fn build_spec(
         overrides,
     );
     problems.extend(found);
+    let (null_keys, not_null_keys, found) = key_nulls(
+        (table, &constants),
+        (strategy, &unique_key),
+        layered(&settings.null_keys, &defaults.null_keys)
+            .filter(|(_, origin)| *origin == SettingOrigin::Table || merges)
+            .map(|(value, _)| value),
+    );
+    problems.extend(found);
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
     problems.extend(
         checks
@@ -322,6 +330,8 @@ pub(crate) fn build_spec(
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        null_keys,
+        not_null_keys,
         dedup_sort,
         cursor,
         batch,
@@ -804,7 +814,10 @@ fn table_key(
             ))
         }
         Some(_) if table.primary_key.is_empty() => Err(no_primary_key_problem(context, table)),
-        Some(_) => Ok((table.primary_key.clone(), true)),
+        Some(_) => match nullable_key_problem(context, table) {
+            Some(problem) => Err(problem),
+            None => Ok((table.primary_key.clone(), true)),
+        },
     }
 }
 
@@ -855,6 +868,34 @@ fn missing_strategy_problem(
         "{qualified} (kind = \"{}\"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one. Fix: {fix}",
         context.source.kind.name()
     )
+}
+
+/// Whether `table`'s column `key` can hold NULL: the source does not declare it NOT NULL, or doesn't list it.
+fn can_be_null(table: &SourceTable, key: &str) -> bool {
+    table
+        .columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(key))
+        .is_none_or(|column| column.nullable)
+}
+
+/// Why a table set to `unique_key = "{primary_key}"` cannot merge on the key its source reports: a column of it can be NULL (a unique index on a nullable column, which MySQL Connector/ODBC reports as the primary key), so the source can hold several different rows with a NULL there, which a merge matching NULLs would merge into one.
+fn nullable_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> Option<String> {
+    let nullable: Vec<&str> = table
+        .primary_key
+        .iter()
+        .filter(|key| can_be_null(table, key))
+        .map(String::as_str)
+        .collect();
+    (!nullable.is_empty()).then(|| {
+        format!(
+            "{} (kind = \"{}\"): unique_key = {PRIMARY_KEY_PLACEHOLDER:?} takes the key the source reports, ({}), and {} can be NULL there, so the source can hold different rows with a NULL in it, which a merge matching NULLs would merge into one. Fix: name the unique_key columns, ones that identify a row and are never NULL, such as unique_key = [\"id\"]",
+            table.qualified_name(),
+            context.source.kind.name(),
+            table.primary_key.join(", "),
+            nullable.join(", ")
+        )
+    })
 }
 
 /// Why a table set to `unique_key = "{primary_key}"` has no key: its source reports no primary key. It names the keys the database lists (a listed primary key means the driver's key lookup is wrong) and suggests the first whose columns are never NULL, as a merge inserts rows with a NULL key again.
@@ -952,6 +993,33 @@ fn dedupe_settings(
         problems.push("dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
     }
     (Some((column, direction)), problems)
+}
+
+/// A table's `null_keys` (as set, else the default) and the `unique_key` columns whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that doesn't merge.
+fn key_nulls(
+    (table, constants): (&SourceTable, &[(String, ColumnType, String)]),
+    (strategy, unique_key): (WriteStrategy, &[String]),
+    null_keys: Option<NullKeys>,
+) -> (NullKeys, Vec<String>, Vec<String>) {
+    let problems: Vec<String> = null_keys
+        .filter(|_| strategy != WriteStrategy::Merge)
+        .map(|_| format!("null_keys is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row"))
+        .into_iter()
+        .collect();
+    let null_keys = null_keys.unwrap_or_default();
+    let never_null = |key: &String| {
+        null_keys == NullKeys::Fail
+            || constants
+                .iter()
+                .any(|(name, _, _)| name.eq_ignore_ascii_case(key))
+            || !can_be_null(table, key)
+    };
+    let not_null: Vec<String> = unique_key
+        .iter()
+        .filter(|key| never_null(key))
+        .cloned()
+        .collect();
+    (null_keys, not_null, problems)
 }
 
 /// Problems with a strategy and the keys and cursor it is given.

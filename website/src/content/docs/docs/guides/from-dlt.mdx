@@ -29,6 +29,7 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 | A resource's table name | `{source}__{table}` by default. `table_name = "{table}"` on the source names it as dlt does. |
 | `write_disposition="append"` or `"replace"` | `write_strategy = "append"` or `"replace"`. |
 | `write_disposition="merge"` with `primary_key` | `write_strategy = "merge"` with `unique_key`. See [merge](/docs/concepts/write-strategies/#merge). |
+| A sentinel such as `""` filled into a key column that can be empty, as dlt makes `primary_key` columns `NOT NULL` | Not needed: from 0.51.0 `merge` matches a NULL in a key column with a NULL. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
 | `merge_key`, dlt's `delete-insert` of the partitions a load holds | `write_strategy = "delete_insert"` with `cursor_column`: it deletes the cursor range it read, then inserts. See [delete_insert](/docs/concepts/write-strategies/#delete_insert). |
 | `dlt.sources.incremental("updated_at", initial_value=...)` | `cursor_column = "updated_at"` and `cursor_start`, with `ctx.cursor_value` in a Python table. `lag` is `lookback`. See [Cursors](/docs/concepts/cursors/). |
 | Pipeline state (`_dlt_pipeline_state`) | The destination's own maximum of `cursor_column`, read each run. `state = "logged"` keeps a position for the tables that need one. |

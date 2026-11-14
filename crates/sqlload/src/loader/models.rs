@@ -25,8 +25,8 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy,
-    ProjectConfig, SortDirection, TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, NullKeys, OnDuplicateKeys, OnSchemaChange, OutputEncoding,
+    Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -103,6 +103,10 @@ pub struct TableSpec {
     pub unique_key_at: Option<String>,
     /// What a merge does with rows of one commit sharing `unique_key`.
     pub on_duplicate_keys: OnDuplicateKeys,
+    /// What a merge does with a NULL in a `unique_key` column.
+    pub null_keys: NullKeys,
+    /// The `unique_key` columns whose values are never NULL, which compare with `=`: those the source declares NOT NULL, or every one under `null_keys = "fail"`, which refuses a commit holding a NULL in them.
+    pub not_null_keys: Vec<String>,
     /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
     pub dedup_sort: Option<(String, SortDirection)>,
     pub cursor: Option<CursorSpec>,

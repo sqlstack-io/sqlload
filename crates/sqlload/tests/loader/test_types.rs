@@ -1120,6 +1120,20 @@ pub(crate) struct DedupeTargetTestCase {
     pub(crate) expected_rows: [&'static str; 4],
 }
 
+/// A target a merge on a key with NULL parts is loaded into three times.
+pub(crate) struct NullKeyTargetTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table (or from one made by hand).
+    pub(crate) reset: &'static [&'static str],
+    /// The table's rows as one text value, `item/site:qty` ordered by item and site (NULLs last).
+    pub(crate) check_query: &'static str,
+    /// What `check_query` returns after each of the three loads; or text of the first load's error.
+    pub(crate) expected_rows: Result<[&'static str; 3], &'static str>,
+}
+
 /// An NDJSON files source under `drop/` with `settings`, planned by the executable into a DuckDB target, or a filesystem files target when `files_target`.
 pub(crate) struct UnnestPlanTestCase {
     pub(crate) description: &'static str,

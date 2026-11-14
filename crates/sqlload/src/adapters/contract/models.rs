@@ -21,10 +21,12 @@ pub struct TableName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteMode {
     Append,
-    /// Upsert: rows whose key matches a staged row are replaced; with `dedupe`, of the staged rows sharing a key only the one it ranks first is merged.
+    /// Upsert: rows whose key matches a staged row are replaced; with `dedupe`, of the staged rows sharing a key only the one it ranks first is merged. Keys match NULL-safely (a NULL matches a NULL), except the `not_null_keys` columns, whose staged values are never NULL, which compare with `=`.
     Merge {
         unique_key: Vec<String>,
         dedupe: Option<MergeDedupe>,
+        /// The key columns whose staged values are never NULL: the source declares them NOT NULL, or `null_keys = "fail"` refuses a commit holding a NULL in them.
+        not_null_keys: Vec<String>,
     },
     /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead.
     DeleteInsert {
@@ -41,7 +43,26 @@ pub enum WriteMode {
     Changes(ChangeWrite),
 }
 
-/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. Rows with a NULL in the key are all kept, as they match nothing.
+impl WriteMode {
+    /// The key columns a merge or a change apply matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
+    pub fn matched_keys(&self) -> Vec<(&str, bool)> {
+        let (unique_key, not_null_keys) = match self {
+            WriteMode::Merge {
+                unique_key,
+                not_null_keys,
+                ..
+            } => (unique_key, not_null_keys),
+            WriteMode::Changes(change) => (&change.unique_key, &change.not_null_keys),
+            _ => return Vec::new(),
+        };
+        unique_key
+            .iter()
+            .map(|key| (key.as_str(), !not_null_keys.contains(key)))
+            .collect()
+    }
+}
+
+/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeDedupe {
     /// The staged column numbering rows in source order.
@@ -56,6 +77,8 @@ pub struct ChangeWrite {
     pub apply: ChangeApply,
     /// The source's key columns, which `merge` matches rows on.
     pub unique_key: Vec<String>,
+    /// The key columns the source declares NOT NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
     /// The newest truncate in the batch, applied before its rows (`merge` only; a changelog keeps it as a row).
     pub truncated: Option<Truncation>,
 }
@@ -226,4 +249,10 @@ pub enum CheckQuery<'a> {
     Duplicates(&'a [String]),
     /// Up to five of those values, in order, each as its columns' text joined by `, `.
     DuplicateExamples(&'a [String]),
+    /// How many values of these columns more than one row holds, a NULL equal to a NULL, as a merge matches keys.
+    KeyDuplicates(&'a [String]),
+    /// Up to five of those values, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    KeyDuplicateExamples(&'a [String]),
+    /// Up to five values of these columns, in order, of rows holding a NULL in any of them, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    NullKeyExamples(&'a [String]),
 }

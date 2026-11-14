@@ -800,6 +800,9 @@ pub struct TableSettings {
     /// What a merge does with rows of one commit that share a `unique_key`: keep one (default) or fail.
     #[serde(default)]
     pub on_duplicate_keys: Option<OnDuplicateKeys>,
+    /// What a merge does with a NULL in a `unique_key` column: match it with a NULL (default) or fail the commit.
+    #[serde(default)]
+    pub null_keys: Option<NullKeys>,
     /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
     #[serde(default)]
     pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
@@ -819,6 +822,17 @@ pub enum OnDuplicateKeys {
     #[default]
     Dedupe,
     /// Fail the commit, naming some of the repeated keys.
+    Fail,
+}
+
+/// What a merge does with a NULL in a `unique_key` column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NullKeys {
+    /// Match it with a NULL, as a value like any other: a row whose key holds one updates the row holding the same key.
+    #[default]
+    Match,
+    /// Fail the commit holding it, naming the key's columns and some of the keys.
     Fail,
 }
 

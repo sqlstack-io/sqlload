@@ -24,7 +24,7 @@ pub(crate) async fn failures(
     };
     let staged = counts[0];
     if let Some(key) = &checks.unique {
-        failures.extend(repeated_keys(commit, key).await?);
+        failures.extend(repeated_keys(commit, key, false).await?);
     }
     for (column, nulls) in checks.not_null.iter().zip(&counts[1..]) {
         if *nulls > 0 {
@@ -64,18 +64,29 @@ pub(crate) async fn failures(
     Ok(failures)
 }
 
-/// The `unique` failure for `key`, with up to five repeated values, each cut short; `None` when no value repeats.
+/// The `unique` failure for `key`, with up to five repeated values, each cut short; `None` when no value repeats. With `nulls`, a NULL in the key compares equal to a NULL, as a merge matches it; without, rows with one are skipped, as the `unique` check does.
 pub(crate) async fn repeated_keys(
     commit: &CheckedCommit<'_>,
     key: &[String],
+    nulls: bool,
 ) -> Result<Option<(CheckName, String)>, LoaderError> {
     let adapter = sql_adapter(commit.warehouse);
-    let query = adapter.render_check_query(commit.staging, CheckQuery::Duplicates(key));
+    let (count, examples) = match nulls {
+        true => (
+            CheckQuery::KeyDuplicates(key),
+            CheckQuery::KeyDuplicateExamples(key),
+        ),
+        false => (
+            CheckQuery::Duplicates(key),
+            CheckQuery::DuplicateExamples(key),
+        ),
+    };
+    let query = adapter.render_check_query(commit.staging, count);
     let repeated = single_count(commit, query).await?;
     if repeated == 0 {
         return Ok(None);
     }
-    let query = adapter.render_check_query(commit.staging, CheckQuery::DuplicateExamples(key));
+    let query = adapter.render_check_query(commit.staging, examples);
     let examples: Vec<String> = text_values(commit.destination, query)
         .await
         .map_err(|error| could_not_run(commit, &error))?
@@ -97,6 +108,37 @@ pub(crate) async fn repeated_keys(
             },
             examples.join("), (")
         ),
+    )))
+}
+
+/// The rows of `commit` holding a NULL in a column of `key`: how many lack each column (those that any lack), and up to five of their keys, each cut short; `None` when no row does.
+pub(crate) async fn null_keys(
+    commit: &CheckedCommit<'_>,
+    key: &[String],
+) -> Result<Option<String>, LoaderError> {
+    let counts = counts_of(commit, commit.staging, key).await?;
+    let missing: Vec<String> = key
+        .iter()
+        .zip(&counts[1..])
+        .filter(|(_, nulls)| **nulls > 0)
+        .map(|(column, nulls)| format!("{nulls} row(s) have no {column}"))
+        .collect();
+    if missing.is_empty() {
+        return Ok(None);
+    }
+    let query = sql_adapter(commit.warehouse)
+        .render_check_query(commit.staging, CheckQuery::NullKeyExamples(key));
+    let examples: Vec<String> = text_values(commit.destination, query)
+        .await
+        .map_err(|error| could_not_run(commit, &error))?
+        .iter()
+        .map(|example| shortened(example))
+        .collect();
+    Ok(Some(format!(
+        "{}, such as ({}) of ({})",
+        missing.join(", "),
+        examples.join("), ("),
+        key.join(", ")
     )))
 }
 

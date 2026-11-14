@@ -1289,6 +1289,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
             spec.destination.table
         ),
         unique_key: Vec::new(),
+        not_null_keys: Vec::new(),
         dedup_sort: None,
         cursor: None,
         batch: None,

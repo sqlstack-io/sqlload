@@ -146,6 +146,14 @@ impl SqlAdapter for BigQuerySql {
         format!("CAST({expression} AS STRING)")
     }
 
+    /// A key column that may be NULL compared as `=` or both NULL: BigQuery runs a join on `IS NOT DISTINCT FROM` alone as a cross join, and refuses it in a full outer join, but still hashes on the `=` branch of this form.
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("({left} = {right} OR ({left} IS NULL AND {right} IS NULL))"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     /// BigQuery refuses FLOAT64 and JSON in `PARTITION BY`, so those keys are partitioned by their text: 17 significant digits tell any two doubles apart, which `CAST` to STRING does not promise, adding `0.0` first turns `-0.0` into `0.0`, as `MERGE ... ON` compares them equal, and each NaN key gets a partition of its own, as no NaN matches another there.
     fn render_partition_key(&self, value: &str, column_type: &ColumnType) -> String {
         match column_type {

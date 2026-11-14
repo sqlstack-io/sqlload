@@ -18,6 +18,8 @@ mod cursor_text;
 mod helpers;
 #[path = "tests/test_insert_rows.rs"]
 mod insert_rows;
+#[path = "tests/test_key_equality.rs"]
+mod key_equality;
 #[path = "tests/test_live_type.rs"]
 mod live_type;
 #[path = "tests/test_max_cursor.rs"]

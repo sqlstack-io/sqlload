@@ -13,6 +13,12 @@ use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase,
 /// Every row as `id:v`, then how many merged files the run log records.
 pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
+/// Every row as `id:v`, a NULL id as `NULL`, then how many merged files the run log records.
+const NULL_MERGE_CHECK: &str = "SELECT (SELECT string_agg(COALESCE(CAST(id AS VARCHAR), 'NULL') || ':' || v, ',' ORDER BY id NULLS LAST) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+
+const NULL_FAIL_SETTINGS: &str =
+    "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnull_keys = \"fail\"\n";
+
 pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
 pub(crate) const MERGE_FAIL_SETTINGS: &str =
@@ -538,7 +544,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     }],
                     loads: true,
                     expected_error: "",
-                    expected_plan: "merge (unique_key: id)",
+                    expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
                 check_query: MERGE_CHECK,
                 expected_result: "5:a,6:c|1",
@@ -797,6 +803,54 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 ],
                 check_query: MERGE_CHECK,
                 expected_result: "1:a2|3",
+            },
+            FilesMergeTestCase {
+                description: "a row without an id in one file is updated by the next file's row without one, not inserted again, as a NULL in the key matches a NULL",
+                settings: MERGE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n,a\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n,b\n,bb\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    expected_error: "",
+                    loads: true,
+                    expected_plan: "merge (unique_key: id; NULLs in keys match)",
+                }],
+                check_query: NULL_MERGE_CHECK,
+                expected_result: "1:a,NULL:bb|2",
+            },
+            FilesMergeTestCase {
+                description: "with null_keys = \"fail\" a file holding a row without an id fails before it merges, naming the key, and the file before it stays merged",
+                settings: NULL_FAIL_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "id,v\n2,b\n,b\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    expected_error: "drop/b.csv: the file holds a NULL in its unique_key: 1 row(s) have no id, such as (NULL) of (id); null_keys = \"fail\" refuses a NULL in a key column",
+                    loads: true,
+                    expected_plan: "",
+                }],
+                check_query: NULL_MERGE_CHECK,
+                expected_result: "1:a|1",
             },
         ];
         for test_case in &test_cases {

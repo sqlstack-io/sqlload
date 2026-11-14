@@ -442,3 +442,51 @@ pub(crate) fn masked_files_route() -> Route {
         reason: "SQLLoad reads the files because email is masked with hmac".to_owned(),
     }
 }
+
+/// The `unique_key` columns the spec of `test_case`'s table compares with `=` (`not_null_keys`, joined by `, `), or its problems joined by `; `.
+pub(crate) fn not_null_keys(
+    test_case: &crate::loader::tests::test_types::KeyNullsTestCase,
+) -> Result<String, String> {
+    use crate::project::main::parse_project::parse_project;
+    let project = parse_project(
+        &format!(
+            "[connections.erp]\nkind = \"postgres\"\nhost = \"localhost\"\nuser = \"u\"\ndatabase = \"erp\"\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n[sources.erp]\nkind = \"postgres\"\nconnection = \"erp\"\ndescription = \"ERP.\"\ninclude = [\"erp.stock\"]\n[sources.erp.tables.\"erp.stock\"]\ndescription = \"Stock.\"\n{}\n",
+            test_case.settings
+        ),
+        &|_| None,
+    )
+    .map_err(|error| error.to_string())?;
+    let table = SourceTable {
+        schema: "erp".to_owned(),
+        name: "stock".to_owned(),
+        columns: test_case
+            .columns
+            .iter()
+            .map(|(name, nullable)| SourceColumn {
+                name: (*name).to_owned(),
+                postgres_type: "text".to_owned(),
+                pg_type: PgType::Other,
+                column_type: Ok(crate::column_types::models::ColumnType::Text),
+                nullable: *nullable,
+                source_spelling: None,
+            })
+            .collect(),
+        primary_key: test_case
+            .primary_key
+            .iter()
+            .map(|key| (*key).to_owned())
+            .collect(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        split_pages: None,
+        comment: None,
+        listed_keys: Vec::new(),
+    };
+    let resolved = resolve_tables(&project, "erp", &[table]);
+    resolved
+        .specs
+        .first()
+        .map(|spec| spec.not_null_keys.join(", "))
+        .ok_or_else(|| resolved.problems.join("; "))
+}

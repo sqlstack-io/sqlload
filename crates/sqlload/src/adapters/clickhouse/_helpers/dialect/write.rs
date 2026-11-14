@@ -42,7 +42,7 @@ pub(crate) fn swap_statements(
     ]
 }
 
-/// The statements applying `request.mode` from `staging`. A build table is swapped in. Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key or `delete_insert` covers by its range.
+/// The statements applying `request.mode` from `staging`. A build table is swapped in. Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key (see [`displaced_keys`]) or `delete_insert` covers by its range.
 pub(crate) fn write_statements(
     adapter: &ClickHouseSql,
     request: &WriteStatementsRequest<'_>,
@@ -81,12 +81,8 @@ pub(crate) fn write_statements(
     let displaced = match request.mode {
         WriteMode::Replace | WriteMode::Recreate => None,
         WriteMode::Append => None,
-        WriteMode::Merge { unique_key, .. } => {
-            let keys: Vec<String> = unique_key
-                .iter()
-                .map(|key| adapter.render_identifier(key))
-                .collect();
-            let keys = keys.join(", ");
+        WriteMode::Merge { .. } => {
+            let keys = displaced_keys(adapter, request.mode);
             Some(format!("({keys}) IN (SELECT {keys} FROM {delta})"))
         }
         WriteMode::DeleteInsert { .. } => Some(range_condition(adapter, request)),
@@ -134,6 +130,22 @@ pub(crate) fn write_statements(
         publish_statement(&publish),
         format!("DROP TABLE IF EXISTS {delta}"),
     ]
+}
+
+/// The key columns of the merge `mode`, as the `IN` choosing the rows a delta replaces lists them: a column whose values may be NULL as whether it is NULL and its value, so a NULL matches a NULL (the `IN` also runs in a lightweight `DELETE`, a mutation, which ignores a session's `transform_null_in`), and a default value (`''`, `0`) does not.
+fn displaced_keys(adapter: &ClickHouseSql, mode: &WriteMode) -> String {
+    let keys: Vec<String> = mode
+        .matched_keys()
+        .into_iter()
+        .map(|(key, nullable)| {
+            let name = adapter.render_identifier(key);
+            match nullable {
+                true => format!("isNull({name}), assumeNotNull({name})"),
+                false => name,
+            }
+        })
+        .collect();
+    keys.join(", ")
 }
 
 /// `table`'s rows matching `condition` removed the way a merge publishes: an empty delta created `AS` the table (named after `scratch`) whose partition publish displaces those rows, so a run killed at any point leaves the table whole and a rerun converges.

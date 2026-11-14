@@ -379,7 +379,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     }],
                     loads: true,
                     expected_error: "",
-                    expected_plan: "merge (unique_key: id)",
+                    expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
                 check_query: MERGE_CHECK,
                 expected_result: "5:a,6:c|1",

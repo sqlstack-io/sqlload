@@ -304,6 +304,7 @@ fn unordered_merge(
     let WriteMode::Merge {
         unique_key,
         dedupe: Some(dedupe),
+        not_null_keys,
     } = &mode
     else {
         return Ok((mode, None));
@@ -325,6 +326,7 @@ fn unordered_merge(
             WriteMode::Merge {
                 unique_key: unique_key.clone(),
                 dedupe: None,
+                not_null_keys: not_null_keys.clone(),
             },
             Some(format!(
                 "{SOURCE_ROW_COLUMN} is not written, so a file's rows have no order to pick the last of a repeated key by: a file repeating its unique_key fails; write {SOURCE_ROW_COLUMN} to keep its last row instead"
@@ -510,6 +512,7 @@ pub(crate) fn captured_mode(spec: &TableSpec, mode: WriteMode) -> WriteMode {
         Some(cdc) => WriteMode::Changes(ChangeWrite {
             apply: cdc.apply,
             unique_key: spec.unique_key.clone(),
+            not_null_keys: spec.not_null_keys.clone(),
             truncated: None,
         }),
         None => mode,
@@ -613,14 +616,15 @@ fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
     }
 }
 
-/// `schema` with what stops or endangers writing `mode` into the existing table: blocked by its problems, with its warnings added.
+/// `schema` with what stops or endangers writing `mode` into the table (`exists` when it does): blocked by its problems, with its warnings added.
 async fn checked_writes(
     destination: &Destination,
     spec: &TableSpec,
-    mode: &WriteMode,
+    (mode, exists): (&WriteMode, bool),
     mut schema: SchemaPlan,
 ) -> Result<SchemaPlan, LoaderError> {
-    let (problems, warnings) = write_problems(destination, &spec.destination, mode).await?;
+    let (problems, warnings) =
+        write_problems(destination, &spec.destination, (mode, exists)).await?;
     schema.warnings.extend(warnings);
     Ok(match problems.is_empty() {
         true => schema,
@@ -795,8 +799,8 @@ async fn plan_table_once(
     let (mode, mut schema) = ordered_mode(captured_mode(spec, mode), schema);
     let exists = live.is_some();
     schema = checked_columns(spec, schema);
-    if schema.blocked.is_none() && exists {
-        schema = checked_writes(destination, spec, &mode, schema).await?;
+    if schema.blocked.is_none() {
+        schema = checked_writes(destination, spec, (&mode, exists), schema).await?;
     }
     let chosen = match &schema.blocked {
         None => {
@@ -887,8 +891,8 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
                 adapter.render_create_schema(&spec.destination),
                 adapter.render_create_loaded_table(spec, &table.schema.write_columns),
             ];
-            if let WriteMode::Merge { unique_key, .. } = &table.mode {
-                statements.extend(adapter.render_key_index(&spec.destination, unique_key));
+            if matches!(table.mode, WriteMode::Merge { .. }) {
+                statements.extend(adapter.render_key_index(&spec.destination, &table.mode));
             }
             statements.extend(adapter.render_table_comment(&spec.destination, &spec.description));
             Some(statements)
@@ -1151,6 +1155,7 @@ fn write_mode(
         (false, WriteStrategy::Replace) => WriteMode::Replace,
         (false, WriteStrategy::Merge) => WriteMode::Merge {
             unique_key: spec.unique_key.clone(),
+            not_null_keys: spec.not_null_keys.clone(),
             dedupe: (spec.on_duplicate_keys == OnDuplicateKeys::Dedupe).then(|| MergeDedupe {
                 ordinal: match spec.files.is_some() {
                     true => SOURCE_ROW_COLUMN.to_owned(),

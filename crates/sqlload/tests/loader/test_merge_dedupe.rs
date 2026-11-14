@@ -6,10 +6,106 @@ use sqlload_testkit::clickhouse::main::start_clickhouse::start_clickhouse;
 use sqlload_testkit::postgres::constants::PASSWORD;
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
+use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
 use crate::helpers::run_async;
-use crate::merge_helpers::{READINGS_SETUP, run_dedupe_case, run_dedupe_rules};
-use crate::test_types::{DedupeRefusalTestCase, DedupeRule, DedupeTargetTestCase};
+use crate::merge_helpers::{READINGS_SETUP, run_dedupe_case, run_dedupe_rules, run_null_key_loads};
+use crate::test_types::{
+    DedupeRefusalTestCase, DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase,
+};
+
+/// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value.
+const NULL_KEY_ROWS: [&str; 3] = [
+    "bolt/s1:1,bolt/NULL:2,NULL/NULL:3",
+    "bolt/s1:11,bolt/NULL:12,NULL/NULL:13",
+    "bolt/s1:21,bolt/NULL:22,NULL/NULL:23",
+];
+
+/// [`NULL_KEY_ROWS`] on Postgres 15, followed by the unique index SQLLoad created, which treats NULLs as equal.
+const POSTGRES_NULL_KEY_ROWS: [&str; 3] = [
+    "bolt/s1:1,bolt/NULL:2,NULL/NULL:3 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+    "bolt/s1:11,bolt/NULL:12,NULL/NULL:13 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+    "bolt/s1:21,bolt/NULL:22,NULL/NULL:23 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
+];
+
+#[test]
+fn given_a_merge_key_with_null_parts_when_loading_three_times_into_each_target_then_each_key_keeps_one_row_with_the_latest_values()
+-> Result<(), String> {
+    run_async(async {
+        let source = start_postgres().await?;
+        let client = connect(&source).await?;
+        let postgres = start_postgres_version("15-alpine").await?;
+        let clickhouse = start_clickhouse().await?;
+        run_client(&clickhouse, "CREATE DATABASE nullkeys", &[]).await?;
+        let test_cases = [
+            NullKeyTargetTestCase {
+                description: "DuckDB, through MERGE INTO",
+                connection: "kind = \"duckdb\"\ndatabase = \":memory:\"".to_owned(),
+                schema: "raw",
+                reset: &["SELECT 1"],
+                check_query: "SELECT string_agg(COALESCE(item, 'NULL') || '/' || COALESCE(site, 'NULL') || ':' || CAST(qty AS VARCHAR), ',' ORDER BY item NULLS LAST, site NULLS LAST, qty) FROM raw.app__stock",
+                expected_rows: Ok(NULL_KEY_ROWS),
+            },
+            NullKeyTargetTestCase {
+                description: "Postgres 15, the first version whose unique index can treat NULLs as equal, through INSERT ... ON CONFLICT on the index SQLLoad creates NULLS NOT DISTINCT",
+                connection: format!(
+                    "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+                    postgres.port
+                ),
+                schema: "nullkeys",
+                reset: &["DROP TABLE IF EXISTS nullkeys.app__stock"],
+                check_query: "SELECT string_agg(COALESCE(item, 'NULL') || '/' || COALESCE(site, 'NULL') || ':' || qty, ',' ORDER BY item NULLS LAST, site NULLS LAST, qty) || ' | ' || (SELECT indexdef FROM pg_indexes WHERE schemaname = 'nullkeys' AND tablename = 'app__stock') FROM nullkeys.app__stock",
+                expected_rows: Ok(POSTGRES_NULL_KEY_ROWS),
+            },
+            NullKeyTargetTestCase {
+                description: "ClickHouse, through its delta of replaced keys",
+                connection: format!(
+                    "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
+                    clickhouse.port
+                ),
+                schema: "nullkeys",
+                reset: &["DROP TABLE IF EXISTS nullkeys.app__stock"],
+                check_query: "SELECT arrayStringConcat(arrayMap(row -> if(row.1, 'NULL', row.2) || '/' || if(row.3, 'NULL', row.4) || ':' || toString(row.5), arraySort(groupArray((isNull(item), ifNull(item, ''), isNull(site), ifNull(site, ''), qty)))), ',') FROM nullkeys.app__stock",
+                expected_rows: Ok(NULL_KEY_ROWS),
+            },
+            NullKeyTargetTestCase {
+                description: "Postgres, into a table made by hand whose unique index on the key treats NULLs as distinct: ON CONFLICT would insert a NULL key again on every load, so plan refuses it, naming the index to create",
+                connection: format!(
+                    "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+                    postgres.port
+                ),
+                schema: "nullkeys",
+                reset: &[
+                    "DROP TABLE IF EXISTS nullkeys.app__stock",
+                    "CREATE TABLE nullkeys.app__stock (company text, item text, site text, qty bigint)",
+                    "CREATE UNIQUE INDEX app__stock_key ON nullkeys.app__stock (company, item, site)",
+                ],
+                check_query: "SELECT 1",
+                expected_rows: Err(
+                    "its unique index on (company, item, site), nullkeys.app__stock_key, treats NULLs as distinct, so INSERT ... ON CONFLICT would insert a row with a NULL key again on every load",
+                ),
+            },
+        ];
+        for test_case in &test_cases {
+            let rows = run_null_key_loads(test_case, (&client, source.port)).await;
+            assert_eq!(
+                rows.as_deref()
+                    .map(|rows| rows.to_vec())
+                    .map_err(|error| test_case
+                        .expected_rows
+                        .err()
+                        .is_some_and(|expected| error.contains(expected))),
+                test_case
+                    .expected_rows
+                    .map(|rows| rows.iter().map(|row| (*row).to_owned()).collect())
+                    .map_err(|_| true),
+                "{}: {rows:?}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
 
 #[test]
 fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_row_per_key_stays_by_the_chosen_rule()
@@ -31,9 +127,9 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 reset: "SELECT 1",
                 check_query: "SELECT COALESCE(string_agg(COALESCE(sensor, 'NULL') || ':' || CAST(amount AS VARCHAR), ',' ORDER BY sensor NULLS LAST, amount), '') FROM raw.app__readings",
                 expected_rows: [
-                    "s1:20,s2:1,s3:4,NULL:7,NULL:8",
-                    "s1:30,s2:5,s3:4,NULL:7,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:7,NULL:8",
+                    "s1:20,s2:1,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
+                    "s1:10,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },
@@ -47,9 +143,9 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 reset: "DROP TABLE IF EXISTS dedupe.app__readings",
                 check_query: "SELECT COALESCE(string_agg(COALESCE(sensor, 'NULL') || ':' || amount, ',' ORDER BY sensor NULLS LAST, amount), '') FROM dedupe.app__readings",
                 expected_rows: [
-                    "s1:20,s2:1,s3:4,NULL:7,NULL:8",
-                    "s1:30,s2:5,s3:4,NULL:7,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:7,NULL:8",
+                    "s1:20,s2:1,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
+                    "s1:10,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },
@@ -63,9 +159,9 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 reset: "DROP TABLE IF EXISTS dedupe.app__readings",
                 check_query: "SELECT arrayStringConcat(arrayMap(row -> if(row.1, 'NULL', row.2) || ':' || toString(row.3), arraySort(groupArray((isNull(sensor), ifNull(sensor, ''), amount)))), ',') FROM dedupe.app__readings",
                 expected_rows: [
-                    "s1:20,s2:1,s3:4,NULL:7,NULL:8",
-                    "s1:30,s2:5,s3:4,NULL:7,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:7,NULL:8",
+                    "s1:20,s2:1,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
+                    "s1:10,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },

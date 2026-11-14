@@ -25,6 +25,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "column_names",
     "constant_columns",
     "on_duplicate_keys",
+    "null_keys",
     "dedup_sort",
     "naming",
     "row_id",

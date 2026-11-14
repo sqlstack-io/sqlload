@@ -47,6 +47,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 dedupe: None,
             },
             run_insert: None,
@@ -131,6 +132,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             mode: WriteMode::Changes(ChangeWrite {
                 apply: ChangeApply::SoftDeletes,
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 truncated: Some(Truncation {
                     lsn: 42,
                     committed_at: "2026-11-07T10:00:00Z".to_owned(),
@@ -149,6 +151,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             mode: WriteMode::Changes(ChangeWrite {
                 apply: ChangeApply::HardDeletes,
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 truncated: Some(Truncation {
                     lsn: 42,
                     committed_at: "2026-11-07T10:00:00Z".to_owned(),

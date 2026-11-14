@@ -144,3 +144,24 @@ pub(crate) fn date_parameter(
         .map(crate::adapters::contract::models::BoundParameter::Date)
         .map_err(|error| error.to_string())
 }
+
+/// The text of `statement` after the first `after`, up to the next `end`; empty when it has none.
+pub(crate) fn between(statement: &str, (after, end): (&str, &str)) -> String {
+    statement
+        .split_once(after)
+        .and_then(|(_, rest)| rest.split_once(end))
+        .map(|(found, _)| found.to_owned())
+        .unwrap_or_default()
+}
+
+/// A merge on `id` and `updated_at`, `id` never NULL.
+pub(crate) fn mixed_merge() -> crate::adapters::contract::models::WriteMode {
+    crate::adapters::contract::models::WriteMode::Merge {
+        unique_key: vec!["id".to_owned(), "updated_at".to_owned()],
+        not_null_keys: vec!["id".to_owned()],
+        dedupe: Some(crate::adapters::contract::models::MergeDedupe {
+            ordinal: "_sqlload_row".to_owned(),
+            sort: None,
+        }),
+    }
+}

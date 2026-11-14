@@ -2,6 +2,8 @@
 mod constant_batches;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_key_nulls.rs"]
+mod key_nulls;
 #[path = "tests/test_merged_files.rs"]
 mod merged_files;
 #[path = "tests/test_python_columns.rs"]

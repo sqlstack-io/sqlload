@@ -1,14 +1,18 @@
 //! What the merge loader tests share: a Postgres table with repeated keys loaded into any target.
 
+use std::collections::BTreeMap;
+
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
 use crate::helpers::{described_project, load_selected};
-use crate::test_types::{DedupeRule, DedupeTargetTestCase};
+use crate::test_types::{DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase};
 
-/// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor.
+/// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
 pub(crate) const READINGS_SETUP: &str = "
 CREATE TABLE public.readings (reading_id int8 PRIMARY KEY, sensor text, amount int8, seen_at timestamptz, meta jsonb);
 CREATE TABLE public.visits (visit_id int8 PRIMARY KEY, sensor text);
@@ -26,10 +30,10 @@ INSERT INTO public.readings VALUES
 /// What a merge keeps of `public.readings` by each repeated-key rule, the same on every target.
 const RULES: [DedupeRule; 4] = [
     DedupeRule {
-        description: "by default the last row read of each repeated key wins, and rows without a key all stay",
+        description: "by default the last row read of each repeated key wins, rows without a sensor included, and plan says NULLs in the key match",
         settings: "",
         expected_error: "",
-        expected_plan: "merge (unique_key: sensor)",
+        expected_plan: "merge (unique_key: sensor; NULLs in keys match)",
     },
     DedupeRule {
         description: "dedup_sort desc keeps the latest seen_at, a NULL seen_at losing, and plan warns that a later commit still overwrites",
@@ -46,7 +50,7 @@ const RULES: [DedupeRule; 4] = [
     DedupeRule {
         description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
         settings: "on_duplicate_keys = \"fail\"",
-        expected_error: "the loaded rows repeat its unique_key: 2 values of (sensor) appear in more than one row",
+        expected_error: "the loaded rows repeat its unique_key: 3 values of (sensor) appear in more than one row",
         expected_plan: "",
     },
 ];
@@ -94,6 +98,75 @@ pub(crate) async fn run_dedupe_case(
     single_text(destination, check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
+}
+
+/// `public.stock`, keyed by `(company, item, site)` with no constraint: one key whole, one without a site, one without an item or a site.
+const STOCK_SETUP: &str = "
+CREATE TABLE public.stock (company text, item text, site text, qty int8);
+INSERT INTO public.stock VALUES ('acme', 'bolt', 's1', 1), ('acme', 'bolt', NULL, 2), ('acme', NULL, NULL, 3);
+";
+
+/// The change made to `public.stock` after each load: every row's `qty` grows by 10.
+const STOCK_CHANGE: &str = "UPDATE public.stock SET qty = qty + 10";
+
+/// Merge `public.stock` from Postgres on `postgres_port` (reached by `source`) into `target` on `(company, item, site)` three times, the source's rows changed after each load: the rows `target.check_query` returns after each load, or the first load's error.
+pub(crate) async fn run_null_key_loads(
+    target: &NullKeyTargetTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.stock\"]\n\n[sources.app.tables.\"public.stock\"]\nwrite_strategy = \"merge\"\nunique_key = [\"company\", \"item\", \"site\"]\n",
+        target.connection, target.schema
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(STOCK_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let rows = loaded_rows(&project, &destinations, (target.check_query, source)).await;
+    source
+        .batch_execute("DROP TABLE public.stock")
+        .await
+        .map_err(|error| error.to_string())?;
+    rows
+}
+
+/// Load `project` into its `dev` target three times, `public.stock` changed on `source` after each: what `check_query` returns after each load, or the first load's error.
+async fn loaded_rows(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    (check_query, source): (&str, &tokio_postgres::Client),
+) -> Result<Vec<String>, String> {
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let mut rows = Vec::new();
+    for _ in 0..3 {
+        load_selected(project, destinations, &[]).await?;
+        rows.push(
+            single_text(destination, check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+        );
+        source
+            .batch_execute(STOCK_CHANGE)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(rows)
 }
 
 /// The rows `target.check_query` returns after each rule of `RULES`, loaded from Postgres on `postgres_port` into `target`, each from a fresh table; `""` where it returns none.

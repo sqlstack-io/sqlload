@@ -132,14 +132,17 @@ never fails on the warehouse's own error about it.
 - With `dedup_sort = { updated_at = "desc" }`, the row with the highest `updated_at` wins, and
   `"asc"` keeps the lowest. A NULL loses to any value, and a tie goes to the row read later.
   `dedup_sort` takes one column, which can't be in the key, masked, JSON or an array.
-- Rows with a NULL in any key column are never collapsed: each one is inserted.
+- From 0.51.0, a NULL in a key column counts as a value: rows whose keys hold the same values and
+  NULLs in the same columns are collapsed like any other repeat, by the same rule. Before 0.51.0
+  each of them was inserted.
 - Rows are ranked within one commit. A load that commits more than once, by `batch_size` window,
   about every 1 GB, or one file at a time, merges each commit on its own. So with `dedup_sort`, a
   later batch in the same load still overwrites an earlier one, whatever its `dedup_sort` value.
   `plan` warns when a table can commit more than once, and `batch_size = "none"` loads a database
   or Python table in one commit.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
-  columns and examples, before that commit changes anything. Commits before it stay.
+  columns and examples, before that commit changes anything. Commits before it stay. From 0.51.0
+  it compares NULLs in the key too.
 - Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
   other from its source, so a table can choose `"fail"` under a source's `dedup_sort`, or the
   reverse.
@@ -154,6 +157,77 @@ dedup_sort = { read_at = "desc" }
 The plan line names the rule when it isn't the default, as in
 `merge (unique_key: sensor_id; repeated keys: highest read_at wins)` or
 `merge (unique_key: sensor_id; repeated keys fail)`.
+
+### NULLs in keys
+
+From 0.51.0, `merge` matches a NULL in a key column with a NULL. A row keyed
+`("acme", "bolt", NULL)` on `unique_key = ["company", "item", "site"]` updates the row the table
+holds for that key, and a commit holding it twice keeps one, as [Repeated keys](#repeated-keys)
+says. Before 0.51.0 a NULL matched nothing, as `NULL = NULL` is never true in SQL, so such a row
+was inserted again by every load that read it.
+
+Each target compares a key column that can be NULL its own way, and one the source declares
+`NOT NULL` with plain `=`, as before:
+
+| Target | A key column that can be NULL |
+|--------|-------------------------------|
+| DuckDB, MotherDuck, Snowflake | `IS NOT DISTINCT FROM` |
+| BigQuery | `(a = b OR (a IS NULL AND b IS NULL))`, which BigQuery still runs as a hash join |
+| Databricks | `<=>` |
+| ClickHouse | the key's `IN` lists the column as `isNull(k), assumeNotNull(k)` |
+| Postgres | `ON CONFLICT` on a unique index created `NULLS NOT DISTINCT` |
+
+`null_keys` chooses what a NULL in a key column does:
+
+- `"match"` (the default) matches it as above.
+- `"fail"` refuses a commit holding a NULL in a key column, naming the columns and example keys,
+  before that commit changes anything. Commits before it stay. Set on a source, it applies to its
+  `merge` tables only.
+
+```toml
+[sources.erp.tables."pub.stock"]
+write_strategy = "merge"
+unique_key = ["company", "item", "site"]
+null_keys = "fail"
+```
+
+When a key column can be NULL, the plan line says so:
+`merge (unique_key: company, item, site; NULLs in keys match)`.
+
+A key from `"{primary_key}"` must be `NOT NULL` in every column. A source that lets a key column
+hold NULLs (such as a MySQL unique index on a nullable column, which MySQL Connector/ODBC reports as
+the primary key) can hold several rows with a NULL there that are different rows, and matching
+NULLs would merge them into one. `plan` refuses such a table, naming the column; name the
+`unique_key` columns instead.
+
+On a [Postgres target](/docs/targets/postgres/#nulls-in-keys), matching NULLs needs Postgres 15
+or later.
+
+#### Tables loaded before 0.51.0
+
+A table merged before 0.51.0 may already hold several copies of a row whose key has a NULL. They
+stay: the next load's row matches every copy and updates them all, so they hold the same values
+but are still separate rows. Remove them once, with `sqlload load app__stock --reload` (not on a
+Postgres target, which SQLLoad never rebuilds), or by deleting all but the copy from the newest
+load (`_sqlload_load_id` is a random id, so order by `_sqlload_loaded_at`). On DuckDB:
+
+```sql
+DELETE FROM raw.app__stock
+WHERE rowid IN (
+    SELECT rowid
+    FROM (
+        SELECT rowid,
+               row_number() OVER (
+                   PARTITION BY company, item, site
+                   ORDER BY _sqlload_loaded_at DESC
+               ) AS copy
+        FROM raw.app__stock
+    )
+    WHERE copy > 1
+);
+```
+
+`PARTITION BY` puts NULLs together, so each key, NULLs included, keeps one row.
 
 ## delete_insert
 

@@ -106,7 +106,8 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
-use crate::project::models::WriteStrategy;
+use crate::project::models::{NullKeys, WriteStrategy};
+use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
 use crate::publish_checks::models::CheckedCommit;
@@ -1109,9 +1110,22 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
+        if let (WriteMode::Merge { unique_key, .. }, NullKeys::Fail) = (&mode, spec.null_keys) {
+            let commit = CheckedCommit {
+                destination: &self.destination,
+                warehouse,
+                staging: &staging,
+                table: &spec.destination,
+                exists: self.table.exists,
+                columns: &self.table.schema.write_columns,
+                committed: self.committed_rows,
+            };
+            refuse_null_keys(&commit, unique_key, merging_file).await?;
+        }
         if let WriteMode::Merge {
             unique_key,
             dedupe: None,
+            ..
         } = &mode
         {
             let commit = CheckedCommit {

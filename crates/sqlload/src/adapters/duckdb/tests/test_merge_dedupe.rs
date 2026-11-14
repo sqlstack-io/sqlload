@@ -64,7 +64,7 @@ fn given_a_merge_commit_repeating_a_key_when_duckdb_runs_it_then_one_row_per_key
             expected_rows: &["1:later"],
         },
         MergeDedupeTestCase {
-            description: "rows with a NULL key are never collapsed",
+            description: "rows with a NULL key collapse like any other repeated key: the last in source order wins",
             sort: None,
             existing: &[],
             staged: &[
@@ -73,7 +73,25 @@ fn given_a_merge_commit_repeating_a_key_when_duckdb_runs_it_then_one_row_per_key
                 "(3, 'a', 1, 3)",
                 "(3, 'b', 1, 4)",
             ],
-            expected_rows: &["3:b", "NULL:x", "NULL:y"],
+            expected_rows: &["3:b", "NULL:y"],
+        },
+        MergeDedupeTestCase {
+            description: "rows with a NULL key collapse to the one dedup_sort ranks first, even an earlier row",
+            sort: Some(true),
+            existing: &[],
+            staged: &[
+                "(NULL, 'high', 7, 1)",
+                "(NULL, 'low', 2, 2)",
+                "(NULL, 'none', NULL, 3)",
+            ],
+            expected_rows: &["NULL:high"],
+        },
+        MergeDedupeTestCase {
+            description: "a NULL key the table already holds is updated, not inserted again",
+            sort: None,
+            existing: &["(NULL, 'old', 0)", "(4, 'kept', 0)"],
+            staged: &["(NULL, 'new', 1, 1)"],
+            expected_rows: &["4:kept", "NULL:new"],
         },
         MergeDedupeTestCase {
             description: "a repeated key already in the table is updated once, to the winning row",

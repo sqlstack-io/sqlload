@@ -1053,6 +1053,7 @@ impl CdcSource<'_> {
             plan.mode = WriteMode::Changes(ChangeWrite {
                 apply: self.cdc.apply,
                 unique_key: table.spec.unique_key.clone(),
+                not_null_keys: table.spec.not_null_keys.clone(),
                 truncated,
             });
             let mut publisher =

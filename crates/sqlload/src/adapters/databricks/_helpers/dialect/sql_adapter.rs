@@ -115,6 +115,14 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
+    /// A key column that may be NULL compared with Spark's NULL-safe `<=>`, which joins by hash as `=` does.
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("{left} <=> {right}"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     fn render_text_cast(&self, expression: &str) -> String {
         format!("CAST({expression} AS STRING)")
     }

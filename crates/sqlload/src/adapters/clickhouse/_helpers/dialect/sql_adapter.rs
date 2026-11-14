@@ -247,6 +247,14 @@ impl SqlAdapter for ClickHouseSql {
         write_statements(self, request, staging)
     }
 
+    /// A key column that may be NULL compared with `isNotDistinctFrom`, which ClickHouse takes only in `JOIN ON`, where this is used; a merge's displaced keys are an `IN` that encodes NULLs itself (see `displaced_keys`).
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("isNotDistinctFrom({left}, {right})"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     /// ClickHouse's typed bounds, as its partition publish displaces the rows.
     fn render_replaced_rows(&self, request: &WriteStatementsRequest<'_>) -> Option<String> {
         Some(range_condition(self, request))

@@ -35,14 +35,21 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
     };
     let merge = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
+        not_null_keys: vec!["id".to_owned()],
         dedupe: None,
     };
     let deduped = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
+        not_null_keys: vec!["id".to_owned()],
         dedupe: Some(MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
             sort: Some(("note".to_owned(), false)),
         }),
+    };
+    let nullable = WriteMode::Merge {
+        unique_key: vec!["id".to_owned(), "note".to_owned()],
+        not_null_keys: vec!["id".to_owned()],
+        dedupe: None,
     };
     let key_only = [desired("id", ColumnType::Int)];
     let test_cases = [
@@ -71,10 +78,10 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
             ],
         },
         RenderedTestCase {
-            description: "merge with dedupe upserts one staged row per non-NULL key, the lowest dedup_sort value first, NULLs last, then the later row, so ON CONFLICT never meets a key twice",
+            description: "merge with dedupe upserts one staged row per key, the lowest dedup_sort value first, NULLs last, then the later row, so ON CONFLICT never meets a key twice",
             rendered: adapter.render_write(&request(&deduped), &staging),
             expected_statements: &[
-                "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\" AS \"id\", CAST(\"doc\" AS jsonb) AS \"doc\", \"note\" AS \"note\", ROW_NUMBER() OVER (PARTITION BY \"id\" ORDER BY \"note\" ASC NULLS LAST, \"_sqlload_row\" DESC) AS __sqlload_rank FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\") AS __sqlload_ranked WHERE __sqlload_rank = 1 OR \"id\" IS NULL) AS __sqlload_kept ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
+                "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\" AS \"id\", CAST(\"doc\" AS jsonb) AS \"doc\", \"note\" AS \"note\", ROW_NUMBER() OVER (PARTITION BY \"id\" ORDER BY \"note\" ASC NULLS LAST, \"_sqlload_row\" DESC) AS __sqlload_rank FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\") AS __sqlload_ranked WHERE __sqlload_rank = 1) AS __sqlload_kept ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
             ],
         },
         RenderedTestCase {
@@ -106,13 +113,23 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
             ],
         },
         RenderedTestCase {
-            description: "a table SQLLoad creates for merge gets a unique index on the key",
+            description: "a table SQLLoad creates for merge gets a unique index on the key, a plain one when the key is never NULL",
             rendered: adapter
-                .render_key_index(&orders(), &["id".to_owned()])
+                .render_key_index(&orders(), &merge)
                 .into_iter()
                 .collect(),
             expected_statements: &[
                 "CREATE UNIQUE INDEX IF NOT EXISTS \"orders_sqlload_key\" ON \"app\".\"orders\" (\"id\")",
+            ],
+        },
+        RenderedTestCase {
+            description: "a key column that may be NULL gets a unique index NULLS NOT DISTINCT, so ON CONFLICT matches a NULL key with the row holding it",
+            rendered: adapter
+                .render_key_index(&orders(), &nullable)
+                .into_iter()
+                .collect(),
+            expected_statements: &[
+                "CREATE UNIQUE INDEX IF NOT EXISTS \"orders_sqlload_key\" ON \"app\".\"orders\" (\"id\", \"note\") NULLS NOT DISTINCT",
             ],
         },
         RenderedTestCase {

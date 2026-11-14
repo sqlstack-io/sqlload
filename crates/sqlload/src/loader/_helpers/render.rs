@@ -25,7 +25,7 @@ use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
     PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
@@ -336,7 +336,9 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {
-        WriteMode::Merge { unique_key, dedupe } => {
+        WriteMode::Merge {
+            unique_key, dedupe, ..
+        } => {
             let repeats = match dedupe {
                 None => "; repeated keys fail".to_owned(),
                 Some(MergeDedupe {
@@ -353,8 +355,17 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 true => format!(" ← {PRIMARY_KEY_PLACEHOLDER}"),
                 false => String::new(),
             };
+            let nulls = match table
+                .mode
+                .matched_keys()
+                .iter()
+                .any(|(_, nullable)| *nullable)
+            {
+                true => NULL_KEYS_NOTE,
+                false => "",
+            };
             format!(
-                "merge (unique_key: {}{origin}{repeats})",
+                "merge (unique_key: {}{origin}{repeats}{nulls})",
                 unique_key.join(", ")
             )
         }

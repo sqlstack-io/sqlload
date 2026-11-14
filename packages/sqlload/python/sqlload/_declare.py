@@ -30,6 +30,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"dedup_sort",
 		"lookback",
 		"naming",
+		"null_keys",
 		"on_duplicate_keys",
 		"on_schema_change",
 		"row_id",
