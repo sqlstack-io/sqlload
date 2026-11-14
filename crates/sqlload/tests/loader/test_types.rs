@@ -984,6 +984,8 @@ pub(crate) struct OdbcDriverTestCase {
     pub(crate) expected_tables: (&'static str, &'static str),
 }
 
+/// One driver's run of the ODBC scenario of cursor tables without a reported key.
+#[cfg(feature = "odbc")]
 pub(crate) struct OdbcKeylessTestCase {
     pub(crate) description: &'static str,
     pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
