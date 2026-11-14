@@ -19,6 +19,7 @@ use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
+use crate::loader::main::failing_sources::failing_sources;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
@@ -30,7 +31,7 @@ use crate::loader::models::{
 };
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::project::models::ProjectConfig;
+use crate::project::models::{ProjectConfig, SourceKind};
 use crate::python_sources::types::PythonHost;
 use tokio_util::sync::CancellationToken;
 
@@ -251,6 +252,18 @@ async fn run_command(
     if !applies {
         return Ok((lines, exit_code(planned, plan_retryable)));
     }
+    if follow.is_some() && !render_plan(&plan).1 {
+        return Ok(match json {
+            true => {
+                let (text, _, retryable) = json_report(&plan, None);
+                (vec![text], exit_code(false, retryable))
+            }
+            false => {
+                lines.extend([String::new(), follow_refused(project, &plan)]);
+                (lines, exit_code(false, plan_retryable))
+            }
+        });
+    }
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
         return Err(problem.into());
     }
@@ -315,6 +328,31 @@ async fn run_command(
     ))
 }
 
+/// Why `load --follow` did not start on a plan with errors: following past a source or table that did not plan would move the replication slot beyond its changes for good. Names how to leave each failing source out to follow the rest: `--exclude` for a source it does not follow, and the source's own `exclude` for the tables of a `postgres_cdc` source, which share its one slot.
+fn follow_refused(project: &ProjectConfig, plan: &ProjectPlan) -> String {
+    let (captured, others): (Vec<String>, Vec<String>) =
+        failing_sources(plan).into_iter().partition(|name| {
+            project
+                .sources
+                .get(name)
+                .is_some_and(|source| source.kind == SourceKind::PostgresCdc)
+        });
+    let mut ways: Vec<String> = Vec::new();
+    if !others.is_empty() {
+        ways.push(format!("--exclude {}", others.join(" ")));
+    }
+    ways.extend(captured.iter().map(|name| {
+        format!("the failing tables of {name} in exclude under [sources.{name}], as its tables share one slot")
+    }));
+    let leave_out = match ways.is_empty() {
+        true => String::new(),
+        false => format!(", or leave them out to follow the rest: {}", ways.join("; ")),
+    };
+    format!(
+        "✗ load --follow did not start: it follows only when every selected source and table plans, since the replication slot would move past the changes of one left out; fix the errors above{leave_out}"
+    )
+}
+
 /// Why `load --follow` cannot follow `plan`: it follows exactly one `postgres_cdc` source, and nothing else, since it never finishes to load other tables after; when it selects none, the plan's problems say why.
 fn follow_problem(plan: &ProjectPlan) -> Option<String> {
     let others: Vec<&str> = plan
@@ -325,12 +363,13 @@ fn follow_problem(plan: &ProjectPlan) -> Option<String> {
         .collect();
     if !others.is_empty() {
         return Some(format!(
-            "load --follow follows one postgres_cdc source and nothing else; {} {} not captured, so load them without --follow",
+            "load --follow follows one postgres_cdc source and nothing else; {} {} not captured, so load them without --follow, or leave them out: --exclude {}",
             others.join(", "),
             match others.len() {
                 1 => "is",
                 _ => "are",
-            }
+            },
+            others.join(" ")
         ));
     }
     let sources: std::collections::BTreeSet<&str> = plan

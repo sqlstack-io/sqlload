@@ -245,6 +245,13 @@ long ago its newest change committed. The two changes to one order load as one r
   ```
 
   The same column gained again, with nothing written in between, stops it.
+- **Only a whole plan follows.** From 0.50.0, a plan with errors in any selected source or table
+  doesn't start it, since following the rest would move the slot past the changes of what didn't
+  plan, and they'd be lost for good. It prints the plan with each error and its fix, then says how
+  to leave them out to follow the rest: `--exclude <source>` for another source, or the table
+  under `exclude` in `[sources.<name>]` for a table of the source it follows, as its tables share
+  one slot. A re-plan that finds errors, such as a table that lost its primary key, stops it the
+  same way, naming them.
 - **Every other error**, including a re-plan that blocks a table, exits 1 without confirming
   anything unwritten. Run it under a supervisor that restarts it; the restarted load carries on
   from the last confirmed position.
