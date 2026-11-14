@@ -1,7 +1,8 @@
 //! The settings of every selected table, without reading any destination.
 
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::sources::{scoped_tables, selected, unmatched_selectors};
+use crate::loader::_helpers::resolve::unmatched_selectors;
+use crate::loader::_helpers::sources::{scoped_tables, selected};
 use crate::loader::_helpers::table_plan::{desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanOptions, SelectedTable, SelectedTables};

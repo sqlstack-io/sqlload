@@ -36,6 +36,7 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 | `max_table_nesting` and child tables | `unnest` and `max_depth`. See [Nested data](/docs/concepts/nested-data/). |
 | `rest_api` | `sl.http`, below. |
 | `filesystem` with a reader | A [files source](/docs/sources/files/), below. |
+| A transformer, or `add_map`, that reshapes each file's rows | From 0.51.0, a files source's `transform`. See [Transforming each file](/docs/sources/files/#transforming-each-file). |
 | `secrets.toml` and `config.toml` | `${ENV:NAME}` in `sqlload.toml`. |
 | `pipeline.run()` from a task | `sqlload load --json`, below. |
 
@@ -147,6 +148,10 @@ table is named after the source:
   (`sheet_range: A:C` and `column_names: [metric, category, value]` in a pipeline's settings), is
   `xlsx = { range = "A:C", header = false }` and `column_names = ["metric", "category", "value"]`
   from 0.49.0. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns).
+- A file that needs reshaping before it loads (title rows, a header split over two rows, months
+  across), read in dlt by a custom reader or reshaped by `add_map`, takes a `transform` from 0.51.0:
+  a Python function under `python_paths` that gets each file's rows as a `pyarrow.Table` and
+  returns the rows to load. See [Transforming each file](/docs/sources/files/#transforming-each-file).
   See [Load files](/docs/guides/files/).
 
 ## Tables that look like dlt's

@@ -394,9 +394,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             ),
         },
     };
-    let source = match &spec.tunnel {
-        Some(route) => format!("{source}  via {route}"),
-        None => source,
+    let source = match (&spec.tunnel, &spec.transform) {
+        (Some(route), _) => format!("{source}  via {route}"),
+        (None, Some(transform)) => format!("{source}  transform {}", transform.function),
+        (None, None) => source,
     };
     let mut details = vec![detail("source", source)];
     details.extend(
@@ -580,6 +581,12 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         )
     }));
     details.extend(
+        spec.transform
+            .iter()
+            .filter(|transform| transform.changed)
+            .map(|_| detail("", "transform  changed since the last load")),
+    );
+    details.extend(
         table
             .output
             .iter()
@@ -641,7 +648,9 @@ fn batch_line(table: &TablePlan) -> String {
             let parquet = spec
                 .files
                 .as_ref()
-                .is_some_and(|files| files.encoding.format == SourceFormat::Parquet);
+                .is_some_and(|files| {
+                    files.encoding.format == SourceFormat::Parquet && files.transform.is_none()
+                });
             let drift = match parquet {
                 true => "; each batch's footers are combined, so later batches may add columns",
                 false => "",
@@ -1122,6 +1131,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
         after_load: match &outcome.loaded {
             Ok(loaded) => loaded.after_load.clone(),
             Err(_) => None,
+        },
+        transforms: match &outcome.loaded {
+            Ok(loaded) => loaded.transforms.clone(),
+            Err(_) => Vec::new(),
         },
     }
 }

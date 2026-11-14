@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -17,11 +18,12 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
+use crate::files_source::constants::VERSION_SEPARATOR;
 use crate::files_source::models::LoadedFile;
 use crate::loader::_helpers::python::batch_cursor_max;
-use crate::loader::_helpers::sources::loaded_file;
+use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
+use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun};
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -313,6 +315,7 @@ pub(crate) fn run_entry(
             note: None,
             recorded_at: String::new(),
             batch: None,
+            transform: None,
         },
         cursor_type,
         before: window.and_then(|window| window.maximum.clone()),
@@ -397,6 +400,90 @@ pub(crate) fn merged_record(
         note: Some("files source merge".to_owned()),
         recorded_at: now_utc_text(),
         batch: Some(batch),
+        transform: None,
+    }
+}
+
+/// The time a load's `transform` took on each file or range, once the load succeeded; having run it at all, the load records its version (a logged table's run log holds its runs only).
+pub(crate) async fn transformed(
+    table: &TablePlan,
+    (destination, run): (&Destination, Option<TransformRun>),
+) -> Result<Vec<crate::python_sources::models::TransformTime>, LoaderError> {
+    let times: Vec<crate::python_sources::models::TransformTime> = match run {
+        Some(run) => std::mem::take(
+            &mut *run
+                .times
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        ),
+        None => Vec::new(),
+    };
+    if let Some(transform) = table
+        .spec
+        .transform
+        .as_ref()
+        .filter(|_| !times.is_empty() && !table.spec.logged)
+    {
+        append_run(
+            table,
+            destination,
+            &transform_record(&table.spec, &transform.version),
+        )
+        .await?;
+    }
+    Ok(times)
+}
+
+/// `plan` with its `transform` marked changed when the version the table's newest load recorded differs from the one imported now; a table that does not exist yet, one rewritten whole (`replace`, `--reload`), a logged one and one never loaded with a transform are left as they are.
+pub(crate) async fn with_transform_version(
+    mut plan: TablePlan,
+    destination: &Destination,
+) -> Result<TablePlan, LoaderError> {
+    let rewritten = matches!(plan.mode, WriteMode::Replace | WriteMode::Recreate);
+    let Some(current) = plan
+        .spec
+        .transform
+        .as_ref()
+        .map(|transform| transform.version.clone())
+    else {
+        return Ok(plan);
+    };
+    if !plan.exists || rewritten || plan.spec.logged || plan.schema.blocked.is_some() {
+        return Ok(plan);
+    }
+    let (log, _) = read_run_log(&plan, destination).await?;
+    let spec = &plan.spec;
+    let newest = log
+        .records
+        .iter()
+        .filter(|record| {
+            record.source == spec.source_name && record.source_table == spec.source_table.name
+        })
+        .filter_map(|record| Some((&record.recorded_at, record.transform.as_ref()?)))
+        .max()
+        .map(|(_, version)| version.clone());
+    if let Some(transform) = plan.spec.transform.as_mut() {
+        transform.changed = newest.is_some_and(|version| version != current);
+    }
+    Ok(plan)
+}
+
+/// The record a load of a table with a `transform` writes once it ran the function at `version`, which the next `plan` compares with.
+pub(crate) fn transform_record(spec: &TableSpec, version: &str) -> RunRecord {
+    let record = event_record(
+        &record_table(spec),
+        StateEvent {
+            event: RunEvent::Run,
+            cursor_before: None,
+            cursor_after: None,
+            state: None,
+            note: "transform".to_owned(),
+            recorded_at: now_utc_text(),
+        },
+    );
+    RunRecord {
+        transform: Some(version.to_owned()),
+        ..record
     }
 }
 
@@ -473,4 +560,87 @@ fn newest_stamp(table: &TablePlan) -> Option<&str> {
 
 fn record_json(record: &RunRecord) -> Result<String, LoaderError> {
     serde_json::to_string(record).map_err(|error| LoaderError::Invalid(error.to_string()))
+}
+
+/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), or why a files source cannot merge into it: only into a DuckDB or Postgres table, never with `--reload` (one commit would lose the files' order) or `state = "logged"`; none while the table does not exist.
+pub(crate) async fn merge_ledger(
+    request: &FilesPlanRequest<'_>,
+) -> Result<Result<Vec<LoadedFile>, String>, LoaderError> {
+    let spec = request.spec;
+    let destination = match request.loaded {
+        LoadedSource::Query(destination) => destination,
+        LoadedSource::Recorded(_) => {
+            return Ok(Err("merge is not supported for files targets".to_owned()));
+        }
+    };
+    if !sql_adapter(spec.warehouse).merges_files() {
+        return Ok(Err(format!(
+            "merge from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
+            spec.warehouse
+        )));
+    }
+    if request.options.reload {
+        return Ok(Err(
+            "--reload would merge every file in one commit and lose their order; drop the table and load again to merge every file anew".to_owned(),
+        ));
+    }
+    if spec.logged {
+        return Ok(Err(
+            "state = \"logged\" does not apply to a files source's merge, which records each file it merges".to_owned(),
+        ));
+    }
+    if let Some(cursor) = &spec.cursor {
+        return Ok(Err(format!(
+            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it and set write_strategy = \"merge\", or keep it and use delete_insert",
+            cursor.column
+        )));
+    }
+    let merged = match request.live {
+        None => return Ok(Ok(Vec::new())),
+        Some(_) => merged_files(spec, destination).await?,
+    };
+    let location = request.files.location.to_string();
+    let listed: HashMap<String, String> = request
+        .files
+        .table
+        .files
+        .iter()
+        .map(|data| {
+            (
+                format!("{location}{}", data.file.relative_key),
+                data.file.version(),
+            )
+        })
+        .collect();
+    Ok(merged.map(|merged| unchanged_files(merged, &listed)))
+}
+
+/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
+fn unchanged_files(merged: Vec<LoadedFile>, listed: &HashMap<String, String>) -> Vec<LoadedFile> {
+    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
+    for file in merged {
+        newest.insert(file.name.clone(), file);
+    }
+    newest
+        .into_values()
+        .filter(|file| {
+            listed
+                .get(&file.name)
+                .is_none_or(|version| *version == file.version)
+        })
+        .collect()
+}
+
+/// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
+pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
+    match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
+        (true, Some((name, version))) => LoadedFile {
+            name: name.to_owned(),
+            version: version.to_owned(),
+        },
+        _ => LoadedFile {
+            name: text,
+            version: String::new(),
+        },
+    }
 }

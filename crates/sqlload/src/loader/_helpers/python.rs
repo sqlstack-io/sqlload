@@ -677,7 +677,7 @@ pub(crate) fn typed_batch(
 }
 
 /// The batches' target schema: each read column in its planned type.
-fn read_schema(table: &TablePlan) -> SchemaRef {
+pub(crate) fn read_schema(table: &TablePlan) -> SchemaRef {
     let fields: Vec<Field> = table
         .read_columns
         .iter()
@@ -690,7 +690,10 @@ fn read_schema(table: &TablePlan) -> SchemaRef {
 }
 
 /// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the list, or from the JSON text a list arrives as); a value that does not convert is an error naming the column.
-fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, LoaderError> {
+pub(crate) fn read_types(
+    batch: &RecordBatch,
+    target: &SchemaRef,
+) -> Result<RecordBatch, LoaderError> {
     let arrays: Vec<ArrayRef> = target
         .fields()
         .iter()
@@ -868,6 +871,7 @@ impl PythonFeed {
                 changes: Vec::new(),
                 note: Some(NO_DATA_NOTE.to_owned()),
                 after_load: None,
+                transforms: Vec::new(),
             });
         }
         let unsettled = self.publisher.is_none()
@@ -889,6 +893,7 @@ impl PythonFeed {
             changes: std::mem::take(&mut self.changes),
             note: None,
             after_load: None,
+            transforms: Vec::new(),
         })
     }
 
@@ -1315,6 +1320,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
             lists: ListChoices::new(),
         }),
         sheet: None,
+        transform: None,
         cdc: None,
         checks: None,
         warehouse_source: None,

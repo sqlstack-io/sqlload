@@ -9,9 +9,8 @@ use crate::loader::_helpers::destination::{
     block_shared_destinations, mark_shared_destinations, unknown_sharing,
 };
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::sources::{
-    admit_tables, destination_names, found_sources, selected, source_ends, unmatched_selectors,
-};
+use crate::loader::_helpers::resolve::{admit_tables, unmatched_selectors};
+use crate::loader::_helpers::sources::{destination_names, found_sources, selected, source_ends};
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};

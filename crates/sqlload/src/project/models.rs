@@ -46,6 +46,12 @@ pub struct ProjectConfig {
     /// The file declaring each Python source, by source name.
     #[serde(skip)]
     pub python_modules: BTreeMap<String, String>,
+    /// The Python host that imported `python_paths`, which runs `transform` functions; `None` in the standalone executable.
+    #[serde(skip)]
+    pub python_host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
+    /// Each `transform` function named in the project: its version (a hash of its module's source), or why it cannot run.
+    #[serde(skip)]
+    pub transforms: BTreeMap<String, Result<String, String>>,
 }
 
 /// How a Snowflake connection's loads get into Snowflake: required, with no default; one it cannot use fails at plan, never falling back.
@@ -794,6 +800,9 @@ pub struct TableSettings {
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
+    /// A Python function, `module:function` with the module named as `python_paths` imports it, run on each file's rows (files) or each range's (`google_sheets`) before they load.
+    #[serde(default)]
+    pub transform: Option<String>,
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.

@@ -62,6 +62,21 @@ pub(crate) struct RenderTallyTestCase {
     pub(crate) expected_output: &'static str,
 }
 
+pub(crate) struct TransformReaderTestCase {
+    pub(crate) description: &'static str,
+    /// The files table's `transform`, if any.
+    pub(crate) transform: Option<&'static str>,
+    /// Why SQLLoad must read the Parquet files itself, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}
+
+pub(crate) struct TransformTallyTestCase {
+    pub(crate) description: &'static str,
+    /// Each file the table's transform ran on: its name, milliseconds, rows given and whether it returned dicts.
+    pub(crate) transforms: &'static [(&'static str, u64, u64, bool)],
+    pub(crate) expected_output: &'static str,
+}
+
 /// A plan item: its name, its action, and each detail's label and text.
 pub(crate) type ItemSpec = (
     &'static str,

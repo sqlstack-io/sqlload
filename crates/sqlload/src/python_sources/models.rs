@@ -52,3 +52,74 @@ pub struct CursorRead {
     /// Whether `start` itself is included.
     pub inclusive: bool,
 }
+
+/// What a `transform` function gets as `ctx`: where the rows came from. A files table sets `path`, `modified_at` and, for its format, `sheet`, `range` and `skip_rows`; a `google_sheets` table sets `spreadsheet_id`, `sheet` (the tab) and `range`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FileContext {
+    /// The table's name in its source.
+    pub table: String,
+    /// The file as `_sqlload_source_file` names it.
+    pub path: Option<String>,
+    /// When the file was last modified, RFC 3339 in UTC.
+    pub modified_at: Option<String>,
+    pub sheet: Option<String>,
+    pub range: Option<String>,
+    pub skip_rows: Option<u32>,
+    pub spreadsheet_id: Option<String>,
+}
+
+/// One call of a `transform` function, and how its returned columns cross.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TransformCall {
+    /// `module:function`.
+    pub function: String,
+    pub context: FileContext,
+    /// Columns loaded masked.
+    pub masked: Vec<String>,
+    /// Columns pinned as `array(...)`: their Arrow lists cross as lists.
+    pub arrays: Vec<String>,
+    /// How the table's columns load and the destination's name limit.
+    #[serde(skip)]
+    pub naming: (crate::load_naming::models::Naming, Option<usize>),
+}
+
+/// What a `transform` function returned, crossing into Arrow: the batches, and whether it returned dicts (which cross slower than Arrow or a DataFrame).
+#[derive(Debug)]
+pub struct Transformed {
+    pub batches: Box<dyn crate::python_sources::types::BatchStream>,
+    pub dicts: bool,
+}
+
+/// What a `transform` function returned for one file or range, crossed into Arrow, and how long the call and its crossing took.
+#[derive(Debug, Clone)]
+pub struct TransformRan {
+    pub batches: Vec<arrow_array::RecordBatch>,
+    /// Whether it returned dicts, which cross slower than Arrow or a DataFrame.
+    pub dicts: bool,
+    /// The rows it was given.
+    pub rows_in: u64,
+    pub seconds: f64,
+}
+
+/// How long a `transform` took on one file or Sheets range.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TransformTime {
+    /// The file as `_sqlload_source_file` names it, or the range.
+    pub file: String,
+    /// How long the call, and its crossing into Arrow, took.
+    pub milliseconds: u64,
+    /// The rows the function was given.
+    pub rows: u64,
+    /// Whether it returned dicts, which cross slower than Arrow or a DataFrame.
+    pub dicts: bool,
+}
+
+/// What `transform_files` runs: the host, the call (its `context.table` and how what the function returns crosses; each file sets the rest of the context), and the files, in the folder printed as `location`, encoded as `encoding`.
+#[derive(Debug, Clone)]
+pub struct TransformFiles<'a> {
+    pub host: std::sync::Arc<dyn crate::python_sources::types::PythonHost>,
+    pub call: TransformCall,
+    pub files: &'a [crate::files_source::models::DataFile],
+    pub location: String,
+    pub encoding: &'a crate::files_source::models::FilesEncoding,
+}

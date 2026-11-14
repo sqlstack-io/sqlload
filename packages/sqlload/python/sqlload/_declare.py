@@ -8,6 +8,7 @@ import inspect
 import json
 from collections.abc import Callable, Collection, Iterator, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from logging import Logger
 from typing import Any, TypeVar, overload
 
@@ -227,6 +228,24 @@ class Connection(Mapping[str, Any]):
 		if name not in self._named:
 			raise KeyError(f"no connection named {name}")
 		return Connection(self._named[name], self._named, self._withheld)
+
+
+@dataclass(frozen=True)
+class FileContext:
+	"""What a `transform` function receives with the rows: where they came from.
+
+	A files table sets `path` (as `_sqlload_source_file` names the file, `archive.zip/member.csv`
+	for a ZIP member), `modified_at`, and `sheet`, `range` or `skip_rows` when its format uses them.
+	A `google_sheets` table sets `spreadsheet_id`, `sheet` (the tab) and `range`.
+	"""
+
+	table: str
+	path: str | None = None
+	modified_at: datetime | None = None
+	sheet: str | None = None
+	range: str | None = None
+	skip_rows: int | None = None
+	spreadsheet_id: str | None = None
 
 
 class Context:

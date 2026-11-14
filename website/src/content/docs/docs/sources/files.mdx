@@ -185,6 +185,107 @@ as any rewritten file does. Only an archive's index and the members read are fet
 requests. Workbooks, XML documents and ZIP members are read whole, up to 1 GiB each; a larger member,
 or an archive naming two members alike, fails.
 
+## Transforming each file
+
+From 0.51.0. `transform` names a Python function that makes a file loadable: it fixes headers,
+drops title and totals rows, or unpivots a sheet. Keep business logic downstream, in SQL, where it
+can change without reloading files. The function is `module:function`, the module named as
+[`python_paths`](/docs/configuration/#top-level) discovery imports it: by its path from the project
+folder, so `transforms/metrics.py` is `transforms.metrics`. It needs the `sqlload` Python package
+and pyarrow; the standalone `sqlload-cli` executable refuses a table with a `transform`.
+
+```toml
+python_paths = ["transforms"]
+
+[sources.metrics]
+kind = "files"
+connection = "lake"
+path = "drop/metrics/"
+format = "xlsx"
+xlsx = { range = "A3:Z" }
+description = "Monthly metrics, one workbook a month."
+write_strategy = "append"
+transform = "transforms.metrics:transform"
+```
+
+It runs once for each file, and for each member of a ZIP archive, after SQLLoad reads it and before
+its rows are typed against the table. It gets the file's rows as a `pyarrow.Table` and a
+`sl.FileContext`, and returns what a [Python table](/docs/guides/python/) may yield: a list of
+dicts, a `pyarrow.Table`, or a polars or pandas DataFrame. Dicts are the simplest:
+
+```python title="transforms/metrics.py"
+import pyarrow as pa
+import sqlload as sl
+
+def transform(table: pa.Table, ctx: sl.FileContext):
+    rows = []
+    for row in table.to_pylist():
+        if row["metric"] in (None, "Total"):
+            continue
+        for month, value in row.items():
+            if month != "metric" and value is not None:
+                rows.append({"metric": row["metric"], "month": month, "value": value})
+    return rows
+```
+
+`ctx` has `path` (as in `_sqlload_source_file`), `modified_at`, `sheet`, `range`, `skip_rows` and
+`table`; `spreadsheet_id` is set only for [Google Sheets](/docs/sources/google-sheets/) tables.
+
+The rows it gets are typed so that no value fails the read before the function sees it: CSV and
+XML values as text, Parquet columns as stored, Excel cells as the workbook stores each column, and
+JSON values as text except nested objects and lists, which stay JSON. `exclude_columns` and
+`allow_columns` apply to the file's own columns, before the function; `columns` and `mask` apply to
+what it returns.
+
+Dict values are typed as JSON values are, so a whole number is `int` and a decimal `float`; pin
+exact types in `columns`. For large files, return Arrow or a DataFrame, which skips converting each
+row. The same unpivot in polars:
+
+```python title="transforms/metrics.py"
+import polars as pl
+import pyarrow as pa
+import sqlload as sl
+
+def transform(table: pa.Table, ctx: sl.FileContext):
+    frame = pl.from_arrow(table).filter(pl.col("metric").is_not_null() & (pl.col("metric") != "Total"))
+    return frame.unpivot(index="metric", variable_name="month", value_name="value").drop_nulls("value")
+```
+
+A pandas DataFrame crosses with its columns only; after filtering, call `reset_index(drop=True)` so
+no index is left over.
+
+- `plan` imports the function and fails when its module or the function is missing, or isn't
+  callable. It then runs the function on the newest file (by name), and the table's columns are
+  what it returned, typed as a Python table's rows are. So the function runs at `plan` and again
+  at load: keep it free of side effects.
+- Every file must return the columns the planned file did, or fewer (a missing one loads NULL). A
+  file returning a new column fails, naming it; pin it in `columns` to add it.
+- A transform that raises, or returns something else, fails that file and names the function and
+  the file. Its rows don't commit, and `after_load` leaves it where it is. The table stops there,
+  as for a file that doesn't read; files committed before it stay committed.
+- The file order, `merge`, `after_load` and the `_sqlload_source_*` columns work as without a
+  transform; `_sqlload_source_row` numbers the rows the function returned. SQLLoad always reads the
+  files itself, so a destination never reads them directly.
+- Each file is read whole and held in memory with what the function returns, so a file streams no
+  longer.
+- The load report gives each file's transform time, and a hint when dicts made a large file slow.
+
+### Changing a transform
+
+Each load records a version of the transform (a hash of its module's source). Files already loaded
+aren't read again, so after a change, `plan` shows `transform  changed since the last load` on
+the table. The version covers the module the function is in; a change in another module it imports
+isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`:
+
+- `append` tables load every file again into a new table that replaces the old one at the end.
+  `merge` tables load every file again oldest first and one at a time, into a new table that
+  replaces the old one at the end. A reload that fails leaves the old table and its file record as
+  they were.
+- With `after_load = { move_to = ... }`, the reload also reads the files under `move_to`, in their
+  order. `plan` shows both folders, and how many files it reads from each. Files read from `path`
+  move as usual; those already moved stay where they are.
+- With `after_load = "delete"`, `--reload` is refused: the files loaded before are gone.
+
 ## Which files load
 
 | Strategy | Reads |

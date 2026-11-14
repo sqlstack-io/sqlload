@@ -26,6 +26,12 @@ reads those files and masks the column itself. The plan warns when this happens.
 server are not an exception: no warehouse reads SFTP, so they never had a direct route, and
 `plan` shows them read over SFTP.
 
+A table with a `transform` (from 0.51.0) is read by SQLLoad too, since its Python function runs on
+each file's rows before they load: `reader_offer` gives the reason `transform <function> runs on
+each file`, and `plan_route` takes the same path as for `hmac`. Without a `transform`, nothing else
+changes, and the route test below still checks that only `hmac` reaches SQLLoad's reader among the
+settings it plans.
+
 Anything else fails rather than falling back to SQLLoad:
 
 - Files no external stage covers fail the plan, and the error says how to fix it.

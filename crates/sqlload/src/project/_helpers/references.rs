@@ -158,6 +158,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         )),
     }
     problems.extend(kind_problems(&place, source));
+    problems.extend(transform_problems(project, &place, source));
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_name_problems(&place, name, source));
     }
@@ -375,6 +376,51 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ));
     }
     problems
+}
+
+/// Where `transform` does not fit: a source other than files or `google_sheets`, a value that is not `module:function`, or a project without `python_paths` to find the module on.
+fn transform_problems(project: &ProjectConfig, place: &str, source: &SourceConfig) -> Vec<String> {
+    let transforms: Vec<&String> = sheet_settings(source)
+        .filter_map(|settings| settings.transform.as_ref())
+        .collect();
+    let mut problems: Vec<String> = Vec::new();
+    if transforms.is_empty() {
+        return problems;
+    }
+    if !matches!(source.kind, SourceKind::Files | SourceKind::GoogleSheets) {
+        problems.push(format!(
+            "{place} transform is for kind = \"files\" and kind = \"google_sheets\" tables"
+        ));
+    }
+    problems.extend(
+        transforms
+            .iter()
+            .filter(|transform| !is_function_name(transform))
+            .map(|transform| {
+                format!(
+                    "{place} transform {transform:?} must be module:function, the module as python_paths imports it, such as \"transforms.metrics:transform\""
+                )
+            }),
+    );
+    if project.python_paths.is_empty() {
+        problems.push(format!(
+            "{place} transform needs python_paths, naming the folder that holds its module"
+        ));
+    }
+    problems
+}
+
+/// Whether `text` is `module:function`: dotted Python names, a colon, then one name.
+fn is_function_name(text: &str) -> bool {
+    let is_name = |part: &str| {
+        let mut characters = part.chars();
+        characters
+            .next()
+            .is_some_and(|first| first.is_alphabetic() || first == '_')
+            && characters.all(|character| character.is_alphanumeric() || character == '_')
+    };
+    text.split_once(':')
+        .is_some_and(|(module, function)| module.split('.').all(is_name) && is_name(function))
 }
 
 /// A source's settings and each of its tables'.

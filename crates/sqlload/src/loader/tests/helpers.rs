@@ -7,6 +7,7 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::errors::StoreError;
+use crate::files_source::models::{FilesEncoding, FilesTable, TextChecks};
 use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
 use crate::loader::_helpers::python::child_paths;
@@ -14,16 +15,18 @@ use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
 use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::_helpers::table_plan::reader_offer;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
+use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
     BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
-    ItemSpec, SourceSpellingTestCase,
+    ItemSpec, SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::python_sources::models::PythonSource;
 use crate::schema_plan::models::LiveColumn;
+use crate::store_paths::models::{Location, StoreKind};
 
 /// The columns of the inferred table, as `name:type` joined by commas.
 pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
@@ -273,7 +276,7 @@ pub(crate) fn merged_file_round_trip(
         .flat_map(|record| record.files)
         .next()
         .ok_or_else(|| format!("no file read back: {:?}", decoded.unreadable))?;
-    let loaded = crate::loader::_helpers::sources::loaded_file(file, true);
+    let loaded = crate::loader::_helpers::run_log::loaded_file(file, true);
     Ok((loaded.name, loaded.version))
 }
 
@@ -415,4 +418,42 @@ pub(crate) fn refused_bounds_runs(
         .map_err(|error| error.to_string())?
         .block_on(refused_bounds(&plan, "erp", stub));
     Ok((problem, runs))
+}
+
+/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform`.
+pub(crate) fn transform_reader(
+    test_case: &TransformReaderTestCase,
+) -> Result<Option<String>, String> {
+    let mut spec = python_spec("{}")?;
+    spec.python = None;
+    spec.files = Some(FilesSource {
+        location: Location {
+            store: StoreKind::Filesystem {
+                root: "/data".to_owned(),
+            },
+            prefix: "drop/".to_owned(),
+        },
+        table: FilesTable {
+            files: Vec::new(),
+            columns: Vec::new(),
+            problems: Vec::new(),
+            skipped: 0,
+            unmatched: 0,
+            dropped: Vec::new(),
+            objects: Vec::new(),
+        },
+        partition_types: Vec::new(),
+        constants: Vec::new(),
+        encoding: FilesEncoding::default(),
+        checks: TextChecks::default(),
+        notes: Vec::new(),
+        copy_to_internal_stage: false,
+        transform: None,
+    });
+    spec.transform = test_case.transform.map(|function| TableTransform {
+        function: function.to_owned(),
+        version: format!("{function}@0"),
+        changed: false,
+    });
+    Ok(reader_offer(&spec, None, None).needs_loader)
 }

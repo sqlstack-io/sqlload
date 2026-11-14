@@ -17,5 +17,7 @@ mod retryable_errors;
 mod source_filter;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_transform_reader.rs"]
+mod transform_reader;
 #[path = "tests/test_view_lines.rs"]
 mod view_lines;

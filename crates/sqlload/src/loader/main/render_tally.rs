@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use crate::loader::_helpers::render::{change_line, thousands};
+use crate::loader::constants::{DICT_HINT_MILLISECONDS, DICT_HINT_ROWS};
 use crate::loader::models::{TableOutcome, TallyLine};
+use crate::python_sources::models::TransformTime;
 
 /// One aligned line per object `applied` created or altered and per table loaded, failed or skipped, then a final line counting them; and whether nothing failed.
 pub fn render_tally(
@@ -26,7 +28,11 @@ pub fn render_tally(
                     .unwrap_or_default();
                 (
                     "loaded",
-                    format!("{} rows{note}  {seconds}", thousands(loaded.rows)),
+                    format!(
+                        "{} rows{note}  {seconds}{}",
+                        thousands(loaded.rows),
+                        transform_lines(&loaded.transforms)
+                    ),
                 )
             }
             Err(reason) if outcome.skipped => ("skipped", reason.clone()),
@@ -75,4 +81,32 @@ pub fn render_tally(
         _ => format!("✗ Completed with failures  {}", clauses.join(", ")),
     });
     (out, failed == 0)
+}
+
+/// A line per file or range a `transform` ran on, with its time, each after a line break; then, when it returned dicts for a large one and took a while, one hint naming the slowest such that Arrow or a DataFrame is faster.
+fn transform_lines(times: &[TransformTime]) -> String {
+    let mut lines: String = times
+        .iter()
+        .map(|time| format!("\ntransform  {}  {:.2}s", time.file, seconds(time)))
+        .collect();
+    let slow = times
+        .iter()
+        .filter(|time| {
+            time.dicts && time.rows >= DICT_HINT_ROWS && time.milliseconds >= DICT_HINT_MILLISECONDS
+        })
+        .max_by_key(|time| time.milliseconds);
+    if let Some(time) = slow {
+        lines.push_str(&format!(
+            "\nhint: the transform returned dicts for {} ({} rows, {:.1}s); a pyarrow Table or a DataFrame transforms faster",
+            time.file,
+            thousands(time.rows),
+            seconds(time)
+        ));
+    }
+    lines
+}
+
+/// How long `time`'s call took, in seconds.
+fn seconds(time: &TransformTime) -> f64 {
+    time.milliseconds as f64 / 1000.0
 }
