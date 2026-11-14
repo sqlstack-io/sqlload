@@ -82,16 +82,15 @@ load picks up from the table's committed rows.
   process into a stand-in for MotherDuck and compared with the same load into DuckDB, an incremental
   rerun, the process ending mid-load, a value MotherDuck rejects, and the setup errors.
 
-## Removing the separate process
+## The separate process
 
-Once MotherDuck accepts the DuckDB version SQLLoad bundles, the separate process is no longer needed.
-Everything specific to it is behind one interface, the `Bridge` connection of the DuckDB adapter:
+Any command that connects to a MotherDuck target, such as `sqlload debug`, `plan` or `load`, starts
+the process itself, on the first of these Pythons:
 
-1. Delete `crates/sqlload/src/adapters/motherduck_bridge/` and its `mod` line in `adapters/mod.rs`.
-2. In `adapters/duckdb`, remove `DuckDbConnection::Bridge` (keeping `Local` as the connection), the
-   `Bridge` branches in `main/`, the `Bridge` error, and open MotherDuck with
-   `duckdb::Connection::open(connection_string(...))` as 0.33.0 did.
-3. Remove the `motherduck` extra from `packages/sqlload/pyproject.toml`, the
-   `SQLLOAD_MOTHERDUCK_PYTHON` line in `packages/sqlload/python/sqlload/_cli.py`, and
-   `packages/sqlload/tests/test_motherduck.py`.
-4. Rewrite the Install section of this page.
+1. The one `SQLLOAD_MOTHERDUCK_PYTHON` names.
+2. With the `sqlload` command of the Python package, that package's own Python.
+3. Otherwise, `python3` on `PATH` (`python` on Windows).
+
+There's nothing to start, stop or clean up by hand. The process exits when SQLLoad does, including
+when SQLLoad is stopped or killed, and its open transactions roll back, so a stopped load leaves no
+part of a batch behind. DuckDB targets and every other target never start it.
