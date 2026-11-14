@@ -102,7 +102,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 | Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
 | MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. From 0.43.0, each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel with libstdc++ preloaded; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
 | MariaDB Connector/ODBC 3.1 | Against MySQL 8.4 by hand, not in the driver tests: it reports no primary keys there, so name each `merge` table's `unique_key` columns instead of `"{primary_key}"`; see [MariaDB Connector/ODBC 3.1](#mariadb-connectorodbc-31). |
-| OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
+| OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values, binding timestamp bounds and writing them as `{ts}` escapes), not against a live server. Run `sqlload plan` first: it checks that the driver takes the cursor's bounds, and names `cursor_bounds = "literals"` when the driver only takes escapes; see [Cursor bounds](#cursor-bounds). |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
 ### MySQL Connector/ODBC on Linux
@@ -140,22 +140,6 @@ registration at the installed files in `/etc/odbcinst.ini`:
 sudo sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini
 ```
 
-From 0.39.0, a cursor filter compares the cursor column with bound parameters,
-such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
-an ODBC `TIMESTAMP`, with every fractional digit; a date as a `DATE`; text as text. No database's
-literal rules can change a bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
-SQL Server's legacy `datetime` is the one exception: it stores 1/300 s ticks, which its driver reads
-rounded to milliseconds, so its bounds go as ISO 8601 text (`2026-01-31T23:59:59.997`) in the
-column's own precision, which SQL Server converts to the column's type alike under every login
-language. A cursor column pinned to a type (`columns = { ... }`) compares with a quoted literal, as
-the pinned type may not be the column's own, such as a `varchar` read as a timestamp. A numeric
-cursor compares with a bare number, such as `"id" > 41`.
-Any other cursor, a timestamp with a time zone for one, still compares with a quoted literal,
-which the database converts to the column's type; check that yours does before relying on it.
-For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_start` also take ODBC
-escape values, such as
-`{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
-
 From 0.39.0, a timestamp column is read in at least microseconds whatever precision
 the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
 seconds were dropped before.
@@ -185,6 +169,77 @@ Errors (1)
 ```
 
 Name the key columns on each such table, or use MySQL Connector/ODBC, which reports MySQL's keys.
+
+## Cursor bounds
+
+From 0.39.0, a cursor filter compares the cursor column with bound parameters,
+such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
+an ODBC `TIMESTAMP`; a date as a `DATE`; text as text. No database's literal rules can change a
+bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
+A cursor column pinned to a type (`columns = { ... }`) compares with a quoted literal, as
+the pinned type may not be the column's own, such as a `varchar` read as a timestamp. A numeric
+cursor compares with a bare number, such as `"id" > 41`.
+Any other cursor, a timestamp with a time zone for one, still compares with a quoted literal,
+which the database converts to the column's type; check that yours does before relying on it.
+For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_start` also take ODBC
+escape values, such as
+`{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
+
+From 0.47.0, a timestamp bound has the fractional digits the driver describes for its column: three
+for milliseconds (1 to 3 digits), six for microseconds (4 to 6). Before, it always had seven, which
+a driver may refuse for a column with fewer. A bound with more digits than that, such as a
+`--start-cursor` of `10:00:00.1235` on a millisecond column, or a maximum from a driver that
+describes fewer digits than its values hold, keeps every digit and is never rounded, so it selects
+exactly the rows it did before. When the driver describes the column with no digits, as MySQL
+Connector/ODBC describes every `DATETIME(n)`, or with seven or more, the bound keeps every digit,
+as before. SQL Server keeps its own handling: a timestamp binds with seven
+digits, compared as `datetime2(7)`, except against a legacy `datetime`, which stores 1/300 s ticks
+that its driver reads rounded to milliseconds, so its bounds go as ISO 8601 text
+(`2026-01-31T23:59:59.997`) in the column's own precision, which SQL Server converts to the
+column's type alike under every login language.
+
+### Literal bounds
+
+Some drivers refuse a bound value; OpenEdge's, by one report, takes no timestamp parameter there.
+From 0.47.0, `cursor_bounds = "literals"` on an ODBC source, or on one of its table entries, writes
+the bounds into the query as ODBC escapes instead (the default is `"parameters"`):
+
+```toml
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+cursor_bounds = "literals"
+```
+
+| Cursor | Bound |
+|--------|-------|
+| Timestamp without a time zone | `{ts '2026-01-31 23:59:59.997'}`, with the column's fractional digits when the bound has no more (as above), else the fewest of 0, 3, 6 or 9 that keep every digit |
+| Date | `{d '2026-01-31'}` |
+| Number | `41`, as with parameters |
+| Text | `'o''brien'`, in single quotes with each quote doubled |
+
+It covers every bound: after the destination's maximum, `--start-cursor`, `--end-cursor`,
+`cursor_start`, `lookback` and each `batch_size` window. Keep the default on SQL Server: its
+`{ts}` escape is a `datetime`, which rounds milliseconds to 1/300 s. A text bound holding a
+backslash is refused under literals, as a database that treats a backslash in a string as an
+escape, MySQL by default, would read it as another value; bind it as a parameter instead.
+
+### Checked at plan
+
+From 0.47.0, `plan` (and `load`, which plans first) checks each ODBC table whose text, date or
+timestamp cursor binds: it runs the table's query once with bounds that select no rows,
+`"updated_at" > v AND "updated_at" < v AND 1 = 0`, with `v` the planned lower bound (else the upper
+bound, else a fixed value of the cursor's type), and fetches nothing. When the driver refuses the
+bounds but takes them written the other way, and refuses them again its own way, the table fails
+and the error names the setting:
+
+```text
+Errors (1)
+└── items
+    └── reason  the ODBC driver refuses the cursor updated_at's bounds as parameters ([HY000] …) but takes them as ODBC escapes; set cursor_bounds = "literals" on source erp or its table entry
+```
+
+When both ways fail, the error shows both of the driver's errors.
 
 ## Choosing tables
 
@@ -218,6 +273,9 @@ binary column, so set them when the driver reports a huge length for unbounded c
 `TEXT` or `VARCHAR(MAX)`, or none at all, which the read then refuses, naming the setting. A value
 longer than its buffer, even in a `VARCHAR(10000)` column capped at 8000 bytes, fails the read,
 naming the setting to raise; it's never cut short.
+
+From 0.47.0, the driver's own notes on the buffer size it chose for each column are no longer
+logged; set `RUST_LOG=info` to see them again.
 
 ## Types
 

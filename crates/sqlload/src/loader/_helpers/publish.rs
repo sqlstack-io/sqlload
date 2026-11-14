@@ -82,7 +82,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::{binds_cursor, source_filter};
+use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1609,21 +1609,20 @@ fn window_filter(
     table: &TablePlan,
     window: &CursorWindow,
 ) -> (Option<String>, Vec<BoundParameter>) {
-    let mut parameters: Vec<BoundParameter> = Vec::new();
     let Some(column) = table.spec.cursor.as_ref().and_then(|cursor| {
         table
             .read_columns
             .iter()
             .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
     }) else {
-        return (None, parameters);
+        return (None, Vec::new());
     };
     let operator = match window.inclusive {
         true => INCLUSIVE_BOUND,
         false => EXCLUSIVE_BOUND,
     };
     let source = table.spec.warehouse_source.as_ref();
-    let filter = source_filter(
+    source_filter(
         &column.expression,
         (
             Some(&column.output),
@@ -1633,9 +1632,8 @@ fn window_filter(
             window.from.as_deref().map(|from| (operator, from)),
             window.to.as_deref(),
         ),
-        binds_cursor(&table.spec).then_some(&mut parameters),
-    );
-    (filter, parameters)
+        cursor_binding(&table.spec, None),
+    )
 }
 
 /// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.

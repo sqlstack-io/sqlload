@@ -347,3 +347,72 @@ pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, 
         .collect();
     Ok(child_paths(&spec, tables))
 }
+
+/// What `plan`'s cursor-bounds check says of ODBC table `sales.items` (cursor `updated`) against a stub driver refusing what `test_case` says, and each query it ran, as its filter and bound values.
+#[cfg(feature = "odbc")]
+pub(crate) fn refused_bounds_runs(
+    test_case: &crate::loader::tests::test_types::RefusedBoundsTestCase,
+) -> Result<(Option<String>, Vec<String>), String> {
+    use crate::adapters::contract::models::BoundParameter;
+    use crate::loader::_helpers::table_plan::refused_bounds;
+    use crate::loader::_helpers::table_plan::{blocked_table, read_columns};
+    use crate::loader::models::ReadWindow;
+    use crate::project::main::parse_project::parse_project;
+    let project = parse_project(
+        &format!(
+            "[connections.erp]\nkind = \"odbc\"\nconnection_string = \"Driver=stub\"\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\ndescription = \"ERP.\"\ninclude = [\"sales.items\"]\nwrite_strategy = \"append\"\n{}\n[sources.erp.tables.\"sales.items\"]\ndescription = \"Items.\"\ncursor_column = \"updated\"\n",
+            test_case.source_settings
+        ),
+        &|_| None,
+    )
+    .map_err(|error| error.to_string())?;
+    let table = SourceTable {
+        schema: "sales".to_owned(),
+        name: "items".to_owned(),
+        columns: vec![SourceColumn {
+            name: "updated".to_owned(),
+            postgres_type: test_case.cursor_type.to_string(),
+            pg_type: PgType::Other,
+            column_type: Ok(test_case.column_type.clone()),
+            nullable: false,
+            source_spelling: None,
+        }],
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        comment: None,
+        listed_keys: Vec::new(),
+    };
+    let resolved = resolve_tables(&project, "erp", &[table]);
+    let spec = resolved
+        .specs
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no spec: {:?}", resolved.problems))?;
+    let mut plan = blocked_table(&spec, Vec::new());
+    plan.read_columns = read_columns(&spec).map_err(|problems| problems.join("; "))?;
+    plan.window = test_case.from.map(|from| ReadWindow {
+        column: "updated".to_owned(),
+        from: Some(from.to_owned()),
+        to: None,
+        inclusive: false,
+        maximum: Some(from.to_owned()),
+    });
+    let mut runs: Vec<String> = Vec::new();
+    let stub = async |filter: String, parameters: Vec<BoundParameter>| {
+        runs.push(format!("{filter} {parameters:?}"));
+        test_case
+            .responses
+            .get(runs.len() - 1)
+            .copied()
+            .unwrap_or(Ok(()))
+            .map_err(str::to_owned)
+    };
+    let problem = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(refused_bounds(&plan, "erp", stub));
+    Ok((problem, runs))
+}

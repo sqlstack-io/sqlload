@@ -6,6 +6,9 @@ mod helpers;
 mod merged_files;
 #[path = "tests/test_python_columns.rs"]
 mod python_columns;
+#[cfg(feature = "odbc")]
+#[path = "tests/test_refused_bounds.rs"]
+mod refused_bounds;
 #[path = "tests/test_render_tally.rs"]
 mod render_tally;
 #[path = "tests/test_retryable_errors.rs"]

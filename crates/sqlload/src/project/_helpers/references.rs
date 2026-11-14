@@ -239,6 +239,13 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} max_text_size and max_binary_size are for kind = \"odbc\""
         ));
     }
+    if source.kind != SourceKind::Odbc
+        && sheet_settings(source).any(|settings| settings.cursor_bounds.is_some())
+    {
+        problems.push(format!(
+            "{place} cursor_bounds is for kind = \"odbc\", whose drivers may refuse a bound cursor value"
+        ));
+    }
     if source.kind == SourceKind::Snowflake {
         problems.extend(unload_stage_problems(place, source));
     }

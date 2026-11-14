@@ -8,4 +8,5 @@ pub mod bound_parameter;
 pub mod cursor_bound;
 pub mod cursor_from_now;
 pub mod cursor_text;
+pub mod escape_literal;
 pub mod staging_id;

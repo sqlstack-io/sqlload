@@ -132,7 +132,7 @@ pub(crate) fn timestamp_parameter(
     text: &str,
 ) -> Result<crate::adapters::contract::models::BoundParameter, String> {
     chrono::NaiveDateTime::parse_from_str(text, "%Y-%m-%d %H:%M:%S%.f")
-        .map(crate::adapters::contract::models::BoundParameter::Timestamp)
+        .map(|time| crate::adapters::contract::models::BoundParameter::Timestamp(time, None))
         .map_err(|error| error.to_string())
 }
 

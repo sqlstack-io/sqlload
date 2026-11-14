@@ -268,6 +268,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | none | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. |
 | `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
+| `cursor_bounds` | `parameters` | From 0.47.0, ODBC sources only. `parameters` binds the cursor's bounds as typed parameters; `literals` writes them into the query as ODBC escapes (`{ts '…'}`, `{d '…'}`), for a driver that refuses a bound value. See [Cursor bounds](/docs/sources/odbc/#cursor-bounds). |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
 | `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
 | `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |

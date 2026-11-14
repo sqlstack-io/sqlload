@@ -19,7 +19,7 @@ pub fn bound_parameter(value: &str, column_type: &ColumnType) -> Option<BoundPar
                 },
             )
             .filter(|time| BOUND_YEARS.contains(&time.year()))
-            .map(BoundParameter::Timestamp),
+            .map(|time| BoundParameter::Timestamp(time, None)),
         ColumnType::Date => match NaiveDate::parse_from_str(value, "%Y-%m-%d") {
             Ok(date) if BOUND_YEARS.contains(&date.year()) => Some(BoundParameter::Date(date)),
             Ok(_) | Err(_) => None,

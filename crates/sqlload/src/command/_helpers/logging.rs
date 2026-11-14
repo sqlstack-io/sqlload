@@ -2,10 +2,10 @@ use tracing_subscriber::EnvFilter;
 
 use crate::command::models::LogFormat;
 
-/// Log to stderr at `info` unless `RUST_LOG` says otherwise.
+/// Log to stderr at `info`, without the ODBC crates' per-column buffer notes (`arrow_odbc` at `warn`, `odbc_api` at `error`), unless `RUST_LOG` says otherwise.
 pub(crate) fn init_logging(format: LogFormat) {
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,odbc_api=error"));
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,odbc_api=error,arrow_odbc=warn"));
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(std::io::stderr);

@@ -2,6 +2,7 @@ use arrow_schema::Schema;
 
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::load_naming::models::Naming;
+use crate::loader::models::CursorBinding;
 
 pub(crate) struct FittingTypeTestCase {
     pub(crate) description: &'static str,
@@ -92,8 +93,8 @@ pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
     pub(crate) cursor_type: ColumnType,
     pub(crate) dialect: Option<Warehouse>,
-    /// Whether the source is an ODBC source, whose text, date and timestamp bounds are bound parameters.
-    pub(crate) odbc: bool,
+    /// How the bounds are written: literals, or, for an ODBC source, parameters or escapes with the cursor column's fractional digits when the source reports them.
+    pub(crate) binding: CursorBinding,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,
@@ -135,4 +136,21 @@ pub(crate) struct ChildPathsTestCase {
     pub(crate) tables: &'static [&'static str],
     /// Each table's dotted path, as `(path, table)`.
     pub(crate) expected_paths: &'static [(&'static str, &'static str)],
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct RefusedBoundsTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added to `[sources.erp]`.
+    pub(crate) source_settings: &'static str,
+    /// The cursor column's type, as the ODBC driver describes it, and the portable type it reads as.
+    pub(crate) cursor_type: arrow_schema::DataType,
+    pub(crate) column_type: ColumnType,
+    /// The planned lower bound, when the destination has rows.
+    pub(crate) from: Option<&'static str>,
+    /// What the stub driver answers each query, in order; a query past the list runs.
+    pub(crate) responses: &'static [Result<(), &'static str>],
+    pub(crate) expected_problem: Option<&'static str>,
+    /// Each query the check ran: its filter and bound values.
+    pub(crate) expected_runs: &'static [&'static str],
 }
