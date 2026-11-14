@@ -245,7 +245,7 @@ long ago its newest change committed. The two changes to one order load as one r
   ```
 
   The same column gained again, with nothing written in between, stops it.
-- **Only a whole plan follows.** From 0.50.0, a plan with errors in any selected source or table
+- **Only a whole plan follows.** From 0.51.0, a plan with errors in any selected source or table
   doesn't start it, since following the rest would move the slot past the changes of what didn't
   plan, and they'd be lost for good. It prints the plan with each error and its fix, then says how
   to leave them out to follow the rest: `--exclude <source>` for another source, or the table
