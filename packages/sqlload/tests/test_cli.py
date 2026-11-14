@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import sqlload
+from sqlload import _cli
 
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -438,3 +439,43 @@ def test_given_column_names_or_an_xlsx_range_that_do_not_fit_when_planning_then_
 	done = run("plan", "-c", str(config))
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
+
+
+LIBRARY = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+
+
+@pytest.mark.parametrize(
+	("environ", "platform", "found", "expected"),
+	[
+		pytest.param({}, "linux", LIBRARY, {_cli.PRELOADED: "1", "LD_PRELOAD": LIBRARY}, id="linux starts again with libstdc++ preloaded"),
+		pytest.param({"LD_PRELOAD": "/opt/a.so"}, "linux", LIBRARY, {_cli.PRELOADED: "1", "LD_PRELOAD": f"{LIBRARY} /opt/a.so"}, id="a preload already set is kept after it"),
+		pytest.param({_cli.PRELOADED: "1"}, "linux", LIBRARY, None, id="a process that started again never starts again"),
+		pytest.param({"LD_PRELOAD": LIBRARY}, "linux", LIBRARY, None, id="libstdc++ preloaded already"),
+		pytest.param({_cli.NO_PRELOAD: "1"}, "linux", LIBRARY, None, id="SQLLOAD_NO_PRELOAD turns it off"),
+		pytest.param({}, "linux", None, None, id="no libstdc++ installed: runs as it is"),
+		pytest.param({}, "darwin", LIBRARY, None, id="not on Linux"),
+	],
+)
+def test_given_the_environment_when_the_console_script_starts_then_it_starts_again_with_libstdcxx_preloaded_at_most_once(
+	environ: dict[str, str], platform: str, found: str | None, expected: dict[str, str] | None
+) -> None:
+	assert _cli.preloaded_environment(environ, platform, lambda: found) == (None if expected is None else {**environ, **expected})
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the preload is Linux-only")
+def test_given_the_console_script_on_linux_when_run_then_it_starts_again_once_with_libstdcxx_preloaded() -> None:
+	code = "import os, sys; print(repr(os.environ.get('LD_PRELOAD')), flush=True); sys.argv[1:] = ['--version']; from sqlload._cli import main; main()"
+	env = {key: value for key, value in os.environ.items() if key not in ("LD_PRELOAD", _cli.PRELOADED, _cli.NO_PRELOAD)}
+	done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env)
+	assert done.returncode == 0, done.stderr
+	first, second, version = done.stdout.splitlines()
+	assert first == "None" and "libstdc++.so.6" in second and version.startswith("sqlload "), done.stdout
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the preload is Linux-only")
+def test_given_a_script_read_from_stdin_when_it_runs_the_console_script_then_sqlload_runs_without_starting_again() -> None:
+	script = "import sys; print('run', flush=True); sys.argv[1:] = ['--version']; from sqlload._cli import main; main()"
+	env = {key: value for key, value in os.environ.items() if key not in ("LD_PRELOAD", _cli.PRELOADED, _cli.NO_PRELOAD)}
+	done = subprocess.run([sys.executable, "-"], input=script, capture_output=True, text=True, env=env)
+	assert done.returncode == 0, done.stderr
+	assert done.stdout.splitlines()[0] == "run" and done.stdout.splitlines()[-1].startswith("sqlload "), done.stdout
