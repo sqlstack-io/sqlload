@@ -120,28 +120,30 @@ fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     }
     let window = table.window.as_ref()?;
     let note = table.cursor_note.as_deref().unwrap_or_default();
-    let origin = note
-        .rsplit_once(" (")
-        .map(|(_, origin)| origin.trim_end_matches(')'))
-        .unwrap_or_default()
-        .replace("destination maximum", "warehouse maximum");
-    let origin = match origin.is_empty() {
-        true => String::new(),
-        false => format!(" ({origin})"),
-    };
+    let said = note
+        .strip_prefix(window.column.as_str())
+        .unwrap_or(note)
+        .trim();
     let Some(from) = &window.from else {
-        return Some(format!(
-            "{} everything{}",
-            window.column,
-            match window.to.as_deref() {
-                Some(to) => format!(", up to {}", trimmed_time(to, precise)),
-                None => String::new(),
-            }
-        ));
+        return Some(format!("{}: {said}", window.column));
+    };
+    let origin = match said.rsplit_once(" (") {
+        Some((_, origin)) => origin
+            .trim_end_matches(')')
+            .replace("destination maximum", "warehouse maximum"),
+        None => said
+            .strip_suffix(from.as_str())
+            .unwrap_or(said)
+            .trim_end()
+            .to_owned(),
     };
     let bound = match window.inclusive {
         true => ">=",
         false => ">",
+    };
+    let origin = match origin.is_empty() {
+        true => String::new(),
+        false => format!(" ({origin})"),
     };
     Some(format!(
         "{} {bound} {}{origin}",
@@ -164,17 +166,12 @@ fn commits_line(table: &TablePlan, precise: bool) -> Option<String> {
             "once, at the end of the read",
             1,
         )),
-        CommitRule::Windows(_) => {
-            let step = match table.spec.batch {
-                Some(BatchStep::Duration(step)) => window_length(step),
-                Some(BatchStep::Integer(step)) => format!("{step}-wide"),
-                Some(BatchStep::Whole) | None => return Some(batch_line(table)),
-            };
-            Some(match precise {
-                true => format!("after each {step} window: {}", batch_line(table)),
-                false => format!("after each {step} window"),
-            })
-        }
+        CommitRule::Windows(_) if precise => Some(batch_line(table)),
+        CommitRule::Windows(_) => Some(match table.spec.batch {
+            Some(BatchStep::Duration(step)) => format!("after each {} window", window_length(step)),
+            Some(BatchStep::Integer(step)) => format!("after each window of {step}"),
+            Some(BatchStep::Whole) | None => batch_line(table),
+        }),
         CommitRule::Ordered { .. } | CommitRule::Size | CommitRule::FileGroups(_) => {
             precise.then(|| batch_line(table))
         }

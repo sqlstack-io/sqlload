@@ -122,7 +122,11 @@ fn given_a_files_source_into_a_files_target_when_planning_then_an_overlapping_fo
             test_case.single_file
         );
         let output = run_without_host(&project, &["plan"]);
-        let words = output.split_whitespace().collect::<Vec<_>>().join(" ");
+        let words = output
+            .split_whitespace()
+            .filter(|word| *word != "│")
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             words.contains(test_case.expected_problem) && output.ends_with(test_case.expected_exit),
             "{}: {output}",
