@@ -24,7 +24,10 @@ Commands:
 ```
 
 `sqll` is a short name for `sqlload` (from 0.48.0); it runs the same command, with the same help,
-output and exit codes.
+output and exit codes. On Windows, the `sqlload-cli` package's and `cargo install`'s `sqll.exe`
+starts `sqlload.exe` and waits for it: Ctrl-C and Ctrl-Break reach `sqlload` as usual, but ending
+`sqll.exe` another way, such as from Task Manager or a scheduler stopping its task, leaves
+`sqlload.exe` running. Run `sqlload` itself where something may end the process.
 
 | Command | Page |
 |---------|------|
