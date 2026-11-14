@@ -127,15 +127,26 @@ fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     let Some(from) = &window.from else {
         return Some(format!("{}: {said}", window.column));
     };
-    let origin = match said.rsplit_once(" (") {
-        Some((_, origin)) => origin
-            .trim_end_matches(')')
-            .replace("destination maximum", "warehouse maximum"),
-        None => said
-            .strip_suffix(from.as_str())
-            .unwrap_or(said)
-            .trim_end()
-            .to_owned(),
+    let after_bound = said
+        .strip_prefix("from ")
+        .or_else(|| said.strip_prefix("after "))
+        .and_then(|rest| rest.strip_prefix(from.as_str()));
+    let origin = match after_bound {
+        Some(rest) => match rest
+            .trim()
+            .strip_prefix('(')
+            .and_then(|o| o.strip_suffix(')'))
+        {
+            Some(origin) if !origin.contains('(') => {
+                origin.replace("destination maximum", "warehouse maximum")
+            }
+            _ if rest.trim().is_empty() => String::new(),
+            _ => return Some(note.to_owned()),
+        },
+        None => match said.strip_suffix(from.as_str()) {
+            Some(before) if !before.contains('(') => before.trim_end().to_owned(),
+            _ => return Some(note.to_owned()),
+        },
     };
     let bound = match window.inclusive {
         true => ">=",
@@ -235,6 +246,16 @@ fn clock_time(recorded_at: &str) -> String {
     }
 }
 
+/// Words in a source's error that say it could not be reached, as opposed to read: such an error is headed `can't connect` and gets a fix.
+const CONNECTION_WORDS: [&str; 6] = [
+    "cannot connect",
+    "connection refused",
+    "login failed",
+    "password authentication failed",
+    "timed out",
+    "could not connect",
+];
+
 /// What an error's reason says, and the headline `plan` gives it.
 const HEADLINES: [(&str, &str); 2] = [
     ("the source reports no primary key", "no key to merge on"),
@@ -250,38 +271,38 @@ pub(crate) fn text_error(plan: &ProjectPlan, problem: &str, item: PlanItem) -> P
     let unread = source.and_then(|source| Some((source, plan.unread_sources.get(source)?)));
     let item = match unread {
         Some((source, unread)) => {
-            let reason = item
+            let mut details: Vec<PlanDetail> = item
                 .details
+                .into_iter()
+                .map(|detail| match detail.label.as_str() {
+                    "reason" => PlanDetail {
+                        text: driver_message(&detail.text),
+                        ..detail
+                    },
+                    _ => detail,
+                })
+                .collect();
+            let reason = details
                 .iter()
                 .find(|detail| detail.label == "reason")
-                .map_or_else(String::new, |detail| driver_message(&detail.text));
-            let action = match [
-                "connect",
-                "login",
-                "password",
-                "authentication",
-                "timed out",
-            ]
-            .iter()
-            .any(|word| reason.to_lowercase().contains(word))
-            {
-                true => "can't connect",
-                false => "can't read",
-            };
-            let mut details = vec![
-                detail("reason", reason),
-                detail(
+                .map_or_else(String::new, |detail| detail.text.to_lowercase());
+            let connects = CONNECTION_WORDS.iter().any(|word| reason.contains(word));
+            if connects && !details.iter().any(|detail| detail.label == "fix") {
+                details.push(detail(
                     "fix",
                     format!(
                         "check connection {}'s settings and credentials; sqlload debug tests every connection",
                         unread.connection
                     ),
-                ),
-            ];
+                ));
+            }
             details.extend(blocks_line(plan, source, unread).map(|text| detail("blocks", text)));
             PlanItem {
                 name: source.to_owned(),
-                action: action.to_owned(),
+                action: match connects {
+                    true => "can't connect".to_owned(),
+                    false => item.action,
+                },
                 details,
             }
         }
