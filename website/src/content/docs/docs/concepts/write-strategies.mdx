@@ -27,8 +27,7 @@ set `unique_key`, or choose `delete_insert` or `append` yourself (a files source
 `append`, as its `merge` takes no `cursor_column`). Before 0.44.0 such a table took
 `delete_insert`, which loads a row updated after an earlier load again, as its old version is
 outside the cursor range it replaces; that went unnoticed when a driver failed to report a key the
-table has, as [MariaDB Connector/ODBC 3.1](/docs/sources/odbc/#mariadb-connectorodbc-31) does
-against MySQL 8.4.
+table has, as [MariaDB Connector/ODBC 3.1](/docs/sources/odbc/#mariadb-connectorodbc-31) can.
 
 ```console
 $ sqlload plan
