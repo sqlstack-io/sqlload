@@ -378,6 +378,8 @@ pub struct Calls {
     pub limiter: Option<std::sync::Arc<Limiter>>,
     pub retries: u32,
     pub on_status: BTreeMap<u16, StatusAction>,
+    /// Whether an offset page of this request held its whole limit in this job, which shows the API does not cap its pages lower, so a short first page needs no check; shared by its clones, the keys of a fan-out.
+    pub full_page_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// What one try at a request came to.

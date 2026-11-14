@@ -551,6 +551,7 @@ fn request_calls(
         limiter,
         retries: client.retries,
         on_status,
+        full_page_seen: std::sync::Arc::default(),
     })
 }
 

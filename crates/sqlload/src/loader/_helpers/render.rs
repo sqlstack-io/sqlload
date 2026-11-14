@@ -16,8 +16,7 @@ use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, CUT_ELEMENTS_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
-    RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -30,7 +29,7 @@ use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
-use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, TableAction};
+use crate::schema_plan::models::{ColumnChange, ColumnOrigin, TableAction};
 use crate::store_paths::models::StoreKind;
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch; nothing when it has no items.
@@ -202,15 +201,12 @@ pub(crate) fn object_item(table: &TablePlan) -> PlanItem {
 
 /// What the type an added or widened column ends up with loses, as `  (...)`, or nothing, as a new table's column lines note it.
 fn change_note(table: &TablePlan, change: &ColumnChange) -> String {
-    let (column_type, cut) = match change {
-        ColumnChange::Add { column, .. } => (&column.column_type, cut_elements(table, column)),
-        ColumnChange::Widen { to, .. } | ColumnChange::Rebuild { to, .. } => (to, None),
+    let column_type = match change {
+        ColumnChange::Add { column, .. } => &column.column_type,
+        ColumnChange::Widen { to, .. } | ColumnChange::Rebuild { to, .. } => to,
     };
     let rendered = sql_adapter(table.spec.warehouse).render_loader_logical_type(column_type);
-    let losses: Vec<&str> = [cut, rendered.lossy.as_deref()]
-        .into_iter()
-        .flatten()
-        .collect();
+    let losses: Vec<&str> = rendered.lossy.as_deref().into_iter().collect();
     match losses.is_empty() {
         true => String::new(),
         false => format!("  ({})", losses.join("; ")),
@@ -257,10 +253,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .iter()
         .map(|column| {
             let rendered = adapter.render_loader_logical_type(&column.column_type);
-            let losses: Vec<&str> = [cut_elements(table, column), rendered.lossy.as_deref()]
-                .into_iter()
-                .flatten()
-                .collect();
+            let losses: Vec<&str> = rendered.lossy.as_deref().into_iter().collect();
             let note = match (from_path(&column.name), losses.is_empty()) {
                 _ if column.origin == ColumnOrigin::Constant => CONSTANT_NOTE.to_owned(),
                 (path, _) if !path.is_empty() => path.to_owned(),
@@ -864,22 +857,6 @@ pub(crate) fn warning_item(table: &TablePlan) -> Option<PlanItem> {
             .map(|warning| detail("", warning.as_str()))
             .collect(),
     })
-}
-
-/// The loss of a column pinned as an integer array when the source reads lists as Arrow (a Python source or Parquet files): float elements are cut to whole numbers, as Arrow casts them.
-fn cut_elements(table: &TablePlan, column: &DesiredColumn) -> Option<&'static str> {
-    let arrow_lists = table.spec.python.is_some()
-        || table
-            .spec
-            .files
-            .as_ref()
-            .is_some_and(|files| files.encoding.format == SourceFormat::Parquet);
-    let integer_array = matches!(
-        &column.column_type,
-        ColumnType::Array(element) if matches!(**element, ColumnType::Int | ColumnType::SmallInt)
-    );
-    (arrow_lists && integer_array && column.origin == ColumnOrigin::Pinned)
-        .then_some(CUT_ELEMENTS_NOTE)
 }
 
 /// A Python table's object line before its first load.

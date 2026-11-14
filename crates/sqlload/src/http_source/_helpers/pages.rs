@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::Ordering;
 
 use reqwest::Url;
 use serde_json::{Map, Value};
@@ -21,7 +22,7 @@ use crate::http_source::models::{
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that ends after a first page shorter than its limit warns, as an API capping its pages lower would end it there too. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
 pub(crate) async fn paginate(
     calls: &Calls,
     request: &Request,
@@ -61,16 +62,8 @@ pub(crate) async fn paginate(
         previous = digest;
         let document = parsed(request, &rows, &fetched.bytes)
             .map_err(|error| format!("{shown}: the response is not JSON: {error}"))?;
-        if let Some(document) = &document
-            && request.select_missing == SelectMissing::Fail
-            && missing_path(document, &rows)
-        {
-            return Err(format!(
-                "{shown}: select {:?} is not in the response, which holds {}; an API can answer an error with a 200 status, so check the response. For an API that leaves an empty list out, set select_missing=\"empty\" to read such a page as no rows",
-                request.select.clone().unwrap_or_default(),
-                top_level(document)
-            )
-            .into());
+        if let Some(document) = &document {
+            selected_or_allowed(request, (&rows, document), &shown)?;
         }
         let next = next_call(
             request,
@@ -78,15 +71,14 @@ pub(crate) async fn paginate(
             (&fetched, document.as_ref(), step),
         )
         .map_err(|error| format!("{shown}: {error}"))?;
-        if let (1, None, Paginator::Offset { limit, .. }, Some(document)) =
-            (step, &next, &request.paginator, &document)
-        {
-            let read = page_rows(document, request).map_err(|error| format!("{shown}: {error}"))?;
-            if read > 0 && read < *limit {
-                tracing::warn!(
-                    "{shown}: the first page held {read} rows, fewer than limit {limit}, so offset paging ended after it; if the API caps its pages below {limit} rows, set limit to that cap, or the rows after the first page are never read"
-                );
+        match (step, &next, &document) {
+            (1, None, Some(document)) => {
+                capped_pages(calls, request, (&first, document), &shown).await?
             }
+            (_, Some(_), _) if matches!(request.paginator, Paginator::Offset { .. }) => {
+                calls.full_page_seen.store(true, Ordering::Relaxed);
+            }
+            _ => {}
         }
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
@@ -115,6 +107,78 @@ pub(crate) async fn paginate(
         }
     }
     Ok(())
+}
+
+/// For offset paging whose first page (`document`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so are the first page's rows again, from an API that rounds the offset down to a page boundary. Skipped once a page of the request held its whole limit in this job, which shows the API does not cap it (see `Calls::full_page_seen`).
+async fn capped_pages(
+    calls: &Calls,
+    request: &Request,
+    (first, document): (&Url, &Value),
+    shown: &str,
+) -> Result<(), ReadError> {
+    let Paginator::Offset {
+        param,
+        limit_param,
+        limit,
+        ..
+    } = &request.paginator
+    else {
+        return Ok(());
+    };
+    let read = page_rows(document, request).map_err(|error| format!("{shown}: {error}"))?;
+    if read == 0 || read >= *limit || calls.full_page_seen.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let probe = page_call(
+        request,
+        first,
+        vec![
+            (param.clone(), Value::from(read)),
+            (limit_param.clone(), Value::from(*limit)),
+        ],
+    )?;
+    let Some(fetched) = fetch(calls, &probe).await? else {
+        return Ok(());
+    };
+    let probed = redacted(
+        &format!("{} {}", probe.method.as_str(), probe.url),
+        &calls.endpoint.current_secrets(),
+    );
+    let rows = selector(request.select.as_deref())?;
+    let more = match parsed(request, &rows, &fetched.bytes)
+        .map_err(|error| format!("{probed}: the response is not JSON: {error}"))?
+    {
+        Some(next) if selected_node(&next, &rows) == selected_node(document, &rows) => 0,
+        Some(next) => {
+            selected_or_allowed(request, (&rows, &next), &probed)?;
+            page_rows(&next, request).map_err(|error| format!("{probed}: {error}"))?
+        }
+        None => 0,
+    };
+    match more {
+        0 => Ok(()),
+        _ => Err(format!(
+            "{shown}: the first page held {read} rows, fewer than limit {limit}, but the API returned {more} more at offset {read}, so it caps its pages at {read} rows; set limit={read}"
+        )
+        .into()),
+    }
+}
+
+/// Fails when the response `document` to `shown` lacks the `rows` path, naming what it holds, unless the request reads a missing path as no rows (`select_missing`).
+fn selected_or_allowed(
+    request: &Request,
+    (rows, document): (&Selector, &Value),
+    shown: &str,
+) -> Result<(), ReadError> {
+    match request.select_missing == SelectMissing::Fail && missing_path(document, rows) {
+        true => Err(format!(
+            "{shown}: select {:?} is not in the response, which holds {}; an API can answer an error with a 200 status, so check the response. For an API that leaves an empty list out, set select_missing=\"empty\" to read such a page as no rows",
+            request.select.clone().unwrap_or_default(),
+            top_level(document)
+        )
+        .into()),
+        false => Ok(()),
+    }
 }
 
 /// What a response holds at its top level, for an error: its keys, or the kind of value it is.

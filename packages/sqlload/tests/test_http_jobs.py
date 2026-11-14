@@ -92,6 +92,8 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
 			"/v1/quota": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {"error": {"message": "daily quota used"}}),
 			"/v1/capped": lambda query: self.reply(200, ORDERS[int(query["offset"]) : int(query["offset"]) + 3]),
+			"/v1/capped_small": lambda query: self.reply(200, ORDERS[:2][int(query["offset"]) : int(query["offset"]) + 3]),
+			"/v1/rounded": lambda query: self.reply(200, ORDERS[int(query["offset"]) // int(query["limit"]) * int(query["limit"]) :][: int(query["limit"])]),
 			"/v1/comma": self.comma,
 			"/v1/sheet": self.sheet,
 			"/v1/grid": lambda query: self.reply(200, [GRID, GRID_BLANK_PAGE, GRID_END][int(query["page"]) - 1]),
@@ -633,12 +635,34 @@ def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: P
 	assert api.log == []  # type: ignore[attr-defined]
 
 
-def test_given_offset_paging_when_the_first_page_is_shorter_than_limit_then_the_run_ends_there_with_a_warning(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+def test_given_offset_paging_when_the_api_caps_its_pages_below_limit_then_the_load_fails_naming_the_page_size(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/capped', paginator=sl.offset(limit=5))\n")
 	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "the first page held 3 rows, fewer than limit 5, but the API returned 3 more at offset 3, so it caps its pages at 3 rows; set limit=3" in done.stdout + done.stderr, done.stdout + done.stderr
+
+
+def test_given_offset_paging_when_a_short_first_page_is_the_whole_table_then_one_more_request_confirms_the_end(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/offset', paginator=sl.offset(limit=10))\n")
+	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(3,)]
-	assert "the first page held 3 rows, fewer than limit 5, so offset paging ended after it; if the API caps its pages below 5 rows, set limit to that cap" in done.stderr, done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
+	assert [(path, query["offset"]) for path, query, _ in api.log] == [("/v1/offset", "0"), ("/v1/offset", str(len(ORDERS)))]  # type: ignore[attr-defined]
+	assert "WARN" not in done.stderr, done.stderr
+
+
+def test_given_a_fan_out_over_a_capped_api_when_one_key_ends_on_a_short_page_then_a_later_key_is_still_checked(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.fan_out('/{part}', over=['capped_small', 'capped'], concurrency=1, paginator=sl.offset(limit=5))\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "/v1/capped?offset=0&limit=5: the first page held 3 rows, fewer than limit 5, but the API returned 3 more at offset 3" in done.stdout + done.stderr, done.stdout + done.stderr
+
+
+def test_given_offset_paging_when_the_api_rounds_the_offset_to_a_page_then_a_short_first_page_is_the_end(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/rounded', paginator=sl.offset(limit=10))\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
 
 
 def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_connection(tmp_path: Path, api: ThreadingHTTPServer) -> None:
@@ -646,7 +670,7 @@ def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_
 	project = make_project(tmp_path, api, tables)
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert [(path, query.get("key"), auth) for path, query, auth in api.log] == [("/v1/offset", TOKEN, None)]  # type: ignore[attr-defined]
+	assert [(path, query.get("key"), auth) for path, query, auth in api.log] == [("/v1/offset", TOKEN, None)] * 2  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -673,7 +697,7 @@ def test_given_a_datetime_param_when_loading_then_it_is_sent_as_iso_text(tmp_pat
 	project = make_project(tmp_path, api, tables)
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert [query.get("since") for _, query, _ in api.log] == ["2024-01-02T03:04:00"]  # type: ignore[attr-defined]
+	assert [query.get("since") for _, query, _ in api.log] == ["2024-01-02T03:04:00"] * 2  # type: ignore[attr-defined]
 
 
 def test_given_a_redirect_listed_in_on_status_when_loading_then_it_is_skipped_and_not_followed(
@@ -995,7 +1019,7 @@ def test_given_an_incremental_cursor_in_the_body_when_loading_twice_then_the_sec
 	for _ in range(2):
 		done = sqlload(project, "load")
 		assert done.returncode == 0, done.stdout + done.stderr
-	assert [body["filter"]["after"] for _, _, body in api.bodies] == [None, 7]  # type: ignore[attr-defined]
+	assert [(body["filter"]["after"], body["page"]["offset"]) for _, _, body in api.bodies] == [(None, 0), (None, 7), (7, 0)]  # type: ignore[attr-defined]
 	assert query(project, 'SELECT count(*), count(DISTINCT order_id) FROM "RAW".shop__orders') == [(7, 7)]
 
 

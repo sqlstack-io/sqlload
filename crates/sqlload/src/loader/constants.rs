@@ -101,10 +101,6 @@ pub const RESULT_SCHEMA_VERSION: u32 = 1;
 /// The plan's note on a `constant_columns` column.
 pub const CONSTANT_NOTE: &str = "  (constant)";
 
-/// The loss of an integer array pin over Arrow or Parquet lists.
-pub const CUT_ELEMENTS_NOTE: &str =
-    "float elements of Arrow and Parquet lists are cut to whole numbers";
-
 /// The SQLSTATEs of Postgres errors worth retrying unchanged: a connection that failed or dropped (not 08P01, which PgBouncer also sends for a database it does not know), out of memory, too many connections, a server shutting down or starting, a serialization failure, a deadlock and a lock not available.
 pub const TRANSIENT_SQLSTATES: [&str; 11] = [
     "08000", "08003", "08006", "53200", "53300", "57P01", "57P02", "57P03", "40001", "40P01",

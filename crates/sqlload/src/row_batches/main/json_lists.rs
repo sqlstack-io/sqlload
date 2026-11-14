@@ -1,13 +1,16 @@
 //! JSON array text as Arrow lists.
 
+use std::sync::Arc;
+
 use arrow_array::builder::{ListBuilder, StringBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef};
-use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::DataType;
 use serde_json::Value;
 
-/// `texts`, JSON arrays as text (NULL for NULL), as a list array of `list_type`: each element converted from its text as a string column would be (a JSON string's own text, a number or boolean as written), strictly, so a value that does not convert is an error naming its row, never NULL. A JSON `null` element is NULL; anything but an array of scalars is an error.
+use crate::column_types::main::exact_cast::exact_cast;
+
+/// `texts`, JSON arrays as text (NULL for NULL), as a list array of `list_type`: each element converted from its text as a string column would be (a JSON string's own text, a number or boolean as written), strictly and exactly (see [`exact_cast`]), so a value that does not convert, or would lose digits, is an error, never NULL. A JSON `null` element is NULL; anything but an array of scalars is an error.
 pub fn json_lists(texts: &ArrayRef, list_type: &DataType) -> Result<ArrayRef, String> {
     let texts = texts
         .as_string_opt::<i32>()
@@ -42,10 +45,7 @@ pub fn json_lists(texts: &ArrayRef, list_type: &DataType) -> Result<ArrayRef, St
         }
         lists.append(true);
     }
-    let strict = CastOptions {
-        safe: false,
-        ..CastOptions::default()
-    };
-    cast_with_options(&lists.finish(), list_type, &strict)
+    let lists: ArrayRef = Arc::new(lists.finish());
+    exact_cast(&lists, list_type)
         .map_err(|error| format!("an element does not convert to {list_type}: {error}"))
 }

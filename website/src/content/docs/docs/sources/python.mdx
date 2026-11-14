@@ -229,7 +229,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
 | `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. From 0.45.0, a run that ends after a first page shorter than `limit` warns: an API capping its pages below `limit` ends it there too, so set `limit` to the API's cap. |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. From 0.45.0, when a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). |
 | `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0. |
 | `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
 

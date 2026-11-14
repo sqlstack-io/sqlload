@@ -248,6 +248,31 @@ def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_
 	assert (from_lake.returncode, [finding["kind"] for finding in json.loads(from_lake.stdout)["resources"][0]["findings"]]) == (1, ["relation_missing"]), from_lake.stdout + from_lake.stderr
 
 
+@pytest.mark.parametrize(
+	("column", "message"),
+	[
+		("_sqlload_source_file", "_sqlload_source_file must be loaded: append uses it to skip files already loaded"),
+		("_sqlload_source_version", "_sqlload_source_version must be loaded: append uses it to tell a file rewritten in place, or a new file under a loaded name, from one already loaded; stop excluding it"),
+	],
+	ids=["source-file", "source-version"],
+)
+def test_given_an_append_files_table_excluding_a_column_append_needs_when_planning_then_plan_refuses_it(tmp_path: Path, column: str, message: str) -> None:
+	import pyarrow as pa
+	import pyarrow.parquet as pq
+
+	(tmp_path / "data").mkdir()
+	pq.write_table(pa.table({"id": pa.array([1], pa.int64())}), tmp_path / "data" / "p.parquet")
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+		f'\n[sources.orders.tables.orders]\nwrite_strategy = "append"\nexclude_columns = ["{column}"]\n'
+	)
+	planned = run("plan", "-c", str(config))
+	assert planned.returncode == 1, planned.stdout + planned.stderr
+	assert message in planned.stdout + planned.stderr, planned.stdout + planned.stderr
+
+
 def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_the_files_itself_with_the_same_rows(tmp_path: Path) -> None:
 	import duckdb
 	import pyarrow as pa
