@@ -275,16 +275,38 @@ no index is left over.
 Each load records a version of the transform (a hash of its module's source). Files already loaded
 aren't read again, so after a change, `plan` shows `transform  changed since the last load` on
 the table. The version covers the module the function is in; a change in another module it imports
-isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`:
+isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
+([Reloading a files table](#reloading-a-files-table)). A table whose `after_load` deletes its files
+can't be reloaded: drop it and load the files still in `path`.
 
-- `append` tables load every file again into a new table that replaces the old one at the end.
-  `merge` tables load every file again oldest first and one at a time, into a new table that
-  replaces the old one at the end. A reload that fails leaves the old table and its file record as
-  they were.
-- With `after_load = { move_to = ... }`, the reload also reads the files under `move_to`, in their
-  order. `plan` shows both folders, and how many files it reads from each. Files read from `path`
-  move as usual; those already moved stay where they are.
-- With `after_load = "delete"`, `--reload` is refused: the files loaded before are gone.
+## Reloading a files table
+
+`sqlload load <table> --reload` reads every listed file again into a new table, which replaces the
+old one in one commit at the end; until then readers see the old table.
+
+- `append`, `replace` and `delete_insert` tables read the files in batches, as a first load does. A
+  `delete_insert` with a [`replace_key`](#replacing-rows-by-a-key) refuses `--reload`.
+- From 0.52.0, `merge` tables reload too, on DuckDB targets (Postgres targets refuse `--reload` for
+  every table). Each file merges into the new table on its own, as a load merges them: files merged
+  before go in the order they merged, matched by name and version or else by name, so a file
+  `after_load` moved keeps its place; files never merged follow, oldest modified first. The new
+  table's file record (a reset, then one record per file) is written in the commit that swaps it
+  in, so a reload that fails part way leaves the old table and its file record as they were. After
+  a reload, the next load reads only files added since. `plan` shows
+  `merge (unique_key: …) into a new table, swapped in at the end (--reload)`. A `merge` table with `unnest` is refused, since its child tables aren't rebuilt:
+  drop the table and its child tables and load again.
+- From 0.52.0, with `after_load = { move_to = ... }` the reload also lists the files under
+  `move_to`, which keep the names they loaded under (`_sqlload_source_file` names the file under
+  `path`). `plan` shows both folders and how many files it reads from each:
+
+  ```text
+  ├── source  files  ./drop/ and ./done/  csv, compression by file name
+  ├── files   3 to read of 3 listed: 1 in ./drop/, 2 in ./done/
+  ```
+
+  Once the new table is in, files read from `path` move as usual; those already under `move_to`
+  stay there. A reload that fails moves nothing.
+- With `after_load = "delete"`, `--reload` is still refused: the files loaded before are gone.
 
 ## Which files load
 
@@ -294,7 +316,7 @@ isn't noticed. To load every file again with the new transform, run `sqlload loa
 | `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. From 0.51.0, a file that changed since it loaded whose partition lies below that range fails the table, as does a new file below it in a partition the table holds; see below. |
 | `delete_insert` with a `replace_key` (from 0.51.0) | Only files not loaded yet, or changed since, one at a time, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
 | `replace` | Every file, swapped in as a new table. |
-| `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. |
+| `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. Under `--reload` (from 0.52.0, DuckDB), every file again, one at a time, into a new table swapped in at the end; see [Reloading a files table](#reloading-a-files-table). |
 
 A files source needs a `write_strategy`, from the source or its table entry: `plan` refuses it
 otherwise. Before 0.46.0 it took `replace` without a `cursor_column`, and before 0.44.0
@@ -423,8 +445,11 @@ unique_key = ["sku"]
   that includes a file repeating a key with NULLs in it, even under the default
   `on_duplicate_keys`.
 - Merging files loads into DuckDB and Postgres targets so far, and MotherDuck through its DuckDB
-  connection, which isn't tested live. `--reload`, `state = "logged"` and a
-  `cursor_column` are refused: the run log, not a cursor, picks the files. To merge every file again, drop the table: a table created anew starts a new record.
+  connection, which isn't tested live. `state = "logged"` and a `cursor_column` are refused: the
+  run log, not a cursor, picks the files. To merge every file again, drop the table (a table
+  created anew starts a new record), or from 0.52.0 run `--reload` on DuckDB, which keeps the old
+  table until every file merged; see [Reloading a files table](#reloading-a-files-table). Before
+  0.52.0 `--reload` was refused.
 
 ### Deleting or moving loaded files
 
@@ -463,7 +488,9 @@ after_load = { move_to = "loaded" }
 - It needs `write_strategy = "append"` or `"merge"`, or from 0.51.0 `"delete_insert"` with a
   `replace_key`, which never read a loaded file again. A file
   that reappears under a loaded name is a new file when its version differs; an identical copy,
-  such as the same bytes on S3, is skipped as loaded and stays. `--reload` is refused.
+  such as the same bytes on S3, is skipped as loaded and stays. From 0.52.0, `--reload` with
+  `move_to` reads the moved files too, and with `"delete"` it's refused; see
+  [Reloading a files table](#reloading-a-files-table). Before 0.52.0 both were refused.
 - From 0.39.1, a run that finds the folder empty skips the table and exits 0,
   since `after_load` handled every file loaded before: `plan` lists it under skipped, as does
   `load --json` in `plan.skipped`. That needs an existing folder holding no file at all (hidden

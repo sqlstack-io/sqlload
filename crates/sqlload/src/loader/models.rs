@@ -307,6 +307,8 @@ pub struct FilesSource {
     pub copy_to_internal_stage: bool,
     /// How each file is read for its table's `transform`; `None` without one, when `table`'s columns are the files'.
     pub transform: Option<FilesTransform>,
+    /// Under `--reload` with `after_load.move_to`, the folder the loaded files were moved to, whose files `table` lists too (keeping their keys, so their names); they stay there after the load.
+    pub archive: Option<Location>,
 }
 
 /// How a files table with a `transform` reads each file before the function runs; its source table's columns are then what the function returned for `sample` at plan.
@@ -873,6 +875,13 @@ pub enum CommitRange {
     Values(Vec<String>),
 }
 
+/// A files source's merge under `--reload`: each file merges into `build`, which replaces the table once every file merged, with `records` (a reset, then one per file) in the swap's transaction, so a failed reload leaves the table and its run log as they were.
+#[derive(Debug)]
+pub struct MergeRebuild {
+    pub build: TableName,
+    pub records: Vec<RunRecord>,
+}
+
 /// One table's load as it commits batch by batch: where the batches go, and what is staged but not yet committed.
 #[derive(Debug)]
 pub struct Publisher {
@@ -933,6 +942,8 @@ pub struct Publisher {
     pub settled_files: Vec<StoredFile>,
     /// The child tables `unnest` fills from the table's rows; `None` without `unnest`.
     pub children: Option<ChildTables>,
+    /// A files source's merge under `--reload`, which merges each file into a new table swapped in at the end.
+    pub rebuild: Option<MergeRebuild>,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.

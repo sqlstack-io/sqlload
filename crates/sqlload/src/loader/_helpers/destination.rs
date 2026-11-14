@@ -7,12 +7,17 @@ use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::main::clear_pending::clear_pending;
+use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::table_path::table_path;
 use crate::adapters::files::models::{
     FilesDestination, FolderClaim, TableFiles, TablePath, TablePathRequest,
 };
+use crate::adapters::files::models::{PartitionFolder, PendingPhase, PendingRun, ReplacedFiles};
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::delete_files::delete_files;
+use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::NANOSECOND_SCALE;
 use crate::files_source::main::footer_columns::footer_columns;
@@ -26,12 +31,14 @@ use crate::loader::models::{
 };
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
-use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
+use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
@@ -297,7 +304,7 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             removing.strategy
         ));
     }
-    if table.mode == WriteMode::Recreate {
+    if table.mode == WriteMode::Recreate || table.schema.action == TableAction::Recreate {
         problems.push(format!(
             "{place}; --reload would drop the other tables' rows"
         ));
@@ -491,4 +498,59 @@ fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
         .find(|existing| existing.name.eq_ignore_ascii_case(name))
         .and_then(|existing| existing.fraction_digits)
         .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
+}
+
+/// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.
+pub(crate) fn commit_deletes(
+    replaced: &ReplacedFiles,
+    partition: Option<&PartitionFolder>,
+    (written, last): (&BTreeSet<String>, bool),
+    deleted: &BTreeSet<String>,
+) -> Vec<String> {
+    let folders: Vec<String> = match partition {
+        Some(partition) => written
+            .iter()
+            .map(|value| format!("{}/", partition.name(value)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut keys: Vec<String> = written
+        .iter()
+        .flat_map(|value| replaced.by_partition.get(value).into_iter().flatten())
+        .cloned()
+        .collect();
+    for key in &replaced.always {
+        let written_folder = folders.iter().any(|folder| key.starts_with(folder));
+        if last || written_folder {
+            keys.push(key.clone());
+        }
+    }
+    keys.retain(|key| !deleted.contains(key));
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+pub(crate) async fn replace_files(
+    (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
+    file_id: &str,
+    (keys, run): (&[String], Option<&PendingRun>),
+) -> Result<(), LoaderError> {
+    keep_lease(table_folder, lease, lease_now())
+        .await?
+        .map_err(LoaderError::Invalid)?;
+    mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
+    if let Some(run) = run {
+        let records = OpenFolder {
+            store: folder.store.clone(),
+            location: Location {
+                store: folder.location.store.clone(),
+                prefix: run.prefix.clone(),
+            },
+        };
+        write_file(&records, &run.name, Bytes::from(run.json.clone())).await?;
+    }
+    delete_files(folder, keys).await?;
+    Ok(clear_pending(folder, file_id).await?)
 }

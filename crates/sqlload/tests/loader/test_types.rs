@@ -1038,6 +1038,8 @@ pub(crate) struct MergeStep {
     pub(crate) removed: &'static [&'static str],
     /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
     pub(crate) loads: bool,
+    /// Whether the step plans and loads with `--reload`.
+    pub(crate) reload: bool,
     /// Text the load's error must contain; empty when it must succeed.
     pub(crate) expected_error: &'static str,
     /// Text the plan must contain when the load succeeds.

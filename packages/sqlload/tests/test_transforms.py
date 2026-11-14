@@ -263,6 +263,28 @@ def test_plan_says_when_the_transform_changed_since_the_last_load(tmp_path: Path
 	assert changed not in reloading.stdout, reloading.stdout
 
 
+
+def test_a_changed_transform_reloads_a_merge_table_with_moved_files_into_one_row_per_key(tmp_path: Path) -> None:
+	settings = 'write_strategy = "merge"\nunique_key = ["id"]\nafter_load = { move_to = "done" }\n'
+	project = make_project(tmp_path, RETURNS["dicts"], settings=settings)
+	now = time.time()
+	give(project, "a.csv", "id,v\n1,a\n2,a\n", modified=now - 200)
+	give(project, "b.csv", "id,v\n1,b\n", modified=now - 100)
+	load(project)
+	module = project / "transforms" / "metrics.py"
+	module.write_text(module.read_text().replace('"v": row["v"]', '"v": row["v"].upper()'))
+	give(project, "c.csv", "id,v\n3,c\n", modified=now)
+	assert "transform  changed since the last load" in sqlload(project, "plan").stdout
+	planned = sqlload(project, "plan", "--reload")
+	assert "files   3 to read of 3 listed: 1 in ./drop/, 2 in ./done/" in planned.stdout, planned.stdout
+	load(project, "--reload", "--yes")
+	rows = query(project, "SELECT id, v, file FROM RAW.metrics ORDER BY id")
+	assert rows == [(1, "B", "./drop/b.csv"), (2, "A", "./drop/a.csv"), (3, "C", "./drop/c.csv")]
+	assert sorted(path.name for path in (project / "done").iterdir()) == ["a.csv", "b.csv", "c.csv"]
+	give(project, "d.csv", "id,v\n4,d\n")
+	after = sqlload(project, "plan").stdout
+	assert "1 new of 1 listed" in after and "transform  changed since the last load" not in after, after
+
 #: The `KPIs` tab, as the Sheets API writes it: a merged title row, a header row, label-only rows, KPI blocks with measures below each, a note and an `IFERROR` "" here and there.
 def text(value: str) -> dict[str, Any]:
 	return {"effectiveValue": {"stringValue": value}, "formattedValue": value}

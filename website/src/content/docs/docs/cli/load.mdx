@@ -107,6 +107,10 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 [Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is also refused on
 [Postgres targets](/docs/targets/postgres/).
 
+On a files source, `--reload` reads every file again; from 0.52.0 a `merge` table merges them one
+at a time into the new table, and `after_load = { move_to = ... }` reads the moved files too. See
+[Reloading a files table](/docs/sources/files/#reloading-a-files-table).
+
 ## Following a Postgres CDC source
 
 `sqlload load SOURCE --follow` keeps streaming one `postgres_cdc` source after it catches up,

@@ -5,10 +5,12 @@ use arrow_array::RecordBatch;
 use bytes::Bytes;
 
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
 use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
@@ -21,12 +23,16 @@ use crate::file_store::main::write_file::write_file;
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
+use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, column_fix, live_has};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun};
+use crate::loader::models::{
+    MergeRebuild, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
+};
 use crate::project::models::WriteStrategy;
+use crate::row_batches::models::Unnest;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -41,6 +47,7 @@ use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{
     DecodedRuns, RecordTable, RunEvent, RunOutcome, RunRecord, StateEvent, UnreadableRecord,
 };
+use crate::schema_plan::models::TableAction;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -477,7 +484,8 @@ pub(crate) async fn with_transform_version(
     mut plan: TablePlan,
     destination: &Destination,
 ) -> Result<TablePlan, LoaderError> {
-    let rewritten = matches!(plan.mode, WriteMode::Replace | WriteMode::Recreate);
+    let rewritten = matches!(plan.mode, WriteMode::Replace | WriteMode::Recreate)
+        || plan.schema.action == TableAction::Recreate;
     let Some(current) = plan
         .spec
         .transform
@@ -765,10 +773,10 @@ pub(crate) fn listed_sources(
     ))
 }
 
-/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), or why a files source cannot merge into it: only into a DuckDB or Postgres table, never with `--reload` (one commit would lose the files' order) or `state = "logged"`; none while the table does not exist.
+/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), and under `--reload` none, with every file the table's merges recorded instead (oldest first), whose order the reload keeps; or why a files source cannot load into it: only into a DuckDB or Postgres table, never with `state = "logged"`, nor `--reload` with `unnest` or of a `delete_insert` (one commit would lose the files' order); none while the table does not exist.
 pub(crate) async fn merge_ledger(
     request: &FilesPlanRequest<'_>,
-) -> Result<Result<Vec<LoadedFile>, String>, LoaderError> {
+) -> Result<Result<(Vec<LoadedFile>, Vec<LoadedFile>), String>, LoaderError> {
     let spec = request.spec;
     let destination = match request.loaded {
         LoadedSource::Query(destination) => destination,
@@ -786,10 +794,15 @@ pub(crate) async fn merge_ledger(
             spec.strategy, spec.warehouse
         )));
     }
-    if request.options.reload {
+    if request.options.reload && spec.strategy != WriteStrategy::Merge {
         return Ok(Err(format!(
             "--reload would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
         )));
+    }
+    if request.options.reload && spec.unnest != Unnest::None {
+        return Ok(Err(
+            "--reload of a merge files table does not rebuild its child tables (unnest); drop the table and its child tables and load again to merge every file anew".to_owned(),
+        ));
     }
     if spec.logged {
         return Ok(Err(format!(
@@ -804,9 +817,12 @@ pub(crate) async fn merge_ledger(
         )));
     }
     let merged = match request.live {
-        None => return Ok(Ok(Vec::new())),
+        None => return Ok(Ok((Vec::new(), Vec::new()))),
         Some(_) => merged_files(spec, destination).await?,
     };
+    if request.options.reload {
+        return Ok(merged.map(|merged| (Vec::new(), merged)));
+    }
     let location = request.files.location.to_string();
     let listed: HashMap<String, String> = request
         .files
@@ -820,7 +836,88 @@ pub(crate) async fn merge_ledger(
             )
         })
         .collect();
-    Ok(merged.map(|merged| unchanged_files(merged, &listed)))
+    Ok(merged.map(|merged| (unchanged_files(merged, &listed), Vec::new())))
+}
+
+/// `files` in the order a merge `--reload` applies them: those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else by name (a file moved by `after_load` may have a new version); then the others oldest modified first, as a load merges new files.
+pub(crate) fn reload_order(
+    files: Vec<DataFile>,
+    location: &str,
+    merged: &[LoadedFile],
+) -> Vec<DataFile> {
+    let mut by_version: HashMap<(&str, &str), usize> = HashMap::new();
+    let mut by_name: HashMap<&str, usize> = HashMap::new();
+    for (index, file) in merged.iter().enumerate() {
+        by_version
+            .entry((file.name.as_str(), file.version.as_str()))
+            .or_insert(index);
+        by_name.entry(file.name.as_str()).or_insert(index);
+    }
+    let mut recorded: Vec<(usize, DataFile)> = Vec::new();
+    let mut others: Vec<DataFile> = Vec::new();
+    for data in files {
+        let name = format!("{location}{}", data.file.relative_key);
+        let version = data.file.version();
+        match by_version
+            .get(&(name.as_str(), version.as_str()))
+            .or_else(|| by_name.get(name.as_str()))
+        {
+            Some(index) => recorded.push((*index, data)),
+            None => others.push(data),
+        }
+    }
+    recorded.sort_by_key(|(index, _)| *index);
+    recorded
+        .into_iter()
+        .map(|(_, data)| data)
+        .chain(merge_order(others))
+        .collect()
+}
+
+/// Before a files source's merge or `delete_insert` by `replace_key` writes: `_sqlload_runs` when it does not exist yet; under a merge's `--reload` of an existing table, the table each file merges into, created beside it in its current columns, and the reset its swap commits first, stamped before any file's record, so the files merged into the old table stop counting.
+pub(crate) async fn merge_rebuild(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<Option<MergeRebuild>, LoaderError> {
+    ensure_merge_log(table, destination).await?;
+    if table.schema.action != TableAction::Recreate || table.spec.strategy != WriteStrategy::Merge {
+        return Ok(None);
+    }
+    let spec = &table.spec;
+    let adapter = sql_adapter(spec.warehouse);
+    let id = staging_id(
+        &uuid::Uuid::new_v4().to_string(),
+        chrono::Utc::now().naive_utc(),
+    );
+    let build = adapter.staging_relation_name(&spec.destination, &id);
+    let create = adapter.render_create_build_table(
+        &build,
+        &spec.destination,
+        (&table.schema.write_columns, table.live.as_deref(), None),
+    );
+    execute_ddl(destination, create).await?;
+    Ok(Some(MergeRebuild {
+        build,
+        records: vec![merge_reset_record(spec)],
+    }))
+}
+
+/// Swap a merge `--reload`'s table in, with its run records in the same transaction.
+pub(crate) async fn swap_rebuild(
+    table: &TablePlan,
+    destination: &Destination,
+    rebuild: &MergeRebuild,
+) -> Result<(), LoaderError> {
+    let spec = &table.spec;
+    let adapter = sql_adapter(spec.warehouse);
+    let runs = runs_table(&spec.destination);
+    let mut statements = adapter.render_swap(&spec.destination, &rebuild.build, &[]);
+    for record in &rebuild.records {
+        let insert = insert_run(&runs, record, spec.warehouse).map_err(LoaderError::Invalid)?;
+        statements = adapter.render_logged(statements, insert);
+    }
+    let _held = ddl_guard(destination).await;
+    execute(destination, statements).await
 }
 
 /// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.

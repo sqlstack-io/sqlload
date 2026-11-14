@@ -21,12 +21,13 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
 use crate::file_store::main::open_folder::open_folder;
-use crate::file_store::models::OpenFolder;
+use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::errors::FilesError;
 use crate::files_source::main::discover_files::discover_files;
+use crate::files_source::main::discover_reload_files::discover_reload_files;
 use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::main::move_to_prefix::move_to_prefix;
 use crate::files_source::main::read_files::read_files;
@@ -47,7 +48,7 @@ use crate::loader::_helpers::resolve::{
     display_name, resolve_tables, source_target, spec_names, target_display_name, unread_source,
 };
 use crate::loader::_helpers::run_log::{
-    file_column_problem, loaded_file, logs_files, merge_ledger,
+    file_column_problem, loaded_file, logs_files, merge_ledger, reload_order,
 };
 use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::{files_read_as, path_values, pinned_unsampled};
@@ -232,7 +233,7 @@ pub(crate) async fn open_source(
 
 /// A source's tables, its files for a files source, and warnings about reaching it; `Ok(Err(problem))` when they cannot be found, including when a Postgres source cannot be reached or its `include`/`exclude` patterns are invalid.
 pub(crate) async fn source_tables(
-    project: &ProjectConfig,
+    (project, options): (&ProjectConfig, &PlanOptions),
     source_name: &str,
     source: &SourceConfig,
 ) -> Result<Result<(Vec<SourceTable>, Option<FilesSource>, Vec<String>), SourceProblem>, LoaderError>
@@ -270,8 +271,12 @@ pub(crate) async fn source_tables(
                 .map_or(&unset, |overrides| &overrides.settings);
             let naming = table_naming((settings, &source.defaults), target.naming);
             Ok(
-                match discover_files_table(project, source_name, source, (target.warehouse, naming))
-                    .await
+                match discover_files_table(
+                    (project, options),
+                    (source_name, source),
+                    (target.warehouse, naming),
+                )
+                .await
                 {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(LoaderError::Files(FilesError::NoFiles { .. }))
@@ -841,11 +846,10 @@ fn snowflake_session(
     })
 }
 
-/// A files source as one source table (file columns, partition columns, the source-file column), and its files.
+/// A files source as one source table (file columns, partition columns, the source-file column), and its files: under `--reload` with `after_load.move_to`, those it moved there too.
 pub(crate) async fn discover_files_table(
-    project: &ProjectConfig,
-    source_name: &str,
-    source: &SourceConfig,
+    (project, options): (&ProjectConfig, &PlanOptions),
+    (source_name, source): (&str, &SourceConfig),
     (warehouse, naming): (Warehouse, Naming),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
@@ -855,7 +859,20 @@ pub(crate) async fn discover_files_table(
         flatten_objects: naming == Naming::Dlt,
         ..source.files_encoding()
     };
-    let table = discover_files(&folder, &values, &encoding).await?;
+    let archive = match &source.after_load {
+        AfterLoad::MoveTo(move_to) if options.reload => Some(OpenFolder {
+            store: folder.store.clone(),
+            location: Location {
+                store: location.store.clone(),
+                prefix: move_to_prefix(&location, move_to).map_err(LoaderError::Invalid)?,
+            },
+        }),
+        _ => None,
+    };
+    let table = match &archive {
+        Some(archive) => discover_reload_files((&folder, archive), &values, &encoding).await?,
+        None => discover_files(&folder, &values, &encoding).await?,
+    };
     if let Some(problem) = table.problems.first() {
         return Err(LoaderError::Invalid(problem.clone()));
     }
@@ -890,7 +907,14 @@ pub(crate) async fn discover_files_table(
     };
     let (table, files) =
         files_source_parts(source_name, source, (warehouse, naming), (location, table))?;
-    Ok((table, FilesSource { transform, ..files }))
+    Ok((
+        table,
+        FilesSource {
+            transform,
+            archive: archive.map(|archive| archive.location),
+            ..files
+        },
+    ))
 }
 
 /// `table` with the columns `call`'s function returned for its newest file (the first sampling reads), typed as a Python table's yields are (a column only ever NULL as text), and `input` with that file as its sample.
@@ -1058,6 +1082,7 @@ pub(crate) fn files_source_parts(
             notes,
             copy_to_internal_stage: source.copy_to_internal_stage,
             transform: None,
+            archive: None,
         },
     ))
 }
@@ -1146,7 +1171,7 @@ pub(crate) async fn plan_files(
     {
         return Ok(Err(problem));
     }
-    if spec.after_load != AfterLoad::Keep && request.options.reload {
+    if spec.after_load == AfterLoad::Delete && request.options.reload {
         return Ok(Err(
             "--reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded".to_owned(),
         ));
@@ -1193,7 +1218,9 @@ pub(crate) async fn plan_files(
         true => (recorded, Vec::new()),
         false => (Vec::new(), recorded),
     };
-    let loaded = merged.clone().unwrap_or(loaded);
+    let loaded = merged
+        .as_ref()
+        .map_or(loaded, |(unchanged, _)| unchanged.clone());
     let location = request.files.location.to_string();
     let selection = FileSelection {
         files: &request.files.table.files,
@@ -1212,7 +1239,8 @@ pub(crate) async fn plan_files(
         ..request.files.checks.clone()
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
-    let ordered = select_files(&selection).map(|files| match merged {
+    let ordered = select_files(&selection).map(|files| match &merged {
+        Some((_, recorded)) if request.options.reload => reload_order(files, &location, recorded),
         Some(_) => merge_order(files),
         None => files,
     });
@@ -1224,6 +1252,22 @@ pub(crate) async fn plan_files(
         nanos,
         batch_rows: SOURCE_BATCH_ROWS,
     }))
+}
+
+/// The stored `files` that `after_load` settles once their rows commit: under a `--reload` that lists the `move_to` folder too, those read from it stay where they are.
+pub(crate) fn unarchived(table: &TablePlan, files: &[DataFile]) -> Vec<StoredFile> {
+    let archive = table
+        .spec
+        .files
+        .as_ref()
+        .and_then(|files| files.archive.as_ref());
+    files
+        .iter()
+        .filter(|data| {
+            archive.is_none_or(|archive| !data.file.path.as_ref().starts_with(&archive.prefix))
+        })
+        .map(|data| data.file.clone())
+        .collect()
 }
 
 /// One file's rows as `read` (of that file alone) reads them, whole, and their schema: what a `transform` gets.
@@ -1582,16 +1626,17 @@ pub(crate) async fn scoped_tables(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
 ) -> Result<Result<(ResolvedTables, Option<FilesSource>), Option<SourceProblem>>, LoaderError> {
-    let (discovered, files, warnings) = match source_tables(project, source_name, source).await? {
-        Ok(found) => found,
-        Err(problem) => {
-            let in_scope = source_in_scope((project, options), (source_name, source), None);
-            return Ok(Err(in_scope.then(|| SourceProblem {
-                message: format!("[sources.{source_name}]: {}", problem.message),
-                retryable: problem.retryable,
-            })));
-        }
-    };
+    let (discovered, files, warnings) =
+        match source_tables((project, options), source_name, source).await? {
+            Ok(found) => found,
+            Err(problem) => {
+                let in_scope = source_in_scope((project, options), (source_name, source), None);
+                return Ok(Err(in_scope.then(|| SourceProblem {
+                    message: format!("[sources.{source_name}]: {}", problem.message),
+                    retryable: problem.retryable,
+                })));
+            }
+        };
     if source.kind == SourceKind::Files && discovered.is_empty() {
         return Ok(Ok((
             drained_files((project, options), (source_name, source)),
@@ -1834,11 +1879,11 @@ pub(crate) async fn found_sources<'a>(
                 "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
                 source.name, drained.table.table, source.name
             )),
-            (true, false, true) => Some(format!(
+            (true, false, true) if source.source.after_load == AfterLoad::Delete => Some(format!(
                 "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
                 source.name
             )),
-            (true, false, false) => None,
+            (true, false, _) => None,
         };
         match problem {
             Some(problem) => source.resolved.problems.push(problem),
