@@ -931,7 +931,7 @@ impl Publisher {
             Some(&self.table.outcome_name()),
             EventKind::TableProgress {
                 unit: "batch".to_owned(),
-                count: self.batch,
+                count: self.batch - 1,
                 rows: self.committed_rows + self.waiting_rows,
             },
         );
