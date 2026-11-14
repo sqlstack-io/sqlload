@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.49.0](https://github.com/sqlstack-io/sqlload/compare/v0.48.0...v0.49.0) (2026-11-14)
+
+
+### Features
+
+* **files:** Excel A1 ranges and column_names for headerless data; keep rotated OAuth refresh tokens ([#247](https://github.com/sqlstack-io/sqlload/issues/247)) ([d681cbc](https://github.com/sqlstack-io/sqlload/commit/d681cbc02362895aac852634ff65c5c2b85a0669))
+
 ## [0.48.0](https://github.com/sqlstack-io/sqlload/compare/v0.47.0...v0.48.0) (2026-11-14)
 
 
