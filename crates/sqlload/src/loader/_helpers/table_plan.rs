@@ -251,6 +251,7 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
+    plan.schema.warnings.extend(reload_range(options));
     plan.schema.warnings.extend(split_ranking(&plan));
     with_run_log(plan, destination, options).await
 }
@@ -384,14 +385,42 @@ fn split_ranking(plan: &TablePlan) -> Option<String> {
     ))
 }
 
-/// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` and `--reload` swap the whole table in once, and windows need a cursor.
+/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped.
+fn reload_range(options: &PlanOptions) -> Option<String> {
+    let (start, end) = (
+        options.start_cursor.as_deref().filter(|_| options.reload),
+        options.end_cursor.as_deref().filter(|_| options.reload),
+    );
+    let (kept, dropped) = match (start, end) {
+        (Some(start), Some(end)) => (
+            format!("from {start} (--start-cursor), below {end} (--end-cursor)"),
+            format!("rows before {start} and from {end} on are dropped"),
+        ),
+        (Some(start), None) => (
+            format!("from {start} (--start-cursor)"),
+            format!("rows before {start} are dropped"),
+        ),
+        (None, Some(end)) => (
+            format!("below {end} (--end-cursor)"),
+            format!("rows from {end} on are dropped"),
+        ),
+        (None, None) => return None,
+    };
+    Some(format!(
+        "--reload rebuilds the table with only the rows {kept}: {dropped}"
+    ))
+}
+
+/// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` swaps the whole table in once, as does `--reload` (whose cursor windows still cut the reads), and windows need a cursor.
 fn ignored_batch(plan: &TablePlan) -> Option<String> {
     let spec = &plan.spec;
     let step = spec.batch?;
     let reason = match (&spec.files, &plan.mode, &spec.cursor, step) {
         (Some(_), _, _, _) => "a files source commits in batches of whole partitions",
         (None, WriteMode::Replace, _, _) => "replace swaps the whole table in once",
-        (None, WriteMode::Recreate, _, _) => "--reload rebuilds the whole table once",
+        (None, WriteMode::Recreate, None, _) | (None, WriteMode::Recreate, _, BatchStep::Whole) => {
+            "--reload rebuilds the whole table once"
+        }
         (None, _, None, BatchStep::Duration(_) | BatchStep::Integer(_)) => {
             "windows need a cursor_column"
         }
@@ -1548,12 +1577,6 @@ pub(crate) async fn cursor_window(
             maximum: None,
         }));
     };
-    if backfill && options.reload {
-        return Ok(Err(
-            "--reload rebuilds the whole table, so it takes no --start-cursor/--end-cursor"
-                .to_owned(),
-        ));
-    }
     let flag = |value: &Option<String>| {
         value
             .as_deref()

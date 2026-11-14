@@ -691,9 +691,10 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 1 => "1 window".to_owned(),
                 count => format!("{count} windows"),
             };
-            let commits = match publishes_once(table) {
-                true => "staged one after another and published in one commit",
-                false => "one commit each",
+            let commits = match (at_end, publishes_once(table)) {
+                (true, _) => "read one after another into a new table, swapped in once at the end",
+                (false, true) => "staged one after another and published in one commit",
+                (false, false) => "one commit each",
             };
             format!("{windows} of {step}, {commits}{end}")
         }

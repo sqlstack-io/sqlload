@@ -150,7 +150,24 @@ which publishes once per run (last row below). `plan` of one table shows how it 
 | `delete_insert` into ClickHouse, in windows or cursor order | Once, at the end: everything read is staged and the whole range published together. A stopped run publishes nothing, so split a long backfill with `--end-cursor`. |
 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
-integer cursor without `--end-cursor` ends at its maximum when `plan` ran.
+integer cursor without `--end-cursor` ends at its maximum when `plan` ran. Other sources can't report
+their maximum, so an integer `batch_size` there needs `--end-cursor`. From 0.51.0 that includes
+`--reload`, which reads the windows from `cursor_start` (or `--start-cursor`) up to `--end-cursor`
+into a new table and swaps it in once at the end. The rebuilt table holds only that range; see
+[Reloading](/docs/cli/load/#reloading).
+
+```console
+$ sqlload plan --reload --end-cursor 200000 shop__orders
+…
+└── raw.shop__orders                                recreate from the whole source (--reload)
+…
+    ├── reads   order_id reload, from cursor_start 0, below 200000 (--end-cursor)
+…
+    └── commits 4 windows of 50000, read one after another into a new table, swapped in once at the end
+```
+
+Without `--end-cursor`, `plan` stops and asks for it: "an integer batch needs --end-cursor to know
+where the last window ends, with --reload too".
 
 ```toml
 [sources.app.tables."public.orders"]
