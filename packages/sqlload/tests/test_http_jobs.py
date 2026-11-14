@@ -92,6 +92,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
 			"/v1/quota": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {"error": {"message": "daily quota used"}}),
 			"/v1/capped": lambda query: self.reply(200, ORDERS[int(query["offset"]) : int(query["offset"]) + 3]),
+			"/v1/capped_small": lambda query: self.reply(200, ORDERS[:2][int(query["offset"]) : int(query["offset"]) + 3]),
 			"/v1/rounded": lambda query: self.reply(200, ORDERS[int(query["offset"]) // int(query["limit"]) * int(query["limit"]) :][: int(query["limit"])]),
 			"/v1/comma": self.comma,
 			"/v1/sheet": self.sheet,
@@ -648,6 +649,13 @@ def test_given_offset_paging_when_a_short_first_page_is_the_whole_table_then_one
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
 	assert [(path, query["offset"]) for path, query, _ in api.log] == [("/v1/offset", "0"), ("/v1/offset", str(len(ORDERS)))]  # type: ignore[attr-defined]
 	assert "WARN" not in done.stderr, done.stderr
+
+
+def test_given_a_fan_out_over_a_capped_api_when_one_key_ends_on_a_short_page_then_a_later_key_is_still_checked(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.fan_out('/{part}', over=['capped_small', 'capped'], concurrency=1, paginator=sl.offset(limit=5))\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "/v1/capped?offset=0&limit=5: the first page held 3 rows, fewer than limit 5, but the API returned 3 more at offset 3" in done.stdout + done.stderr, done.stdout + done.stderr
 
 
 def test_given_offset_paging_when_the_api_rounds_the_offset_to_a_page_then_a_short_first_page_is_the_end(tmp_path: Path, api: ThreadingHTTPServer) -> None:

@@ -71,8 +71,14 @@ pub(crate) async fn paginate(
             (&fetched, document.as_ref(), step),
         )
         .map_err(|error| format!("{shown}: {error}"))?;
-        if let (1, None, Some(document)) = (step, &next, &document) {
-            capped_pages(calls, request, (&first, document, &fetched.bytes), &shown).await?;
+        match (step, &next, &document) {
+            (1, None, Some(document)) => {
+                capped_pages(calls, request, (&first, document), &shown).await?
+            }
+            (_, Some(_), _) if matches!(request.paginator, Paginator::Offset { .. }) => {
+                calls.full_page_seen.store(true, Ordering::Relaxed);
+            }
+            _ => {}
         }
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
@@ -103,11 +109,11 @@ pub(crate) async fn paginate(
     Ok(())
 }
 
-/// For offset paging whose first page (`document`, its `bytes`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so is the first page again, from an API that rounds the offset down to a page boundary. Checked once a job per request (see `Calls::cap_checked`).
+/// For offset paging whose first page (`document`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so are the first page's rows again, from an API that rounds the offset down to a page boundary. Skipped once a page of the request held its whole limit in this job, which shows the API does not cap it (see `Calls::full_page_seen`).
 async fn capped_pages(
     calls: &Calls,
     request: &Request,
-    (first, document, bytes): (&Url, &Value, &[u8]),
+    (first, document): (&Url, &Value),
     shown: &str,
 ) -> Result<(), ReadError> {
     let Paginator::Offset {
@@ -120,7 +126,7 @@ async fn capped_pages(
         return Ok(());
     };
     let read = page_rows(document, request).map_err(|error| format!("{shown}: {error}"))?;
-    if read == 0 || read >= *limit || calls.cap_checked.swap(true, Ordering::Relaxed) {
+    if read == 0 || read >= *limit || calls.full_page_seen.load(Ordering::Relaxed) {
         return Ok(());
     }
     let probe = page_call(
@@ -134,9 +140,6 @@ async fn capped_pages(
     let Some(fetched) = fetch(calls, &probe).await? else {
         return Ok(());
     };
-    if fetched.bytes.as_slice() == bytes {
-        return Ok(());
-    }
     let probed = redacted(
         &format!("{} {}", probe.method.as_str(), probe.url),
         &calls.endpoint.current_secrets(),
@@ -145,6 +148,7 @@ async fn capped_pages(
     let more = match parsed(request, &rows, &fetched.bytes)
         .map_err(|error| format!("{probed}: the response is not JSON: {error}"))?
     {
+        Some(next) if selected_node(&next, &rows) == selected_node(document, &rows) => 0,
         Some(next) => {
             selected_or_allowed(request, (&rows, &next), &probed)?;
             page_rows(&next, request).map_err(|error| format!("{probed}: {error}"))?
