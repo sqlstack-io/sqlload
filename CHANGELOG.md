@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.51.0](https://github.com/sqlstack-io/sqlload/compare/v0.50.0...v0.51.0) (2026-11-14)
+
+
+### Features
+
+* **cli:** plan and load print what matters for each table, and load streams events ([#253](https://github.com/sqlstack-io/sqlload/issues/253)) ([059a2cc](https://github.com/sqlstack-io/sqlload/commit/059a2ccdf3b28e5c5f893204d6fa39d159b15eaa))
+
+
+### Bug Fixes
+
+* **odbc:** preload libstdc++ for MySQL Connector/ODBC on Linux, and name the fix for a driver registered under //odbc/ ([#251](https://github.com/sqlstack-io/sqlload/issues/251)) ([64743fb](https://github.com/sqlstack-io/sqlload/commit/64743fb89672373dc6f2f9a610ed02d38a757718))
+
 ## [0.50.0](https://github.com/sqlstack-io/sqlload/compare/v0.49.0...v0.50.0) (2026-11-14)
 
 
