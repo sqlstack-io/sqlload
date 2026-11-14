@@ -82,7 +82,11 @@ impl Tally {
             } => {
                 self.loaded += 1;
                 self.rows += rows;
-                if self.slowest.as_ref().is_none_or(|(_, slowest)| elapsed_ms > slowest) {
+                if self
+                    .slowest
+                    .as_ref()
+                    .is_none_or(|(_, slowest)| elapsed_ms > slowest)
+                {
                     self.slowest = Some((table, *elapsed_ms));
                 }
             }
@@ -230,8 +234,7 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
     clauses.extend((tally.loaded > 0).then(|| format!("{} loaded", tally.loaded)));
     clauses.extend((tally.failed > 0).then(|| format!("{} failed", tally.failed)));
     clauses.extend(
-        (!tally.not_started.is_empty())
-            .then(|| format!("{} not started", tally.not_started.len())),
+        (!tally.not_started.is_empty()).then(|| format!("{} not started", tally.not_started.len())),
     );
     clauses.extend((tally.loaded > 0).then(|| format!("{} rows", thousands(tally.rows))));
     clauses.push(format!("{:.1}s", elapsed_ms as f64 / 1000.0));
@@ -262,9 +265,7 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
     if failures && exit_code == crate::command::constants::RETRYABLE_EXIT {
         branches.push((
             "retry",
-            format!(
-                "every failure is retryable, so exit {exit_code}: run the same command again"
-            ),
+            format!("every failure is retryable, so exit {exit_code}: run the same command again"),
         ));
     }
     if failures {

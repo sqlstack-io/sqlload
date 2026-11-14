@@ -259,6 +259,8 @@ pub struct FilesSource {
 pub struct SkippedTable {
     pub source_name: String,
     pub source_table: String,
+    /// The name `plan` shows it by: its destination's display name, as `schema.table`.
+    pub destination: String,
     pub reason: String,
 }
 
@@ -280,8 +282,8 @@ pub struct FoundSources<'a> {
     pub plan: ProjectPlan,
     /// The sources whose tables could not be listed, selected or not, so the tables they would load are unknown.
     pub unresolved: Vec<String>,
-    /// The destination table and source of each files source skipped as drained (see [`DrainedFiles`]), names a selector may use.
-    pub drained: Vec<(String, String)>,
+    /// The destination table, its display name and the source of each files source skipped as drained (see [`DrainedFiles`]): names a selector may use.
+    pub drained: Vec<String>,
 }
 
 /// The settings for tables of one project, before any destination is read.
@@ -291,6 +293,8 @@ pub struct ResolvedTables {
     pub skipped: Vec<SkippedTable>,
     /// Problems with one table's settings, as `source_table: problem`.
     pub problems: Vec<String>,
+    /// Each of `problems` about one table, with the display name of the table it would load into.
+    pub problem_names: Vec<(String, String)>,
     /// Warnings about reaching the source, such as reading it in plain text.
     pub warnings: Vec<String>,
     /// A files source whose folder `after_load` emptied, when the selection takes it.
@@ -438,6 +442,34 @@ pub struct ProjectPlan {
     pub retryable_problems: Vec<String>,
     /// The sources with a problem in `problems`, which a table's problem names only by its `schema.table`.
     pub failed_sources: std::collections::BTreeSet<String>,
+    /// Each of `problems` about one table, with the display name of the table it would load into, which `plan` names it by.
+    pub problem_names: Vec<(String, String)>,
+    /// What each in-scope source that could not be read holds up, by source name.
+    pub unread_sources: BTreeMap<String, UnreadSource>,
+    /// Each warning that a source could not be read so tables may share a destination with it, and what it is about.
+    pub unread_sharing: Vec<UnreadSharing>,
+}
+
+/// The tables a source that could not be read would load, as far as its settings name them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnreadSource {
+    /// The display names of the tables it names itself: exactly in `include`, under `tables`, or a files source's one table.
+    pub tables: Vec<String>,
+    /// Whether its `include` also has patterns, whose tables are unknown.
+    pub patterns: bool,
+    /// The connection it reads through.
+    pub connection: String,
+}
+
+/// A warning that sources could not be read, so tables may share a destination table with them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnreadSharing {
+    /// The warning as `plan.warnings` holds it.
+    pub warning: String,
+    /// The sources that could not be read.
+    pub sources: Vec<String>,
+    /// The display names of the tables whose check it holds up.
+    pub tables: Vec<String>,
 }
 
 impl ProjectPlan {

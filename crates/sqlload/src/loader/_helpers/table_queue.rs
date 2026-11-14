@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use tokio::task::{Id, JoinError};
 
+use crate::adapters::contract::models::WriteMode;
 use crate::cdc::main::load_cdc::load_cdc;
-use crate::loader::constants::DEFAULT_THREADS;
-use crate::loader::main::_load_table::load_one;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
-use crate::adapters::contract::models::WriteMode;
+use crate::loader::constants::DEFAULT_THREADS;
+use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
 use crate::project::models::ProjectConfig;
 

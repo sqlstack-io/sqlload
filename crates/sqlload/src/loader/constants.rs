@@ -16,6 +16,12 @@ pub const PLAN_DETAIL_COLUMN: usize = 52;
 /// The width of a plan detail's label and the space after it, as `route   `.
 pub const LABEL_WIDTH: usize = 8;
 
+/// How a skipped files source's reason ends after `no files to load in <path>`, when `after_load` emptied its folder.
+pub const DRAINED_REASON: &str = ": after_load deleted or moved the ones already loaded";
+
+/// The widest an `Errors` line of `plan` runs before its text wraps under itself.
+pub const PLAN_ERROR_WIDTH: usize = 100;
+
 /// The comparison reading a cursor's lower bound itself.
 pub const INCLUSIVE_BOUND: &str = ">=";
 

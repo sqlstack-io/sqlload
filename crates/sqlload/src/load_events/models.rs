@@ -45,7 +45,11 @@ pub enum EventKind {
         changes: Vec<String>,
     },
     /// A table failed, and whether running the load again may get past it.
-    TableFailed { reason: String, retryable: bool, elapsed_ms: u64 },
+    TableFailed {
+        reason: String,
+        retryable: bool,
+        elapsed_ms: u64,
+    },
     /// A table the load never started, and why.
     TableNotStarted { reason: String },
     /// The load ended: its counts and the exit code.
