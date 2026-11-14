@@ -147,8 +147,8 @@ TYPED = dict(
     },
 )
 
-local = sl.source("local", destination="local")
-cloud = sl.source("cloud", destination="cloud")
+local = sl.source("local", write_strategy="replace", destination="local")
+cloud = sl.source("cloud", write_strategy="replace", destination="cloud")
 
 {tables}
 '''

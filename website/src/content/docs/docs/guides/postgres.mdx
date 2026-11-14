@@ -38,12 +38,15 @@ connection = "app"
 description = "The shop's application database."
 include = ["public.*"]
 exclude = ["public.audit_*"]
+write_strategy = "replace"
 
 [sources.app.tables."public.customers"]
 description = "Customers, one row per customer."
 
 [sources.app.tables."public.orders"]
 description = "Orders, one row per order."
+write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 ```
 
@@ -61,21 +64,21 @@ Loads (2)                                           sqlload load
 │   ├── source  postgres  app  public.customers
 │   ├── route   read as Arrow -> DuckDB takes Arrow
 │   └── batch   about 1 GB at a time into a new table, swapped in once at the end
-└── app__orders                                     merge (unique_key: order_id)
+└── app__orders                                     merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
     └── cursor  updated_at first run, everything
 ```
 
-- `customers` has no `cursor_column`, so it takes `replace`: each run rebuilds it from the whole
-  table.
-- `orders` has a `cursor_column` and a primary key, so it takes `merge`: each run reads from the
+- `customers` takes the source's `replace`: each run rebuilds it from the whole table.
+- `orders` sets `merge` on its primary key, `"{primary_key}"`: each run reads from the
   destination's maximum `updated_at` and upserts on the key.
 - `audit_log` matches `exclude`, so it isn't listed.
 
 See [Choosing tables](/docs/sources/postgres/#choosing-tables) for patterns and tables that appear
-later, and [Write strategies](/docs/concepts/write-strategies/) for the defaults.
+later, and [Write strategies](/docs/concepts/write-strategies/) for the others. Every table needs a
+`write_strategy`, from its entry or its source.
 
 ## Keep tables up to date
 

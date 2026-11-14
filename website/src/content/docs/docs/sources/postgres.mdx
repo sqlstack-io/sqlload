@@ -23,6 +23,7 @@ description = "The shop's application database."
 include = ["public.*"]
 exclude = ["public.audit_*"]
 write_strategy = "merge"
+unique_key = "{primary_key}"
 
 [sources.app.tables."public.orders"]
 description = "Orders, one row per order."
@@ -41,6 +42,11 @@ use the same connection.
 `include` and `exclude` are `schema.table` patterns (`*` matches any text). A table must match an
 `include` pattern and no `exclude` pattern. A `[sources.app.tables."schema.table"]` entry sets
 options for one table; on its own, it doesn't add the table.
+
+Every table needs a `write_strategy`, from its entry or the source, so a new table that `include`
+matches takes the source's. A `merge` table needs a `unique_key`: its columns, or
+`"{primary_key}"` for each table's primary key, which fails `plan` for a table without one. See
+[Write strategies](/docs/concepts/write-strategies/).
 
 `new_tables` says what happens when a table that matches `include` appears after the source's
 first load:
@@ -102,6 +108,7 @@ exclude_columns = ["*_at"]
 allow_columns = ["updated_at"]
 skip_tables_with_columns = ["total"]
 mask_key = "${ENV:MASK_KEY}"
+write_strategy = "replace"
 
 [sources.app.tables."public.customers"]
 description = "Customers."

@@ -79,6 +79,7 @@ load() {
 		connection = "shop"
 		description = "Smoke test."
 		include = ["items"]
+		write_strategy = "replace"
 
 		[sources.shop.tables.items]
 		description = "Items."

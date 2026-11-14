@@ -183,7 +183,8 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             store: local_store,
             setup: ORDERS,
             target_settings: "",
-            settings: "",
+            settings: "write_strategy = \"replace\"
+",
             runs: LOCAL_REPLACE_RUNS,
             check_column: "name",
             expected_files: "- run2 2:b2",
@@ -193,7 +194,8 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             store: seaweedfs_store,
             setup: ORDERS,
             target_settings: "",
-            settings: "",
+            settings: "write_strategy = \"replace\"
+",
             runs: REPLACE_RUNS,
             check_column: "name",
             expected_files: "- run2 2:b2",
@@ -274,7 +276,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             store: local_store,
             setup: ORDERS,
             target_settings: "",
-            settings: "write_strategy = \"merge\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n",
+            settings: "write_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"placed_at\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n",
             runs: &[FilesTargetRun {
                 expected_error: "merge needs a table format",
                 ..OK
@@ -327,7 +329,8 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             setup: "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text); INSERT INTO public.orders VALUES (1, 'a');
                     CREATE SCHEMA sales; CREATE TABLE sales.orders (id int8 PRIMARY KEY, name text);",
             target_settings: "",
-            settings: "",
+            settings: "write_strategy = \"replace\"
+",
             runs: &[FilesTargetRun {
                 select: &["public.orders"],
                 expected_error: "both come from tables named alike in schemas public and sales, so add {schema} to the path",
@@ -492,7 +495,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             runs: &[
                 OK,
                 FilesTargetRun {
-                    settings: Some("write_strategy = \"merge\"\ncursor_column = \"placed_at\"\nnew_tables = \"skip\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n"),
+                    settings: Some("write_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"placed_at\"\nnew_tables = \"skip\"\ndestination_path = \"PREFIX/{source}/{table}/day={cursor:date}/\"\n"),
                     expected_error: "merge needs a table format",
                     ..OK
                 },
@@ -554,7 +557,8 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
                 store: local_store,
                 setup: ORDERS,
                 target_settings: "format = \"csv\"\ncompression = \"gzip\"",
-                settings: "",
+                settings: "write_strategy = \"replace\"
+",
                 runs: CSV_REPLACE_RUNS,
                 check_column: "name",
                 expected_files: "- run2 2:b2",
@@ -599,7 +603,8 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
                 store: local_store,
                 setup: ORDERS,
                 target_settings: "format = \"csv\"\ncompression = \"gzip\"\nsingle_file = true",
-                settings: "",
+                settings: "write_strategy = \"replace\"
+",
                 runs: CSV_REPLACE_RUNS,
                 check_column: "name",
                 expected_files: "- run2 2:b2",

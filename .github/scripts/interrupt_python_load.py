@@ -44,7 +44,7 @@ import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
 
-shop = sl.source("shop")
+shop = sl.source("shop", write_strategy="replace")
 
 
 @shop.table(description="Rows that block on the first load.")

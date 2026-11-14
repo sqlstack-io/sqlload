@@ -23,7 +23,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             description: "a load that fails mid-read leaves the table as it was, and a rerun recovers",
             setup: "CREATE TABLE public.prices (id int8 PRIMARY KEY, amount numeric(10,2), updated_at timestamptz NOT NULL);
                     INSERT INTO public.prices VALUES (1, 1.00, '2026-11-01 00:00:00+00'), (2, 2.00, '2026-11-01 00:00:00+00');",
-            settings: "[sources.app.tables.\"public.prices\"]\ncursor_column = \"updated_at\"\ncolumns = { amount = \"decimal(10,2)\" }\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.prices\"]\nwrite_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"updated_at\"\ncolumns = { amount = \"decimal(10,2)\" }\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -128,7 +128,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             description: "a column dropped by hand is added back, and one added by hand is left alone",
             setup: "CREATE TABLE public.stores (code text PRIMARY KEY, city text);
                     INSERT INTO public.stores VALUES ('L1', 'Leeds');",
-            settings: "[sources.app.tables.\"public.stores\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.stores\"]\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -143,7 +143,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "new_tables = skip: tables present at the first load are approved, and a later one loads only once include names it exactly",
             setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
-            settings: "include = [\"public.*\", \"public.approved\"]\nnew_tables = \"skip\"\n",
+            settings: "include = [\"public.*\", \"public.approved\"]\nwrite_strategy = \"replace\"\nnew_tables = \"skip\"\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -158,7 +158,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "new_tables = skip: selecting only a later table does not make it look present at the first load",
             setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
-            settings: "new_tables = \"skip\"\n",
+            settings: "write_strategy = \"replace\"\nnew_tables = \"skip\"\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -173,7 +173,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "new_tables = fail stops the plan and names a table that appears after the first load",
             setup: "CREATE TABLE public.present (id int8 PRIMARY KEY);",
-            settings: "new_tables = \"fail\"\n",
+            settings: "write_strategy = \"replace\"\nnew_tables = \"fail\"\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -189,7 +189,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a discovered table needs no description; one with a source comment carries it to the destination table",
             setup: "CREATE TABLE public.plain (id int8 PRIMARY KEY); CREATE TABLE public.noted (id int8 PRIMARY KEY); COMMENT ON TABLE public.noted IS 'Noted it''s here.';",
-            settings: "",
+            settings: "write_strategy = \"replace\"\n",
             runs: &[OK],
             check_query: "SELECT string_agg(table_name || '=' || coalesce(comment, 'null'), ',' ORDER BY table_name) FROM duckdb_tables() WHERE schema_name = 'raw'",
             expected_result: "app__noted=Noted it's here.,app__plain=null",
@@ -197,7 +197,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a table entry without a description fails the plan with where to add one",
             setup: "CREATE TABLE public.listed (id int8 PRIMARY KEY); COMMENT ON TABLE public.listed IS 'Only the source says so.';",
-            settings: "[sources.app.tables.\"public.listed\"]\ndescription = \"\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.listed\"]\ndescription = \"\"\n",
             runs: &[ScenarioRun {
                 expected_error: "app__listed\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.listed\"]",
                 ..OK
@@ -208,7 +208,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a table named in include without a description fails the plan",
             setup: "CREATE TABLE public.named (id int8 PRIMARY KEY);",
-            settings: "include = [\"public.named\"]\n",
+            settings: "include = [\"public.named\"]\nwrite_strategy = \"replace\"\n",
             runs: &[ScenarioRun {
                 expected_error: "app__named\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.named\"]",
                 ..OK
@@ -220,7 +220,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             description: "--reload rebuilds a table whose source type changed incompatibly",
             setup: "CREATE TABLE public.codes (id int8 PRIMARY KEY, code int4);
                     INSERT INTO public.codes VALUES (1, 10);",
-            settings: "[sources.app.tables.\"public.codes\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.codes\"]\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -284,7 +284,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a mask naming no column stops the plan instead of loading the column in clear",
             setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, \"Email\" text);",
-            settings: "[sources.app.tables.\"public.users\"]\nmask = { email = \"hash\" }\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.users\"]\nmask = { email = \"hash\" }\n",
             runs: &[ScenarioRun {
                 expected_error: "mask \"email\" is not a column of the source table (names are case-sensitive); did you mean \"Email\"?",
                 ..OK
@@ -295,7 +295,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "two tables dlt's naming loads into one table stop the plan, naming both",
             setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
-            settings: "naming = \"dlt\"\n",
+            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n",
             runs: &[ScenarioRun {
                 expected_error: "public.order-items and public.order_items: both load as table app__order_items under naming = \"dlt\"",
                 ..OK
@@ -306,7 +306,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a dlt-named table that loads into the table another one loads into under SQLLoad's naming stops the plan",
             setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
-            settings: "[sources.app.tables.\"public.order-items\"]\nnaming = \"dlt\"\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.order-items\"]\nnaming = \"dlt\"\n",
             runs: &[ScenarioRun {
                 expected_error: "public.order-items and public.order_items: both load as table app__order_items under naming = \"dlt\"",
                 ..OK
@@ -317,7 +317,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
         ScenarioTestCase {
             description: "a masked cursor column is rejected",
             setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, code text);",
-            settings: "[sources.app.tables.\"public.users\"]\ncursor_column = \"code\"\nmask = { code = \"hash\" }\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.users\"]\nwrite_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"code\"\nmask = { code = \"hash\" }\n",
             runs: &[ScenarioRun {
                 expected_error: "a masked column cannot be the cursor_column",
                 ..OK
@@ -329,7 +329,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             description: "a write that fails inside the transaction keeps the old rows and drops the staging table",
             setup: "CREATE TABLE public.people (id int8 PRIMARY KEY, name text);
                     INSERT INTO public.people VALUES (1, 'Ann'), (2, 'Bob');",
-            settings: "[sources.app.tables.\"public.people\"]\n",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.people\"]\n",
             runs: &[
                 OK,
                 ScenarioRun {
@@ -361,6 +361,50 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             ],
             check_query: "SELECT string_agg(seq || note, ',' ORDER BY seq) FROM raw.app__ticks",
             expected_result: "1a,2b",
+        },
+        ScenarioTestCase {
+            description: "a table that neither it nor its source gives a write_strategy is refused, though it has a cursor and a primary key, naming the lines to add",
+            setup: "CREATE TABLE public.keyed (id int8 PRIMARY KEY, at timestamptz NOT NULL);",
+            settings: "[sources.app.tables.\"public.keyed\"]\ncursor_column = \"at\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "public.keyed (kind = \"postgres\"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "merge without a unique_key is refused, though the table has a primary key: SQLLoad no longer takes it unasked",
+            setup: "CREATE TABLE public.keyed (id int8 PRIMARY KEY, note text);",
+            settings: "write_strategy = \"merge\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "write_strategy = \"merge\" needs a unique_key: the key columns, such as unique_key = [\"id\"], or unique_key = \"{primary_key}\"",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a source's merge on {primary_key} covers a keyed table include matches, and a table entry that replaces overrides it, though that table has no primary key",
+            setup: "CREATE TABLE public.plain (id int8, note text);
+                    CREATE TABLE public.keyed (id int8 PRIMARY KEY, note text, at timestamptz NOT NULL);
+                    INSERT INTO public.plain VALUES (1, 'a');
+                    INSERT INTO public.keyed VALUES (1, 'a', '2026-11-01 00:00:00+00'), (2, 'a', '2026-11-01 00:00:00+00');",
+            settings: "write_strategy = \"merge\"\nunique_key = \"{primary_key}\"\n[sources.app.tables.\"public.keyed\"]\ncursor_column = \"at\"\n[sources.app.tables.\"public.plain\"]\nwrite_strategy = \"replace\"\n",
+            runs: &[
+                ScenarioRun {
+                    expected_plan: "merge (unique_key: id ← {primary_key})",
+                    ..OK
+                },
+                ScenarioRun {
+                    source_change: "UPDATE public.plain SET note = 'b';
+                                    UPDATE public.keyed SET note = 'b', at = '2026-11-02 00:00:00+00' WHERE id = 1;",
+                    expected_plan: "replace",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT (SELECT string_agg(id || note, ',' ORDER BY id) FROM raw.app__plain) || '|' || (SELECT string_agg(id || note, ',' ORDER BY id) FROM raw.app__keyed)",
+            expected_result: "1b|1b,2a",
         },
     ];
     run_async(async {

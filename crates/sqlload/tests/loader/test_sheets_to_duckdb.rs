@@ -93,7 +93,7 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
         let test_cases = [
             SheetsRefusalTestCase {
                 description: "two ranges into one table_name without {table}",
-                source: "[sources.many]\nkind = \"google_sheets\"\nconnection = \"sheets\"\nspreadsheet_id = \"fake-sheet\"\ntable_name = \"fixed\"\nranges = { a = \"Report\", b = \"Locations\" }\n",
+                source: "[sources.many]\nkind = \"google_sheets\"\nwrite_strategy = \"replace\"\nconnection = \"sheets\"\nspreadsheet_id = \"fake-sheet\"\ntable_name = \"fixed\"\nranges = { a = \"Report\", b = \"Locations\" }\n",
                 expected_output: "table_name \"fixed\" must contain {table}",
             },
             SheetsRefusalTestCase {
@@ -103,12 +103,12 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
             },
             SheetsRefusalTestCase {
                 description: "a connection with both a service-account key and an OAuth client",
-                source: "[connections.mixed]\nkind = \"google_sheets\"\nservice_account_json = '{}'\nclient_id = \"c\"\nclient_secret = \"s\"\n[sources.mixed]\nkind = \"google_sheets\"\ndescription = \"Mixed.\"\nconnection = \"mixed\"\nspreadsheet_id = \"fake-sheet\"\n",
+                source: "[connections.mixed]\nkind = \"google_sheets\"\nservice_account_json = '{}'\nclient_id = \"c\"\nclient_secret = \"s\"\n[sources.mixed]\nkind = \"google_sheets\"\nwrite_strategy = \"replace\"\ndescription = \"Mixed.\"\nconnection = \"mixed\"\nspreadsheet_id = \"fake-sheet\"\n",
                 expected_output: "connection \"mixed\" sets more than one of service_account_json, service_account_json_base64, service_account_file and client_id; keep one",
             },
             SheetsRefusalTestCase {
                 description: "an OAuth client without its secret",
-                source: "[connections.half]\nkind = \"google_sheets\"\nclient_id = \"c\"\n[sources.half]\nkind = \"google_sheets\"\ndescription = \"Half.\"\nconnection = \"half\"\nspreadsheet_id = \"fake-sheet\"\n",
+                source: "[connections.half]\nkind = \"google_sheets\"\nclient_id = \"c\"\n[sources.half]\nkind = \"google_sheets\"\nwrite_strategy = \"replace\"\ndescription = \"Half.\"\nconnection = \"half\"\nspreadsheet_id = \"fake-sheet\"\n",
                 expected_output: "connection \"half\" sets client_id without client_secret",
             },
         ];

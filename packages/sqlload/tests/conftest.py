@@ -20,6 +20,7 @@ connection = "wh"
 loader_schema = "RAW"
 
 [sources.app]
+write_strategy = "replace"
 kind = "postgres"
 connection = "app_pg"
 destination = "dev"

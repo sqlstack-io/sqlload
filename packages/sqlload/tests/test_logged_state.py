@@ -44,7 +44,7 @@ from pathlib import Path
 import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
-api = sl.source("api")
+api = sl.source("api", write_strategy="replace")
 
 
 def remember(ctx, **seen):
@@ -120,7 +120,7 @@ HERE = Path(__file__).resolve().parent.parent
 
 
 def pages_of(name):
-    source = sl.source(name, destination=name, table_name="pages")
+    source = sl.source(name, write_strategy='replace', destination=name, table_name="pages")
 
     @source.table(description="Test table.", name=f"{name}_pages", write_strategy="append", state="logged")
     def pages(ctx):
@@ -149,7 +149,7 @@ from pathlib import Path
 import sqlload as sl
 
 HERE = Path(__file__).resolve().parent.parent
-shop = sl.source("shop")
+shop = sl.source("shop", write_strategy="replace")
 
 
 @shop.table(description="Test table.", write_strategy="append", state="logged", unnest=["items"])
@@ -397,17 +397,17 @@ def test_given_a_files_target_when_resetting_then_the_reset_is_an_object_and_the
 @pytest.mark.parametrize(
 	("module", "message"),
 	[
-		("import sqlload as sl\n@sl.table(description='Test table.', state='kept')\ndef t(ctx):\n    yield {}\n", "unknown variant `kept`"),
+		("import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.', state='kept')\ndef t(ctx):\n    yield {}\n", "unknown variant `kept`"),
 		(
-			"import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    ctx.state = 1\n    yield {'n': 1}\n",
+			"import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.')\ndef t(ctx):\n    ctx.state = 1\n    yield {'n': 1}\n",
 			"ctx.state needs state='logged' on table t",
 		),
-		("import sqlload as sl\n@sl.table(description='Test table.', state='logged')\ndef t(ctx):\n    ctx.state = object()\n    yield {'n': 1}\n", "ctx.state of table t is not JSON"),
+		("import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.', state='logged')\ndef t(ctx):\n    ctx.state = object()\n    yield {'n': 1}\n", "ctx.state of table t is not JSON"),
 		(
-			"import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n    yield sl.checkpoint(1)\n",
+			"import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n    yield sl.checkpoint(1)\n",
 			"sl.checkpoint needs state='logged' on the table",
 		),
-		("import sqlload as sl\n@sl.table(description='Test table.', state='logged')\ndef t(ctx):\n    yield sl.checkpoint(object())\n", "sl.checkpoint state is not JSON"),
+		("import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.', state='logged')\ndef t(ctx):\n    yield sl.checkpoint(object())\n", "sl.checkpoint state is not JSON"),
 	],
 	ids=["bad value", "state without logged", "state not json", "checkpoint without logged", "checkpoint not json"],
 )
@@ -421,7 +421,7 @@ def test_given_bad_logged_state_use_when_loading_then_it_fails_clearly(tmp_path:
 
 def test_given_no_logged_tables_when_showing_state_then_it_says_so(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT)
-	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table(description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n")
+	(project / "sources" / "api.py").write_text("import sqlload as sl\n@sl.table(write_strategy='replace', description='Test table.')\ndef t(ctx):\n    yield {'n': 1}\n")
 	assert 'no selected table has state = "logged"' in ok(project, "logged-state", "show")
 
 

@@ -52,8 +52,8 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::constants::{
-    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS, RELOAD_FIX,
-    SOURCE_BATCH_ROWS,
+    KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READ_MIN_BYTES, PARALLEL_READERS,
+    PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX, SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -555,7 +555,8 @@ async fn sheets_tables(
         let settings = source.tables.get(&name).map(|table| &table.settings);
         let key = settings
             .and_then(|settings| settings.unique_key.as_ref())
-            .or(source.defaults.unique_key.as_ref());
+            .or(source.defaults.unique_key.as_ref())
+            .filter(|key| !key.contains(&PRIMARY_KEY_PLACEHOLDER.to_owned()));
         let merge = settings
             .and_then(|settings| settings.write_strategy)
             .or(source.defaults.write_strategy)

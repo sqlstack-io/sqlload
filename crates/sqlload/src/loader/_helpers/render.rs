@@ -16,7 +16,8 @@ use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER,
+    RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -314,7 +315,14 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 }) => format!("; repeated keys: lowest {column} wins"),
                 Some(_) => String::new(),
             };
-            format!("merge (unique_key: {}{repeats})", unique_key.join(", "))
+            let origin = match spec.key_from_primary_key {
+                true => format!(" ← {PRIMARY_KEY_PLACEHOLDER}"),
+                false => String::new(),
+            };
+            format!(
+                "merge (unique_key: {}{origin}{repeats})",
+                unique_key.join(", ")
+            )
         }
         WriteMode::DeleteInsert { cursor_column, .. } => {
             format!("delete_insert (cursor: {cursor_column})")

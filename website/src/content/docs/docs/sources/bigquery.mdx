@@ -20,6 +20,7 @@ connection = "bq"
 description = "Tables of the marts datasets."
 include = ["marts.*"]
 exclude = ["marts.tmp_*"]
+write_strategy = "replace"
 
 [sources.marts.tables."marts.events"]
 description = "Events, one row per event."
@@ -64,9 +65,9 @@ case-sensitive, so the patterns are too. SQLLoad lists the datasets and tables f
 which bills nothing. A `[sources.marts.tables."dataset.table"]` entry sets options for one table; on
 its own, it doesn't add the table.
 
-A source needs at least one `include` pattern or one query table. A table's primary key, if it
-declares one, becomes the table's default `unique_key`, and its description becomes the table's
-description.
+A source needs at least one `include` pattern or one query table. A `merge` table merges on the
+primary key the table declares with `unique_key = "{primary_key}"`, or on the columns you name. A
+table's description becomes the table's description.
 
 ## How tables are read
 

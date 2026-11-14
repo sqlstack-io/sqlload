@@ -136,7 +136,7 @@ def test_given_a_loaded_files_table_when_its_declaration_differs_then_contract_d
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
 	)
 	assert "relation_missing" in run("contract", "diff", "-c", str(config)).stdout
 	assert run("load", "-c", str(config)).returncode == 0
@@ -160,7 +160,7 @@ def test_given_new_files_of_other_columns_when_diffing_with_source_then_each_und
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
 		'\n[sources.orders.tables.orders]\ncolumns = { code = "text" }\n'
 	)
 	assert run("load", "-c", str(config)).returncode == 0
@@ -190,7 +190,7 @@ def test_given_a_loaded_table_when_generating_its_contract_then_write_declares_t
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
 	)
 	assert run("load", "-c", str(config)).returncode == 0
 	config.write_text(config.read_text() + 'contract = "enforced"\n')
@@ -235,7 +235,7 @@ def test_given_a_table_loaded_into_another_target_when_diffing_from_it_then_its_
 		'[targets.prod]\nconnection = "prod"\nloader_schema = "STAGE"\n\n'
 		'[targets.lake]\nconnection = "files"\n\n'
 	)
-	source = '[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\ndestination = "{}"\n'
+	source = '[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\ndestination = "{}"\n'
 	config.write_text(targets + source.format("prod"))
 	assert run("load", "-c", str(config)).returncode == 0
 	config.write_text(targets + source.format("dev"))
@@ -265,7 +265,7 @@ def test_given_an_append_files_table_excluding_a_column_append_needs_when_planni
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Orders."\n'
 		f'\n[sources.orders.tables.orders]\nwrite_strategy = "append"\nexclude_columns = ["{column}"]\n'
 	)
 	planned = run("plan", "-c", str(config))
@@ -285,7 +285,7 @@ def test_given_parquet_in_a_folder_when_loading_into_duckdb_then_duckdb_reads_th
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\n'
 		'description = "Orders."\npartition_columns = { day = "date" }\n'
 	)
 	assert f"DuckDB reads directly from {tmp_path}/data/" in run("plan", "-c", str(config)).stdout
@@ -312,7 +312,7 @@ def test_given_a_column_pinned_to_another_type_when_loading_parquet_into_duckdb_
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\n'
 		'description = "Orders."\n\n[sources.orders.tables.orders]\ncolumns = { score = "text" }\n'
 	)
 	planned = run("plan", "-c", str(config)).stdout
@@ -340,7 +340,7 @@ def test_given_a_native_type_for_a_column_from_paths_or_configuration_when_plann
 	config = tmp_path / "sqlload.toml"
 	config.write_text(
 		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
-		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nkind = "files"\nconnection = "files"\npath = "data/"\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.orders]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "files"\npath = "data/"\n'
 		f'description = "Orders."\n{setting}\n'
 	)
 	planned = run("plan", "-c", str(config))

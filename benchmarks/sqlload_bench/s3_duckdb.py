@@ -65,7 +65,7 @@ def sqlload_project(work: Path, bucket: str, region: str, key: str) -> Path:
 		f'[connections.lake]\nkind = "s3"\nbucket = "{bucket}"\nregion = "{region}"\n\n'
 		f'[connections.wh]\nkind = "duckdb"\ndatabase = "{work / "wh.duckdb"}"\n\n'
 		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n'
-		f'[sources.narrow]\nkind = "files"\nconnection = "lake"\npath = "{key}"\nformat = "parquet"\ndescription = "Benchmark rows."\n'
+		f'[sources.narrow]\nkind = "files"\nconnection = "lake"\npath = "{key}"\nformat = "parquet"\ndescription = "Benchmark rows."\nwrite_strategy = "replace"\n'
 	)
 	return config
 

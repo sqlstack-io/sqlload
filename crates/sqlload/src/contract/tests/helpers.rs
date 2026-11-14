@@ -70,7 +70,7 @@ fn orders(_: &crate::project::models::SourceConfig) -> Vec<SourceTable> {
 /// Postgres table `public.orders` of source `app`, with sqlload.toml `settings` under its entry.
 pub(crate) fn postgres_spec(settings: &str, warehouse: Warehouse) -> Result<TableSpec, String> {
     let text = format!(
-        "{TARGET}[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.orders\"]\n[sources.app.tables.\"public.orders\"]\ndescription = \"Orders.\"\n{settings}"
+        "{TARGET}[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.orders\"]\nwrite_strategy = \"replace\"\n[sources.app.tables.\"public.orders\"]\ndescription = \"Orders.\"\n{settings}"
     );
     first_spec((&text, "[]"), "app", orders, warehouse)
 }
@@ -78,7 +78,7 @@ pub(crate) fn postgres_spec(settings: &str, warehouse: Warehouse) -> Result<Tabl
 /// Python table `t` of source `s`, declared in `src/s.py` with JSON `settings`.
 pub(crate) fn python_spec(settings: &str, warehouse: Warehouse) -> Result<TableSpec, String> {
     let sources = format!(
-        r#"[{{"name": "s", "module": "src/s.py", "settings": {{"tables": {{"t": {settings}}}}}}}]"#
+        r#"[{{"name": "s", "module": "src/s.py", "settings": {{"write_strategy": "replace", "tables": {{"t": {settings}}}}}}}]"#
     );
     let mut spec = first_spec((TARGET, &sources), "s", python_tables, warehouse)?;
     spec.python = Some(python_table("src/s.py", &spec.source_table));

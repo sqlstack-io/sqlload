@@ -27,6 +27,8 @@ INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');
 
 const TABLES: &str = r#"
 [sources.app.tables."public.accounts"]
+write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 lookback = "1h"
 
@@ -35,6 +37,7 @@ write_strategy = "delete_insert"
 cursor_column = "at"
 
 [sources.app.tables."public.stores"]
+write_strategy = "replace"
 mask = { city = "hash" }
 "#;
 
@@ -48,6 +51,7 @@ INSERT INTO public.orders VALUES
 const PINNED_TABLES: &str = r#"include = ["public.orders"]
 [sources.app.tables."public.orders"]
 write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 "#;
 
@@ -69,7 +73,7 @@ Objects (1)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: id)
+└── app__orders                                     merge (unique_key: id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
@@ -82,7 +86,7 @@ const PINNED_DESCRIBE: &str = "id BIGINT YES|label VARCHAR YES|amount DECIMAL(10
 const PINNED_SECOND_PLAN: &str = "Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: id)
+└── app__orders                                     merge (unique_key: id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
@@ -573,49 +577,49 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
         let test_cases = [
             ConstantLoadTestCase {
                 description: "a typed constant loads as its type, in every row",
-                settings: "include = [\"public.item*\"]\nconstant_columns = { shard = { value = \"7\", type = \"int\" }, tenant_id = \"a\" }\n",
+                settings: "include = [\"public.item*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { shard = { value = \"7\", type = \"int\" }, tenant_id = \"a\" }\n",
                 expected_error: "",
                 check_query: "SELECT (SELECT string_agg(column_name || ' ' || column_type, ',') FROM (DESCRIBE raw.app__items)) || '|' || (SELECT string_agg(id || ':' || shard || ':' || tenant_id, ',' ORDER BY id) FROM raw.app__items)",
                 expected_result: "id BIGINT,label VARCHAR,shard BIGINT,tenant_id VARCHAR,_sqlload_load_id VARCHAR,_sqlload_loaded_at TIMESTAMP WITH TIME ZONE|1:7:a,2:7:a",
             },
             ConstantLoadTestCase {
                 description: "a table's own constant_columns replace its source's",
-                settings: "include = [\"public.item*\"]\nconstant_columns = { tenant_id = \"source\" }\n[sources.app.tables.\"public.items\"]\nconstant_columns = { region = \"eu\" }\n",
+                settings: "include = [\"public.item*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { tenant_id = \"source\" }\n[sources.app.tables.\"public.items\"]\nconstant_columns = { region = \"eu\" }\n",
                 expected_error: "",
                 check_query: "SELECT string_agg(column_name, ',') FROM (DESCRIBE raw.app__items)",
                 expected_result: "id,label,region,_sqlload_load_id,_sqlload_loaded_at",
             },
             ConstantLoadTestCase {
                 description: "a source column named like a constant, in another case, fails the plan, naming it",
-                settings: "include = [\"public.clash*\"]\nconstant_columns = { tenant_id = \"a\" }\n",
+                settings: "include = [\"public.clash*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { tenant_id = \"a\" }\n",
                 expected_error: "constant column tenant_id: the source already has a column Tenant_ID, and a constant never replaces it",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__clashing'",
                 expected_result: NO_SUCH_TABLE,
             },
             ConstantLoadTestCase {
                 description: "excluding the source's column of the constant's name loads the constant instead",
-                settings: "include = [\"public.clash*\"]\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.clashing\"]\nexclude_columns = [\"Tenant_ID\"]\n",
+                settings: "include = [\"public.clash*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.clashing\"]\nexclude_columns = [\"Tenant_ID\"]\n",
                 expected_error: "",
                 check_query: "SELECT string_agg(id || ':' || tenant_id, ',') FROM raw.app__clashing",
                 expected_result: "1:a",
             },
             ConstantLoadTestCase {
                 description: "a constant cannot be a database table's cursor",
-                settings: "include = [\"public.item*\"]\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\ncursor_column = \"tenant_id\"\n",
+                settings: "include = [\"public.item*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { tenant_id = \"a\" }\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"tenant_id\"\n",
                 expected_error: "constant column tenant_id cannot be the cursor_column",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__items'",
                 expected_result: NO_SUCH_TABLE,
             },
             ConstantLoadTestCase {
                 description: "tables with constant columns sharing a destination cannot replace it, which would remove the other's rows",
-                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
+                settings: "include = [\"public.item*\"]\nwrite_strategy = \"replace\"\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\nwrite_strategy = \"replace\"\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
                 expected_error: "items is also loaded by other.public.other_items, and constant_columns tell their rows apart; app.public.items uses write_strategy = \"replace\"",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
                 expected_result: NO_SUCH_TABLE,
             },
             ConstantLoadTestCase {
                 description: "tables with constant columns sharing a destination cannot merge on a key without a constant",
-                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\nwrite_strategy = \"merge\"\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\nwrite_strategy = \"merge\"\nunique_key = [\"tenant_id\", \"id\"]\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
+                settings: "include = [\"public.item*\"]\ntable_name = \"{table}\"\nconstant_columns = { tenant_id = \"a\" }\nwrite_strategy = \"merge\"\nunique_key = \"{primary_key}\"\n[sources.other]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.other_item*\"]\nconstant_columns = { tenant_id = \"b\" }\nwrite_strategy = \"merge\"\nunique_key = [\"tenant_id\", \"id\"]\n[sources.other.tables.\"public.other_items\"]\nname = \"items\"\n",
                 expected_error: "its unique_key (id) has no constant column, so its merge could overwrite their rows",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'items'",
                 expected_result: NO_SUCH_TABLE,

@@ -19,6 +19,8 @@ Most tables mix both: pin a few `columns`, and let the rest follow the source.
 ```toml
 [sources.app.tables."public.orders"]
 description = "Orders, one row per order."
+write_strategy = "merge"
+unique_key = "{primary_key}"
 cursor_column = "updated_at"
 columns = { total = "decimal(18,2)" }
 ```

@@ -104,6 +104,7 @@ path = "drop/"
 format = "xml"
 xml = { record_path = "customers/customer", lists = ["phone"] }
 description = "Customers from the nightly XML export."
+write_strategy = "replace"
 ```
 
 **ZIP archives (`compression = "zip"`).** Each `.zip` file under `path` is opened, and each member
@@ -121,6 +122,7 @@ format = "csv"
 compression = "zip"
 members = "*.csv"
 description = "Orders from the nightly ZIP export."
+write_strategy = "replace"
 
 [sources.lines]
 kind = "files"
@@ -130,6 +132,7 @@ format = "xlsx"
 compression = "zip"
 xlsx = { sheet = "Lines" }
 description = "Order lines from the workbook in the nightly ZIP export."
+write_strategy = "replace"
 ```
 
 A member's version is its archive's, so with `append` an archive rewritten in place fails the table,
@@ -146,8 +149,9 @@ or an archive naming two members alike, fails.
 | `replace` | Every file, swapped in as a new table. |
 | `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. |
 
-From 0.44.0, a files source with a `cursor_column` and no `unique_key` needs `write_strategy`, set
-to `delete_insert` or `append`: `plan` refuses it otherwise, where it took `delete_insert` before.
+A files source needs a `write_strategy`, from the source or its table entry: `plan` refuses it
+otherwise. Before 0.46.0 it took `replace` without a `cursor_column`, and before 0.44.0
+`delete_insert` with one. Files report no primary key, so a `merge` names its `unique_key` columns.
 
 ```console
 $ sqlload load
@@ -338,6 +342,7 @@ format = "ndjson"
 shape = "record"
 record_column = "payload"
 partition_columns = { dt = "date" }
+write_strategy = "append"
 ```
 
 - **JSON and NDJSON**: each object as JSON. A key given twice keeps its last value. A record that

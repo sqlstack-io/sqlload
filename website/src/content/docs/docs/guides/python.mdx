@@ -207,7 +207,7 @@ client_secret = "${ENV:ERP_CLIENT_SECRET}"
 ```
 
 ```python
-erp = sl.source("erp", connection="erp")
+erp = sl.source("erp", connection="erp", write_strategy="replace")
 api = sl.http(
     erp,
     auth=sl.oauth2_client_credentials(

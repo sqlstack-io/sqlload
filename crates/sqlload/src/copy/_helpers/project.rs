@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use toml::{Table, Value};
 
+use crate::loader::constants::PRIMARY_KEY_PLACEHOLDER;
+
 use crate::copy::_helpers::endpoints::endpoint;
 use crate::copy::constants::COPY_PREFIX;
 use crate::copy::models::{CopyProject, CopyRequest, Endpoint, Role};
@@ -171,7 +173,7 @@ fn source_settings(
         Value::String(format!("Copied from {}.", source.described)),
     );
     settings.extend(schema.map(|schema| ("schema".to_owned(), Value::String(schema))));
-    settings.extend(table_settings(request));
+    settings.extend(table_settings(request, !FILE_KINDS.contains(&kind(source))));
     match kind(source) {
         "postgres" => {
             settings.insert("kind".to_owned(), text_value("postgres"));
@@ -211,23 +213,35 @@ fn source_settings(
     Ok(settings)
 }
 
-/// The write settings the command line gives.
-fn table_settings(request: &CopyRequest) -> Vec<(String, Value)> {
+/// The write settings the command line gives, with copy's own defaults, as a project needs both set: `replace` without a cursor, `merge` with one when there is a key (`--unique-key`, or a database table's primary key as `"{primary_key}"`); a files source with a cursor and no key gets none, so it must choose.
+fn table_settings(request: &CopyRequest, reports_keys: bool) -> Vec<(String, Value)> {
     let mut settings: Vec<(String, Value)> = Vec::new();
-    settings.extend(
+    let keyed = !request.unique_key.is_empty() || reports_keys;
+    let strategy =
         request
             .write_strategy
             .clone()
-            .map(|strategy| ("write_strategy".to_owned(), Value::String(strategy))),
-    );
-    settings.extend((!request.unique_key.is_empty()).then(|| {
-        let keys: Vec<Value> = request
+            .or_else(|| match (&request.cursor_column, keyed) {
+                (None, _) => Some("replace".to_owned()),
+                (Some(_), true) => Some("merge".to_owned()),
+                (Some(_), false) => None,
+            });
+    let key: Vec<Value> = match (request.unique_key.is_empty(), reports_keys) {
+        (false, _) => request
             .unique_key
             .iter()
             .map(|key| text_value(key))
-            .collect();
-        ("unique_key".to_owned(), Value::Array(keys))
-    }));
+            .collect(),
+        (true, true) => vec![text_value(PRIMARY_KEY_PLACEHOLDER)],
+        (true, false) => Vec::new(),
+    };
+    let merges = strategy.as_deref() == Some("merge");
+    settings
+        .extend(strategy.map(|strategy| ("write_strategy".to_owned(), Value::String(strategy))));
+    settings.extend(
+        ((merges || !request.unique_key.is_empty()) && !key.is_empty())
+            .then(|| ("unique_key".to_owned(), Value::Array(key))),
+    );
     settings.extend(
         request
             .cursor_column

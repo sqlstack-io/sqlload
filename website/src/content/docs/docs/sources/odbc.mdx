@@ -24,6 +24,7 @@ description = "Tables of the ERP database."
 include = ["sales.*"]
 exclude = ["sales.tmp_*"]
 max_text_size = 8000
+write_strategy = "replace"
 
 [sources.erp.tables."sales.items"]
 description = "Items, one row per item."
@@ -100,7 +101,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 | psqlODBC (`PostgreSQL Unicode`) | Yes, against Postgres 17 in containers on Linux and on Windows. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
 | Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
 | MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. From 0.43.0, each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel with libstdc++ preloaded; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
-| MariaDB Connector/ODBC 3.1 | Against MySQL 8.4 by hand, not in the driver tests: it reports no primary keys there, so tables with a cursor need `unique_key`; see [MariaDB Connector/ODBC 3.1](#mariadb-connectorodbc-31). |
+| MariaDB Connector/ODBC 3.1 | Against MySQL 8.4 by hand, not in the driver tests: it reports no primary keys there, so name each `merge` table's `unique_key` columns instead of `"{primary_key}"`; see [MariaDB Connector/ODBC 3.1](#mariadb-connectorodbc-31). |
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values and binding timestamp bounds), not against a live server. |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
@@ -164,25 +165,26 @@ seconds were dropped before.
 MariaDB Connector/ODBC 3.1, the `odbc-mariadb` package of Debian 13 (3.1.15) among others, reports
 no primary key for MySQL 8.4 tables: its `SQLPrimaryKeys` looks for `COLUMN_KEY = 'pri'` in
 `INFORMATION_SCHEMA.COLUMNS`, and MySQL 8.4 compares that column case-sensitively with its value
-`PRI` (checked with 3.1.15 against MySQL 8.4.13). Every table then loads as if it had no key: a table
-with a `cursor_column` took `delete_insert` before 0.44.0, so a row updated after it was loaded was
-loaded again beside its old version.
+`PRI` (checked with 3.1.15 against MySQL 8.4.13). Before 0.44.0 a table with a `cursor_column`
+then took `delete_insert`, so a row updated after it was loaded was loaded again beside its old
+version.
 
-From 0.44.0, `plan` refuses such a table instead, and when the database's `INFORMATION_SCHEMA`
-lists a key the driver didn't report, the error names it:
+From 0.46.0 SQLLoad never takes a key the driver reports unless the table asks for it with
+`unique_key = "{primary_key}"`. A table that does, through this driver, fails `plan`, and when the
+database's `INFORMATION_SCHEMA` lists a key the driver didn't report, the error names it:
 
 ```console
 $ sqlload plan
 …
 Errors (1)
 └── items
-    ├── reason  items (kind = "odbc"): no primary key found and no unique_key set for a table with a cursor_column. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)
-    └── fix     set unique_key (unique_key = ["id"]) to merge on it, or choose write_strategy = "delete_insert" or "append" if that is what you want; either can load a row updated since an earlier load again, beside its old version
+    ├── reason  items (kind = "odbc"): unique_key = "{primary_key}", but the source reports no primary key for the table. The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists PRIMARY KEY (id), so the driver's key lookup is wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)
+    └── fix     name the key columns, such as unique_key = ["id"]
 
 ✗ Plan failed with errors
 ```
 
-Set `unique_key` on each such table, or use MySQL Connector/ODBC, which reports MySQL's keys.
+Name the key columns on each such table, or use MySQL Connector/ODBC, which reports MySQL's keys.
 
 ## Choosing tables
 
@@ -191,13 +193,14 @@ any text). SQLLoad lists the tables and views the driver reports. For a database
 the patterns match the table name alone. A `[sources.erp.tables."schema.table"]` entry sets options
 for one table; on its own, it doesn't add the table.
 
-A source needs at least one `include` pattern or one query table. The primary key the driver
-reports (`SQLPrimaryKeys`) becomes the table's default `unique_key`. From 0.44.0, a table with a
-`cursor_column` and no key, a query table included, needs `unique_key` or a `write_strategy`; see
-[Write strategies](/docs/concepts/write-strategies/). When the driver reports no primary key for a
-table, SQLLoad also asks the database's `INFORMATION_SCHEMA` for the table's primary key and unique
-constraints, so that the error can name them; a database without `INFORMATION_SCHEMA` gets the
-error without them.
+A source needs at least one `include` pattern or one query table. Every table needs a
+`write_strategy`, from its entry or the source, and a `merge` table a `unique_key`: its columns, or
+`"{primary_key}"` for the primary key the driver reports (`SQLPrimaryKeys`); see
+[Write strategies](/docs/concepts/write-strategies/). A query table reports no key, so name its
+columns. When the driver reports no primary key for a table set to `"{primary_key}"`, SQLLoad
+also asks the database's `INFORMATION_SCHEMA` for the table's primary key and unique constraints,
+so that the error can name them; a database without `INFORMATION_SCHEMA` gets the error without
+them.
 
 ## Query tables
 

@@ -41,7 +41,6 @@ use crate::store_paths::models::Location;
 pub enum SettingOrigin {
     Table,
     Source,
-    Default,
 }
 
 impl std::fmt::Display for SettingOrigin {
@@ -49,7 +48,6 @@ impl std::fmt::Display for SettingOrigin {
         formatter.write_str(match self {
             Self::Table => "table",
             Self::Source => "source",
-            Self::Default => "default",
         })
     }
 }
@@ -82,6 +80,8 @@ pub struct TableSpec {
     pub strategy: WriteStrategy,
     pub strategy_origin: SettingOrigin,
     pub unique_key: Vec<String>,
+    /// Whether `unique_key` is the primary key the source reports, set as `"{primary_key}"`.
+    pub key_from_primary_key: bool,
     /// What a merge does with rows of one commit sharing `unique_key`.
     pub on_duplicate_keys: OnDuplicateKeys,
     /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.

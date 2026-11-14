@@ -39,7 +39,7 @@ def orders(ctx: sl.Context):
 |----------|---------|
 | `sl.source(name, *, description=None, **settings)` | A `Source`. `settings` are its `connection`, `destination`, `schema` and the defaults its tables share. |
 | `@source.table` or `@source.table(*, name=None, description=None, **settings)` | A `Table` attached to the source. |
-| `@sl.table` or `@sl.table(...)` | A standalone `Table`, with the target's defaults. |
+| `@sl.table` or `@sl.table(...)` | A standalone `Table`, loaded into the target's schema; it sets its own `write_strategy`. |
 | `@source.client` | Declares a client the source's tables share as `ctx.client`, built once per run. |
 
 A table's description is `description=`, or else the function's docstring; `plan` requires one.
@@ -49,7 +49,7 @@ Unknown settings raise `TypeError` when the module is imported.
 
 | Setting | On | Meaning |
 |---------|----|---------|
-| `write_strategy`, `unique_key`, `on_duplicate_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0. Python tables don't take `lookahead` or `lookback_from`. |
+| `write_strategy`, `unique_key`, `on_duplicate_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0. Python tables don't take `lookahead` or `lookback_from`. Every table needs a `write_strategy`, from its source or its own decorator, and a `merge` table names its `unique_key` columns: a Python source reports no primary key, so `"{primary_key}"` is refused. |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
 | `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | source or table | From 0.37.0. Columns with the same value in every row, such as `{"tenant_id": "acme"}` or `{"shard": {"value": "7", "type": "int"}}`; a table's replace its source's. A yielded field of the same name, ignoring case, fails the table before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
@@ -106,7 +106,7 @@ from decimal import Decimal
 
 import sqlload as sl
 
-store = sl.source("store")
+store = sl.source("store", write_strategy="replace")
 
 
 @store.table(

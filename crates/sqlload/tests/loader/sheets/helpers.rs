@@ -147,12 +147,14 @@ loader_schema = "raw"
 
 [sources.reference]
 kind = "google_sheets"
+write_strategy = "replace"
 description = "Reference tables kept in a spreadsheet."
 connection = "sheets"
 spreadsheet_id = "fake-sheet"
 
 [sources.report]
 kind = "google_sheets"
+write_strategy = "replace"
 description = "A report below its title rows."
 connection = "sheets"
 spreadsheet_id = "fake-sheet"
@@ -191,6 +193,7 @@ loader_schema = "raw"
 
 [sources.reference]
 kind = "google_sheets"
+write_strategy = "replace"
 description = "Reference tables kept in a spreadsheet."
 connection = "sheets"
 spreadsheet_id = "fake-sheet"
