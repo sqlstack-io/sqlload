@@ -11,13 +11,15 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::plan_text::{folded_warning, text_error, text_item, usual_details};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER,
-    RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
+    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -601,7 +603,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
 }
 
 /// How the load commits: by cursor window, in cursor order, by size, by files batch, or as one commit; with a hint to set `batch_size` for a large first load that would be one commit.
-fn batch_line(table: &TablePlan) -> String {
+pub(crate) fn batch_line(table: &TablePlan) -> String {
     let spec = &table.spec;
     let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
     let described = match (&table.commits, at_end) {
@@ -916,11 +918,37 @@ fn counted(count: usize, (one, many): (&str, &str)) -> String {
 
 /// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known; one `Errors` item per table or problem.
 pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
+    sections(plan, false)
+}
+
+/// The plan as `plan` prints it: as `plan_view`, with tables named as they land and sorted by that name, an up-to-date files table skipped, and each load's details sharpened by `text_item`.
+pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
+    sections(plan, true)
+}
+
+/// A files table with no new file to read, which `plan` skips as up to date: the reason it gives, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`.
+fn up_to_date(table: &TablePlan) -> Option<String> {
+    let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
+    let incremental = !matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    (incremental && read.files.is_empty()).then(|| {
+        format!(
+            "up to date: 0 new of {} files in {} ({})",
+            thousands(source.table.files.len() as u64),
+            source.location,
+            source.encoding
+        )
+    })
+}
+
+fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
     let ready: Vec<_> = plan
         .tables
         .iter()
         .filter(|table| table.schema.blocked.is_none())
         .collect();
+    let (loading, current): (Vec<&TablePlan>, Vec<&TablePlan>) = ready
+        .iter()
+        .partition(|table| !text || up_to_date(table).is_none());
     let mut stages: Vec<&PlannedStage> = Vec::new();
     for table in &ready {
         if let Some(stage) = &table.planned_stage
@@ -947,16 +975,29 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
     let errors: Vec<PlanItem> = plan
         .tables
         .iter()
-        .filter_map(blocked_item)
-        .chain(plan.problems.iter().map(|problem| problem_item(problem)))
+        .filter_map(|table| {
+            let item = blocked_item(table)?;
+            Some(match (text, &table.schema.blocked) {
+                (true, Some(blocked)) => {
+                    let name = display_name(table.spec.warehouse, &table.spec.destination);
+                    text_error(plan, &blocked.reasons.join(" "), PlanItem { name, ..item })
+                }
+                _ => item,
+            })
+        })
+        .chain(plan.problems.iter().map(|problem| match text {
+            true => text_error(plan, problem, problem_item(problem)),
+            false => problem_item(problem),
+        }))
         .collect();
     let clauses = [
         (creates, ("object to create", "objects to create")),
         (alters, ("to alter", "to alter")),
-        (ready.len(), ("to load", "to load")),
-        (plan.skipped.len(), ("skipped", "skipped")),
+        (loading.len(), ("to load", "to load")),
+        (plan.skipped.len() + current.len(), ("skipped", "skipped")),
     ];
-    let mut summary = vec![format!("{} selected", plan.tables.len())];
+    let selected = plan.tables.len() - current.len();
+    let mut summary = vec![format!("{selected} selected")];
     summary.extend(
         clauses
             .into_iter()
@@ -967,33 +1008,75 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
         ok: errors.is_empty(),
         retryable: !errors.is_empty() && plan.only_retryable_problems(),
         summary: summary.join(", "),
-        selected: plan.tables.len(),
+        selected,
         objects: stages
             .iter()
             .map(|stage| stage_item(stage))
             .chain(changed.iter().map(|table| object_item(table)))
             .collect(),
-        loads: ready.iter().map(|table| load_item(table)).collect(),
-        skipped: plan
-            .skipped
-            .iter()
-            .map(|skipped| PlanItem {
-                name: skipped.source_table.clone(),
-                action: String::new(),
-                details: vec![PlanDetail {
-                    label: "reason".to_owned(),
-                    text: skipped.reason.clone(),
-                }],
-            })
-            .collect(),
+        loads: match text {
+            false => loading.iter().map(|table| load_item(table)).collect(),
+            true => {
+                let items: Vec<PlanItem> = loading.iter().map(|table| load_item(table)).collect();
+                let usual = usual_details(&items);
+                let one = plan.tables.len() == 1;
+                sorted(
+                    loading
+                        .iter()
+                        .zip(items)
+                        .map(|(table, item)| text_item(table, item, one, &usual))
+                        .collect(),
+                )
+            }
+        },
+        skipped: match text {
+            false => plan
+                .skipped
+                .iter()
+                .map(|skipped| skipped_item(skipped.source_table.clone(), skipped.reason.clone()))
+                .collect(),
+            true => sorted(
+                plan.skipped
+                    .iter()
+                    .map(|skipped| {
+                        let reason = match skipped.reason.strip_suffix(DRAINED_REASON) {
+                            Some(drained) => {
+                                drained.replacen("no files to load in", "no new files in", 1)
+                            }
+                            None => skipped.reason.clone(),
+                        };
+                        skipped_item(skipped.destination.clone(), reason)
+                    })
+                    .chain(current.iter().filter_map(|table| {
+                        let name = display_name(table.spec.warehouse, &table.spec.destination);
+                        up_to_date(table).map(|reason| skipped_item(name, reason))
+                    }))
+                    .collect(),
+            ),
+        },
         errors,
         warnings: plan
             .warnings
             .iter()
+            .filter(|warning| !(text && folded_warning(plan, warning)))
             .map(|warning| error_item(warning, &[]))
             .chain(ready.iter().filter_map(|table| warning_item(table)))
             .collect(),
     }
+}
+
+fn skipped_item(name: String, reason: String) -> PlanItem {
+    PlanItem {
+        name,
+        action: String::new(),
+        details: vec![detail("reason", reason)],
+    }
+}
+
+/// `items` sorted by name, which groups them by schema.
+fn sorted(mut items: Vec<PlanItem>) -> Vec<PlanItem> {
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    items
 }
 
 /// The lines `plan` prints for `view`: `Plan ready`, each section with items, then whether the plan is complete.
