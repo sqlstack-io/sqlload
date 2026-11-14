@@ -59,11 +59,11 @@ class Api(BaseHTTPRequestHandler):
 
 	def changelog(self, path: str, body: dict[str, Any]) -> None:
 		"""Jira-shaped change histories of the issues `$.ids` names, one issue a page, paged by `$.next`: issue n has histories
-		n*10 and n*10+1, created at epoch milliseconds; the page envelope counts the request's ids. `/v1/changelog-wrong` answers
+		n*10 and n*10+1, created at epoch milliseconds, each changing the status then the assignee; the page envelope counts the request's ids. `/v1/changelog-wrong` answers
 		the second page for issue 99; `/v1/changelog-noid` leaves out issue 11's `issueId`."""
 		ids, page = body["ids"], int(body.get("next") or 0)
 		issue = 99 if path.endswith("-wrong") and page == 1 else ids[page]
-		histories = [{"id": issue * 10 + k, "created": 1_700_000_000_000 + k * 1_500, "items": [{"field": "status", "to": str(k)}]} for k in range(2)]
+		histories = [{"id": issue * 10 + k, "created": 1_700_000_000_000 + k * 1_500, "items": [{"field": "status", "to": str(k)}, {"field": "assignee", "to": f"u{k}"}]} for k in range(2)]
 		more = page + 1 < len(ids)
 		log: dict[str, Any] = {"changeHistories": histories} if path.endswith("-noid") and issue == 11 else {"issueId": str(issue), "changeHistories": histories}
 		self.reply(200, {"total": len(ids), "issueChangeLogs": [log], "next": str(page + 1) if more else None})
@@ -1204,7 +1204,7 @@ def test_given_a_select_through_two_lists_when_loading_then_each_history_carries
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	rows = query(project, 'SELECT issue_id, ids_sent, history_id, epoch_ms(created), items FROM "RAW".shop__t ORDER BY history_id')
-	expected = [(str(issue), sent, issue * 10 + k, 1_700_000_000_000 + k * 1_500, f'[{{"field":"status","to":"{k}"}}]') for issue, sent in ((10, 2), (11, 2), (12, 1)) for k in range(2)]
+	expected = [(str(issue), sent, issue * 10 + k, 1_700_000_000_000 + k * 1_500, f'[{{"field":"status","to":"{k}"}},{{"field":"assignee","to":"u{k}"}}]') for issue, sent in ((10, 2), (11, 2), (12, 1)) for k in range(2)]
 	assert [(issue, sent, history, created, items.replace(" ", "")) for issue, sent, history, created, items in rows] == expected
 	assert sorted(body["ids"] for path, _, body in api.bodies) == [[10, 11], [10, 11], [12]]  # type: ignore[attr-defined]
 
@@ -1214,6 +1214,56 @@ def test_given_key_path_when_a_page_inside_a_batch_answers_for_another_key_then_
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "a record's key 99 at key_path $.issueId is not among the keys its request sent (10, 11), so the API answered for another key" in done.stdout + done.stderr
+
+
+INDEXED = (
+	"api.fan_out('/changelog', over=[10, 12], method='POST', json_body={{'ids': '{{id}}'}}, batch=2, "
+	"paginator=sl.cursor('$.next', '$.next', location='body'), select='$.issueChangeLogs[*].changeHistories[*]', "
+	"fields={{'history_id': '$.id', 'first_to': '$.items[0].to', 'last_field': sl.field('$.items[-1].field'), "
+	"'last_history': sl.parent('$.changeHistories[-1].id'), 'third_to': {third}}})"
+)
+
+
+@pytest.mark.parametrize(
+	("third", "expected"),
+	[
+		("'$.items[2].to'", [(100, "0", "assignee", 101, None), (101, "1", "assignee", 101, None), (120, "0", "assignee", 121, None), (121, "1", "assignee", 121, None)]),
+		("sl.field('$.items[-1].to', required=True)", [(100, "0", "assignee", 101, "u0"), (101, "1", "assignee", 101, "u1"), (120, "0", "assignee", 121, "u0"), (121, "1", "assignee", 121, "u1")]),
+		("sl.field('$.items[2].to', required=True)", "field third_to needs a value at $.items[2].to, and the row has none"),
+	],
+	ids=["past-the-end-loads-null", "required-last-item-loads", "past-the-end-required-fails"],
+)
+def test_given_list_indexes_in_fields_when_loading_then_each_reads_its_item_and_one_past_the_end_is_null(
+	tmp_path: Path, api: ThreadingHTTPServer, third: str, expected: Any
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {INDEXED.format(third=third)}\n")
+	done = sqlload(project, "load")
+	if isinstance(expected, str):
+		assert done.returncode == 1 and expected in done.stdout + done.stderr, done.stdout + done.stderr
+		return
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT history_id, first_to, last_field, last_history, third_to FROM "RAW".shop__t ORDER BY history_id') == expected
+
+
+@pytest.mark.parametrize(
+	("path", "uses"),
+	[
+		("$.items[?(@.to)].to", "uses the filter [?(@.to)]"),
+		("$.items[0:2]", "uses the slice [0:2]"),
+		("$..to", "uses recursive descent (..)"),
+		("$.items[*].to", "uses the wildcard [*]"),
+	],
+	ids=["filter", "slice", "recursive-descent", "wildcard"],
+)
+def test_given_unsupported_path_syntax_in_fields_when_loading_then_it_fails_before_any_request_naming_the_field_and_path(
+	tmp_path: Path, api: ThreadingHTTPServer, path: str, uses: str
+) -> None:
+	job = INDEXED.format(third=repr(path))
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert f'fields["third_to"]: field path "{path}" {uses}' in " ".join((done.stdout + done.stderr).split()), done.stdout + done.stderr
+	assert api.log == [] and api.bodies == []  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(

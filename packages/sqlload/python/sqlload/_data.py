@@ -27,12 +27,15 @@ class Field:
 	source: Mapping[str, Any] | None = None
 
 
-#: `fields=`: each column's path, such as `"$.address.city"`, or an `sl.field(...)`.
+#: `fields=`: each column's path, such as `"$.address.city"` or `"$.items[0].id"`, or an `sl.field(...)`.
 Fields = Mapping[str, "str | Field"]
 
 
 def field(path: str, *, required: bool = False, parse: str | Mapping[str, str] | None = None, on_error: str = "fail") -> Field:
-	"""The value at `path` (such as `"$.updated-at"`) for `fields=`; `required=True` fails the table on a row without one.
+	"""The value at `path` (such as `"$.updated-at"` or `"$.items[0].id"`) for `fields=`; `required=True` fails the table on a
+	row without one. A path is dotted keys after `$`, each optionally followed by list indexes: `[0]` is the first item and
+	`[-1]` the last. A missing key, an index past the end of the list or on a value that isn't a list gives NULL. Other
+	JSONPath syntax (`[*]`, filters, slices, `..`) is refused, naming the field.
 
 	`parse` converts the value: `"epoch_s"`, `"epoch_ms"` or `"epoch_us"` turn a number (or numeric text) into a UTC
 	timestamp; `{"timestamp": "%d/%m/%Y %H:%M"}` and `{"date": "%d/%m/%Y"}` read text with a strftime format. A value

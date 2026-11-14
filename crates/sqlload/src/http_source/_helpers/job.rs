@@ -20,6 +20,7 @@ use crate::http_source::_helpers::urls::{
     body_placeholders, filled_body, filled_path, placeholders, redacted,
 };
 use crate::python_sources::errors::ReadError;
+use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
 use crate::row_batches::models::{FieldFrom, Projection, ProjectionRules};
@@ -123,14 +124,14 @@ fn context_problems(job: &HttpJob) -> Vec<String> {
     problems
 }
 
-/// Why `key_path`'s `path` can't be read, if it can't: it must name fields from `$`, as `$.issueId` does, with no list.
-fn key_path_problem(path: &str) -> Option<String> {
-    let problem = Some(format!(
-        "key_path {path:?} is not a path such as \"$.issueId\"; use dotted field names after \"$\""
-    ));
-    match selector(Some(path)) {
-        Ok(read) if read.field.is_none() && read.within.is_empty() && !read.rows.is_empty() => None,
-        Ok(_) | Err(_) => problem,
+/// Why `key_path`'s `path` can't be read, if it can't: it is a field path below `$`, such as `$.issueId` or `$.keys[0]`.
+fn key_path_problem(text: &str) -> Option<String> {
+    match field_path(text) {
+        Ok(segments) if !segments.is_empty() => None,
+        Ok(_) => Some(format!(
+            "key_path {text:?} is not a path such as \"$.issueId\"; use dotted field names after \"$\""
+        )),
+        Err(reason) => Some(format!("key_path {reason}")),
     }
 }
 
