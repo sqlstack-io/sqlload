@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "sqlload"
-version = "0.43.0" # x-release-please-version
+version = "0.44.0" # x-release-please-version
 description = "SQL data loading tooling."
 readme = "README.md"
 requires-python = ">=3.10"

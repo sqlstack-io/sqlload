@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.44.0](https://github.com/sqlstack-io/sqlload/compare/v0.43.0...v0.44.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **load,odbc:** a table with a cursor_column and no key (no unique_key, and no primary key its source reports) no longer defaults to write_strategy = "delete_insert", whatever its source kind (postgres, odbc, snowflake, bigquery, files, python): plan refuses it. Set unique_key to merge on it, or set write_strategy = "delete_insert" (or "append") to keep loading it as before.
+
+### Features
+
+* **load,odbc:** refuse a cursor table without a key instead of defaulting to delete_insert ([#235](https://github.com/sqlstack-io/sqlload/issues/235)) ([97f149a](https://github.com/sqlstack-io/sqlload/commit/97f149a3bf5b548e01e71b338cbb5179d8d24a6c))
+
 ## [0.43.0](https://github.com/sqlstack-io/sqlload/compare/v0.42.1...v0.43.0) (2026-11-13)
 
 
