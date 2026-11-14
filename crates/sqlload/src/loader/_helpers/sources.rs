@@ -1825,9 +1825,12 @@ pub(crate) async fn admit_tables(
                 source_table: qualified,
                 reason: "new table (new_tables = \"skip\"); add it to include to sync it".to_owned(),
             }),
-            (true, NewTables::Fail, _) => plan.problems.push(format!(
-                "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
-            )),
+            (true, NewTables::Fail, _) => {
+                plan.failed_sources.insert(source_name.clone());
+                plan.problems.push(format!(
+                    "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
+                ));
+            }
             _ => {
                 if let Some(problem) = missing_description(source_name, source, &spec.source_table)
                 {
@@ -1905,6 +1908,7 @@ pub(crate) async fn found_sources<'a>(
                         if problem.retryable {
                             found.plan.retryable_problems.push(problem.message.clone());
                         }
+                        found.plan.failed_sources.insert(source_name.clone());
                         found.plan.problems.push(problem.message);
                     }
                     continue;
