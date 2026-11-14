@@ -33,6 +33,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"null_keys",
 		"on_duplicate_keys",
 		"on_schema_change",
+		"replace_key",
 		"row_id",
 		"state",
 		"type_change_rebuild",

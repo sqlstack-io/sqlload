@@ -16,6 +16,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "without a cursor every file not loaded yet is read",
             loaded: &[("/data/day=2026-11-03/a.parquet", "1-0")],
+            held: &[],
             removed: false,
             cursor_type: None,
             bounds: (None, None),
@@ -24,6 +25,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a file loaded without its version is an error, as a rewrite in place since can't be told",
             loaded: &[("/data/day=2026-11-03/a.parquet", "")],
+            held: &[],
             removed: false,
             cursor_type: None,
             bounds: (None, None),
@@ -37,6 +39,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 ("/data/day=2026-11-03/a.parquet", ""),
                 ("/data/day=2026-11-03/a.parquet", "1-0"),
             ],
+            held: &[],
             removed: false,
             cursor_type: None,
             bounds: (None, None),
@@ -45,6 +48,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a loaded file whose version changed is an error",
             loaded: &[("/data/day=2026-11-04/a.parquet", "9-9")],
+            held: &[],
             removed: false,
             cursor_type: None,
             bounds: (None, None),
@@ -56,6 +60,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 ("/data/day=2026-11-04/a.parquet", "1-0"),
                 ("/data/day=2026-11-04/a.parquet", "9-9"),
             ],
+            held: &[],
             removed: false,
             cursor_type: None,
             bounds: (None, None),
@@ -64,6 +69,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "when loaded files leave the folder, a loaded name at another version is a new file",
             loaded: &[("/data/day=2026-11-04/a.parquet", "9-9")],
+            held: &[],
             removed: true,
             cursor_type: None,
             bounds: (None, None),
@@ -79,6 +85,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 ("/data/day=2026-11-04/a.parquet", "9-9"),
                 ("/data/day=2026-11-04/a.parquet", "1-0"),
             ],
+            held: &[],
             removed: true,
             cursor_type: None,
             bounds: (None, None),
@@ -87,6 +94,34 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a date cursor reads from <= value < to",
             loaded: &[],
+            held: &[],
+            removed: false,
+            cursor_type: Some(ColumnType::Date),
+            bounds: (Some("2026-11-04"), Some("2026-11-05")),
+            expected_keys: Ok(&["day=2026-11-04/a.parquet"]),
+        },
+        SelectFilesTestCase {
+            description: "under delete_insert, a file the table holds at another version below the window fails, naming the file and the fixes, rather than being skipped",
+            loaded: &[],
+            held: &[
+                ("/data/day=2026-11-03/a.parquet", "9-9"),
+                ("/data/day=2026-11-05/a.parquet", "1-0"),
+            ],
+            removed: false,
+            cursor_type: Some(ColumnType::Date),
+            bounds: (Some("2026-11-05"), None),
+            expected_keys: Err(
+                "/data/day=2026-11-03/a.parquet changed since it was loaded (version 9-9 is now 1-0), but its day 2026-11-03 is below this load's range, which starts at 2026-11-05, so delete_insert would skip it and keep its old rows. Fix: set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor 2026-11-03, or rebuild the table with --reload",
+            ),
+        },
+        SelectFilesTestCase {
+            description: "under delete_insert, files held at their listed version, or at an unknown one, below the window are skipped, and a changed one above it is outside the range asked for",
+            loaded: &[],
+            held: &[
+                ("/data/day=2026-11-03/a.parquet", "1-0"),
+                ("/data/day=2026-11-04/a.parquet", ""),
+                ("/data/day=2026-11-05/a.parquet", "9-9"),
+            ],
             removed: false,
             cursor_type: Some(ColumnType::Date),
             bounds: (Some("2026-11-04"), Some("2026-11-05")),
@@ -95,6 +130,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a text cursor compares as text",
             loaded: &[],
+            held: &[],
             removed: false,
             cursor_type: Some(ColumnType::Text),
             bounds: (Some("2026-11-05"), None),
@@ -103,6 +139,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "an int cursor needs integer values",
             loaded: &[],
+            held: &[],
             removed: false,
             cursor_type: Some(ColumnType::Int),
             bounds: (Some("3"), None),
@@ -111,6 +148,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
         SelectFilesTestCase {
             description: "a timestamp partition cannot be a cursor",
             loaded: &[],
+            held: &[],
             removed: false,
             cursor_type: Some(ColumnType::TimestampTz),
             bounds: (Some("2026-11-04 00:00:00+00"), None),
@@ -140,10 +178,19 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 version: (*version).to_owned(),
             })
             .collect();
+        let held: Vec<LoadedFile> = test_case
+            .held
+            .iter()
+            .map(|(name, version)| LoadedFile {
+                name: (*name).to_owned(),
+                version: (*version).to_owned(),
+            })
+            .collect();
         let selection = FileSelection {
             files: &files,
             location: "/data/",
             loaded: &loaded,
+            held: &held,
             removed: test_case.removed,
             cursor: test_case
                 .cursor_type

@@ -28,12 +28,15 @@ pub enum WriteMode {
         /// The key columns whose staged values are never NULL: the source declares them NOT NULL, or `null_keys = "fail"` refuses a commit holding a NULL in them.
         not_null_keys: Vec<String>,
     },
-    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead.
+    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead. With a `replace_key`, the rows holding a key value a staged row holds are replaced too (alone, without a cursor), matched as a merge matches keys: NULL-safely, except the `not_null_keys` columns, which compare with `=`.
     DeleteInsert {
-        cursor_column: String,
+        cursor_column: Option<String>,
         from: Option<String>,
         to: Option<String>,
         values: Vec<String>,
+        replace_key: Vec<String>,
+        /// The `replace_key` columns whose staged values are never NULL: the source declares them NOT NULL, or `null_keys = "fail"` refuses a commit holding a NULL in them.
+        not_null_keys: Vec<String>,
     },
     /// The staged rows become the whole table, atomically.
     Replace,
@@ -44,7 +47,18 @@ pub enum WriteMode {
 }
 
 impl WriteMode {
-    /// The key columns a merge or a change apply matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
+    /// The key columns a commit by this mode matches its staged rows on, and the setting naming them: a merge's `unique_key`, a `delete_insert`'s `replace_key`; `None` for the other modes.
+    pub fn staged_key(&self) -> Option<(&[String], &'static str)> {
+        match self {
+            WriteMode::Merge { unique_key, .. } => Some((unique_key, "unique_key")),
+            WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
+                Some((replace_key, "replace_key"))
+            }
+            _ => None,
+        }
+    }
+
+    /// The key columns a merge, a change apply or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
     pub fn matched_keys(&self) -> Vec<(&str, bool)> {
         let (unique_key, not_null_keys) = match self {
             WriteMode::Merge {
@@ -53,6 +67,11 @@ impl WriteMode {
                 ..
             } => (unique_key, not_null_keys),
             WriteMode::Changes(change) => (&change.unique_key, &change.not_null_keys),
+            WriteMode::DeleteInsert {
+                replace_key,
+                not_null_keys,
+                ..
+            } => (replace_key, not_null_keys),
             _ => return Vec::new(),
         };
         unique_key
@@ -255,4 +274,6 @@ pub enum CheckQuery<'a> {
     KeyDuplicateExamples(&'a [String]),
     /// Up to five values of these columns, in order, of rows holding a NULL in any of them, each as its columns' text (`NULL` for a NULL) joined by `, `.
     NullKeyExamples(&'a [String]),
+    /// Up to this many distinct values of these columns, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    KeyValues(&'a [String], u64),
 }

@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -22,6 +23,7 @@ use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::loaded_file;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
+use crate::project::models::WriteStrategy;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -337,6 +339,16 @@ pub(crate) fn fold_maximum(
     Ok(run.later(maximum, batch_maximum))
 }
 
+/// Whether `spec`'s files source loads one file per commit, each recorded in the run log, which then picks the files it reads: a merge, or `delete_insert` by `replace_key`.
+pub(crate) fn logs_files(spec: &TableSpec) -> bool {
+    spec.files.is_some()
+        && match spec.strategy {
+            WriteStrategy::Merge => true,
+            WriteStrategy::DeleteInsert => !spec.replace_key.is_empty(),
+            WriteStrategy::Append | WriteStrategy::Replace => false,
+        }
+}
+
 /// The files (`name|version`) a files source's merge recorded merging into the table of `spec`, since the table's newest reset; why they cannot be known when a record after it cannot be read; none when the run log does not exist.
 pub(crate) async fn merged_files(
     spec: &TableSpec,
@@ -374,6 +386,25 @@ pub(crate) async fn merged_files(
     Ok(Ok(files))
 }
 
+/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
+pub(crate) fn unchanged_files(
+    merged: Vec<LoadedFile>,
+    listed: &HashMap<String, String>,
+) -> Vec<LoadedFile> {
+    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
+    for file in merged {
+        newest.insert(file.name.clone(), file);
+    }
+    newest
+        .into_values()
+        .filter(|file| {
+            listed
+                .get(&file.name)
+                .is_none_or(|version| *version == file.version)
+        })
+        .collect()
+}
+
 /// The record a files source's merge commits with `file` (`name|version`), its `batch`th commit of run `run_id`, which wrote `rows`.
 pub(crate) fn merged_record(
     spec: &TableSpec,
@@ -394,7 +425,13 @@ pub(crate) fn merged_record(
         state: None,
         row_count: rows,
         files: vec![file],
-        note: Some("files source merge".to_owned()),
+        note: Some(
+            match spec.strategy {
+                WriteStrategy::Merge => "files source merge",
+                _ => "files source delete_insert",
+            }
+            .to_owned(),
+        ),
         recorded_at: now_utc_text(),
         batch: Some(batch),
     }

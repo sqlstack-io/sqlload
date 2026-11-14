@@ -127,10 +127,12 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
     let mode = match (options.reload, spec.strategy) {
         (true, _) => WriteMode::Recreate,
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
-            cursor_column: column.to_owned(),
+            cursor_column: Some(column.to_owned()),
             from: from.clone(),
             to: to.clone(),
             values: vec![],
+            replace_key: spec.replace_key.clone(),
+            not_null_keys: spec.not_null_keys.clone(),
         },
         (false, _) => WriteMode::Append,
     };

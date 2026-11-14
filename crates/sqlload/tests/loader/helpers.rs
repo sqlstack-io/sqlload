@@ -28,9 +28,9 @@ use crate::files_target_helpers::file_batches;
 use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
     FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
-    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
-    RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
-    WrittenRun,
+    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, ReplacedKeysTestCase, RouteFiles,
+    RouteOutcome, RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition,
+    WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1949,4 +1949,44 @@ pub(crate) fn words(text: &str) -> String {
         .filter(|word| *word != "│")
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Load `test_case`'s steps from CSV files under `drop/` with `settings` into DuckDB through the `sqlload` executable (`load --json`), each after writing its files: each load's first table's `replaced_keys`, as compact JSON.
+pub(crate) fn run_replaced_keys(
+    test_case: &ReplacedKeysTestCase,
+    settings: &str,
+) -> Result<Vec<String>, String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let config = root.path().join("sqlload.toml");
+    let text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"csv\"\n{settings}",
+        root.path().join("out.duckdb").display(),
+        root.path().display()
+    );
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+    let mut reports = Vec::new();
+    for files in test_case.steps {
+        for file in *files {
+            let path = root.path().join("drop").join(file.key);
+            std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
+            let modified =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|opened| opened.set_modified(modified))
+                .map_err(|error| error.to_string())?;
+        }
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+            .arg("--config")
+            .arg(&config)
+            .args(["load", "--json"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("{error}: {}", String::from_utf8_lossy(&output.stdout)))?;
+        reports.push(report["tables"][0]["replaced_keys"].to_string());
+    }
+    Ok(reports)
 }

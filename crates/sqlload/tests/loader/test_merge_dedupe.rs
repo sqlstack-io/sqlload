@@ -9,9 +9,12 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
 use crate::helpers::run_async;
-use crate::merge_helpers::{READINGS_SETUP, run_dedupe_case, run_dedupe_rules, run_null_key_loads};
+use crate::merge_helpers::{
+    READINGS_SETUP, run_dedupe_case, run_dedupe_rules, run_null_key_loads, run_replace_key_loads,
+};
 use crate::test_types::{
     DedupeRefusalTestCase, DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase,
+    ReplaceKeyTargetTestCase,
 };
 
 /// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value.
@@ -27,6 +30,15 @@ const POSTGRES_NULL_KEY_ROWS: [&str; 3] = [
     "bolt/s1:11,bolt/NULL:12,NULL/NULL:13 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
     "bolt/s1:21,bolt/NULL:22,NULL/NULL:23 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
 ];
+
+/// What `delete_insert` on `updated_at` with `replace_key = ["le_version"]` holds after each load: P01 replaced whole (line C gone, though its rows lie below the cursor), P02 read again, P00 untouched, and the line without a version replaced by the new one, a NULL matching a NULL.
+const REPLACE_KEY_ROWS: [&str; 2] = [
+    "LE-FY27-P00/Z:0,LE-FY27-P01/A:1,LE-FY27-P01/B:2,LE-FY27-P01/C:3,LE-FY27-P02/X:10,NULL/N:7",
+    "LE-FY27-P00/Z:0,LE-FY27-P01/A:100,LE-FY27-P01/B:200,LE-FY27-P02/X:10,NULL/M:9",
+];
+
+const REPLACE_KEY_PLAN: &str =
+    "delete_insert (cursor: updated_at, replace_key: le_version; NULLs in keys match)";
 
 #[test]
 fn given_a_merge_key_with_null_parts_when_loading_three_times_into_each_target_then_each_key_keeps_one_row_with_the_latest_values()
@@ -243,6 +255,57 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 "{}",
                 test_case.description
             );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_database_source_with_a_cursor_and_a_replace_key_when_loading_into_each_target_then_the_cursor_range_and_every_row_of_the_read_versions_are_replaced()
+-> Result<(), String> {
+    run_async(async {
+        let source = start_postgres().await?;
+        let client = connect(&source).await?;
+        let clickhouse = start_clickhouse().await?;
+        run_client(&clickhouse, "CREATE DATABASE replacekeys", &[]).await?;
+        let test_cases = [
+            ReplaceKeyTargetTestCase {
+                description: "DuckDB, through DELETE ... USING the staged keys, then INSERT, in one transaction",
+                connection: "kind = \"duckdb\"\ndatabase = \":memory:\"".to_owned(),
+                schema: "raw",
+                reset: &["SELECT 1"],
+                check_query: "SELECT string_agg(COALESCE(le_version, 'NULL') || '/' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line) FROM raw.app__estimates",
+                expected_plan: REPLACE_KEY_PLAN,
+                expected_rows: REPLACE_KEY_ROWS,
+            },
+            ReplaceKeyTargetTestCase {
+                description: "Postgres, through DELETE ... USING the staged keys, then INSERT, in one transaction",
+                connection: format!(
+                    "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"sqlload\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"",
+                    source.port
+                ),
+                schema: "replacekeys",
+                reset: &["DROP TABLE IF EXISTS replacekeys.app__estimates"],
+                check_query: "SELECT string_agg(COALESCE(le_version, 'NULL') || '/' || line || ':' || amount, ',' ORDER BY le_version NULLS LAST, line) FROM replacekeys.app__estimates",
+                expected_plan: REPLACE_KEY_PLAN,
+                expected_rows: REPLACE_KEY_ROWS,
+            },
+            ReplaceKeyTargetTestCase {
+                description: "ClickHouse, through its delta displacing the range's rows and those of the delta's keys",
+                connection: format!(
+                    "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
+                    clickhouse.port
+                ),
+                schema: "replacekeys",
+                reset: &["DROP TABLE IF EXISTS replacekeys.app__estimates"],
+                check_query: "SELECT arrayStringConcat(arrayMap(row -> if(row.1, 'NULL', row.2) || '/' || row.3 || ':' || toString(row.4), arraySort(groupArray((isNull(le_version), ifNull(le_version, ''), line, amount)))), ',') FROM replacekeys.app__estimates",
+                expected_plan: REPLACE_KEY_PLAN,
+                expected_rows: REPLACE_KEY_ROWS,
+            },
+        ];
+        for test_case in &test_cases {
+            let rows = run_replace_key_loads(test_case, (&client, source.port)).await?;
+            assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
         }
         Ok(())
     })

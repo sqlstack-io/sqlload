@@ -800,9 +800,12 @@ pub struct TableSettings {
     /// What a merge does with rows of one commit that share a `unique_key`: keep one (default) or fail.
     #[serde(default)]
     pub on_duplicate_keys: Option<OnDuplicateKeys>,
-    /// What a merge does with a NULL in a `unique_key` column: match it with a NULL (default) or fail the commit.
+    /// What a merge does with a NULL in a `unique_key` column, and `delete_insert` in a `replace_key` column: match it with a NULL (default) or fail the commit.
     #[serde(default)]
     pub null_keys: Option<NullKeys>,
+    /// The columns whose values `delete_insert` replaces whole: each commit first deletes the rows holding a value of them that its rows hold.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub replace_key: Option<Vec<String>>,
     /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
     #[serde(default)]
     pub dedup_sort: Option<BTreeMap<String, SortDirection>>,

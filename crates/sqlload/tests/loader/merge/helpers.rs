@@ -9,8 +9,10 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
-use crate::helpers::{described_project, load_selected};
-use crate::test_types::{DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase};
+use crate::helpers::{described_project, load_selected, words};
+use crate::test_types::{
+    DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase, ReplaceKeyTargetTestCase,
+};
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
 pub(crate) const READINGS_SETUP: &str = "
@@ -166,6 +168,75 @@ async fn loaded_rows(
             .await
             .map_err(|error| error.to_string())?;
     }
+    Ok(rows)
+}
+
+/// `public.estimates`: version P00 read long ago, P01's lines A, B and C, a line without a version, then P02, the newest `updated_at`.
+const ESTIMATES_SETUP: &str = "
+CREATE TABLE public.estimates (le_version text, line text, amount int8, updated_at timestamptz NOT NULL);
+INSERT INTO public.estimates VALUES
+  ('LE-FY27-P00', 'Z', 0, '2026-01-01'),
+  ('LE-FY27-P01', 'A', 1, '2026-02-01'), ('LE-FY27-P01', 'B', 2, '2026-02-01'), ('LE-FY27-P01', 'C', 3, '2026-02-01'),
+  (NULL, 'N', 7, '2026-02-15'),
+  ('LE-FY27-P02', 'X', 10, '2026-03-01');
+";
+
+/// P01 sent again after the first load, without line C and with new amounts, and the line without a version replaced by another: all newer than P02, so the cursor reads them, but the rows they replace lie below it.
+const ESTIMATES_CHANGE: &str = "
+DELETE FROM public.estimates WHERE line IN ('C', 'N');
+UPDATE public.estimates SET amount = amount * 100, updated_at = '2026-04-01' WHERE le_version = 'LE-FY27-P01';
+INSERT INTO public.estimates VALUES (NULL, 'M', 9, '2026-04-01');
+";
+
+/// Load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into `target` by `delete_insert` on the cursor `updated_at` and `replace_key = ["le_version"]`, then again after [`ESTIMATES_CHANGE`]: what `target.check_query` returns after each load, or the first error; each load's plan must show `target.expected_plan`.
+pub(crate) async fn run_replace_key_loads(
+    target: &ReplaceKeyTargetTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.estimates\"]\n\n[sources.app.tables.\"public.estimates\"]\nwrite_strategy = \"delete_insert\"\ncursor_column = \"updated_at\"\nreplace_key = [\"le_version\"]\n",
+        target.connection, target.schema
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut rows = Vec::new();
+    for change in [ESTIMATES_CHANGE, ""] {
+        let plan = load_selected(&project, &destinations, &[]).await?;
+        assert!(
+            words(&plan).contains(target.expected_plan),
+            "{}: {plan}",
+            target.description
+        );
+        rows.push(
+            single_text(destination, target.check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+        );
+        source
+            .batch_execute(change)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(rows)
 }
 

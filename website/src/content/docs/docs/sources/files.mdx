@@ -190,7 +190,8 @@ or an archive naming two members alike, fails.
 | Strategy | Reads |
 |----------|-------|
 | `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. From 0.45.0, so does a listed file loaded without its version (an empty `_sqlload_source_version`, as in rows loaded before SQLLoad recorded it), since whether it was rewritten can't be told: `--reload` loads the table again and records every file's version. Before 0.45.0 such a file was taken as loaded. From 0.45.0, `plan` refuses an `append` table that excludes `_sqlload_source_version`, as it refuses one excluding `_sqlload_source_file`. |
-| `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. |
+| `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. From 0.51.0, a file that changed since it loaded whose partition lies below that range fails the table; see below. |
+| `delete_insert` with a `replace_key` (from 0.51.0) | Only files not loaded yet, or changed since, one at a time, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
 | `replace` | Every file, swapped in as a new table. |
 | `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. |
 
@@ -214,6 +215,62 @@ loaded  raw.events_log      1 row  0.0s
 
 Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
 across commits.
+
+From 0.51.0, `delete_insert` on a partition cursor fails the table when a listed file changed since
+it loaded but its partition lies below the range the load reads, such as a monthly file sent again
+corrected after the next month's loaded. Skipping it would keep its old rows. The error names the
+file and the fixes:
+
+```console
+$ sqlload plan
+…
+Errors (1)
+└── raw.le
+    ├── reason  /data/drop/le_LE-FY27-P01.csv changed since it was loaded (version e3c0-3b9aca00-47
+    │           is now e3c0-b2d05e00-3b), but its file_version LE-FY27-P01 is below this load's
+    │           range, which starts at LE-FY27-P02, so delete_insert would skip it and keep its old
+    │           rows
+    └── fix     set replace_key to replace rows by a column the files hold (and drop
+                cursor_column), load from it with --start-cursor LE-FY27-P01, or rebuild the table
+                with --reload
+```
+
+`--start-cursor LE-FY27-P01` replaces that partition and every one after it, once. For files sent
+again as a matter of course, use a [`replace_key`](#replacing-rows-by-a-key).
+
+### Replacing rows by a key
+
+From 0.51.0, `delete_insert` with a `replace_key` and no `cursor_column` loads each new or changed
+file in its own commit, oldest modified first, then path. Each commit deletes the rows holding a
+`replace_key` value the file holds, then inserts the file's rows. A file sent again corrected
+replaces its version whole, lines it dropped included, and leaves other versions alone. Two files of
+one run holding the same value: the one modified later wins whole. A file's rows always commit
+together, so a value is never split across commits.
+
+```toml
+[sources.le]
+kind = "files"
+connection = "lake"
+path = "finance/le/"
+format = "csv"
+description = "Latest Estimate, one file per version, each row holding its le_version."
+write_strategy = "delete_insert"
+replace_key = ["le_version"]
+```
+
+```console
+$ sqlload plan
+…
+└── raw.le                                          delete_insert (replace_key: le_version; NULLs in keys match)
+    ├── source  files  lake/finance/le/  csv, compression by file name
+…
+    ├── files   1 new of 1 listed
+    └── batch   1 file, one commit each, oldest modified first (ties by path), each recorded in the run log
+```
+
+It picks files as [merging files](#merging-files) does: each commit records its file and version in
+`_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
+and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 
 ### Merging files
 
@@ -285,7 +342,8 @@ after_load = { move_to = "loaded" }
 - If a delete or move fails, the load still counts and isn't run again. `load --json` reports
   `after_load` on the table, with `status` `"failed"` and each file left in `failed`, and a
   warning is logged. Its `status` is `"done"` when every file was handled.
-- It needs `write_strategy = "append"` or `"merge"`, which never read a loaded file again. A file
+- It needs `write_strategy = "append"` or `"merge"`, or from 0.51.0 `"delete_insert"` with a
+  `replace_key`, which never read a loaded file again. A file
   that reappears under a loaded name is a new file when its version differs; an identical copy,
   such as the same bytes on S3, is skipped as loaded and stays. `--reload` is refused.
 - From 0.39.1, a run that finds the folder empty skips the table and exits 0,

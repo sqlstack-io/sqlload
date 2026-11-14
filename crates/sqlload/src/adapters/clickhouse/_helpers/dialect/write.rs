@@ -42,7 +42,7 @@ pub(crate) fn swap_statements(
     ]
 }
 
-/// The statements applying `request.mode` from `staging`. A build table is swapped in. Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key (see [`displaced_keys`]) or `delete_insert` covers by its range.
+/// The statements applying `request.mode` from `staging`. A build table is swapped in. Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key (see [`displaced_keys`]) or `delete_insert` covers by its range or holds a value of its `replace_key` the delta holds.
 pub(crate) fn write_statements(
     adapter: &ClickHouseSql,
     request: &WriteStatementsRequest<'_>,
@@ -85,7 +85,23 @@ pub(crate) fn write_statements(
             let keys = displaced_keys(adapter, request.mode);
             Some(format!("({keys}) IN (SELECT {keys} FROM {delta})"))
         }
-        WriteMode::DeleteInsert { .. } => Some(range_condition(adapter, request)),
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } => {
+            let range = cursor_column
+                .as_ref()
+                .map(|_| range_condition(adapter, request));
+            let keyed = (!replace_key.is_empty()).then(|| {
+                let keys = displaced_keys(adapter, request.mode);
+                format!("({keys}) IN (SELECT {keys} FROM {delta})")
+            });
+            Some(match (range, keyed) {
+                (Some(range), Some(keyed)) => format!("({range}) OR {keyed}"),
+                (range, keyed) => range.or(keyed).unwrap_or_else(|| "0".to_owned()),
+            })
+        }
         WriteMode::Changes(_) => {
             return vec![
                 "SELECT throwIf(1, 'captured changes are not applied to ClickHouse tables')"
@@ -132,7 +148,7 @@ pub(crate) fn write_statements(
     ]
 }
 
-/// The key columns of the merge `mode`, as the `IN` choosing the rows a delta replaces lists them: a column whose values may be NULL as whether it is NULL and its value, so a NULL matches a NULL (the `IN` also runs in a lightweight `DELETE`, a mutation, which ignores a session's `transform_null_in`), and a default value (`''`, `0`) does not.
+/// The key columns of `mode` (a merge's `unique_key`, a `delete_insert`'s `replace_key`), as the `IN` choosing the rows a delta replaces lists them: a column whose values may be NULL as whether it is NULL and its value, so a NULL matches a NULL (the `IN` also runs in a lightweight `DELETE`, a mutation, which ignores a session's `transform_null_in`), and a default value (`''`, `0`) does not.
 fn displaced_keys(adapter: &ClickHouseSql, mode: &WriteMode) -> String {
     let keys: Vec<String> = mode
         .matched_keys()
@@ -188,16 +204,17 @@ pub(crate) fn typed_literal(text: &str, column_type: &ColumnType) -> String {
     }
 }
 
-/// The rows a `delete_insert` replaces: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds). The bounds are [typed literals](typed_literal), so a bound ClickHouse cannot read fails rather than matching nothing.
+/// The rows a `delete_insert` replaces by its cursor: those whose cursor is one of its values, or within its range (`1`, every row, when it has no bounds; `0`, none, without a cursor). The bounds are [typed literals](typed_literal), so a bound ClickHouse cannot read fails rather than matching nothing.
 pub(crate) fn range_condition(
     adapter: &ClickHouseSql,
     request: &WriteStatementsRequest<'_>,
 ) -> String {
     let WriteMode::DeleteInsert {
-        cursor_column,
+        cursor_column: Some(cursor_column),
         from,
         to,
         values,
+        ..
     } = request.mode
     else {
         return "0".to_owned();

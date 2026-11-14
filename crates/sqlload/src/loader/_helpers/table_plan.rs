@@ -269,6 +269,16 @@ fn unwritten_column(
             "cursor_column {name} is not written to the table (excluded, not in the enforced contract, or ignored by on_schema_change)"
         ));
     }
+    if let Some(key) = spec
+        .replace_key
+        .iter()
+        .filter(|_| spec.python.is_none())
+        .find(|key| !writes_column(schema, key))
+    {
+        return Some(format!(
+            "replace_key column {key} is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change). Fix: name a column the table loads in replace_key, such as the version column every row holds"
+        ));
+    }
     let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
     let column = schema
         .write_columns
@@ -283,6 +293,14 @@ fn unwritten_column(
         )),
         Some(_) => None,
     }
+}
+
+/// Whether `schema` writes the column `name`, ignoring case.
+fn writes_column(schema: &SchemaPlan, name: &str) -> bool {
+    schema
+        .write_columns
+        .iter()
+        .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
 /// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
@@ -1022,7 +1040,7 @@ pub(crate) fn publishes_once(table: &TablePlan) -> bool {
         && sql_adapter(table.spec.warehouse).publishes_ranges_once()
 }
 
-/// One commit per file, in the order planned: a files source's merge applies each file on its own, so a key repeated across files ends with the newest file's value.
+/// One commit per file, in the order planned: a files source's merge, or `delete_insert` by `replace_key`, applies each file on its own, so a key repeated across files ends with the newest file's value (or rows).
 fn one_file_each(count: usize) -> Vec<FileGroup> {
     (0..count)
         .map(|index| FileGroup {
@@ -1168,14 +1186,12 @@ fn write_mode(
             }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
-            cursor_column: spec
-                .cursor
-                .as_ref()
-                .map(|cursor| cursor.column.clone())
-                .unwrap_or_default(),
+            cursor_column: spec.cursor.as_ref().map(|cursor| cursor.column.clone()),
             from,
             to,
             values: Vec::new(),
+            replace_key: spec.replace_key.clone(),
+            not_null_keys: spec.not_null_keys.clone(),
         },
     }
 }
@@ -1556,15 +1572,22 @@ pub(crate) struct CommitRequest<'a> {
 /// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch_size` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch_size = "none"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
 pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, String> {
     let spec = request.spec;
+    let keyed = matches!(request.mode, WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty());
     if let Some(files) = request.files {
         let by_value = match request.mode {
-            WriteMode::DeleteInsert { cursor_column, .. } => Some(cursor_column.as_str()),
+            WriteMode::DeleteInsert {
+                cursor_column: Some(cursor_column),
+                ..
+            } => Some(cursor_column.as_str()),
             _ => None,
         };
-        if matches!(request.mode, WriteMode::Merge { .. }) {
+        if matches!(request.mode, WriteMode::Merge { .. }) || keyed {
             return Ok(CommitRule::FileGroups(one_file_each(files.files.len())));
         }
         return Ok(CommitRule::FileGroups(file_groups(&files.files, by_value)));
+    }
+    if keyed {
+        return Ok(CommitRule::Whole(WholeReason::ReplaceKey));
     }
     if spec.batch == Some(BatchStep::Whole) {
         return Ok(CommitRule::Whole(WholeReason::Chosen));

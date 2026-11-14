@@ -11,7 +11,7 @@ SQLLoad doesn't choose a strategy for you.
 |----------|--------|-------|
 | `append` | Inserts the rows read. | Nothing. |
 | `merge` | Updates rows whose `unique_key` matches, inserts the rest. | A `unique_key`: columns, or `"{primary_key}"`. |
-| `delete_insert` | Deletes the cursor range it read, then inserts the rows. | A `cursor_column`. No key. |
+| `delete_insert` | Deletes the cursor range it read, or the rows holding a `replace_key` value it read, then inserts the rows. | A `cursor_column`, a `replace_key`, or both. |
 | `replace` | Builds a new table from the whole source, and swaps it in at the end. | No `cursor_column`. |
 
 A strategy set on a source covers every table it matches, including those `include` patterns
@@ -62,7 +62,8 @@ replaces; with a driver that reports no key for a table that has one, as
 unnoticed.
 
 `plan` shows each table's strategy next to its name, with its key or cursor, such as
-`merge (unique_key: order_id)` or `delete_insert (cursor: dt)`. A key from `"{primary_key}"`
+`merge (unique_key: order_id)`, `delete_insert (cursor: dt)` or
+`delete_insert (replace_key: le_version; NULLs in keys match)`. A key from `"{primary_key}"`
 shows where it came from, as in `merge (unique_key: order_no, line_no ← {primary_key})`.
 
 ## append
@@ -249,7 +250,52 @@ To replace a fixed window around today on every run, such as 7 days back to 7 da
 [Reload a window](/docs/guides/reload-a-window/).
 
 On a files source partitioned by the cursor, it replaces whole partitions, and never splits one
-across commits.
+across commits. A file that changed since it loaded but whose partition lies below the range a load
+reads fails the table rather than being skipped; see
+[Which files load](/docs/sources/files/#which-files-load).
+
+### Replacing rows by a key
+
+From 0.51.0, `replace_key` names columns whose values `delete_insert` replaces whole. Each commit
+deletes every row holding a `replace_key` value that its rows hold, then inserts its rows, in one
+transaction. The key need not be unique: a value usually has many rows. Rows of other values stay.
+
+```toml
+[sources.finance.tables."le"]
+write_strategy = "delete_insert"
+replace_key = ["le_version"]
+```
+
+A load of `LE-FY27-P01` with lines A and B, into a table holding P01 with lines A, B and C and
+P02, leaves P01 with A and B at the new amounts, and P02 as it was.
+
+- Without a `cursor_column`, a database or Python source reads every row on each run. A files
+  source reads only new or changed files; see
+  [Replacing rows by a key](/docs/sources/files/#replacing-rows-by-a-key).
+- With a `cursor_column`, the cursor decides what a run reads. Each commit deletes its cursor range
+  and also the rows of the `replace_key` values it read, wherever their cursor lies.
+- A NULL in a `replace_key` column matches a NULL, as in [NULLs in keys](#nulls-in-keys).
+  `null_keys = "fail"` refuses a commit holding one instead.
+- `load --json` lists the values each table replaced in
+  [`replaced_keys`](/docs/cli/load/#results-as-json).
+
+`plan` refuses a table where `replace_key` doesn't apply, naming the fix:
+
+| Setting | Why it's refused |
+|---------|------------------|
+| `replace_key` with `merge`, `append` or `replace` | Only `delete_insert` deletes by it. |
+| A `replace_key` column the table doesn't load | It names no column of the table. |
+| `delete_insert` with neither `cursor_column` nor `replace_key` | It has nothing to replace. |
+| `replace_key` on a files target | A files target replaces partition folders, not rows. |
+| `replace_key` with `unnest` | Child tables aren't replaced with their rows yet. |
+
+Each target deletes the rows of the staged keys its own way:
+
+| Target | The delete |
+|--------|------------|
+| DuckDB, MotherDuck, Snowflake, Postgres | `DELETE FROM t AS __target USING (SELECT DISTINCT key …) AS __source WHERE …`, then `INSERT`, in one transaction |
+| BigQuery, Databricks | One `MERGE` that inserts every staged row and deletes the rows matching each distinct staged key |
+| ClickHouse | The delta's partition publish displaces the rows whose key is in the delta |
 
 ## replace
 

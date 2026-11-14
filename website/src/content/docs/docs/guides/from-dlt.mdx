@@ -30,7 +30,7 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 | `write_disposition="append"` or `"replace"` | `write_strategy = "append"` or `"replace"`. |
 | `write_disposition="merge"` with `primary_key` | `write_strategy = "merge"` with `unique_key`. See [merge](/docs/concepts/write-strategies/#merge). |
 | A sentinel such as `""` filled into a key column that can be empty, as dlt makes `primary_key` columns `NOT NULL` | Not needed: from 0.51.0 `merge` matches a NULL in a key column with a NULL. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
-| `merge_key`, dlt's `delete-insert` of the partitions a load holds | `write_strategy = "delete_insert"` with `cursor_column`: it deletes the cursor range it read, then inserts. See [delete_insert](/docs/concepts/write-strategies/#delete_insert). |
+| `merge_key`, dlt's `delete-insert` of the partitions a load holds | From 0.51.0, `write_strategy = "delete_insert"` with `replace_key` set to the `merge_key` columns: each commit deletes the rows holding a key value it read, then inserts. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). Where the partition is a cursor range, `cursor_column` alone does it. |
 | `dlt.sources.incremental("updated_at", initial_value=...)` | `cursor_column = "updated_at"` and `cursor_start`, with `ctx.cursor_value` in a Python table. `lag` is `lookback`. See [Cursors](/docs/concepts/cursors/). |
 | Pipeline state (`_dlt_pipeline_state`) | The destination's own maximum of `cursor_column`, read each run. `state = "logged"` keeps a position for the tables that need one. |
 | The stored schema (`_dlt_version`) | The live table, read each run. See [Contracts](/docs/concepts/contracts/). |

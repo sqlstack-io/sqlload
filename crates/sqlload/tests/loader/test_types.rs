@@ -1120,6 +1120,30 @@ pub(crate) struct DedupeTargetTestCase {
     pub(crate) expected_rows: [&'static str; 4],
 }
 
+/// A target that `delete_insert` with a cursor and a `replace_key` loads Postgres rows into twice.
+pub(crate) struct ReplaceKeyTargetTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table.
+    pub(crate) reset: &'static [&'static str],
+    /// The table's rows as one text value, `le_version/line:amount` ordered by version (NULL last) and line.
+    pub(crate) check_query: &'static str,
+    /// Text each load's plan must show.
+    pub(crate) expected_plan: &'static str,
+    /// What `check_query` returns after each of the two loads.
+    pub(crate) expected_rows: [&'static str; 2],
+}
+
+/// Loads of CSV files by `delete_insert` with `replace_key = ["le_version"]` through `sqlload load --json`, one per step, each after writing its files.
+pub(crate) struct ReplacedKeysTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) steps: &'static [&'static [MergeFile]],
+    /// Each load's table `replaced_keys`, as compact JSON.
+    pub(crate) expected_reports: &'static [&'static str],
+}
+
 /// A target a merge on a key with NULL parts is loaded into three times.
 pub(crate) struct NullKeyTargetTestCase {
     pub(crate) description: &'static str,

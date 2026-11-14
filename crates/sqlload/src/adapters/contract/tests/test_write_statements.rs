@@ -104,10 +104,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "delete_insert replaces the cursor window",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04T09:00:00Z".to_owned()),
                 to: None,
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
@@ -120,10 +122,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "a text cursor's window is deleted by code point on Snowflake, whatever the column's collation",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "code".to_owned(),
+                cursor_column: Some("code".to_owned()),
                 from: Some("B1".to_owned()),
                 to: Some("a9".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
@@ -136,10 +140,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "a text cursor's listed values are deleted by code point on Postgres",
             warehouse: Warehouse::Postgres,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "code".to_owned(),
+                cursor_column: Some("code".to_owned()),
                 from: None,
                 to: None,
                 values: vec!["B1".to_owned()],
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
@@ -152,16 +158,122 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "a text cursor's window on DuckDB, which compares bytewise already, is deleted as it is",
             warehouse: Warehouse::DuckDb,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "code".to_owned(),
+                cursor_column: Some("code".to_owned()),
                 from: Some("B1".to_owned()),
                 to: None,
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
                 "DELETE FROM \"raw\".\"app__accounts\" WHERE \"code\" >= CAST('B1' AS VARCHAR)",
                 DUCK_INSERT,
                 "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert by replace_key on Snowflake deletes the rows holding a staged key, a NULL matching a NULL, then inserts, in one transaction",
+            warehouse: Warehouse::Snowflake,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: None,
+                from: None,
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec![],
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"RAW\".\"APP__ACCOUNTS\" AS __target USING (SELECT DISTINCT \"ID\" AS \"ID\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\") AS __source WHERE __target.\"ID\" IS NOT DISTINCT FROM __source.\"ID\"",
+                SF_INSERT,
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert by replace_key on Postgres compares a key column the source declares NOT NULL with =",
+            warehouse: Warehouse::Postgres,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: None,
+                from: None,
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"raw\".\"app__accounts\" AS __target USING (SELECT DISTINCT \"id\" AS \"id\" FROM \"pg_temp\".\"app__accounts__sqlload_staging_load1\") AS __source WHERE __target.\"id\" = __source.\"id\"",
+                "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS jsonb), \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\" FROM \"pg_temp\".\"app__accounts__sqlload_staging_load1\"",
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert with a cursor and a replace_key on DuckDB deletes the cursor window and the rows of the staged keys",
+            warehouse: Warehouse::DuckDb,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: Some("updated_at".to_owned()),
+                from: Some("2026-11-04T09:00:00Z".to_owned()),
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec![],
+            },
+            expected_statements: &[
+                "BEGIN",
+                "DELETE FROM \"raw\".\"app__accounts\" WHERE \"updated_at\" >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP WITH TIME ZONE)",
+                "DELETE FROM \"raw\".\"app__accounts\" AS __target USING (SELECT DISTINCT \"id\" AS \"id\" FROM \"raw\".\"app__accounts__sqlload_staging_load1\") AS __source WHERE __target.\"id\" IS NOT DISTINCT FROM __source.\"id\"",
+                DUCK_INSERT,
+                "COMMIT",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert by replace_key on BigQuery is one MERGE that deletes the rows of each distinct staged key and inserts every staged row",
+            warehouse: Warehouse::BigQuery,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: None,
+                from: None,
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec![],
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, FALSE AS __sqlload_replaces FROM `raw`.`app__accounts__sqlload_staging_load1` UNION ALL SELECT `id`, NULL, NULL, NULL, NULL, TRUE FROM (SELECT DISTINCT `id` AS `id` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __sqlload_keys) AS __source ON __source.__sqlload_replaces AND (__target.`id` = __source.`id` OR (__target.`id` IS NULL AND __source.`id` IS NULL)) WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND NOT __source.__sqlload_replaces THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`)",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert with a cursor and a replace_key on Databricks is one MERGE that also deletes the cursor window",
+            warehouse: Warehouse::Databricks,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: Some("updated_at".to_owned()),
+                from: Some("2026-11-04T09:00:00Z".to_owned()),
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec![],
+            },
+            expected_statements: &[
+                "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at`, FALSE AS __sqlload_replaces FROM `raw`.`app__accounts__sqlload_staging_load1` UNION ALL SELECT `id`, NULL, NULL, NULL, NULL, TRUE FROM (SELECT DISTINCT `id` AS `id` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __sqlload_keys) AS __source ON __source.__sqlload_replaces AND __target.`id` <=> __source.`id` WHEN MATCHED THEN DELETE WHEN NOT MATCHED AND NOT __source.__sqlload_replaces THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP) THEN DELETE",
+            ],
+        },
+        WriteStatementsTestCase {
+            description: "delete_insert by replace_key on ClickHouse publishes the delta displacing the rows of its keys, a NULL matching a NULL",
+            warehouse: Warehouse::ClickHouse,
+            mode: WriteMode::DeleteInsert {
+                cursor_column: None,
+                from: None,
+                to: None,
+                values: Vec::new(),
+                replace_key: vec!["id".to_owned()],
+                not_null_keys: vec![],
+            },
+            expected_statements: &[
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
+                "CREATE TABLE `raw`.`app__accounts__sqlload_staging_load1_swap` AS `raw`.`app__accounts`",
+                CH_DELTA_INSERT,
+                "-- sqlload publish {\"Partitions\":{\"target\":\"`raw`.`app__accounts`\",\"delta\":\"`raw`.`app__accounts__sqlload_staging_load1_swap`\",\"copy\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy`\",\"aside\":\"`raw`.`app__accounts__sqlload_staging_load1_swap_copy_aside`\",\"displaced\":\"(isNull(`id`), assumeNotNull(`id`)) IN (SELECT isNull(`id`), assumeNotNull(`id`) FROM `raw`.`app__accounts__sqlload_staging_load1_swap`)\"}}",
+                "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",
             ],
         },
         WriteStatementsTestCase {
@@ -179,10 +291,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "a backfill window bounds the delete on both sides",
             warehouse: Warehouse::DuckDb,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-01".to_owned()),
                 to: Some("2026-11-02".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
@@ -195,10 +309,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "a files source's partitions are deleted by value, never by range",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-01".to_owned()),
                 to: None,
                 values: vec!["2026-11-01".to_owned(), "2026-11-03".to_owned()],
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "BEGIN",
@@ -225,10 +341,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "delete_insert on Databricks is one MERGE inserting every staged row and deleting the window",
             warehouse: Warehouse::Databricks,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04T09:00:00Z".to_owned()),
                 to: Some("2026-11-05T09:00:00Z".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP) AND __target.`updated_at` < CAST('2026-11-05T09:00:00Z' AS TIMESTAMP) THEN DELETE",
@@ -238,10 +356,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "delete_insert by partition values on Databricks deletes the listed values",
             warehouse: Warehouse::Databricks,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: None,
                 to: None,
                 values: vec!["2026-11-01".to_owned(), "2026-11-03".to_owned()],
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` IN (CAST('2026-11-01' AS TIMESTAMP), CAST('2026-11-03' AS TIMESTAMP)) THEN DELETE",
@@ -251,10 +371,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "an unbounded delete_insert on Databricks deletes every row it does not insert",
             warehouse: Warehouse::Databricks,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: None,
                 to: None,
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, parse_json(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE THEN DELETE",
@@ -278,10 +400,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "delete_insert on BigQuery is one MERGE inserting every staged row and deleting the window",
             warehouse: Warehouse::BigQuery,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04T09:00:00Z".to_owned()),
                 to: Some("2026-11-05T09:00:00Z".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "MERGE INTO `raw`.`app__accounts` AS __target USING (SELECT `id` AS `id`, PARSE_JSON(`profile`) AS `profile`, `updated_at` AS `updated_at`, `_sqlload_load_id` AS `_sqlload_load_id`, `_sqlload_loaded_at` AS `_sqlload_loaded_at` FROM `raw`.`app__accounts__sqlload_staging_load1`) AS __source ON FALSE WHEN NOT MATCHED THEN INSERT (`id`, `profile`, `updated_at`, `_sqlload_load_id`, `_sqlload_loaded_at`) VALUES (__source.`id`, __source.`profile`, __source.`updated_at`, __source.`_sqlload_load_id`, __source.`_sqlload_loaded_at`) WHEN NOT MATCHED BY SOURCE AND __target.`updated_at` >= CAST('2026-11-04T09:00:00Z' AS TIMESTAMP) AND __target.`updated_at` < CAST('2026-11-05T09:00:00Z' AS TIMESTAMP) THEN DELETE",
@@ -299,10 +423,12 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             description: "delete_insert on ClickHouse converts the staged rows into a delta in the table's shape, then publishes its partitions, replacing the window's rows",
             warehouse: Warehouse::ClickHouse,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04 09:00:00.000000+00".to_owned()),
                 to: Some("2026-11-05 09:00:00.000000+00".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             expected_statements: &[
                 "DROP TABLE IF EXISTS `raw`.`app__accounts__sqlload_staging_load1_swap`",

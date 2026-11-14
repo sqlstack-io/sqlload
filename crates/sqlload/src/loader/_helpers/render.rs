@@ -19,14 +19,15 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
-    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS,
+    PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -369,8 +370,31 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 unique_key.join(", ")
             )
         }
-        WriteMode::DeleteInsert { cursor_column, .. } => {
-            format!("delete_insert (cursor: {cursor_column})")
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } => {
+            let nulls = match table
+                .mode
+                .matched_keys()
+                .iter()
+                .any(|(_, nullable)| *nullable)
+            {
+                true => NULL_KEYS_NOTE,
+                false => "",
+            };
+            let parts: Vec<String> = [
+                cursor_column
+                    .as_ref()
+                    .map(|column| format!("cursor: {column}")),
+                (!replace_key.is_empty())
+                    .then(|| format!("replace_key: {}{nulls}", replace_key.join(", "))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            format!("delete_insert ({})", parts.join(", "))
         }
         WriteMode::Append => match &spec.cursor {
             Some(cursor) => format!("append (cursor: {})", cursor.column),
@@ -671,7 +695,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             };
             format!("{windows} of {step}, {commits}{end}")
         }
-        (CommitRule::FileGroups(groups), _) if matches!(table.mode, WriteMode::Merge { .. }) => {
+        (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(
                 "{}, one commit each, oldest modified first (ties by path), each recorded in the run log",
                 match groups.len() {
@@ -729,6 +753,9 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 }
                 WholeReason::Unordered | WholeReason::Blocked => {
                     "committing part of an unordered cursor read could skip rows"
+                }
+                WholeReason::ReplaceKey => {
+                    "delete_insert by replace_key: each commit replaces every row of its key values, so a value's rows commit together"
                 }
             };
             let once = matches!(table.mode, WriteMode::DeleteInsert { .. })
@@ -1308,6 +1335,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
         retryable: outcome.retryable,
         after_load: match &outcome.loaded {
             Ok(loaded) => loaded.after_load.clone(),
+            Err(_) => None,
+        },
+        replaced_keys: match &outcome.loaded {
+            Ok(loaded) => loaded.replaced_keys.clone(),
             Err(_) => None,
         },
     }

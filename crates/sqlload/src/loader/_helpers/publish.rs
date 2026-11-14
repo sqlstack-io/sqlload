@@ -78,6 +78,7 @@ use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_merge_log;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
+use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::merged_record;
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_read_as;
@@ -90,6 +91,7 @@ use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
 use crate::loader::constants::PROGRESS_EVERY;
+use crate::loader::constants::REPLACED_KEYS_SHOWN;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_repair::files_to_replace;
@@ -99,6 +101,7 @@ use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
 use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
+use crate::loader::models::ReplacedKeys;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
 use crate::loader::models::TableLoaded;
@@ -106,10 +109,11 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
-use crate::project::models::{NullKeys, WriteStrategy};
+use crate::project::models::NullKeys;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
+use crate::publish_checks::main::staged_keys::staged_keys;
 use crate::publish_checks::models::CheckedCommit;
 use crate::row_batches::main::unnest_batch::unnest_batch;
 use crate::row_batches::models::Unnest;
@@ -491,7 +495,7 @@ impl Publisher {
         if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
         }
-        if merges_files(&table) {
+        if records_files(&table) {
             ensure_merge_log(&table, &destination).await?;
         }
         let load_id = uuid::Uuid::new_v4().to_string();
@@ -640,6 +644,7 @@ impl Publisher {
             batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
             merged_file: None,
+            replaced: None,
             fed_files: Vec::new(),
             settled_files: Vec::new(),
         })
@@ -818,7 +823,7 @@ impl Publisher {
             self.state = state;
         }
         let empty_range = self.commits == 0
-            && matches!(self.table.mode, WriteMode::DeleteInsert { .. })
+            && deletes_range(&self.table)
             && !matches!(self.table.commits, CommitRule::Windows(_));
         let pending = self.waiting_rows > 0
             || (self.waiting_range.is_some() && self.files.is_none())
@@ -1110,17 +1115,17 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        if let (WriteMode::Merge { unique_key, .. }, NullKeys::Fail) = (&mode, spec.null_keys) {
-            let commit = CheckedCommit {
-                destination: &self.destination,
-                warehouse,
-                staging: &staging,
-                table: &spec.destination,
-                exists: self.table.exists,
-                columns: &self.table.schema.write_columns,
-                committed: self.committed_rows,
-            };
-            refuse_null_keys(&commit, unique_key, merging_file).await?;
+        let checked = CheckedCommit {
+            destination: &self.destination,
+            warehouse,
+            staging: &staging,
+            table: &spec.destination,
+            exists: self.table.exists,
+            columns: &self.table.schema.write_columns,
+            committed: self.committed_rows,
+        };
+        if let (Some((key, setting)), NullKeys::Fail) = (mode.staged_key(), spec.null_keys) {
+            refuse_null_keys(&checked, (key, setting), merging_file).await?;
         }
         if let WriteMode::Merge {
             unique_key,
@@ -1128,29 +1133,18 @@ impl Publisher {
             ..
         } = &mode
         {
-            let commit = CheckedCommit {
-                destination: &self.destination,
-                warehouse,
-                staging: &staging,
-                table: &spec.destination,
-                exists: self.table.exists,
-                columns: &self.table.schema.write_columns,
-                committed: self.committed_rows,
-            };
-            refuse_repeated_keys(&commit, unique_key, merging_file).await?;
+            refuse_repeated_keys(&checked, unique_key, merging_file).await?;
         }
         if let Some(checks) = &spec.checks {
-            let commit = CheckedCommit {
-                destination: &self.destination,
-                warehouse,
-                staging: &staging,
-                table: &spec.destination,
-                exists: self.table.exists,
-                columns: &self.table.schema.write_columns,
-                committed: self.committed_rows,
-            };
-            run_checks(&commit, checks).await?;
+            run_checks(&checked, checks).await?;
         }
+        let replaced = match &mode {
+            WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
+                let shown = (replace_key.as_slice(), REPLACED_KEYS_SHOWN as u64 + 1);
+                Some((replace_key.clone(), staged_keys(&checked, shown).await?))
+            }
+            _ => None,
+        };
         if let Some(children) = &mut self.children {
             match last {
                 true => {
@@ -1178,6 +1172,9 @@ impl Publisher {
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
         self.commits += 1;
+        if let Some(replaced) = replaced {
+            self.replaced = Some(ReplacedKeys::added(self.replaced.take(), replaced));
+        }
         self.committed_state = self.state.clone();
         self.settled_files.append(&mut self.fed_files);
         Ok(())
@@ -1369,9 +1366,15 @@ async fn snapshot(reader: &SourceReader, statement: &str) -> Result<(), LoaderEr
     }
 }
 
-/// Whether the table's commits delete a cursor range (`delete_insert`), so its last range commits even without rows: rows deleted upstream go too.
+/// Whether the table's commits delete a cursor range (`delete_insert` with a cursor), so its last range commits even without rows: rows deleted upstream go too.
 fn deletes_range(table: &TablePlan) -> bool {
-    matches!(table.mode, WriteMode::DeleteInsert { .. })
+    matches!(
+        table.mode,
+        WriteMode::DeleteInsert {
+            cursor_column: Some(_),
+            ..
+        }
+    )
 }
 
 /// The cursor value at row `index` of `values` as cursor text, where an ordered read's commit ends.
@@ -1381,28 +1384,28 @@ fn cut_value(values: &dyn Array, index: usize, cursor_type: &ColumnType) -> Resu
     cursor_text(&formatter.value(index).to_string(), cursor_type)
 }
 
-/// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions.
+/// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions (its `replace_key` kept).
 fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
-    match (planned, range) {
-        (WriteMode::DeleteInsert { cursor_column, .. }, Some(CommitRange::Window { from, to })) => {
-            WriteMode::DeleteInsert {
-                cursor_column: cursor_column.clone(),
-                from,
-                to,
-                values: Vec::new(),
-            }
-        }
-        (WriteMode::DeleteInsert { cursor_column, .. }, Some(CommitRange::Values(values)))
-            if !values.is_empty() =>
-        {
-            WriteMode::DeleteInsert {
-                cursor_column: cursor_column.clone(),
-                from: None,
-                to: None,
-                values,
-            }
-        }
-        (planned, _) => planned.clone(),
+    let narrowed = match range {
+        Some(CommitRange::Window { from, to }) => (from, to, Vec::new()),
+        Some(CommitRange::Values(values)) if !values.is_empty() => (None, None, values),
+        _ => return planned.clone(),
+    };
+    match planned {
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            not_null_keys,
+            ..
+        } => WriteMode::DeleteInsert {
+            cursor_column: cursor_column.clone(),
+            from: narrowed.0,
+            to: narrowed.1,
+            values: narrowed.2,
+            replace_key: replace_key.clone(),
+            not_null_keys: not_null_keys.clone(),
+        },
+        planned => planned.clone(),
     }
 }
 
@@ -1428,6 +1431,7 @@ pub(crate) async fn publish_table(
         changes: publisher.child_changes(),
         note: None,
         after_load: report,
+        replaced_keys: publisher.replaced.clone(),
     })
 }
 
@@ -1464,7 +1468,7 @@ async fn feed(
             }
             CommitRule::FileGroups(groups) => {
                 let planned = table.files.as_ref().map(|files| files.files.as_slice());
-                let merging = merges_files(table);
+                let merging = records_files(table);
                 for group in groups {
                     let files: Vec<DataFile> = group
                         .files
@@ -1610,14 +1614,12 @@ async fn feed(
     (publisher, fed)
 }
 
-/// Whether `table` merges a files source's files, one commit and run record per file.
-pub(crate) fn merges_files(table: &TablePlan) -> bool {
-    table.files.is_some()
-        && table.spec.files.is_some()
-        && table.spec.strategy == WriteStrategy::Merge
+/// Whether `table` loads a files source's files one commit and run record per file: a merge, or `delete_insert` by `replace_key` (see [`logs_files`]).
+pub(crate) fn records_files(table: &TablePlan) -> bool {
+    table.files.is_some() && logs_files(&table.spec)
 }
 
-/// The file a files merge group reads (it holds one), as its run record names it: `name|version`.
+/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
 fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
     let location = table
         .spec
@@ -1820,7 +1822,10 @@ impl Publisher {
     fn partition_unfinished(&self, range: &CommitRange) -> Result<bool, LoaderError> {
         let (
             Some(sink),
-            WriteMode::DeleteInsert { cursor_column, .. },
+            WriteMode::DeleteInsert {
+                cursor_column: Some(cursor_column),
+                ..
+            },
             CommitRange::Window { to: Some(to), .. },
         ) = (&self.files, &self.table.mode, range)
         else {

@@ -382,7 +382,7 @@ pub(crate) fn loaded_overrides(overrides: &TableOverride, rule: NameRule) -> Tab
     }
 }
 
-/// `settings` with every column they name as the column loads under `rule`: the unique key, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
+/// `settings` with every column they name as the column loads under `rule`: the unique and replace keys, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
 pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> TableSettings {
     let name = |column: &str| loaded_name(rule.0, column, rule.1);
     let names = |columns: &Vec<String>| {
@@ -411,6 +411,7 @@ pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> Table
     }
     TableSettings {
         unique_key: settings.unique_key.as_ref().map(names),
+        replace_key: settings.replace_key.as_ref().map(names),
         cursor_column: settings.cursor_column.as_deref().map(name),
         constant_columns: settings
             .constant_columns

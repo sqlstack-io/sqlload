@@ -870,6 +870,7 @@ impl PythonFeed {
                 changes: Vec::new(),
                 note: Some(NO_DATA_NOTE.to_owned()),
                 after_load: None,
+                replaced_keys: None,
             });
         }
         let unsettled = self.publisher.is_none()
@@ -885,12 +886,14 @@ impl PythonFeed {
         let publisher = self.publisher(load).await?;
         let rows = publisher.finish(state).await?;
         let children = publisher.child_changes();
+        let replaced_keys = publisher.replaced.clone();
         self.changes.extend(children);
         Ok(TableLoaded {
             rows,
             changes: std::mem::take(&mut self.changes),
             note: None,
             after_load: None,
+            replaced_keys,
         })
     }
 
@@ -1290,6 +1293,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         ),
         unique_key: Vec::new(),
         not_null_keys: Vec::new(),
+        replace_key: Vec::new(),
         dedup_sort: None,
         cursor: None,
         batch: None,

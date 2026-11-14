@@ -179,6 +179,15 @@ pub(crate) fn build_spec(
         }
     };
     let merges = strategy == WriteStrategy::Merge && cdc.is_none();
+    let replace_key: Vec<String> = layered(&settings.replace_key, &defaults.replace_key)
+        .filter(|(_, origin)| {
+            *origin == SettingOrigin::Table
+                || strategy == WriteStrategy::DeleteInsert
+                || strategy_origin != SettingOrigin::Table
+        })
+        .map(|(key, _)| key)
+        .unwrap_or_default();
+    let keyed = strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty();
     let (unique_key, key_from_primary_key) =
         match table_key(context, table, (settings, defaults), merges) {
             Ok(key) => key,
@@ -198,9 +207,10 @@ pub(crate) fn build_spec(
         Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),
         None => (
             strategy,
-            strategy_problems(strategy, &unique_key, cursor.as_ref()),
+            strategy_problems(strategy, (&unique_key, &replace_key), cursor.as_ref()),
         ),
     };
+    problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
     problems.extend(column_reference_problems(table, overrides));
     let constants = match table_constants(context, table, (settings, defaults), &columns.excluded) {
         Ok(constants) => constants,
@@ -239,11 +249,15 @@ pub(crate) fn build_spec(
         overrides,
     );
     problems.extend(found);
+    let matched_key = match keyed {
+        true => &replace_key,
+        false => &unique_key,
+    };
     let (null_keys, not_null_keys, found) = key_nulls(
         (table, &constants),
-        (strategy, &unique_key),
+        (strategy, matched_key, keyed),
         layered(&settings.null_keys, &defaults.null_keys)
-            .filter(|(_, origin)| *origin == SettingOrigin::Table || merges)
+            .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || keyed)
             .map(|(value, _)| value),
     );
     problems.extend(found);
@@ -257,9 +271,9 @@ pub(crate) fn build_spec(
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
         let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
-        let is_key = uses_key && unique_key.contains(masked);
+        let is_key = (uses_key && unique_key.contains(masked)) || replace_key.contains(masked);
         (is_cursor || is_key).then(|| {
-            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key")
+            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key or replace_key")
         })
     }));
     if context.source.mask_key.is_none()
@@ -292,7 +306,10 @@ pub(crate) fn build_spec(
         .unwrap_or_default();
     let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
-    problems.extend(after_load_problems(context, strategy));
+    if keyed && !matches!(nesting.unnest, Unnest::None) {
+        problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
+    }
+    problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     if !problems.is_empty() {
@@ -332,6 +349,7 @@ pub(crate) fn build_spec(
             .unwrap_or_default(),
         null_keys,
         not_null_keys,
+        replace_key,
         dedup_sort,
         cursor,
         batch,
@@ -995,15 +1013,15 @@ fn dedupe_settings(
     (Some((column, direction)), problems)
 }
 
-/// A table's `null_keys` (as set, else the default) and the `unique_key` columns whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that doesn't merge.
+/// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when `keyed`) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that matches no key.
 fn key_nulls(
     (table, constants): (&SourceTable, &[(String, ColumnType, String)]),
-    (strategy, unique_key): (WriteStrategy, &[String]),
+    (strategy, unique_key, keyed): (WriteStrategy, &[String], bool),
     null_keys: Option<NullKeys>,
 ) -> (NullKeys, Vec<String>, Vec<String>) {
     let problems: Vec<String> = null_keys
-        .filter(|_| strategy != WriteStrategy::Merge)
-        .map(|_| format!("null_keys is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row"))
+        .filter(|_| strategy != WriteStrategy::Merge && !keyed)
+        .map(|_| format!("null_keys is for write_strategy = \"merge\", which matches rows on unique_key, and \"delete_insert\" with a replace_key; {strategy} keeps every row"))
         .into_iter()
         .collect();
     let null_keys = null_keys.unwrap_or_default();
@@ -1022,10 +1040,32 @@ fn key_nulls(
     (null_keys, not_null, problems)
 }
 
+/// Why a `delete_insert` by `replace_key` (`keyed`) cannot load where `context` puts it: a files target replaces whole partition folders, and a files source picks its files from the run log, not by a cursor.
+fn replace_key_problems(
+    context: &SourceContext<'_>,
+    cursor: Option<&CursorSpec>,
+    keyed: bool,
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if !keyed {
+        return problems;
+    }
+    if context.target.path.is_some() {
+        problems.push("replace_key deletes rows by key in a database table, and a files target replaces whole partition folders. Fix: load into a database target, or drop replace_key and use a partition cursor_column".to_owned());
+    }
+    if let Some(cursor) = cursor.filter(|_| context.source.kind == SourceKind::Files) {
+        problems.push(format!(
+            "cursor_column {} does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log. Fix: remove cursor_column, or drop replace_key to replace partitions by the cursor",
+            cursor.column
+        ));
+    }
+    problems
+}
+
 /// Problems with a strategy and the keys and cursor it is given.
 pub(crate) fn strategy_problems(
     strategy: WriteStrategy,
-    unique_key: &[String],
+    (unique_key, replace_key): (&[String], &[String]),
     cursor: Option<&CursorSpec>,
 ) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
@@ -1040,10 +1080,19 @@ pub(crate) fn strategy_problems(
         (WriteStrategy::Replace, Some(_)) => problems.push(
             "write_strategy = \"replace\" reloads the whole table, so it takes no cursor_column".to_owned(),
         ),
-        (WriteStrategy::DeleteInsert, None) => problems.push(
-            "write_strategy = \"delete_insert\" replaces a cursor range, so it needs a cursor_column".to_owned(),
+        (WriteStrategy::DeleteInsert, None) if replace_key.is_empty() => problems.push(
+            "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key. Fix: set cursor_column, or replace_key = [\"version\"] to replace every row of each version a load reads".to_owned(),
         ),
         _ => {}
+    }
+    if !replace_key.is_empty() && strategy != WriteStrategy::DeleteInsert {
+        let merge = match strategy {
+            WriteStrategy::Merge => " (merge matches rows one by one on unique_key)",
+            _ => "",
+        };
+        problems.push(format!(
+            "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; {strategy} does not delete by it. Fix: set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key{merge}"
+        ));
     }
     if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback.is_none()) {
         problems.push(format!(
@@ -1054,15 +1103,18 @@ pub(crate) fn strategy_problems(
     problems
 }
 
-/// Why a files source's `after_load` cannot apply to its table: only `append` and `merge` never read a loaded file again, and a files target commits its own way.
-fn after_load_problems(context: &SourceContext<'_>, strategy: WriteStrategy) -> Vec<String> {
+/// Why a files source's `after_load` cannot apply to its table: only `append`, `merge` and `delete_insert` by a `replace_key` (`keyed`) never read a loaded file again, and a files target commits its own way.
+fn after_load_problems(
+    context: &SourceContext<'_>,
+    (strategy, keyed): (WriteStrategy, bool),
+) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     if context.source.after_load == AfterLoad::Keep {
         return problems;
     }
-    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) {
+    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) && !keyed {
         problems.push(format!(
-            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\"; {strategy} reads loaded files again"
+            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\", or \"delete_insert\" with a replace_key; {strategy} reads loaded files again"
         ));
     }
     if context.target.path.is_some() {

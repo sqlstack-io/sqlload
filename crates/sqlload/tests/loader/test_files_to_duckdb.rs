@@ -4,10 +4,10 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 use crate::files_helpers::run_source_row_upgrade;
 use crate::helpers::{
     local_store, run_async, run_files_scenario, run_large_partition, run_merge_case,
-    seaweedfs_store,
+    run_replaced_keys, seaweedfs_store,
 };
 use crate::test_types::SourceRowUpgradeTestCase;
-use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
+use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep, ReplacedKeysTestCase};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 
 /// Every row as `id:v`, then how many merged files the run log records.
@@ -121,6 +121,37 @@ const PATH_RUNS: &[FilesRun] = &[
 ];
 const PATH_CHECK: &str = "SELECT string_agg(id || ':' || score || ':' || region || ':' || day || ':' || shop || ':' || day_count || ':' || as_of, ',' ORDER BY id) FROM raw.scores";
 const PATH_RESULT: &str = "1:1.0:eu:2026-11-03:main:1:2026-11-08,2:1.0:eu:2026-11-03:main:1:2026-11-08,3:2.0:eu:2026-11-04:main:1:2026-11-08,4:2.0:eu:2026-11-04:main:1:2026-11-08";
+
+/// Every row as `le_version:line:amount` (a NULL version as `NULL`), in order, then how many files the run log records.
+const LE_CHECK: &str = "SELECT (SELECT string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+
+/// Every row as `le_version:line:amount`, in order, for a table without a run log.
+const LE_ROWS: &str = "SELECT string_agg(le_version || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version, line) FROM raw.scores";
+
+const LE_SETTINGS: &str = "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\n";
+
+const LE_P01: MergeFile = MergeFile {
+    key: "le_LE-FY27-P01.csv",
+    contents: "le_version,line,amount\nLE-FY27-P01,A,1\nLE-FY27-P01,B,2\nLE-FY27-P01,C,3\n",
+    modified_secs: 1_000,
+};
+const LE_P02: MergeFile = MergeFile {
+    key: "le_LE-FY27-P02.csv",
+    contents: "le_version,line,amount\nLE-FY27-P02,A,10\nLE-FY27-P02,B,20\n",
+    modified_secs: 2_000,
+};
+/// P01 sent again corrected: line C removed, new amounts.
+const LE_P01_RESENT: MergeFile = MergeFile {
+    key: "le_LE-FY27-P01.csv",
+    contents: "le_version,line,amount\nLE-FY27-P01,A,100\nLE-FY27-P01,B,200\n",
+    modified_secs: 3_000,
+};
+/// The corrected P01 under another name, so it can arrive in the same run as the first.
+const LE_P01_CORRECTED: MergeFile = MergeFile {
+    key: "le_LE-FY27-P01_corrected.csv",
+    contents: LE_P01_RESENT.contents,
+    modified_secs: 3_000,
+};
 
 #[test]
 fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_load_once()
@@ -913,4 +944,359 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_table_fails_naming_the_fixes_instead_of_skipping_it()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [FilesMergeTestCase {
+            description: "P01 sent again after P02 lies below the cursor read from P02, so the table fails naming replace_key, --start-cursor and --reload, and keeps its rows",
+            settings: "write_strategy = \"delete_insert\"\npath_columns = \"le_{file_version}.csv\"\ncursor_column = \"file_version\"\n",
+            steps: &[
+                MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "delete_insert (cursor: file_version)",
+                },
+                MergeStep {
+                    before: &[],
+                    files: &[LE_P02],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "",
+                },
+                MergeStep {
+                    before: &[],
+                    files: &[LE_P01_RESENT],
+                    loads: true,
+                    expected_error: "le_LE-FY27-P01.csv changed since it was loaded",
+                    expected_plan: "",
+                },
+                MergeStep {
+                    before: &[],
+                    files: &[],
+                    loads: true,
+                    expected_error: "but its file_version LE-FY27-P01 is below this load's range, which starts at LE-FY27-P02, so delete_insert would skip it and keep its old rows └── fix set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor LE-FY27-P01, or rebuild the table with --reload",
+                    expected_plan: "",
+                },
+            ],
+            check_query: LE_ROWS,
+            expected_result: "LE-FY27-P01:A:1,LE-FY27-P01:B:2,LE-FY27-P01:C:3,LE-FY27-P02:A:10,LE-FY27-P02:B:20",
+        }];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_holds_the_rows_of_its_newest_file()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "across runs, P01 sent again without line C replaces P01's rows whole, P02 stays, and a run with no new file loads nothing again",
+                settings: LE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[LE_P01],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "delete_insert (replace_key: le_version; NULLs in keys match)",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[LE_P02],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "1 file, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[LE_P01_RESENT],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
+            },
+            FilesMergeTestCase {
+                description: "in one run, the corrected P01 modified last replaces the first P01's rows whole",
+                settings: LE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01_CORRECTED, LE_P02, LE_P01],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "3 files, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                }],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
+            },
+            FilesMergeTestCase {
+                description: "two files of one run holding the same version: the later modified wins whole, whatever their names, keeping none of the earlier one's lines",
+                settings: LE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "le_version,line,amount\nLE-FY27-P05,A,1\nLE-FY27-P05,B,2\nLE-FY27-P05,C,3\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "le_version,line,amount\nLE-FY27-P05,D,4\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "",
+                }],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P05:D:4|2",
+            },
+            FilesMergeTestCase {
+                description: "a file whose rows have no version replaces the rows without one, as a NULL in the key matches a NULL by default",
+                settings: LE_SETTINGS,
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "a.csv",
+                            contents: "le_version,line,amount\n,A,1\n,B,2\nLE-FY27-P01,A,5\n",
+                            modified_secs: 1_000,
+                        },
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "le_version,line,amount\n,C,3\n",
+                            modified_secs: 2_000,
+                        },
+                    ],
+                    loads: true,
+                    expected_error: "",
+                    expected_plan: "",
+                }],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P01:A:5,NULL:C:3|2",
+            },
+            FilesMergeTestCase {
+                description: "with null_keys = \"fail\" a file holding a row without a version fails before it loads, naming replace_key, and the file before it stays",
+                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\nnull_keys = \"fail\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        LE_P02,
+                        MergeFile {
+                            key: "b.csv",
+                            contents: "le_version,line,amount\n,C,3\n",
+                            modified_secs: 3_000,
+                        },
+                    ],
+                    loads: true,
+                    expected_error: "drop/b.csv: the file holds a NULL in its replace_key: 1 row(s) have no le_version, such as (NULL) of (le_version); null_keys = \"fail\" refuses a NULL in a key column",
+                    expected_plan: "",
+                }],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P02:A:10,LE-FY27-P02:B:20|1",
+            },
+            FilesMergeTestCase {
+                description: "with after_load moving each file once it loads, P01 sent again into the folder still replaces P01's rows",
+                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\nafter_load = { move_to = \"loaded\" }\n",
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[LE_P01, LE_P02],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[LE_P01_RESENT],
+                        loads: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: LE_CHECK,
+                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
+            },
+        ];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it_naming_the_fix()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "replace_key with merge",
+                settings: "write_strategy = \"merge\"\nunique_key = [\"line\"]\nreplace_key = [\"le_version\"]\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; merge does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key (merge matches rows one by one on unique_key)",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "replace_key with append",
+                settings: "write_strategy = \"append\"\nreplace_key = [\"le_version\"]\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; append does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "replace_key with replace",
+                settings: "write_strategy = \"replace\"\nreplace_key = [\"le_version\"]\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; replace does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "a replace_key column the table doesn't have",
+                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"version\"]\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "replace_key column version is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change) └── fix name a column the table loads in replace_key",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "delete_insert with neither a cursor nor a replace_key",
+                settings: "write_strategy = \"delete_insert\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key └── fix set cursor_column, or replace_key = [\"version\"]",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "a files source's replace_key with a cursor_column",
+                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\npath_columns = \"le_{file_version}.csv\"\ncursor_column = \"file_version\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "cursor_column file_version does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log └── fix remove cursor_column",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
+                description: "a cursor_column the files hold, which the plan points to replace_key",
+                settings: "write_strategy = \"delete_insert\"\ncursor_column = \"le_version\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[LE_P01],
+                    loads: true,
+                    expected_error: "cursor_column le_version must be one of the partition_columns or path_columns for a files source; to replace every row of each le_version value the files hold, set replace_key = [\"le_version\"] and drop cursor_column",
+                    expected_plan: "",
+                }],
+                check_query: NO_TABLE,
+                expected_result: "0",
+            },
+        ];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_delete_insert_by_replace_key_when_loading_with_json_then_each_table_reports_the_key_values_it_replaced()
+-> Result<(), String> {
+    let test_cases = [ReplacedKeysTestCase {
+        description: "the first run reports both versions it loaded, the second only the version sent again",
+        steps: &[&[LE_P01, LE_P02], &[LE_P01_RESENT]],
+        expected_reports: &[
+            r#"{"columns":["le_version"],"truncated":false,"values":["LE-FY27-P01","LE-FY27-P02"]}"#,
+            r#"{"columns":["le_version"],"truncated":false,"values":["LE-FY27-P01"]}"#,
+        ],
+    }];
+    for test_case in &test_cases {
+        let reports = run_replaced_keys(test_case, LE_SETTINGS)?;
+        assert_eq!(
+            reports, test_case.expected_reports,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

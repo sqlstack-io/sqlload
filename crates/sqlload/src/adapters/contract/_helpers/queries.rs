@@ -274,6 +274,10 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
                 examples(&names, nulls)
             )
         }
+        CheckQuery::KeyValues(columns, limit) => format!(
+            "SELECT DISTINCT {} AS example FROM {from} ORDER BY 1 LIMIT {limit}",
+            examples(&names_of(columns), true)
+        ),
         CheckQuery::NullKeyExamples(columns) => {
             let names = names_of(columns);
             let missing: Vec<String> = names.iter().map(|name| format!("{name} IS NULL")).collect();
