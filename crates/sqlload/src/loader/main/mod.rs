@@ -15,6 +15,7 @@ pub mod files_columns;
 pub mod json_report;
 pub mod load_tables;
 pub mod plan_project;
+pub mod planned_sources;
 pub mod render_plan;
 pub mod render_tally;
 pub mod selected_specs;

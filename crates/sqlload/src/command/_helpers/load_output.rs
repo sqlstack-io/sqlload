@@ -9,6 +9,7 @@ use crate::command::_helpers::output::print_lines;
 use crate::load_events::main::event_line::event_line;
 use crate::load_events::models::{EventKind, LoadEvent};
 use crate::loader::_helpers::render::thousands;
+use crate::loader::main::planned_sources::planned_sources;
 
 /// The width of a tally line's verb column: `loaded` or `failed` and two spaces.
 const VERB_COLUMN: usize = 8;
@@ -290,4 +291,47 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
         lines.push(format!("{branch}{label:<SUMMARY_LABEL$}{text}"));
     }
     lines
+}
+
+/// `work`, a plan of a project with `sources` sources, with one line on stderr while it runs when `draws`: a spinner, `Planning` and how many sources are done, redrawn by a thread of its own (planning may hold up the async runtime) and cleared before anything else prints.
+pub(crate) async fn planning<T>(
+    work: impl std::future::Future<Output = T>,
+    sources: usize,
+    (draws, no_color): (bool, bool),
+) -> T {
+    if !draws {
+        return work.await;
+    }
+    let bar = indicatif::ProgressBar::with_draw_target(
+        None,
+        indicatif::ProgressDrawTarget::stderr_with_hz(LIVE_HZ),
+    );
+    let template = match no_color {
+        true => "{spinner} Planning  {msg}",
+        false => "{spinner:.cyan} Planning  {msg:.dim}",
+    };
+    if let Ok(style) = indicatif::ProgressStyle::with_template(template) {
+        bar.set_style(style.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "));
+    }
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let drawer = {
+        let (bar, done) = (bar.clone(), done.clone());
+        std::thread::spawn(move || {
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                bar.set_message(format!(
+                    "checking sources, {} of {sources} done",
+                    planned_sources()
+                ));
+                bar.tick();
+                std::thread::sleep(LIVE_REDRAW);
+            }
+        })
+    };
+    let output = work.await;
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    if drawer.join().is_err() {
+        bar.abandon();
+    }
+    bar.finish_and_clear();
+    output
 }
