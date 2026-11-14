@@ -1,6 +1,6 @@
 ---
 title: "Prefect and Dagster"
-description: "Run sqlload load from a Prefect flow or a Dagster asset, with each load event in the orchestrator's own log and a table of loaded tables."
+description: "Run sqlload load from a Prefect flow or a Dagster asset, with each load event in the orchestrator's own log, a table of loaded tables, or one asset per table."
 ---
 
 `sqlload load --events jsonl` writes one JSON object per [load event](/docs/cli/load/#events) to
@@ -65,6 +65,75 @@ if __name__ == "__main__":
     sqlload_load()
 ```
 
+### One asset per table
+
+One `sqlload load` loads every table of the job. To give each table its own Prefect asset, with
+its own health and metadata, record the assets from the job's `--json` report once the load and
+its retries have finished:
+
+```python
+import json
+import subprocess
+
+from prefect import flow, task
+from prefect.assets import add_asset_metadata, materialize
+
+
+class LoadFailed(Exception):  # args: the exit code and the --json report
+    def __str__(self) -> str:
+        return f"sqlload load exited with {self.args[0]}"
+
+
+def retry_on_75(task, task_run, state) -> bool:
+    error = state.result(raise_on_failure=False)
+    return isinstance(error, LoadFailed) and error.args[0] == 75
+
+
+@task(retries=2, retry_delay_seconds=30, retry_condition_fn=retry_on_75)
+def sqlload_load(project: str) -> dict:
+    load = subprocess.run(["sqlload", "load", "--json"], cwd=project, stdout=subprocess.PIPE, text=True)
+    report = json.loads(load.stdout)
+    if load.returncode != 0:
+        raise LoadFailed(load.returncode, report)
+    return report
+
+
+@materialize("sqlload://table")  # each call names its table with .with_options(assets=[...])
+def record_table(key: str, table: dict) -> None:
+    add_asset_metadata(key, {k: table[k] for k in ("rows", "duration_seconds", "write_strategy", "source", "note")})
+    if table["status"] == "failed":
+        raise RuntimeError(f"{table['table']}: {table['error']}")
+
+
+@flow
+def load_warehouse(project: str = ".") -> None:
+    outcome = sqlload_load(project, return_state=True).result(raise_on_failure=False)
+    if isinstance(outcome, Exception) and not isinstance(outcome, LoadFailed):
+        raise outcome
+    report = outcome.args[1] if isinstance(outcome, LoadFailed) else outcome
+    for table in report["tables"]:
+        if table["status"] in ("loaded", "failed"):
+            key = f"sqlload://{table['table']}"
+            record_table.with_options(assets=[key])(key, table, return_state=True)
+    if isinstance(outcome, LoadFailed):
+        raise outcome
+
+
+if __name__ == "__main__":
+    load_warehouse()
+```
+
+- The assets come from the **final** report, after retries, so an outage that a retry recovers
+  from leaves no failed asset.
+- On a failed load, `LoadFailed` carries the report, so the tables that loaded still record and
+  the ones that failed record as failed. The flow then fails with the load's exit code.
+- `return_state=True` keeps one failed table from stopping the others from recording.
+- A table `--fail-fast` didn't start has `status` `skipped` and records nothing.
+- Only exit code 75 retries: every failure may pass on a rerun. See
+  [Retrying failed runs](/docs/cli/#retrying-failed-runs).
+- Declaring every table as an asset of the load task instead would give them all the task's one
+  final state, which is wrong when only one table fails.
+
 ## Dagster
 
 The asset logs through `context.log` and attaches a `tables` table to its materialization, or to
@@ -125,6 +194,49 @@ def sqlload_tables(context: dg.AssetExecutionContext) -> dg.MaterializeResult:
 
 defs = dg.Definitions(assets=[sqlload_tables])
 ```
+
+
+### One asset per table
+
+A `multi_asset` declares one asset per table of the job and yields a `MaterializeResult` for each
+table the final `--json` report lists as loaded:
+
+```python
+import json
+import subprocess
+
+import dagster as dg
+
+# The job's tables, as sqlload plan names them.
+TABLES = ["raw.shop__customers", "raw.shop__orders", "raw.shop__products", "raw.shop__refunds"]
+
+
+@dg.multi_asset(specs=[dg.AssetSpec(t.split("."), skippable=True) for t in TABLES])
+def sqlload_tables(context: dg.AssetExecutionContext):
+    load = subprocess.run(["sqlload", "load", "--json"], stdout=subprocess.PIPE, text=True)
+    report = json.loads(load.stdout)
+    if load.returncode == 75 and context.retry_number < 2:
+        raise dg.RetryRequested(max_retries=2, seconds_to_wait=30)
+    failed = []
+    for table in report["tables"]:
+        if table["status"] == "loaded":
+            metadata = {k: table[k] for k in ("rows", "duration_seconds", "write_strategy", "source", "note")}
+            yield dg.MaterializeResult(asset_key=table["table"].split("."), metadata=metadata)
+        elif table["status"] == "failed":
+            failed.append(f"{table['table']}: {table['error']}")
+    if load.returncode != 0:
+        raise dg.Failure(f"sqlload load exited with {load.returncode}", description="\n".join(failed))
+
+
+defs = dg.Definitions(assets=[sqlload_tables])
+```
+
+- Exit code 75 asks Dagster to run the step again, up to twice, before anything is materialized,
+  so a retried outage leaves no failed asset.
+- On the last attempt, each loaded table materializes. A table that failed doesn't, and the step
+  fails with every failed table's error.
+- `skippable=True` lets the asset of a failed or skipped table go unmaterialized.
+- Keep `TABLES` in line with the job's tables: yielding a table that isn't listed fails the step.
 
 Both recipes log lines that are not events, such as warnings, as they are, and `table_started`,
 `table_progress` and `table_committing` at debug level.
