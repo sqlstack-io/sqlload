@@ -126,11 +126,12 @@ pub(crate) fn event_lines(event: &LoadEvent, name_width: usize) -> Vec<String> {
     vec![tally_line((verb, name), &detail, name_width)]
 }
 
-/// `verb  name  detail` in the tally's columns, a detail's further lines under its first.
+/// `verb  name  detail` in the tally's columns, a detail's further lines under its first; a verb longer than `loaded` (`created`, `altered`) keeps two spaces after it.
 fn tally_line((verb, name): (&str, &str), detail: &str, name_width: usize) -> String {
-    let continued = format!("\n{:width$}", "", width = VERB_COLUMN + name_width);
+    let verb_width = VERB_COLUMN.max(verb.len() + 2);
+    let continued = format!("\n{:width$}", "", width = verb_width + name_width);
     format!(
-        "{verb:<VERB_COLUMN$}{name:<name_width$}{}",
+        "{verb:<verb_width$}{name:<name_width$}{}",
         detail.replace('\n', &continued)
     )
     .trim_end()
@@ -144,6 +145,22 @@ pub(crate) fn change_tally_line(line: &str, name_width: usize) -> String {
     let rest = parts.next().unwrap_or_default().trim_start();
     let (name, detail) = rest.split_once("  ").unwrap_or((rest, ""));
     tally_line((verb, name), detail.trim_start(), name_width)
+}
+
+/// What `load` prints of its plan before it starts: the closing line, and the Objects, Errors and Warnings sections when there are any; the Loads and Skipped trees and the `Plan ready` line are `plan`'s.
+pub(crate) fn start_lines(plan_lines: Vec<String>) -> Vec<String> {
+    let dropped = ["Plan ready", "Loads (", "Skipped ("];
+    let mut kept: Vec<String> = Vec::new();
+    for section in plan_lines.split(String::is_empty) {
+        let first = section.first().map_or("", String::as_str);
+        if section.is_empty() || dropped.iter().any(|heading| first.starts_with(heading)) {
+            continue;
+        }
+        kept.extend(section.iter().cloned());
+        kept.push(String::new());
+    }
+    kept.pop();
+    kept
 }
 
 /// Write each event from `receiver` as it comes: to `--events`, and as its tally line, printed or kept; until every sender is gone. The live block, when drawn, redraws about ten times a second under the printed lines, and is cleared at the end. Returns the kept lines and the tally.

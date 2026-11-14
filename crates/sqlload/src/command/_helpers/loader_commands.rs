@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::command::_helpers::load_output::{
-    EventsTarget, LoadOutput, change_tally_line, summary_lines, write_events,
+    EventsTarget, LoadOutput, change_tally_line, start_lines, summary_lines, write_events,
 };
 use crate::command::_helpers::live_block::LiveState;
 use crate::command::_helpers::output::{confirm_reload, print_lines};
@@ -354,6 +354,7 @@ async fn run_command(
             started,
             planned: (planned, plan_retryable),
         };
+        lines = start_lines(lines);
         if streamed.output.print {
             print_lines(std::mem::take(&mut lines), no_color);
         }
