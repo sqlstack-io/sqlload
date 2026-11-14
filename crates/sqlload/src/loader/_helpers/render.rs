@@ -1,3 +1,12 @@
+use crate::load_naming::models::Naming;
+use crate::loader::constants::{
+    FIX_LABEL, HOURS_OFFSET_LENGTH, REASON_LABEL, ROUTE_LABEL, SECOND_TIMESTAMP_LENGTH,
+    SOURCE_LABEL,
+};
+use crate::loader::models::UnreadSource;
+use crate::project::models::CheckName;
+use crate::run_log::models::RunEvent;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use chrono::SecondsFormat;
@@ -9,21 +18,22 @@ use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER,
-    RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
+    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
     PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan, TableResult,
     TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
+use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
@@ -32,6 +42,43 @@ use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, TableAction};
 use crate::store_paths::models::StoreKind;
+
+/// How many renamed columns the one-table view's `columns` line names before `...`.
+const SHOWN_RENAMES: usize = 2;
+
+/// Details only a plan of one table shows: why its rows travel the way they do.
+const ONE_TABLE_LABELS: [&str; 1] = ["why"];
+
+/// Details the project view leaves out where a table has the text most of its tables have.
+const SHARED_LABELS: [&str; 2] = ["batch", "schema"];
+
+/// Details any table can have, which a plan of several tables leaves out even when no other table shares them: the batches of a table read whole.
+const DEFAULT_DETAILS: [(&str, &str); 2] = [
+    ("batch", "about every 1 GB"),
+    (
+        "batch",
+        "about 1 GB at a time into a new table, swapped in once at the end",
+    ),
+];
+
+/// The details an incremental table's `reads` and `commits` stand in for.
+const REPLACED_LABELS: [&str; 3] = ["cursor", "state", "batch"];
+
+/// Words in a source's error that say it could not be reached, as opposed to read: such an error is headed `can't connect` and gets a fix.
+const CONNECTION_WORDS: [&str; 6] = [
+    "cannot connect",
+    "connection refused",
+    "login failed",
+    "password authentication failed",
+    "timed out",
+    "could not connect",
+];
+
+/// What an error's reason says, and the headline `plan` gives it.
+const HEADLINES: [(&str, &str); 2] = [
+    ("the source reports no primary key", "no key to merge on"),
+    ("no write_strategy is set", "no write_strategy"),
+];
 
 /// A section: a heading with an optional right-aligned note, then each item as a tree branch; nothing when it has no items.
 pub(crate) fn tree(heading: &str, note: &str, items: &[PlanItem]) -> Vec<String> {
@@ -91,19 +138,6 @@ fn detail(label: &str, text: impl Into<String>) -> PlanDetail {
         label: label.to_owned(),
         text: text.into(),
     }
-}
-
-/// `count` with thousands separators, as `30,000`.
-pub(crate) fn thousands(count: u64) -> String {
-    let digits = count.to_string();
-    let mut grouped = String::new();
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
-    }
-    grouped
 }
 
 /// A finding as an `Errors` item: the reason, and the fix where the text gives one after `Fix:`.
@@ -562,9 +596,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     if source_readers(table) > 1 {
         details.push(detail(
             "note",
-            format!(
-                "read over up to {PARALLEL_READERS} connections in one snapshot, each a range of the table's pages, when it is a plain table of 128 MiB or more on Postgres 14+"
-            ),
+            format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
     details.extend(
@@ -601,7 +633,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
 }
 
 /// How the load commits: by cursor window, in cursor order, by size, by files batch, or as one commit; with a hint to set `batch_size` for a large first load that would be one commit.
-fn batch_line(table: &TablePlan) -> String {
+pub(crate) fn batch_line(table: &TablePlan) -> String {
     let spec = &table.spec;
     let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
     let described = match (&table.commits, at_end) {
@@ -638,16 +670,8 @@ fn batch_line(table: &TablePlan) -> String {
             )
         }
         (CommitRule::FileGroups(groups), _) => {
-            let parquet = spec
-                .files
-                .as_ref()
-                .is_some_and(|files| files.encoding.format == SourceFormat::Parquet);
-            let drift = match parquet {
-                true => "; each batch's footers are combined, so later batches may add columns",
-                false => "",
-            };
             format!(
-                "{} of whole partitions, up to {} files or about 1 GB per commit{drift}",
+                "{}, up to {} files or about 1 GB per commit",
                 match groups.len() {
                     1 => "1 batch".to_owned(),
                     count => format!("{count} batches"),
@@ -840,6 +864,33 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
     }
 }
 
+/// Each destination `tables` load into, as `Snowflake analytics`, in order.
+fn destinations(tables: &[&TablePlan]) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for table in tables {
+        let name = format!("{} {}", table.spec.warehouse, table.spec.target);
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// `item` with its `route` naming `table`'s destination when the run loads into several.
+fn routed_item(table: &TablePlan, mut item: PlanItem, several: bool) -> PlanItem {
+    if several {
+        let name = format!("{} {}", table.spec.warehouse, table.spec.target);
+        for detail in item
+            .details
+            .iter_mut()
+            .filter(|detail| detail.label == ROUTE_LABEL)
+        {
+            detail.text = format!("{name}: {}", detail.text);
+        }
+    }
+    item
+}
+
 /// A table that cannot load, as an `Errors` item, with the flag that unblocks it where one does.
 pub(crate) fn blocked_item(table: &TablePlan) -> Option<PlanItem> {
     let blocked = table.schema.blocked.as_ref()?;
@@ -916,6 +967,42 @@ fn counted(count: usize, (one, many): (&str, &str)) -> String {
 
 /// The plan's sections: what `apply` creates or changes, what `load` moves, and what stops or should be known; one `Errors` item per table or problem.
 pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
+    sections(plan, false)
+}
+
+/// The plan as `plan` prints it: as `plan_view`, with tables named as they land and sorted by that name, and each load's details sharpened by `text_item`.
+pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
+    sections(plan, true)
+}
+
+/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, for one with a schema change or an unfinished load to repair, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range (`ranged`), which clears that range even with no file in it.
+pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
+    let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
+    let incremental =
+        table.exists && !matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let settled = table.schema.action == TableAction::Unchanged
+        && table
+            .output
+            .as_ref()
+            .is_none_or(|output| output.pending.is_empty());
+    if !settled || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. }) {
+        return None;
+    }
+    (incremental && read.files.is_empty()).then(|| {
+        let files = format!(
+            "{} files in {} ({})",
+            thousands(source.table.files.len() as u64),
+            source.location,
+            source.encoding
+        );
+        match (ranged, reads_line(table, false)) {
+            (true, Some(reads)) => format!("nothing in range: 0 of {files} for {reads}"),
+            _ => format!("up to date: 0 new of {files}"),
+        }
+    })
+}
+
+fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
     let ready: Vec<_> = plan
         .tables
         .iter()
@@ -944,19 +1031,54 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
             })
             .count();
     let alters = stages.len() + changed.len() - creates;
-    let errors: Vec<PlanItem> = plan
+    let mut errors: Vec<PlanItem> = plan
         .tables
         .iter()
-        .filter_map(blocked_item)
-        .chain(plan.problems.iter().map(|problem| problem_item(problem)))
+        .filter_map(|table| {
+            let item = blocked_item(table)?;
+            Some(match (text, &table.schema.blocked) {
+                (true, Some(blocked)) => {
+                    let name = display_name(table.spec.warehouse, &table.spec.destination);
+                    let problem = blocked.reasons.join(" ");
+                    let at = table.spec.settings_at.as_deref();
+                    text_error(plan, (&problem, at), PlanItem { name, ..item })
+                }
+                _ => item,
+            })
+        })
         .collect();
+    for (index, problem) in plan.problems.iter().enumerate() {
+        errors.push(match text {
+            true => {
+                let nth = plan.problems[..index]
+                    .iter()
+                    .filter(|earlier| *earlier == problem)
+                    .count();
+                let item = problem_item(problem);
+                let item = PlanItem {
+                    name: nth_about(&plan.problem_names, problem, nth).unwrap_or(item.name),
+                    ..item
+                };
+                let at = nth_about(&plan.problem_places, problem, nth).flatten();
+                text_error(plan, (problem, at.as_deref()), item)
+            }
+            false => problem_item(problem),
+        });
+    }
     let clauses = [
         (creates, ("object to create", "objects to create")),
         (alters, ("to alter", "to alter")),
         (ready.len(), ("to load", "to load")),
         (plan.skipped.len(), ("skipped", "skipped")),
     ];
-    let mut summary = vec![format!("{} selected", plan.tables.len())];
+    let selected = plan.tables.len();
+    let one = plan.tables.len() == 1 && plan.skipped.is_empty() && errors.is_empty();
+    let named = match text && !one {
+        true => destinations(&ready),
+        false => Vec::new(),
+    };
+    let several = named.len() > 1;
+    let mut summary = vec![format!("{selected} selected")];
     summary.extend(
         clauses
             .into_iter()
@@ -967,41 +1089,95 @@ pub(crate) fn plan_view(plan: &ProjectPlan) -> PlanView {
         ok: errors.is_empty(),
         retryable: !errors.is_empty() && plan.only_retryable_problems(),
         summary: summary.join(", "),
-        selected: plan.tables.len(),
+        selected,
+        destinations: named,
         objects: stages
             .iter()
             .map(|stage| stage_item(stage))
             .chain(changed.iter().map(|table| object_item(table)))
             .collect(),
-        loads: ready.iter().map(|table| load_item(table)).collect(),
-        skipped: plan
-            .skipped
-            .iter()
-            .map(|skipped| PlanItem {
-                name: skipped.source_table.clone(),
-                action: String::new(),
-                details: vec![PlanDetail {
-                    label: "reason".to_owned(),
-                    text: skipped.reason.clone(),
-                }],
-            })
-            .collect(),
+        loads: match text {
+            false => ready.iter().map(|table| load_item(table)).collect(),
+            true => {
+                let items: Vec<PlanItem> = ready.iter().map(|table| load_item(table)).collect();
+                let usual = usual_details(&ready, &items);
+                sorted(
+                    ready
+                        .iter()
+                        .zip(items)
+                        .map(|(table, item)| {
+                            let item = routed_item(table, item, several);
+                            text_item(table, item, one, &usual)
+                        })
+                        .collect(),
+                )
+            }
+        },
+        skipped: match text {
+            false => plan
+                .skipped
+                .iter()
+                .map(|skipped| skipped_item(skipped.source_table.clone(), skipped.reason.clone()))
+                .collect(),
+            true => sorted(
+                plan.skipped
+                    .iter()
+                    .map(|skipped| {
+                        let reason = match skipped.reason.strip_suffix(DRAINED_REASON) {
+                            Some(drained) => {
+                                drained.replacen("no files to load in", "no new files in", 1)
+                            }
+                            None => skipped.reason.clone(),
+                        };
+                        skipped_item(skipped.destination.clone(), reason)
+                    })
+                    .collect(),
+            ),
+        },
         errors,
         warnings: plan
             .warnings
             .iter()
+            .filter(|warning| !(text && folded_warning(plan, warning)))
             .map(|warning| error_item(warning, &[]))
             .chain(ready.iter().filter_map(|table| warning_item(table)))
             .collect(),
     }
 }
 
+/// What the `nth` (from 0) of `pairs` about `problem` holds: one plan problem's, as the `nth` of the plan's problems with that text.
+fn nth_about<T: Clone>(pairs: &[(String, T)], problem: &str, nth: usize) -> Option<T> {
+    pairs
+        .iter()
+        .filter(|(about, _)| about == problem)
+        .nth(nth)
+        .map(|(_, value)| value.clone())
+}
+
+fn skipped_item(name: String, reason: String) -> PlanItem {
+    PlanItem {
+        name,
+        action: String::new(),
+        details: vec![detail("reason", reason)],
+    }
+}
+
+/// `items` sorted by name, which groups them by schema.
+fn sorted(mut items: Vec<PlanItem>) -> Vec<PlanItem> {
+    items.sort_by(|left, right| left.name.cmp(&right.name));
+    items
+}
+
 /// The lines `plan` prints for `view`: `Plan ready`, each section with items, then whether the plan is complete.
 pub(crate) fn view_lines(view: &PlanView) -> Vec<String> {
     let mut lines = match view.selected {
         0 if !view.errors.is_empty() => Vec::new(),
-        _ => vec![format!("Plan ready  {}", view.summary), String::new()],
+        _ => vec![format!("Plan ready  {}", view.summary)],
     };
+    lines.extend(view.destinations.iter().map(|name| format!("to  {name}")));
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
     lines.extend(tree("Objects", "sqlload apply", &view.objects));
     lines.extend(tree("Loads", "sqlload load", &view.loads));
     lines.extend(tree("Skipped", "", &view.skipped));
@@ -1129,4 +1305,508 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
 /// `elapsed` in seconds, to the millisecond.
 fn seconds(elapsed: Duration) -> f64 {
     (elapsed.as_secs_f64() * 1000.0).round() / 1000.0
+}
+
+/// For each of `SHARED_LABELS`, the text most of `items` show, when at least two share it; ties go to the text first in order. An incremental table's `batch`, which `reads` and `commits` replace, isn't counted.
+pub(crate) fn usual_details(tables: &[&TablePlan], items: &[PlanItem]) -> HashMap<String, String> {
+    let mut counts: Vec<(&str, &str, usize)> = Vec::new();
+    for (table, item) in tables.iter().zip(items) {
+        for detail in &item.details {
+            let label = detail.label.as_str();
+            if incremental(table) && REPLACED_LABELS.contains(&label)
+                || !SHARED_LABELS.contains(&label)
+            {
+                continue;
+            }
+            match counts
+                .iter_mut()
+                .find(|(label, text, _)| *label == detail.label && *text == detail.text)
+            {
+                Some((_, _, count)) => *count += 1,
+                None => counts.push((&detail.label, &detail.text, 1)),
+            }
+        }
+    }
+    let mut usual: HashMap<String, (String, usize)> = HashMap::new();
+    for (label, text, count) in counts {
+        let best = usual.get(label).map_or(1, |(_, best)| *best);
+        if count > best {
+            usual.insert(label.to_owned(), (text.to_owned(), count));
+        }
+    }
+    usual
+        .into_iter()
+        .map(|(label, (text, _))| (label, text))
+        .collect()
+}
+
+/// Whether `table` reads from a cursor or a logged state, so `reads` and `commits` describe it.
+fn incremental(table: &TablePlan) -> bool {
+    table.window.is_some() || table.logged.is_some()
+}
+
+/// `item`, `load_item`'s view of `table`, as `plan` prints it: named as it lands, `route` (and `why`) directly under `source`, and, for an incremental table, `reads` and `commits` in place of `cursor`, `state` and `batch`. With `one` (one table selected) every detail stays, with times to the millisecond; otherwise a detail with its `usual` text is left out, and `commits` only shows when it says more than the usual.
+pub(crate) fn text_item(
+    table: &TablePlan,
+    item: PlanItem,
+    one: bool,
+    usual: &HashMap<String, String>,
+) -> PlanItem {
+    let incremental = incremental(table);
+    let mut details: Vec<PlanDetail> = item
+        .details
+        .into_iter()
+        .filter(|detail| match detail.label.as_str() {
+            label if incremental && REPLACED_LABELS.contains(&label) => false,
+            label if !one && ONE_TABLE_LABELS.contains(&label) => false,
+            label => {
+                one || (usual.get(label) != Some(&detail.text)
+                    && !DEFAULT_DETAILS.contains(&(label, detail.text.as_str())))
+            }
+        })
+        .collect();
+    let routed_at = details
+        .iter()
+        .position(|detail| detail.label == ROUTE_LABEL)
+        .unwrap_or(details.len());
+    if let Some(text) = incremental.then(|| commits_line(table, one)).flatten() {
+        details.insert(routed_at, detail("commits", text));
+    }
+    let (mut added, mut details): (Vec<PlanDetail>, Vec<PlanDetail>) = details
+        .into_iter()
+        .partition(|detail| matches!(detail.label.as_str(), "route" | "why"));
+    let after_source = details
+        .iter()
+        .position(|detail| detail.label == SOURCE_LABEL)
+        .map_or(0, |index| index + 1);
+    if one {
+        added.extend(key_line(table).map(|text| detail("key", text)));
+    }
+    if incremental {
+        added.extend(reads_line(table, one).map(|text| detail("reads", text)));
+    }
+    if one {
+        added.extend(columns_line(table).map(|text| detail("columns", text)));
+        added.extend(checks_line(table).map(|text| detail("checks", text)));
+    }
+    details.splice(after_source..after_source, added);
+    PlanItem {
+        name: display_name(table.spec.warehouse, &table.spec.destination),
+        action: item.action,
+        details,
+    }
+}
+
+/// How many columns the table loads from its source, and under dlt's naming the first names it changes: `6, named by naming = "dlt": company-no -> company_no, item-no -> item_no, ...`; `None` when they are only known at load.
+fn columns_line(table: &TablePlan) -> Option<String> {
+    let count = table
+        .schema
+        .write_columns
+        .iter()
+        .filter(|column| column.origin != ColumnOrigin::Metadata)
+        .count();
+    if count == 0 {
+        return None;
+    }
+    let renamed: Vec<String> = table
+        .spec
+        .source_table
+        .columns
+        .iter()
+        .filter(|_| table.spec.naming == Naming::Dlt)
+        .filter_map(|column| {
+            let spelled = column.source_spelling.as_deref()?;
+            (spelled != column.name).then(|| format!("{spelled} -> {}", column.name))
+        })
+        .collect();
+    Some(match renamed.as_slice() {
+        [] => thousands(count as u64),
+        shown => format!(
+            "{}, named by naming = \"dlt\": {}{}",
+            thousands(count as u64),
+            shown
+                .iter()
+                .take(SHOWN_RENAMES)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+            match shown.len() > SHOWN_RENAMES {
+                true => ", ...",
+                false => "",
+            }
+        ),
+    })
+}
+
+/// The checks its staged rows must pass, as `not_null company_no, item_no; min_rows 1,000 (warns)`.
+fn checks_line(table: &TablePlan) -> Option<String> {
+    let checks = table.spec.checks.as_ref()?;
+    let warns = |name: CheckName| match checks.warn.contains(&name) {
+        true => " (warns)",
+        false => "",
+    };
+    let parts: Vec<String> = [
+        (!checks.not_null.is_empty()).then(|| {
+            format!(
+                "not_null {}{}",
+                checks.not_null.join(", "),
+                warns(CheckName::NotNull)
+            )
+        }),
+        checks
+            .unique
+            .as_ref()
+            .map(|columns| format!("unique {}{}", columns.join(", "), warns(CheckName::Unique))),
+        checks
+            .min_rows
+            .map(|rows| format!("min_rows {}{}", thousands(rows), warns(CheckName::MinRows))),
+        checks
+            .max_row_drop
+            .map(|percent| format!("max_row_drop {percent}%{}", warns(CheckName::MaxRowDrop))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
+/// Where a merge's key comes from: `unique_key`, or the primary key the source reports.
+fn key_line(table: &TablePlan) -> Option<String> {
+    let WriteMode::Merge { unique_key, .. } = &table.mode else {
+        return None;
+    };
+    Some(match table.spec.key_from_primary_key {
+        true => format!(
+            "{}, the primary key the source reports (unique_key = \"{PRIMARY_KEY_PLACEHOLDER}\"{})",
+            unique_key.join(", "),
+            table
+                .spec
+                .unique_key_at
+                .as_deref()
+                .map(|at| format!(", {at}"))
+                .unwrap_or_default()
+        ),
+        false => {
+            let at = table
+                .spec
+                .unique_key_at
+                .as_deref()
+                .map(|at| format!(" ({at})"))
+                .unwrap_or_default();
+            let primary_key = &table.spec.source_table.primary_key;
+            let agrees = !primary_key.is_empty()
+                && primary_key
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    == unique_key.iter().collect();
+            match agrees {
+                true => format!("from unique_key{at}; the source reports the same primary key"),
+                false => format!("from unique_key{at}"),
+            }
+        }
+    })
+}
+
+/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`.
+pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
+    if let Some(logged) = &table.logged {
+        return Some(match &logged.current {
+            Some(record) => {
+                let cursor = record
+                    .cursor_column
+                    .as_ref()
+                    .map(|column| {
+                        let at = record.cursor_after.as_deref().unwrap_or("not set");
+                        format!("{column} {}, ", trimmed_time(at, precise))
+                    })
+                    .unwrap_or_default();
+                let origin = match record.event {
+                    RunEvent::Reset => "state reset",
+                    RunEvent::Reconcile => "reconciled",
+                    RunEvent::Run | RunEvent::Backfill => "run",
+                };
+                format!(
+                    "logged {cursor}state {} ({origin} {}, {})",
+                    record.state.as_deref().unwrap_or("not set"),
+                    record.run_id.chars().take(8).collect::<String>(),
+                    clock_time(&record.recorded_at)
+                )
+            }
+            None => "everything: no run is logged yet".to_owned(),
+        });
+    }
+    let window = table.window.as_ref()?;
+    let note = table.cursor_note.as_deref().unwrap_or_default();
+    let said = note
+        .strip_prefix(window.column.as_str())
+        .unwrap_or(note)
+        .trim();
+    let Some(from) = &window.from else {
+        return Some(format!("{}: {said}", window.column));
+    };
+    let (bound, after_bound) = match (said.strip_prefix("from "), said.strip_prefix("after ")) {
+        (Some(rest), _) => (">=", rest.strip_prefix(from.as_str())),
+        (None, Some(rest)) => (">", rest.strip_prefix(from.as_str())),
+        (None, None) => (
+            match window.inclusive {
+                true => ">=",
+                false => ">",
+            },
+            None,
+        ),
+    };
+    let origin = match after_bound {
+        Some(rest) => match rest
+            .trim()
+            .strip_prefix('(')
+            .and_then(|o| o.strip_suffix(')'))
+        {
+            Some(origin) if !origin.contains('(') => {
+                origin.replace("destination maximum", "warehouse maximum")
+            }
+            _ if rest.trim().is_empty() => String::new(),
+            _ => return Some(note.to_owned()),
+        },
+        None => match said.strip_suffix(from.as_str()) {
+            Some(before) if !before.contains('(') => before.trim_end().to_owned(),
+            _ => return Some(note.to_owned()),
+        },
+    };
+    let origin = match origin.is_empty() {
+        true => String::new(),
+        false => format!(" ({origin})"),
+    };
+    Some(format!(
+        "{} {bound} {}{origin}",
+        window.column,
+        trimmed_time(from, precise)
+    ))
+}
+
+/// How the read commits: once at its end, or after each window; with `precise`, any other rule too, as `batch` says it.
+fn commits_line(table: &TablePlan, precise: bool) -> Option<String> {
+    match &table.commits {
+        CommitRule::Whole(WholeReason::Unordered | WholeReason::Blocked) => Some(format!(
+            "once, at the end of the read ({} isn't read in order)",
+            table.window.as_ref()?.column
+        )),
+        CommitRule::Whole(_) => Some(batch_line(table).replacen(
+            "one commit for the whole read",
+            "once, at the end of the read",
+            1,
+        )),
+        CommitRule::Windows(_) if precise => Some(batch_line(table)),
+        CommitRule::Windows(_) => Some(match table.spec.batch {
+            Some(BatchStep::Duration(step)) => format!("after each {} window", window_length(step)),
+            Some(BatchStep::Integer(step)) => format!("after each window of {step}"),
+            Some(BatchStep::Whole) | None => batch_line(table),
+        }),
+        CommitRule::Ordered { .. } | CommitRule::Size | CommitRule::FileGroups(_) => {
+            precise.then(|| batch_line(table))
+        }
+    }
+}
+
+/// A window's length as people say it: `30-day`, `6-hour`, or as written when it isn't whole days, hours or minutes.
+fn window_length(step: std::time::Duration) -> String {
+    let seconds = step.as_secs();
+    let units = [(86_400, "day"), (3_600, "hour"), (60, "minute")];
+    units
+        .iter()
+        .find(|(size, _)| seconds.is_multiple_of(*size) && seconds >= *size)
+        .map_or_else(
+            || humantime::format_duration(step).to_string(),
+            |(size, unit)| format!("{}-{unit}", seconds / size),
+        )
+}
+
+/// `value` with a timestamp's fraction of a second cut to the second, or to the millisecond when `precise`, and an offset of whole hours shortened (`+00:00` to `+00`); anything else as it is.
+fn trimmed_time(value: &str, precise: bool) -> String {
+    let bytes = value.as_bytes();
+    let is_timestamp = bytes.len() >= SECOND_TIMESTAMP_LENGTH
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && matches!(bytes[10], b' ' | b'T')
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && value.is_char_boundary(SECOND_TIMESTAMP_LENGTH);
+    if !is_timestamp {
+        return value.to_owned();
+    }
+    let (seconds, rest) = value.split_at(SECOND_TIMESTAMP_LENGTH);
+    let digits = match rest.strip_prefix('.') {
+        Some(fraction) => fraction.bytes().take_while(u8::is_ascii_digit).count(),
+        None => 0,
+    };
+    let (fraction, offset) = match digits {
+        0 => ("", rest),
+        _ => rest.split_at(digits + 1),
+    };
+    let fraction = match precise {
+        true => fraction.get(..4).unwrap_or(fraction),
+        false => "",
+    };
+    let offset = offset
+        .strip_suffix(":00")
+        .filter(|hours| hours.len() == HOURS_OFFSET_LENGTH)
+        .unwrap_or(offset);
+    format!("{seconds}{fraction}{offset}")
+}
+
+/// A recorded time's clock part: `2026-11-14T07:54:11.123456Z` as `07:54:11Z`.
+fn clock_time(recorded_at: &str) -> String {
+    let time = recorded_at
+        .split_once('T')
+        .map_or(recorded_at, |(_, time)| time);
+    let clock = time.get(..8).unwrap_or(time);
+    match time.ends_with('Z') {
+        true => format!("{clock}Z"),
+        false => clock.to_owned(),
+    }
+}
+
+/// `item`, an `Errors` item for `problem` (a project problem, or a blocked table's reason), as `plan` prints it: a source that could not be read named by the source, with a headline, its driver's message, a fix and what it holds up (`blocks`); a table's problem named as its table lands, with a headline when its reason has a known one, and a fix that changes a setting starting with where the table's settings are written (`at`, as `sqlload.toml:93`).
+pub(crate) fn text_error(
+    plan: &ProjectPlan,
+    (problem, at): (&str, Option<&str>),
+    item: PlanItem,
+) -> PlanItem {
+    let source = item
+        .name
+        .strip_prefix("[sources.")
+        .and_then(|name| name.strip_suffix(']'));
+    let unread = source.and_then(|source| Some((source, plan.unread_sources.get(source)?)));
+    match unread {
+        Some((source, unread)) => {
+            let mut details: Vec<PlanDetail> = item
+                .details
+                .into_iter()
+                .map(|detail| match detail.label.as_str() {
+                    "reason" => PlanDetail {
+                        text: driver_message(&detail.text),
+                        ..detail
+                    },
+                    _ => detail,
+                })
+                .collect();
+            let reason = details
+                .iter()
+                .find(|detail| detail.label == REASON_LABEL)
+                .map_or_else(String::new, |detail| detail.text.to_lowercase());
+            let connects = CONNECTION_WORDS.iter().any(|word| reason.contains(word));
+            if connects && !details.iter().any(|detail| detail.label == FIX_LABEL) {
+                let check = match unread.variables.as_slice() {
+                    [] => format!(
+                        "check connection {}'s settings and credentials",
+                        unread.connection
+                    ),
+                    [one] => format!("check {one} (connection {})", unread.connection),
+                    [rest @ .., last] => format!(
+                        "check {} and {last} (connection {})",
+                        rest.join(", "),
+                        unread.connection
+                    ),
+                };
+                details.push(detail(
+                    "fix",
+                    format!("{check}; sqlload debug tests every connection"),
+                ));
+            }
+            details.extend(blocks_line(plan, source, unread).map(|text| detail("blocks", text)));
+            PlanItem {
+                name: source.to_owned(),
+                action: match connects {
+                    true => "can't connect".to_owned(),
+                    false => item.action,
+                },
+                details,
+            }
+        }
+        None => PlanItem {
+            name: item.name,
+            action: HEADLINES
+                .iter()
+                .find(|(says, _)| problem.contains(says))
+                .map_or(item.action, |(_, headline)| (*headline).to_owned()),
+            details: item
+                .details
+                .into_iter()
+                .map(|detail| match (detail.label.as_str(), at) {
+                    ("fix", Some(at)) if detail.text.contains(" = ") => PlanDetail {
+                        text: format!("{at} {}", detail.text),
+                        ..detail
+                    },
+                    _ => detail,
+                })
+                .collect(),
+        },
+    }
+}
+
+/// Whether `warning` is one `text_error` folds into an unread source's `blocks`.
+pub(crate) fn folded_warning(plan: &ProjectPlan, warning: &str) -> bool {
+    for sharing in &plan.unread_sharing {
+        if sharing.warning == warning
+            && sharing
+                .sources
+                .iter()
+                .all(|source| plan.unread_sources.contains_key(source))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// What `source`, which could not be read, holds up: its tables, any its include patterns match, and the shared-table check on other tables.
+fn blocks_line(plan: &ProjectPlan, source: &str, unread: &UnreadSource) -> Option<String> {
+    let mut parts: Vec<String> = unread.tables.clone();
+    if unread.patterns {
+        parts.push("any table its include patterns match".to_owned());
+    }
+    for sharing in &plan.unread_sharing {
+        if sharing.sources.iter().any(|named| named == source) {
+            parts.push(format!(
+                "the shared-table check on {}",
+                listed(&sharing.tables)
+            ));
+        }
+    }
+    match parts.as_slice() {
+        [] => None,
+        [one] => Some(one.clone()),
+        [first, second] => Some(format!("{first} and {second}")),
+        [rest @ .., last] => Some(format!("{}, and {last}", rest.join(", "))),
+    }
+}
+
+/// `names` as `a`, `a and b`, or `a, b and c`.
+fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// An ODBC error as its driver's message with its state and native error, `Login failed for user 'sa' (ODBC state 28000, native error 18456)`; other text as it is.
+fn driver_message(text: &str) -> String {
+    let field = |name: &str| -> Option<&str> {
+        let (_, after) = text.split_once(name)?;
+        Some(after.split([',', '\n']).next().unwrap_or(after).trim())
+    };
+    let message = text.split_once("Message: ").map(|(_, message)| {
+        message
+            .rsplit(']')
+            .next()
+            .unwrap_or(message)
+            .trim()
+            .trim_end_matches('.')
+    });
+    match (message, field("State: "), field("Native error: ")) {
+        (Some(message), Some(state), Some(native)) => {
+            format!("{message} (ODBC state {state}, native error {native})")
+        }
+        _ => text.to_owned(),
+    }
 }

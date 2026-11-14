@@ -56,3 +56,34 @@ pub(crate) struct ExitCodeTestCase {
     /// The last line: `exit 1` or `exit 75`.
     pub(crate) expected_exit: &'static str,
 }
+
+/// Load events in, the lines `load` prints for them out.
+pub(crate) struct LoadOutputTestCase {
+    pub(crate) description: &'static str,
+    /// Each event's table and kind, in order.
+    pub(crate) events: Vec<(Option<&'static str>, crate::load_events::models::EventKind)>,
+    pub(crate) name_width: usize,
+    /// The rows column's width, from the plan's estimates.
+    pub(crate) rows_width: usize,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) exit_code: u8,
+    pub(crate) expected_lines: &'static str,
+}
+
+/// Load events as `--events jsonl` writes them, read back, and the lines `load` prints for them.
+pub(crate) struct LoadEventsFileTestCase {
+    pub(crate) description: &'static str,
+    /// One JSON event per line, ending with `run_finished`.
+    pub(crate) events: &'static str,
+    pub(crate) name_width: usize,
+    pub(crate) rows_width: usize,
+    pub(crate) expected_lines: &'static str,
+}
+
+/// A line too wide for the terminal, and the lines it wraps to.
+pub(crate) struct WrapTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) line: &'static str,
+    pub(crate) width: usize,
+    pub(crate) expected_lines: &'static str,
+}

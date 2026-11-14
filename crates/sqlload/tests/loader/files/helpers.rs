@@ -1,4 +1,7 @@
 use arrow_array::RecordBatch;
+use sqlload::adapters::dispatch::main::session::execute::execute;
+use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::adapters::dispatch::models::Destination;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
@@ -7,8 +10,10 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::models::PlanOptions;
 use sqlload::store_paths::models::Location;
 
-use crate::helpers::{column_values, day_files, described_project, run_once};
-use crate::test_types::FilesToFilesTestCase;
+use crate::helpers::{
+    column_values, day_files, described_project, local_store, parquet_bytes, run_once,
+};
+use crate::test_types::{FilesToFilesTestCase, ParquetFile, SourceRowUpgradeTestCase};
 
 /// A run adding no source files.
 pub(crate) fn no_files() -> Result<Vec<(String, bytes::Bytes)>, String> {
@@ -100,4 +105,63 @@ pub(crate) async fn run_files_to_files(
         held.push(format!("{rows}|{}", loads.len()));
     }
     Ok(held)
+}
+
+/// Load a files table into DuckDB; take `_sqlload_source_row` away, as in a table from before it; add a file and load again. Each row's id and row number.
+pub(crate) async fn run_source_row_upgrade(
+    directory: &std::path::Path,
+    test_case: &SourceRowUpgradeTestCase,
+) -> Result<Option<String>, String> {
+    let (store, connection) = local_store("", directory);
+    let folder = open_folder(&Location {
+        store,
+        prefix: "scores/".to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    let text = format!(
+        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
+        test_case.settings
+    );
+    let project_destinations = connect_targets(&described_project(&text).await?)
+        .await
+        .map_err(|error| error.to_string())?;
+    let Some(duckdb @ Destination::DuckDb(_)) = project_destinations.get("dev") else {
+        return Err("no DuckDB destination".to_owned());
+    };
+    for (key, ids) in [("a.parquet", &[1_i64, 2][..]), ("b.parquet", &[3][..])] {
+        let file = ParquetFile {
+            key,
+            ids,
+            score: 1.0,
+            extra: None,
+        };
+        let written = [key]
+            .into_iter()
+            .filter(|key| *key == "a.parquet" || test_case.new_file);
+        for key in written {
+            write_file(&folder, key, parquet_bytes(&file)?)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        run_once(&text, &project_destinations, &PlanOptions::default()).await?;
+        execute(
+            duckdb,
+            [(
+                "a.parquet",
+                "ALTER TABLE raw.scores DROP COLUMN _sqlload_source_row",
+            )]
+            .iter()
+            .filter(|(when, _)| *when == key)
+            .map(|(_, statement)| (*statement).to_owned())
+            .collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    }
+    single_text(
+        duckdb,
+        "SELECT string_agg(id || ':' || coalesce(CAST(_sqlload_source_row AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.scores".to_owned(),
+    )
+    .await
+    .map_err(|error| error.to_string())
 }

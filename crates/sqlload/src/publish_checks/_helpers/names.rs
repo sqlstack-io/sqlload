@@ -1,3 +1,4 @@
+use crate::number_text::main::thousands::thousands;
 use crate::project::models::{CheckName, TableChecks};
 use crate::schema_plan::models::DesiredColumn;
 
@@ -53,8 +54,19 @@ fn loaded_name(columns: &[DesiredColumn], name: &str) -> String {
 pub(crate) fn not_published(committed: u64) -> String {
     match committed {
         0 => "nothing was published".to_owned(),
+        1 => "this commit's rows were not published; the 1 row earlier commits published stays"
+            .to_owned(),
         rows => format!(
-            "this commit's rows were not published; the {rows} row(s) earlier commits published stay"
+            "this commit's rows were not published; the {} earlier commits published stay",
+            counted_rows(rows)
         ),
+    }
+}
+
+/// `count` rows, as `1 row` or `50,000 rows`.
+pub(crate) fn counted_rows(count: u64) -> String {
+    match count {
+        1 => "1 row".to_owned(),
+        _ => format!("{} rows", thousands(count)),
     }
 }

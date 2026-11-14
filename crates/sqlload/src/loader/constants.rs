@@ -16,6 +16,27 @@ pub const PLAN_DETAIL_COLUMN: usize = 52;
 /// The width of a plan detail's label and the space after it, as `route   `.
 pub const LABEL_WIDTH: usize = 8;
 
+/// How a skipped files source's reason ends after `no files to load in <path>`, when `after_load` emptied its folder.
+pub const DRAINED_REASON: &str = ": after_load deleted or moved the ones already loaded";
+
+/// The label of a plan detail saying how a table's rows travel, which `plan` shows directly under `source`.
+pub const ROUTE_LABEL: &str = "route";
+
+/// The label of a plan detail saying where a table's rows come from.
+pub const SOURCE_LABEL: &str = "source";
+
+/// The label of an error's detail saying what is wrong.
+pub const REASON_LABEL: &str = "reason";
+
+/// The label of an error's detail saying how to fix it.
+pub const FIX_LABEL: &str = "fix";
+
+/// The length of a timestamp to the second, as `2026-11-14 07:49:41`, which `plan` cuts a cursor's time to.
+pub const SECOND_TIMESTAMP_LENGTH: usize = 19;
+
+/// The length of an offset of whole hours, as `+00`.
+pub const HOURS_OFFSET_LENGTH: usize = 3;
+
 /// The comparison reading a cursor's lower bound itself.
 pub const INCLUSIVE_BOUND: &str = ">=";
 
@@ -58,8 +79,8 @@ pub const SPARE_BLOCKING_THREADS: usize = 64;
 /// Postgres connections reading one large table at once, when its read is whole and unordered.
 pub const PARALLEL_READERS: usize = 2;
 
-/// Tables Postgres estimates below this size (128 MiB) are read over one connection.
-pub const PARALLEL_READ_MIN_BYTES: i64 = 128 * 1024 * 1024;
+/// The least time between two `table_progress` events of a batch still being read.
+pub const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// ANSI escapes for coloured output.
 pub const BOLD: &str = "\x1b[1m";
@@ -71,6 +92,10 @@ pub const RED: &str = "\x1b[38;5;167m";
 pub const GREEN: &str = "\x1b[32m";
 /// Warnings.
 pub const YELLOW: &str = "\x1b[33m";
+/// What is running now: the live block's badge, bar and spinners.
+pub const CYAN: &str = "\x1b[36m";
+/// Swaps text and background colour: the live block's `LOADING` badge, a cyan block.
+pub const INVERSE: &str = "\x1b[7m";
 /// Back to plain text.
 pub const RESET: &str = "\x1b[0m";
 

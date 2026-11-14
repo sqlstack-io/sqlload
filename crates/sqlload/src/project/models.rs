@@ -46,6 +46,21 @@ pub struct ProjectConfig {
     /// The file declaring each Python source, by source name.
     #[serde(skip)]
     pub python_modules: BTreeMap<String, String>,
+    /// The `${ENV:NAME}` variables each connection's settings read, by connection name, for hints.
+    #[serde(skip)]
+    pub connection_variables: BTreeMap<String, Vec<String>>,
+    /// Where settings are written in the project's file, for hints; empty for a project parsed from text alone.
+    #[serde(skip)]
+    pub config_lines: ConfigLines,
+}
+
+/// The lines of a project file's sources, tables and their `unique_key` (see [`crate::project::main::config_lines::config_lines`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigLines {
+    /// The file's name, as hints show it.
+    pub file: String,
+    /// Each line, by its setting's path, such as `["sources", "erp", "tables", "pub.items", "unique_key"]`.
+    pub lines: BTreeMap<Vec<String>, usize>,
 }
 
 /// How a Snowflake connection's loads get into Snowflake: required, with no default; one it cannot use fails at plan, never falling back.

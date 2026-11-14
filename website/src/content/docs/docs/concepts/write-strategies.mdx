@@ -42,9 +42,14 @@ From 0.46.0, `plan` refuses a table that neither it nor its source gives a `writ
 $ sqlload plan
 …
 Errors (1)
-└── public.page_views
-    ├── reason  public.page_views (kind = "postgres"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one
-    └── fix     add write_strategy = "merge" with unique_key = "{primary_key}" (or the key columns) under [sources.app] for all its tables, or under [sources.app.tables."public.page_views"] for this one; or choose "delete_insert" or "append", which can load a row updated since an earlier load again beside its old version
+└── raw.app__page_views                             no write_strategy
+    ├── reason  public.page_views (kind = "postgres"): no write_strategy is set on the table or its
+    │           source, and SQLLoad doesn't choose one
+    └── fix     add write_strategy = "merge" with unique_key = "{primary_key}" (or the key columns)
+                under [sources.app] for all its tables, or under
+                [sources.app.tables."public.page_views"] for this one; or choose "delete_insert" or
+                "append", which can load a row updated since an earlier load again beside its old
+                version
 ```
 
 Before 0.46.0, a table without `write_strategy` took `replace` without a cursor and `merge` with a

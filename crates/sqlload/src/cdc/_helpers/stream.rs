@@ -1381,7 +1381,7 @@ pub(crate) async fn follow_round<'a>(
     (tables, followed)
 }
 
-/// Plan the project again with `options` because of `reason`, and apply it: the new plan and the lines its apply printed. Its log names what was gained without the catch-up load's advice to run it again, since following plans again by itself.
+/// Plan the project again with `options` because of `reason`, and apply it: the new plan and the lines its apply printed, or why following stops. A plan with problems stops it, naming them, since a table that no longer plans would leave the source without the follow noticing, and the slot would move past its changes for good. Its log names what was gained without the catch-up load's advice to run it again, since following plans again by itself.
 pub(crate) async fn replan(
     run: &LoadRun<'_>,
     options: &PlanOptions,
@@ -1392,6 +1392,12 @@ pub(crate) async fn replan(
     let plan = plan_project(run.project, run.destinations, options)
         .await
         .map_err(|error| error.to_string())?;
+    if !plan.problems.is_empty() {
+        return Err(format!(
+            "following stopped: planning again after {gained} found errors, and following the rest would move the slot past the changes of what did not plan; fix them and load again: {}",
+            plan.problems.join("; ")
+        ));
+    }
     let lines = apply_project(&plan, run.destinations)
         .await
         .map_err(|error| error.to_string())?;

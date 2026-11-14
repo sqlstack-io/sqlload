@@ -28,20 +28,21 @@ lookback_from = "now"
 | `lookback_from = "now"` | Count `lookback` back from the time of the run, not from the destination's maximum. Needs a `lookback`. |
 | `lookahead` | Read only cursor values before now plus this. A date cursor reads up to and including today plus that many days. |
 
-`plan` shows the window on the table's `cursor` line. On 9 November 2026:
+`plan` shows the window on the table's `reads` line. On 14 November 2026:
 
 ```console
 $ sqlload plan
 …
 Loads (1)                                           sqlload load
-└── app__deliveries                                 delete_insert (cursor: delivery_date)
+└── raw.app__deliveries                             delete_insert (cursor: delivery_date)
     ├── source  postgres  app  public.deliveries
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   one commit for the whole read (committing part of an unordered cursor read could skip rows)
-    └── cursor  delivery_date from 2026-11-02 (now minus lookback 7days), below 2026-11-17 (now plus lookahead 7days)
+    ├── reads   delivery_date from 2026-11-07 (now minus lookback 7days), below 2026-11-22 (now plus lookahead 7days)
+    └── commits once, at the end of the read (delivery_date isn't read in order)
+…
 ```
 
-Every run reads `delivery_date` from 2 November up to and including 16 November, deletes those
+Every run reads `delivery_date` from 7 November up to and including 21 November, deletes those
 dates from the destination, and inserts what it read. A delivery deleted at the source while its
 date is in the window is deleted from the destination too.
 
@@ -56,15 +57,17 @@ date is in the window is deleted from the destination too.
   ```console
   $ sqlload plan --start-cursor 2026-10-01 --end-cursor 2026-11-01
   …
-      └── cursor  delivery_date from 2026-10-01 (--start-cursor), below 2026-11-01 (--end-cursor)
+      ├── reads   delivery_date from 2026-10-01 (--start-cursor), below 2026-11-01 (--end-cursor)
+  …
   ```
 
 - `--reload` rebuilds the table from `cursor_start`, or from the first row, up to the lookahead:
 
   ```console
-  $ sqlload load --reload --yes
+  $ sqlload plan --reload
   …
-      └── cursor  delivery_date reload, everything, below 2026-11-17 (now plus lookahead 7days)
+      ├── reads   delivery_date: reload, everything, below 2026-11-22 (now plus lookahead 7days)
+  …
   ```
 
 ## Without `lookback_from`

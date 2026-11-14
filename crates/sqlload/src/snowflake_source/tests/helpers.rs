@@ -49,6 +49,7 @@ pub(crate) fn events() -> SourceTable {
         indexed_columns: Vec::new(),
         estimated_rows: 0,
         estimated_bytes: 0,
+        split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
     }

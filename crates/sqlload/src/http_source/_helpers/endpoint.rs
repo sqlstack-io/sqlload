@@ -1,5 +1,7 @@
 //! A connection's settings resolved into what requests need, and the rate limit its jobs share.
 
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -189,6 +191,8 @@ pub(crate) fn shared_limiter(connection: &str, rate: &str) -> Result<Arc<Limiter
         .entry(format!("{connection}\u{0}{rate}"))
         .or_insert_with(|| {
             Arc::new(Limiter {
+                connection: connection.to_owned(),
+                rate: rate.to_owned(),
                 interval,
                 next: Mutex::new(Instant::now()),
             })
@@ -226,6 +230,16 @@ impl Limiter {
             }
             Err(_) => Duration::ZERO,
         };
+        if !wait.is_zero() {
+            emit(
+                None,
+                EventKind::RateLimited {
+                    connection: self.connection.clone(),
+                    rate: self.rate.clone(),
+                    wait_ms: u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+                },
+            );
+        }
         tokio::time::sleep(wait).await;
     }
 }

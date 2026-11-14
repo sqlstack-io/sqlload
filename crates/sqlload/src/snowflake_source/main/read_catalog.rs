@@ -92,6 +92,7 @@ async fn query_table(
         .await
         .map_err(|error| SnowflakeSourceError::Invalid(format!("query table {name}: {error}")))?;
     Ok(SourceTable {
+        split_pages: None,
         schema: String::new(),
         name: name.to_owned(),
         columns: described_columns(&described.last().cloned().unwrap_or_default()),

@@ -8,9 +8,10 @@ destination's maximum of that column. SQLLoad doesn't store the position anywher
 it from the table, so a table you change, truncate or drop by hand is followed on the next run.
 
 ```console
-$ sqlload load app__orders
+$ sqlload plan app__orders
 …
-    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
+…
 ```
 
 ## Cursor settings
@@ -29,12 +30,11 @@ Where the read starts, in order:
 1. `--start-cursor`, when given.
 2. With `lookback_from = "now"`, now minus `lookback`, on every run, the first one too.
    Otherwise the destination's maximum of `cursor_column`, minus `lookback`. `append` reads
-   strictly after it. From 0.27.0, `plan` prints that read as `after` the maximum; before, it
-   printed `from`.
+   strictly after it, which `plan` shows as `>` rather than `>=`.
 3. `cursor_start`, when the table is empty.
 4. Otherwise, everything.
 
-`plan` says which one applies, on the table's `cursor` line.
+`plan` says which one applies, on the table's `reads` line.
 
 From 0.27.0, text cursors compare by Unicode code point on both sides,
 whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
@@ -62,7 +62,8 @@ date.
 ```console
 $ sqlload plan app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
 …
-    └── cursor  updated_at from 2026-10-01 00:00:00.000000+00 (--start-cursor), below 2026-10-08 00:00:00.000000+00 (--end-cursor)
+    ├── reads   updated_at from 2026-10-01 00:00:00.000000+00 (--start-cursor), below 2026-10-08 00:00:00.000000+00 (--end-cursor)
+…
 ```
 
 Every selected table must have the same kind of cursor. Select tables of one cursor type per run.
@@ -71,8 +72,8 @@ Every selected table must have the same kind of cursor. Select tables of one cur
 
 A large load commits along the way instead of all at the end, so a failure keeps what committed and
 the next run carries on from there. The exception is `delete_insert` into ClickHouse read by cursor,
-which publishes once per run (last row below). `plan` shows how each table commits on its `batch`
-line.
+which publishes once per run (last row below). `plan` of one table shows how it commits, on its
+`commits` line, or `batch` for a table with neither a cursor nor logged state.
 
 | Table | Commits |
 |-------|---------|
@@ -98,13 +99,17 @@ lookback = "1h"
 ```
 
 ```console
+$ sqlload plan
+…
+    ├── reads   updated_at >= 2026-09-01 00:00:00.000+00 (first run, from cursor_start)
+    ├── commits 11 windows of 7days, one commit each
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+…
 $ sqlload load
 …
-    ├── batch   10 windows of 7days, one commit each
-    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
-    └── cursor  updated_at first run, from cursor_start 2026-09-01 00:00:00.000000+00
+loaded  raw.app__orders  1,000 rows 0.1s
 …
-loaded   raw.app__orders  1,001 rows  0.1s
 ```
 
 A Python table with `batch_size` is called once per window, with `ctx.cursor_value` and

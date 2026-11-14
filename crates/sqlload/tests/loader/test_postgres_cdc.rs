@@ -10,7 +10,9 @@ use crate::helpers::{
     CDC_CHANGES, cdc_project, crashed_batch, databricks_cdc_project, duckdb_text, run_async,
     run_sqlload, spawn_sqlload, step, stop_sqlload,
 };
-use crate::postgres_helpers::{DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, run_cdc_scenario};
+use crate::postgres_helpers::{
+    DLT_CRM, DLT_CRM_CHECK, DLT_CRM_SOURCE, FOLLOW_REFUSED, PLAIN_SOURCE, run_cdc_scenario,
+};
 use crate::test_types::{
     CdcPlanTestCase, CdcScenarioTestCase, CdcStep, FollowTestCase, LiveCdcTestCase, LiveDatabricks,
     QuietSlotTestCase,
@@ -630,50 +632,6 @@ const FOLLOW_AFTER_FIRST: [CdcStep; 5] = crashed_batch(FOLLOW_APP, "batch-after-
 
 const FOLLOW_LOG_BEFORE_CONFIRM: [CdcStep; 5] = crashed_batch(FOLLOW_LOG, "batch-before-confirm");
 
-const PLAIN_SOURCE: &str = r#"
-[sources.plain]
-kind = "postgres"
-connection = "pg"
-include = ["public.items"]
-write_strategy = "replace"
-
-[sources.plain.tables."public.items"]
-description = "Items, read whole."
-"#;
-
-const FOLLOW_REFUSED: [CdcStep; 4] = [
-    step(
-        "",
-        &["load", "app", "log", "--follow"],
-        "",
-        (
-            false,
-            "load --follow follows one postgres_cdc source per process",
-        ),
-    ),
-    step(
-        "",
-        &["load", "app", "plain", "--follow"],
-        "",
-        (
-            false,
-            "plain__items is not captured, so load them without --follow",
-        ),
-    ),
-    step(
-        "",
-        &["plan", "app", "--follow"],
-        "",
-        (false, "--follow and --max-duration apply to load only"),
-    ),
-    step(
-        "",
-        &["load", "app", "--max-duration", "3s"],
-        "",
-        (false, "--follow"),
-    ),
-];
-
 /// Waits up to 15 seconds for slot `sqlload_app` to stream.
 const AWAIT_STREAMING: &str = "DO $$ BEGIN FOR attempt IN 1..150 LOOP EXIT WHEN EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'sqlload_app' AND active); PERFORM pg_sleep(0.1); END LOOP; END $$;";
 
@@ -685,6 +643,8 @@ const FOLLOW_SHORT: &[&str] = &["load", "app", "--follow", "--max-duration", "15
 const FIRST_CHANGES: &str = "BEGIN; INSERT INTO public.orders VALUES (4, 4, 'd', '{\"x y\",z}'); UPDATE public.orders SET qty = 10 WHERE id = 1; INSERT INTO public.items VALUES (3, 'three'); COMMIT;";
 
 const SECOND_CHANGES: &str = "BEGIN; DELETE FROM public.orders WHERE id = 2; UPDATE public.items SET name = 'one!' WHERE id = 1; COMMIT; INSERT INTO other.audit SELECT g FROM generate_series(1, 1000) g;";
+
+const KEY_DROPPED_AND_COLUMN_ADDED: &str = "ALTER TABLE public.orders DROP CONSTRAINT orders_pkey; UPDATE public.items SET name = 'one!' WHERE id = 1; ALTER TABLE public.items ADD COLUMN c int4; INSERT INTO public.items VALUES (3, 'three', 1.1, 7);";
 
 const ITEMS_WITH_C: &str = "SELECT string_agg(id || ':' || name || ':' || COALESCE(CAST(c AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.app__items";
 
@@ -1240,7 +1200,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: CHANGELOG_RESULT,
         },
         CdcScenarioTestCase {
-            description: "load --follow follows one postgres_cdc source and nothing else, and only under load",
+            description: "load --follow follows one postgres_cdc source and nothing else, only under load, and only when every selected source and table plans",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: PLAIN_SOURCE,
@@ -1848,6 +1808,24 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
             expected_after: "Completed",
             check_query: ITEMS_WITH_C,
             expected_result: "1:one!:-,2:two:8,3:three:7",
+        },
+        FollowTestCase {
+            description: "a table that stops planning when following plans again stops the follow, naming why, instead of following the rest past its changes",
+            tag: "17-alpine",
+            args: FOLLOW_SHORT,
+            crash_at: "",
+            writes: &[KEY_DROPPED_AND_COLUMN_ADDED],
+            batch_interval: "1s",
+            signal: "-0",
+            expected_advanced: false,
+            expected_batches: 0,
+            expected_follow: (
+                false,
+                "following stopped: planning again after public.items gained column c found errors, and following the rest would move the slot past the changes of what did not plan; fix them and load again: public.orders: public.orders has no primary key",
+            ),
+            expected_after: "public.orders has no primary key",
+            check_query: "SELECT string_agg(id || ':' || name, ',' ORDER BY id) FROM raw.app__items",
+            expected_result: "1:one,2:two",
         },
         FollowTestCase {
             description: "SIGTERM writes what was read but not yet written, confirms it and stops",

@@ -199,14 +199,17 @@ otherwise. Before 0.46.0 it took `replace` without a `cursor_column`, and before
 `delete_insert` with one. Files report no primary key, so a `merge` names its `unique_key` columns.
 
 ```console
-$ sqlload load
+$ sqlload plan
 …
-└── events_log                                      append
+└── raw.events_log                                  append
     ├── source  files  lake/events/  parquet
     ├── files   1 new of 3 listed
     ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
 …
-loaded   raw.events_log  1 rows  0.0s
+$ sqlload load
+…
+loaded  raw.events_log      1 row  0.0s
+…
 ```
 
 Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split

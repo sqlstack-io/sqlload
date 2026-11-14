@@ -1,7 +1,7 @@
 use sqlload_testkit::ssh::main::put_file::put_file;
 use sqlload_testkit::ssh::main::start_bastion::start_bastion;
 
-use crate::helpers::{duckdb_text, integration, run_async, run_sqlload};
+use crate::helpers::{duckdb_text, integration, run_async, run_sqlload, words};
 use crate::sftp_helpers::{
     first_events, first_orders, project_text, rewritten_orders, second_events, second_orders,
     snowflake_project,
@@ -209,7 +209,7 @@ fn given_an_sftp_server_when_loading_files_then_new_files_load_once_and_unknown_
             let (succeeded, output) = run_sqlload(&config, &args, ("", ""))?;
             assert!(
                 succeeded == test_case.expected_success
-                    && output.contains(test_case.expected_output),
+                    && words(&output).contains(&words(test_case.expected_output)),
                 "{}:\n{output}",
                 test_case.description
             );
@@ -265,7 +265,7 @@ fn given_sftp_files_and_a_snowflake_target_when_planning_then_sqlload_reads_them
             let (succeeded, output) = run_sqlload(&config, &["plan"], ("", ""))?;
             assert!(
                 succeeded == test_case.expected_success
-                    && output.contains(test_case.expected_output)
+                    && words(&output).contains(&words(test_case.expected_output))
                     && !output.contains("COPYs directly"),
                 "{}:\n{output}",
                 test_case.description

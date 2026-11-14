@@ -60,15 +60,12 @@ Run `sqlload plan` to see what loads, then `sqlload load`:
 $ sqlload plan
 …
 Loads (2)                                           sqlload load
-├── app__customers                                  replace
-│   ├── source  postgres  app  public.customers
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── batch   about 1 GB at a time into a new table, swapped in once at the end
-└── app__orders                                     merge (unique_key: order_id ← {primary_key})
+├── raw.app__customers                              replace
+│   └── source  postgres  app  public.customers
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
-    └── cursor  updated_at first run, everything
+    └── reads   updated_at: first run, everything
+…
 ```
 
 - `customers` takes the source's `replace`: each run rebuilds it from the whole table.
@@ -88,7 +85,9 @@ maximum of that column, read from the table itself:
 ```console
 $ sqlload plan app__orders
 …
-    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
+    ├── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+…
 ```
 
 For a table whose rows can arrive late, such as a `page_views` table without a key, re-read a
@@ -103,9 +102,10 @@ lookback = "2h"
 ```
 
 ```console
-$ sqlload load app__page_views
+$ sqlload plan app__page_views
 …
-    └── cursor  viewed_at from 2026-10-14 19:20:00.000000+00 (destination maximum minus lookback 2h)
+    ├── reads   viewed_at >= 2026-10-14 19:20:00.000+00 (warehouse maximum minus lookback 2h)
+…
 ```
 
 To reload a fixed window around today on every run, such as the last 7 days and the next 7, see
@@ -128,16 +128,19 @@ lookback = "2h"
 ```
 
 ```console
+$ sqlload plan app__page_views
+…
+└── raw.app__page_views                             delete_insert (cursor: viewed_at)
+    ├── source  postgres  app  public.page_views
+    ├── reads   viewed_at >= 2026-10-01 00:00:00.000+00 (first run, from cursor_start)
+    ├── commits 7 windows of 7days, one commit each
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
+…
 $ sqlload load app__page_views
 …
-└── app__page_views                                 delete_insert (cursor: viewed_at)
-    ├── source  postgres  app  public.page_views
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   6 windows of 7days, one commit each
-    ├── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
-    └── cursor  viewed_at first run, from cursor_start 2026-10-01 00:00:00.000000+00
+loaded  raw.app__page_views  2,000 rows 0.1s
 …
-loaded   raw.app__page_views  2,000 rows  0.1s
 ```
 
 A failure keeps the windows that committed, and the next run carries on from there. See
@@ -146,11 +149,14 @@ A failure keeps the windows that committed, and the next run carries on from the
 To load a range again, give `--start-cursor` and `--end-cursor`. The end isn't included:
 
 ```console
+$ sqlload plan app__page_views --start-cursor 2026-10-05 --end-cursor 2026-10-07
+…
+    ├── reads   viewed_at from 2026-10-05 00:00:00.000000+00 (--start-cursor), below 2026-10-07 00:00:00.000000+00 (--end-cursor)
+…
 $ sqlload load app__page_views --start-cursor 2026-10-05 --end-cursor 2026-10-07
 …
-    └── cursor  viewed_at from 2026-10-05 00:00:00.000000+00 (--start-cursor), below 2026-10-07 00:00:00.000000+00 (--end-cursor)
+loaded  raw.app__page_views    288 rows 0.0s
 …
-loaded   raw.app__page_views  288 rows  0.0s
 ```
 
 ## Connect over TLS

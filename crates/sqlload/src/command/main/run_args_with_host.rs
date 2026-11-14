@@ -14,7 +14,7 @@ use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::constants::COMMAND_STACK_BYTES;
 use crate::command::errors::CommandError;
-use crate::command::models::{Cli, Command, LoaderRequest};
+use crate::command::models::{Cli, Command, LoaderRequest, LogFormat};
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
 
@@ -60,7 +60,10 @@ where
                     command: cli.command,
                     host,
                     no_color: cli.no_color,
+                    streams: true,
+                    log_json: cli.log_format == LogFormat::Json,
                     variables: Default::default(),
+                    generated: false,
                 };
                 return match copies {
                     true => run_copy(request).await,

@@ -2,8 +2,9 @@
 
 use std::time::Duration;
 
-use crate::loader::_helpers::render::{change_line, thousands};
+use crate::loader::_helpers::render::change_line;
 use crate::loader::models::{TableOutcome, TallyLine};
+use crate::number_text::main::thousands::thousands;
 
 /// One aligned line per object `applied` created or altered and per table loaded, failed or skipped, then a final line counting them; and whether nothing failed.
 pub fn render_tally(

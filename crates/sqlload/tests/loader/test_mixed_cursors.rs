@@ -1,4 +1,4 @@
-use crate::helpers::mixed_cursor_plan;
+use crate::helpers::{mixed_cursor_plan, words};
 use crate::test_types::MixedCursorTestCase;
 
 const MIXED: &str = "--start-cursor/--end-cursor apply to every selected table, but their cursors compare different kinds of value";
@@ -25,14 +25,14 @@ fn given_a_cursor_range_when_selected_tables_have_cursors_of_different_types_the
             description: "two date cursors read the same range",
             selectors: &["days", "later"],
             start: "2026-11-02",
-            expected_plan: "day from 2026-11-02 (--start-cursor)",
+            expected_plan: "day >= 2026-11-02 (--start-cursor)",
             expected_absent: MIXED,
         },
         MixedCursorTestCase {
             description: "a table already blocked with no known cursor type is left out, so a date cursor beside it still reads the range",
             selectors: &["days", "missing"],
             start: "2026-11-02",
-            expected_plan: "day from 2026-11-02 (--start-cursor)",
+            expected_plan: "day >= 2026-11-02 (--start-cursor)",
             expected_absent: MIXED,
         },
         MixedCursorTestCase {
@@ -46,7 +46,7 @@ fn given_a_cursor_range_when_selected_tables_have_cursors_of_different_types_the
             description: "one integer cursor takes an integer",
             selectors: &["nums"],
             start: "50",
-            expected_plan: "n from 50 (--start-cursor)",
+            expected_plan: "n >= 50 (--start-cursor)",
             expected_absent: MIXED,
         },
         MixedCursorTestCase {
@@ -71,7 +71,8 @@ fn given_a_cursor_range_when_selected_tables_have_cursors_of_different_types_the
             .map_err(|error| error.to_string())?
             .block_on(mixed_cursor_plan(test_case.selectors, test_case.start))?;
         assert!(
-            plan.contains(test_case.expected_plan) && !plan.contains(test_case.expected_absent),
+            words(&plan).contains(&words(test_case.expected_plan))
+                && !words(&plan).contains(&words(test_case.expected_absent)),
             "{}: {plan}",
             test_case.description
         );

@@ -29,8 +29,8 @@ use crate::test_types::{
     BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
     FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
     LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
-    RouteTestCase, ScenarioTestCase, SourceRowUpgradeTestCase, TextFilesScenarioTestCase,
-    WrittenPartition, WrittenRow, WrittenRun,
+    RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
+    WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -340,9 +340,9 @@ pub(crate) async fn run_scenario(
         let error = outcome.as_ref().err().cloned().unwrap_or_default();
         let planned = outcome.unwrap_or_default();
         assert!(
-            error.contains(run.expected_error)
+            words(&error).contains(&words(run.expected_error))
                 && error.is_empty() == run.expected_error.is_empty()
-                && planned.contains(run.expected_plan),
+                && words(&planned).contains(&words(run.expected_plan)),
             "{} run {}: {error}{planned}",
             test_case.description,
             index + 1
@@ -447,7 +447,7 @@ pub(crate) async fn run_large_partition(
             WrittenRun {
                 files: first,
                 expected_error: "",
-                expected_plan: "2 batches of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined",
+                expected_plan: "2 batches, up to 1,000 files or about 1 GB per commit",
             },
             WrittenRun {
                 files: vec![(rewritten.key, parquet_bytes(&rewritten)?)],
@@ -595,7 +595,8 @@ async fn run_written_files(
             .err()
             .unwrap_or_default();
         assert!(
-            error.contains(expected_error) && error.is_empty() == expected_error.is_empty(),
+            words(&error).contains(&words(expected_error))
+                && error.is_empty() == expected_error.is_empty(),
             "{} run {}: {error}",
             scenario.description,
             index + 1
@@ -879,60 +880,6 @@ pub(crate) async fn run_debug(
     Ok((lines, sent))
 }
 
-/// Load a files table into DuckDB; take `_sqlload_source_row` away, as in a table from before it; add a file and load again. Each row's id and row number.
-pub(crate) async fn run_source_row_upgrade(
-    directory: &std::path::Path,
-    test_case: &SourceRowUpgradeTestCase,
-) -> Result<Option<String>, String> {
-    let (store, connection) = local_store("", directory);
-    let folder = open_folder(&Location {
-        store,
-        prefix: "scores/".to_owned(),
-    })
-    .map_err(|error| error.to_string())?;
-    let text = format!(
-        "[connections.files]\n{connection}\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"scores/\"\nwrite_strategy = \"append\"\n{}\n",
-        test_case.settings
-    );
-    let project_destinations = connect_targets(&described_project(&text).await?)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(duckdb @ Destination::DuckDb(_)) = project_destinations.get("dev") else {
-        return Err("no DuckDB destination".to_owned());
-    };
-    for (key, ids) in [("a.parquet", &[1_i64, 2][..]), ("b.parquet", &[3][..])] {
-        let file = ParquetFile {
-            key,
-            ids,
-            score: 1.0,
-            extra: None,
-        };
-        write_file(&folder, key, parquet_bytes(&file)?)
-            .await
-            .map_err(|error| error.to_string())?;
-        run_once(&text, &project_destinations, &PlanOptions::default()).await?;
-        execute(
-            duckdb,
-            [(
-                "a.parquet",
-                "ALTER TABLE raw.scores DROP COLUMN _sqlload_source_row",
-            )]
-            .iter()
-            .filter(|(when, _)| *when == key)
-            .map(|(_, statement)| (*statement).to_owned())
-            .collect(),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-    }
-    single_text(
-        duckdb,
-        "SELECT string_agg(id || ':' || coalesce(CAST(_sqlload_source_row AS VARCHAR), '-'), ',' ORDER BY id) FROM raw.scores".to_owned(),
-    )
-    .await
-    .map_err(|error| error.to_string())
-}
-
 /// `ORDERS` already exists, its stage refused to this role (it does not own it), and so is `@~`.
 pub(crate) fn not_owned(fake: &sqlload_testkit::fake_snowflake::models::FakeSnowflake) {
     orders_exists(fake);
@@ -1145,7 +1092,7 @@ pub(crate) fn not_found<'a>(texts: &[String], wanted: &[&'a str]) -> Vec<&'a str
     wanted
         .iter()
         .copied()
-        .filter(|text| !texts.iter().any(|sent| sent.contains(text)))
+        .filter(|text| !texts.iter().any(|sent| words(sent).contains(&words(text))))
         .collect()
 }
 
@@ -1338,13 +1285,14 @@ pub(crate) async fn run_files_target_scenario(
         let (plan, outcome) = plan_apply_load(&project, &destinations, &options).await;
         let error = outcome.as_ref().err().cloned().unwrap_or_default();
         assert!(
-            error.contains(run.expected_error) && error.is_empty() == run.expected_error.is_empty(),
+            words(&error).contains(&words(run.expected_error))
+                && error.is_empty() == run.expected_error.is_empty(),
             "{} run {}: {error}",
             test_case.description,
             index + 1
         );
         assert!(
-            plan.contains(run.expected_plan),
+            words(&plan).contains(&words(run.expected_plan)),
             "{} run {}: the plan lacks {:?}:\n{plan}",
             test_case.description,
             index + 1,
@@ -1665,7 +1613,7 @@ pub(crate) async fn run_cdc_steps(
             step.args
         );
         assert!(
-            output.contains(step.expected_output),
+            words(&output).contains(&words(step.expected_output)),
             "{description}: step {} {:?} output lacks {:?}\n{output}",
             first + index,
             step.args,
@@ -1953,7 +1901,7 @@ pub(crate) async fn run_merge_case(
             outcome.err().unwrap_or_default(),
         );
         assert!(
-            error.contains(step.expected_error)
+            words(&error).contains(&words(step.expected_error))
                 && error.is_empty() == step.expected_error.is_empty(),
             "{} step {}: {error}",
             test_case.description,
@@ -1993,4 +1941,12 @@ pub(crate) fn load_ndjson_runs(
         ok.then_some(()).ok_or(output)?;
     }
     Ok(config)
+}
+
+/// `text` with its whitespace collapsed and the plan tree's `│` left out, for checking wrapped plan text: a detail wraps where its width ends, which depends on paths and names.
+pub(crate) fn words(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|word| *word != "│")
+        .collect::<Vec<_>>()
+        .join(" ")
 }

@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
@@ -10,12 +11,13 @@ use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
 };
 use crate::loader::constants::PRIMARY_KEY_PLACEHOLDER;
-use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec};
+use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec, UnreadSource};
 use crate::postgres_source::models::SourceTable;
+use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig, SourceKind, TableOverride,
-    TableSettings, UnnestSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig, SourceKind,
+    TableOverride, TableSettings, UnnestSetting,
 };
 use crate::ssh_tunnel::models::SshTunnel;
 use std::collections::BTreeMap;
@@ -50,8 +52,27 @@ pub(crate) fn resolve_tables(
             source,
             target: &target,
         };
+        let shown = || {
+            let rule = (
+                table_naming((&overrides.settings, &source.defaults), target.naming),
+                sql_adapter(target.warehouse).max_identifier_length(),
+            );
+            let name = table_name(
+                (source_name, source),
+                overrides.name.as_deref(),
+                (table, rule),
+            );
+            target_display_name(&target, name)
+        };
         match resolve_table(&context, table, &overrides) {
             Ok(Ok(mut spec)) => {
+                let lines = &project.config_lines;
+                spec.settings_at = settings_at(lines, source_name, &qualified);
+                spec.unique_key_at = config_at(
+                    lines,
+                    &["sources", source_name, "tables", &qualified, "unique_key"],
+                )
+                .or_else(|| config_at(lines, &["sources", source_name, "unique_key"]));
                 let query = overrides.sql.is_some();
                 spec.approved =
                     !source.discovers_tables() || query || source.include.contains(&qualified);
@@ -72,13 +93,23 @@ pub(crate) fn resolve_tables(
             Ok(Err(reason)) => resolved.skipped.push(SkippedTable {
                 source_name: source_name.to_owned(),
                 source_table: qualified,
+                destination: shown(),
                 reason,
             }),
-            Err(problems) => resolved.problems.extend(
-                problems
-                    .into_iter()
-                    .map(|problem| format!("{qualified}: {problem}")),
-            ),
+            Err(problems) => {
+                let destination = shown();
+                let place = settings_at(&project.config_lines, source_name, &qualified);
+                for problem in problems {
+                    let problem = format!("{qualified}: {problem}");
+                    resolved
+                        .problem_names
+                        .push((problem.clone(), destination.clone()));
+                    resolved
+                        .problem_places
+                        .push((problem.clone(), place.clone()));
+                    resolved.problems.push(problem);
+                }
+            }
         }
     }
     resolved
@@ -259,6 +290,26 @@ pub(crate) fn source_target(
     })
 }
 
+/// The name `plan` shows table `name` of `target` by: `schema.table` as the warehouse displays it, or the table alone in a files target, which has no schema.
+pub(crate) fn target_display_name(target: &ResolvedTarget, name: String) -> String {
+    display_name(
+        target.warehouse,
+        &TableName {
+            database: target.database.clone(),
+            schema: target.schema.clone(),
+            table: name,
+        },
+    )
+}
+
+/// The name `plan` shows `table` of a `warehouse` by: `schema.table` as the warehouse displays it, or the table alone where it has no schema (a files target).
+pub(crate) fn display_name(warehouse: Warehouse, table: &TableName) -> String {
+    match table.schema.is_empty() {
+        true => table.table.clone(),
+        false => sql_adapter(warehouse).render_display_name(table),
+    }
+}
+
 /// How a table's names load: its naming and its destination's name limit.
 pub(crate) type NameRule = (Naming, Option<usize>);
 
@@ -405,4 +456,95 @@ fn renamed_keys<T: Clone>(
     map.iter()
         .map(|(key, value)| (name(key), value.clone()))
         .collect()
+}
+
+/// Where `qualified`'s settings are written in the project file: its `[sources.*.tables]` entry, else its source's section.
+fn settings_at(lines: &ConfigLines, source_name: &str, qualified: &str) -> Option<String> {
+    config_at(lines, &["sources", source_name, "tables", qualified])
+        .or_else(|| config_at(lines, &["sources", source_name]))
+}
+
+/// The tables source `source_name`, which could not be read, names itself, by display name: each named exactly in `include` or under `tables`, or a files source's one table; and whether `include` also has patterns.
+pub(crate) fn unread_source(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &SourceConfig),
+) -> UnreadSource {
+    let Ok(target) = source_target(project, source) else {
+        return UnreadSource {
+            connection: source.connection.clone(),
+            variables: project
+                .connection_variables
+                .get(&source.connection)
+                .cloned()
+                .unwrap_or_default(),
+            ..UnreadSource::default()
+        };
+    };
+    let pattern = |name: &String| name.contains(['*', '?', '[']);
+    let named: Vec<String> = match source.kind {
+        SourceKind::Files => vec![source_name.to_owned()],
+        _ => source
+            .include
+            .iter()
+            .filter(|name| !pattern(name))
+            .chain(source.tables.keys())
+            .cloned()
+            .collect(),
+    };
+    let unset = TableSettings::default();
+    let mut tables: Vec<String> = Vec::new();
+    for qualified in named {
+        let overrides = source.tables.get(&qualified);
+        let rule = (
+            table_naming(
+                (
+                    overrides.map_or(&unset, |overrides| &overrides.settings),
+                    &source.defaults,
+                ),
+                target.naming,
+            ),
+            sql_adapter(target.warehouse).max_identifier_length(),
+        );
+        let mut listed = SourceTable::of_columns(qualified.clone(), Vec::new());
+        if let Some((schema, name)) = qualified
+            .split_once('.')
+            .filter(|_| source.discovers_tables())
+        {
+            listed.schema = schema.to_owned();
+            listed.name = name.to_owned();
+        }
+        let name = overrides.and_then(|overrides| overrides.name.as_deref());
+        let shown = target_display_name(
+            &target,
+            table_name((source_name, source), name, (&listed, rule)),
+        );
+        if !tables.contains(&shown) {
+            tables.push(shown);
+        }
+    }
+    tables.sort();
+    UnreadSource {
+        tables,
+        patterns: source.include.iter().any(pattern),
+        connection: source.connection.clone(),
+        variables: project
+            .connection_variables
+            .get(&source.connection)
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
+
+/// Each of `specs`' names a selector may use (see [`spec_names`]).
+pub(crate) fn destination_names(specs: &[TableSpec]) -> Vec<String> {
+    specs.iter().flat_map(spec_names).collect()
+}
+
+/// The names a selector may pick `spec` by: its destination table, the destination's display name (`schema.table`, as `plan` shows it) and its source's `schema.table`.
+pub(crate) fn spec_names(spec: &TableSpec) -> [String; 3] {
+    [
+        spec.destination.table.clone(),
+        display_name(spec.warehouse, &spec.destination),
+        spec.source_table.qualified_name(),
+    ]
 }

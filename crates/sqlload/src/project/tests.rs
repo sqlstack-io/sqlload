@@ -1,3 +1,5 @@
+#[path = "tests/test_config_lines.rs"]
+mod config_lines;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_is_project.rs"]

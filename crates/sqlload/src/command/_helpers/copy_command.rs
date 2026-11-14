@@ -37,7 +37,10 @@ pub(crate) async fn run_copy(
         command: Command::Load(LoaderArgs::default()),
         host: request.host,
         no_color: request.no_color,
+        streams: request.streams,
+        log_json: request.log_json,
         variables: copy.variables,
+        generated: true,
     })
     .await
 }

@@ -225,9 +225,35 @@ pub struct LoaderArgs {
     /// With --follow: stop after this long, e.g. `10m`, once the buffered changes are written.
     #[arg(long, requires = "follow", value_parser = humantime::parse_duration)]
     pub max_duration: Option<Duration>,
+    /// `load`: write each load event as one line of JSON to stderr (`jsonl`), apart from the logs.
+    #[arg(long, value_enum, value_name = "FORMAT", conflicts_with = "follow")]
+    pub events: Option<EventsFormat>,
+    /// `load`: write each load event as one line of JSON to this file.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["events", "follow"])]
+    pub events_file: Option<PathBuf>,
+    /// `load`: draw the live block of running tables on stderr: on a terminal without --json or --log-format json (`auto`), always, or never.
+    #[arg(long, value_enum, default_value_t = Progress::Auto)]
+    pub progress: Progress,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,
+}
+
+/// How `--events` writes load events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum EventsFormat {
+    /// One JSON object per line, on stderr.
+    Jsonl,
+}
+
+/// When `load` draws its live block.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum Progress {
+    /// When stderr is a terminal, and neither --json nor --log-format json is set.
+    #[default]
+    Auto,
+    Always,
+    Never,
 }
 
 /// How logs are written.
@@ -248,6 +274,12 @@ pub struct LoaderRequest<'a> {
     pub host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
     /// `--no-color`, for the plan a `--reload` prompt shows.
     pub no_color: bool,
+    /// Print `load`'s lines as tables finish, rather than return them all at the end (the command line).
+    pub streams: bool,
+    /// `--log-format json`, under which no live block is drawn.
+    pub log_json: bool,
     /// Values for `${ENV:NAME}` references, read before the process environment (`sqlload copy`'s literal URI passwords).
     pub variables: std::collections::BTreeMap<String, String>,
+    /// `text` is a project `sqlload copy` wrote, not the user's file: hints name no line of it and no variable it reads.
+    pub generated: bool,
 }

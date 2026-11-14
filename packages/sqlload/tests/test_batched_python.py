@@ -398,7 +398,7 @@ def test_given_append_without_a_cursor_when_a_rerun_follows_a_failure_then_no_ro
 	fail(project, 3)
 	failed = sqlload(project, "load", "--batch-bytes", "1", "api__appended")
 	assert failed.returncode != 0, failed.stdout
-	assert "one commit for the whole read (append without a cursor" in failed.stdout + failed.stderr
+	assert "one commit for the whole read (append without a cursor" in sqlload(project, "plan", "--batch-bytes", "1", "api__appended").stdout
 	assert query(project, 'SELECT count(*) FROM "RAW"."api__appended"') == [(0,)]
 	fail(project, -1)
 	done = sqlload(project, "load", "--batch-bytes", "1", "api__appended")
@@ -418,7 +418,7 @@ def test_given_a_slow_table_when_loading_at_once_then_it_does_not_hold_up_the_sm
 	done = sqlload(project, "load", "--concurrency", "2", "api__a_slow", "api__b_small", "api__c_small")
 	assert done.returncode == 0, done.stdout + done.stderr
 	loaded = [line.split()[1] for line in done.stdout.splitlines() if line.startswith("loaded")]
-	assert loaded == ["RAW.api__a_slow", "RAW.api__b_small", "RAW.api__c_small"]
+	assert sorted(loaded[:2]) == ["RAW.api__b_small", "RAW.api__c_small"] and loaded[2] == "RAW.api__a_slow", done.stdout
 
 
 def test_given_parallel_tables_creating_a_new_schema_when_loading_then_every_table_loads(project: Path) -> None:
@@ -477,7 +477,7 @@ def test_given_batch_whole_when_planning_a_python_table_then_the_plan_says_so(pr
 	)
 	done = sqlload(project, "plan", "whole__days")
 	assert done.returncode == 0, done.stdout + done.stderr
-	assert 'one commit for the whole read (batch_size = "none")' in done.stdout
+	assert 'commits once, at the end of the read (batch_size = "none")' in done.stdout
 
 
 def test_given_a_column_added_mid_commit_when_loading_into_files_then_no_value_is_dropped(project: Path) -> None:

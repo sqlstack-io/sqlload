@@ -206,7 +206,7 @@ def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_f
 	load(project)
 	give(project, "rows", [{"id": 2, "code": 7, "meta": {"k": 2}, "extra": True}])
 	done = load(project)
-	assert "loaded   RAW.shop__rows  1 rows" in done.stdout
+	assert "loaded  RAW.shop__rows      1 row " in done.stdout
 	columns = query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
 	assert [name for name, _ in columns] == ["id", "code", "meta", "_sqlload_load_id", "_sqlload_loaded_at", "extra"]
 	assert query(project, 'SELECT id, code, meta, extra FROM "RAW"."shop__rows" ORDER BY id') == [
@@ -237,8 +237,8 @@ def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_an
 	give(project, "bad", {"rows": [{"id": 1}], "raise": "the API returned 503"})
 	done = sqlload(project, "load")
 	assert done.returncode == 1
-	assert "loaded   RAW.shop__good  1 rows" in done.stdout + done.stderr
-	assert "failed   RAW.shop__bad   RuntimeError: the API returned 503" in done.stdout + done.stderr
+	assert "loaded  RAW.shop__good      1 row " in done.stdout + done.stderr
+	assert "failed  RAW.shop__bad   RuntimeError: the API returned 503" in done.stdout + done.stderr
 	assert "shop.py" in done.stdout + done.stderr
 	assert query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name") == [("shop__good",)]
 
@@ -512,7 +512,7 @@ shop.table(description='Test table.', write_strategy='append'{settings})(priced)
 			1,
 			"2.50",
 			1,
-			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(21,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }, or set auto_widen = true",
+			"failed  RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but decimal(21,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }, or set auto_widen = true",
 			[(1, 1)],
 		),
 		(
@@ -536,7 +536,7 @@ shop.table(description='Test table.', write_strategy='append'{settings})(priced)
 			1,
 			2.5,
 			1,
-			"failed   RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but float in the source",
+			"failed  RAW.shop__priced  the yielded data does not fit the table: amount is int in the table but float in the source",
 			[(1, 1)],
 		),
 	],
@@ -688,8 +688,8 @@ def test_given_a_declared_key_the_data_does_not_have_when_loading_then_the_table
 @pytest.mark.parametrize(
 	("settings", "expected_line", "expected_tables"),
 	[
-		("", "loaded   RAW.shop__rows  0 rows (table created on first data)", []),
-		("columns={'id': 'int'}", "loaded   RAW.shop__rows  0 rows", [("id", "BIGINT")]),
+		("", "(table created on first data)", []),
+		("columns={'id': 'int'}", "loaded  RAW.shop__rows      0 rows", [("id", "BIGINT")]),
 	],
 	ids=["nothing declared", "declared columns"],
 )
@@ -699,7 +699,8 @@ def test_given_a_generator_that_yields_nothing_on_its_first_load_then_the_load_s
 	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
 	give(project, "rows", [])
 	done = load(project)
-	assert expected_line in done.stdout, done.stdout
+	assert expected_line in done.stdout and "loaded  RAW.shop__rows      0 rows" in done.stdout, done.stdout
+	assert ("(table created on first data)" in done.stdout) == (settings == ""), done.stdout
 	columns = query(
 		project,
 		"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\'",
@@ -1012,7 +1013,7 @@ def test_given_an_enforced_contract_without_declared_columns_when_planning_then_
 			[{"order_id": 7, "customer": {"country": "GB", "address": {"city": "Leeds"}}, "line_totals": {"sku-14": 12.5}}],
 			[{"order_id": 8, "customer": {"country": "FR", "tier": "gold"}, "line_totals": {"sku-17": 1}}],
 			0,
-			"loaded   RAW.shop__rows  1 rows",
+			"loaded  RAW.shop__rows      1 row ",
 			[
 				("order_id", "BIGINT"),
 				("customer__country", "VARCHAR"),
@@ -1342,7 +1343,7 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 2, "v": "x"}])
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
-	assert "the loaded rows repeat its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
+	assert "the loaded rows repeat its unique_key: 1 value of (id) appears in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__rows"') == [(0,)]
 
 

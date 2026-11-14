@@ -14,34 +14,18 @@ files, `orders/`, is loaded into a DuckDB table:
 
 ```console
 $ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-Plan ready  1 selected, 1 object to create, 1 to load
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
 
-Objects (1)                                         sqlload apply
-└── raw.orders                                      create table
-    ├── order_id   int            -> BIGINT
-    ├── customer   text           -> VARCHAR
-    ├── total      float          -> DOUBLE
-    ├── ordered_at timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
-
-Loads (1)                                           sqlload load
-└── orders                                          replace
-    ├── source  files  orders/  parquet
-    ├── files   1 to read of 1 listed
-    ├── route   DuckDB reads directly from orders/ (nothing through the loader)
-    └── batch   1 batch of whole partitions, up to 1,000 files or about 1 GB per commit; each batch's footers are combined, so later batches may add columns
-
-✓ Plan complete  1 selected, 1 object to create, 1 to load
 created  raw.orders  9 columns
-loaded   raw.orders  3 rows  0.0s
+loaded  raw.orders      3 rows 0.0s
 
-✓ Completed  1 loaded, 3 rows, 0.0s
+✓ Completed  1 loaded, 3 rows, 0.1s
+└── slowest      raw.orders 0.0s
 ```
 
-The plan comes first: the table it creates, how each column's type maps to DuckDB, the write
-strategy (`replace`) and the route. DuckDB reads the Parquet files itself, so the rows never pass
-through SQLLoad. The `_sqlload_*` columns record which file and row each row came from, and when
-it loaded.
+The plan's closing line comes first: one table to create and load. DuckDB reads the Parquet files
+itself, so the rows never pass through SQLLoad. The table's 9 columns are the files' 4 and the
+`_sqlload_*` columns, which record which file and row each row came from, and when it loaded.
 
 Add `--print-toml` to print the same copy as a `sqlload.toml` project instead of running it. See
 [`sqlload copy`](/docs/cli/copy/).
@@ -154,6 +138,7 @@ ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  DuckDB local
 
 Objects (2)                                         sqlload apply
 ├── raw.app__customers                              create table
@@ -171,25 +156,22 @@ Objects (2)                                         sqlload apply
     └── + _sqlload_load_id, _loaded_at
 
 Loads (2)                                           sqlload load
-├── app__customers                                  merge (unique_key: customer_id ← {primary_key})
+├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
 │   ├── source  postgres  app  public.customers
-│   ├── route   read as Arrow -> DuckDB takes Arrow
-│   └── batch   about every 1 GB
-└── app__orders                                     merge (unique_key: order_id ← {primary_key})
+│   └── route   read as Arrow -> DuckDB takes Arrow
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
-    └── cursor  updated_at first run, everything
+    └── reads   updated_at: first run, everything
 
 ✓ Plan complete  2 selected, 2 objects to create, 2 to load
 ```
 
 Tables are named `{source}__{table}` unless you set `table_name`. `← {primary_key}` shows that each
-`unique_key` is the table's primary key. Because an index leads with `updated_at`, `orders` is read in cursor order and
-can commit along the way.
+`unique_key` is the table's primary key. `reads` shows where an incremental table's read starts.
 
-`sqlload apply` creates the tables, and `sqlload load` fills them. Both print the plan first;
-here it is cut to the last lines:
+`sqlload apply` creates the tables, and `sqlload load` fills them. `apply` prints the plan first,
+here cut to the last lines; `load` prints the plan's closing line, then a line per table:
 
 ```console
 $ sqlload apply
@@ -197,13 +179,15 @@ $ sqlload apply
 created  raw.app__customers  6 columns
 created  raw.app__orders     7 columns
 
-✓ Completed  0.0s
+✓ Completed  0.1s
 $ sqlload load
-…
-loaded   raw.app__customers  50 rows  0.0s
-loaded   raw.app__orders     1,000 rows  0.0s
+✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+
+loaded  raw.app__customers     50 rows 0.0s
+loaded  raw.app__orders     1,000 rows 0.0s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.1s
+└── slowest      raw.app__orders 0.0s
 ```
 
 ### 4. Load again
@@ -214,24 +198,32 @@ Change one order and add another:
 docker exec -i shop-db psql -q -U postgres -c "UPDATE orders SET status = 'refunded', updated_at = now() WHERE order_id = 42; INSERT INTO orders VALUES (1001, 7, 'placed', 99.90, now());"
 ```
 
-Load only `app__orders`. The plan shows where the read starts: the destination's maximum
-`updated_at`, read from the table itself.
+Plan only `app__orders`. A plan of one table shows every line. `reads` shows where the read
+starts: the destination's maximum `updated_at`, read from the table itself. Because an index leads
+with `updated_at`, `orders` is read in cursor order and can commit along the way, as `commits`
+shows.
 
 ```console
-$ sqlload load app__orders
+$ sqlload plan app__orders
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
-└── app__orders                                     merge (unique_key: order_id ← {primary_key})
+└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
-    └── cursor  updated_at from 2026-10-12 16:00:00.000000+00 (destination maximum)
+    ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}", sqlload.toml:24)
+    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
+    ├── columns 5
+    └── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
 
 ✓ Plan complete  1 selected, 1 to load
-loaded   raw.app__orders  3 rows  0.0s
+$ sqlload load app__orders
+✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+
+loaded  raw.app__orders      3 rows 0.0s
 
 ✓ Completed  1 loaded, 3 rows, 0.1s
+└── slowest      raw.app__orders 0.0s
 ```
 
 Three rows: the two changed ones, and the row at the previous maximum, which the cursor includes.

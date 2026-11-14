@@ -37,7 +37,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "DELETE FROM public.prices WHERE id = 3;",
                     destination_change: "",
-                    expected_plan: "updated_at from 2026-11-01 00:00:00.000000+00 (destination maximum)",
+                    expected_plan: "reads   updated_at >= 2026-11-01 00:00:00.000+00 (warehouse maximum)",
                     ..OK
                 },
             ],
@@ -52,7 +52,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             runs: &[
                 OK,
                 ScenarioRun {
-                    expected_plan: "seq after 2 (destination maximum)",
+                    expected_plan: "reads   seq > 2 (warehouse maximum)",
                     ..OK
                 },
                 ScenarioRun {
@@ -92,7 +92,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                     ..OK
                 },
                 ScenarioRun {
-                    expected_plan: "seq from 2 (destination maximum)",
+                    expected_plan: "reads   seq >= 2 (warehouse maximum)",
                     ..OK
                 },
             ],
@@ -179,7 +179,7 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
                 ScenarioRun {
                     source_change: "CREATE TABLE public.later (id int8 PRIMARY KEY);",
                     destination_change: "",
-                    expected_error: "public.later\n    └── reason  new table and new_tables = \"fail\"; add it to include or exclude it",
+                    expected_error: "raw.app__later\n    └── reason  new table and new_tables = \"fail\"; add it to include or exclude it",
                     ..OK
                 },
             ],

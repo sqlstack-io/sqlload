@@ -12,11 +12,13 @@ sqlload copy SOURCE DESTINATION [OPTIONS]
 
 ```console
 $ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-Plan ready  1 selected, 1 object to create, 1 to load
-…
-loaded   raw.orders  3 rows  0.0s
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
 
-✓ Completed  1 loaded, 3 rows, 0.0s
+created  raw.orders  9 columns
+loaded  raw.orders      3 rows 0.0s
+
+✓ Completed  1 loaded, 3 rows, 0.1s
+└── slowest      raw.orders 0.0s
 ```
 
 ## Endpoints
@@ -48,10 +50,13 @@ named connection.
 
 ```console
 $ sqlload copy 'postgresql://postgres:${ENV:PGPASSWORD}@localhost:5432/shop#public.orders' duckdb://shop.duckdb#raw.orders --cursor-column updated_at
-…
-└── orders                                          merge (unique_key: order_id ← {primary_key})
-…
-    └── cursor  updated_at first run, everything
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+
+created  raw.orders  7 columns
+loaded  raw.orders  1,000 rows 0.0s
+
+✓ Completed  1 loaded, 1,000 rows, 0.1s
+└── slowest      raw.orders 0.0s
 ```
 
 Run it again and it continues from the destination's maximum `updated_at`, as a project would.

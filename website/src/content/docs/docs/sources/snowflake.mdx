@@ -44,6 +44,7 @@ the same connection.
 ```console
 $ sqlload plan
 Plan ready  2 selected, 2 objects to create, 2 to load
+to  DuckDB local
 
 Objects (2)                                         sqlload apply
 ├── raw.shop__orders                                create table
@@ -58,15 +59,16 @@ Objects (2)                                         sqlload apply
     …
 
 Loads (2)                                           sqlload load
-├── shop__orders                                    delete_insert (cursor: order_date)
-│   ├── source  snowflake  shop  SHOP.ORDERS
-│   ├── route   unload Parquet to internal stage @~/sqlload_unload/ -> read parquet into Arrow -> DuckDB takes Arrow
-│   ├── stage   internal: no stage is set, so Snowflake writes to your user stage, and SQLLoad fetches the files in parallel, decrypts them and removes them after the read
-│   ├── …
-│   └── cursor  order_date from 2026-11-01 (now minus lookback 7days), below 2026-11-16 (now plus lookahead 7days)
-└── shop__big_orders                                replace
-    ├── source  snowflake  shop  query big_orders
-    …
+├── raw.shop__big_orders                            replace
+│   ├── source  snowflake  shop  query big_orders
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   …
+└── raw.shop__orders                                delete_insert (cursor: order_date)
+    ├── source  snowflake  shop  SHOP.ORDERS
+    ├── route   unload Parquet to internal stage @~/sqlload_unload/ -> download unchanged to a local temporary folder -> DuckDB reads them (nothing through the loader)
+    ├── reads   order_date from 2026-11-01 (now minus lookback 7days), below 2026-11-16 (now plus lookahead 7days)
+    ├── stage   internal: no stage is set, so Snowflake writes to your user stage, and SQLLoad fetches the files in parallel, decrypts them and removes them after the read
+    └── …
 ```
 
 ## Choosing tables

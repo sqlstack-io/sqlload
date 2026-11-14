@@ -1,22 +1,35 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
+use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::table_path::table_path;
-use crate::adapters::files::models::{FilesDestination, TableFiles, TablePath, TablePathRequest};
+use crate::adapters::files::models::{
+    FilesDestination, FolderClaim, TableFiles, TablePath, TablePathRequest,
+};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec};
+use crate::loader::models::{
+    FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
+};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
 use crate::schema_plan::models::LiveColumn;
+use crate::table_lease::constants::LEASE_REFRESH;
+use crate::table_lease::main::keep_lease::keep_lease;
+use crate::table_lease::main::lease_now::lease_now;
+use crate::table_lease::main::release_lease::release_lease;
+use crate::table_lease::models::Lease;
+use tokio_util::sync::CancellationToken;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
 pub(crate) async fn clean_staging(run: &LoadRun<'_>, plan: &ProjectPlan) {
@@ -197,15 +210,18 @@ pub(crate) fn mark_shared_destinations(
         .collect()
 }
 
-/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do.
+/// A warning naming the `specs` whose cursors read within their constant values only because the `unresolved` sources' tables are unknown, if any do, with those tables' display names.
 pub(crate) fn unknown_sharing(
     specs: &[TableSpec],
     configured: &[TableSpec],
     unresolved: &[String],
-) -> Option<String> {
-    let names: Vec<String> = specs
+) -> Option<UnreadSharing> {
+    let unknown: Vec<&TableSpec> = specs
         .iter()
         .filter(|spec| spec.shared_destination && !shared(spec, configured))
+        .collect();
+    let names: Vec<String> = unknown
+        .iter()
         .map(|spec| {
             format!(
                 "{}.{}",
@@ -214,12 +230,17 @@ pub(crate) fn unknown_sharing(
             )
         })
         .collect();
-    (!names.is_empty()).then(|| {
-        format!(
+    (!names.is_empty()).then(|| UnreadSharing {
+        warning: format!(
             "{} could not be read, so {} may share a destination table with it: their incremental cursors read only rows with their own constant values",
             unresolved.join(", "),
             names.join(", ")
-        )
+        ),
+        sources: unresolved.to_vec(),
+        tables: unknown
+            .iter()
+            .map(|spec| display_name(spec.warehouse, &spec.destination))
+            .collect(),
     })
 }
 
@@ -334,4 +355,74 @@ fn is_constant(spec: &TableSpec, name: &str) -> bool {
     spec.constants
         .iter()
         .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
+}
+
+/// The folders files tables write to, whether or not they are selected, with the folder their files source (`files`) reads; warehouse tables and paths that do not resolve claim none.
+pub(crate) fn folder_claims(
+    specs: &[TableSpec],
+    files: Option<&FilesSource>,
+    destinations: &BTreeMap<String, Destination>,
+) -> Vec<FolderClaim> {
+    let mut claims: Vec<FolderClaim> = Vec::new();
+    for spec in specs {
+        let Some(target) = destinations.get(&spec.target).and_then(files_destination) else {
+            continue;
+        };
+        let name = format!(
+            "{}.{}",
+            spec.source_name,
+            spec.source_table.qualified_name()
+        );
+        if let Ok(path) = table_folder(spec, target) {
+            claims.push(FolderClaim {
+                id: name.clone(),
+                name,
+                folder: path.folder,
+                template: spec.destination_path.clone().unwrap_or_default(),
+                schema: spec.source_table.schema.clone(),
+                source: files.map(|files| files.location.clone()),
+            });
+        }
+    }
+    claims
+}
+
+/// Refresh `lease` every `LEASE_REFRESH` until the returned guard is dropped, and the task doing it, which a release awaits so no refresh in flight extends the lease after it; a refresh that fails only warns, as the next commit checks the lease again before it deletes anything.
+pub(crate) fn keep_in_background(
+    folder: &OpenFolder,
+    lease: &Lease,
+) -> (tokio_util::sync::DropGuard, tokio::task::JoinHandle<()>) {
+    let stop = CancellationToken::new();
+    let (stopped, folder, lease) = (stop.clone(), folder.clone(), lease.clone());
+    let renewal = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = stopped.cancelled() => return,
+                () = tokio::time::sleep(LEASE_REFRESH) => {}
+            }
+            match keep_lease(&folder, &lease, lease_now()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(lost)) => {
+                    tracing::warn!(folder = %folder.location, "{lost}");
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, folder = %folder.location, "cannot refresh the table's lease; retrying");
+                }
+            }
+        }
+    });
+    (stop.drop_guard(), renewal)
+}
+
+/// The table's own folder, where its lease lives: the live folder, also while the load writes a staged one.
+pub(crate) fn leased_folder(sink: &FilesSink) -> &OpenFolder {
+    sink.swap.as_ref().map_or(&sink.folder, |swap| &swap.live)
+}
+
+/// Release `lease` after the load, best effort: one left behind expires on its own.
+pub(crate) async fn give_back(folder: &OpenFolder, lease: &Lease) {
+    if let Err(error) = release_lease(folder, lease).await {
+        tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
+    }
 }

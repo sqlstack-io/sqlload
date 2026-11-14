@@ -73,6 +73,7 @@ one a problem blocked, counts as new afterwards, so name it exactly in `include`
 ```console
 $ sqlload plan
 Plan ready  1 selected, 1 object to create, 1 to load, 1 skipped
+to  DuckDB local
 
 Objects (1)                                         sqlload apply
 └── raw.app__customers                              create table
@@ -84,13 +85,12 @@ Objects (1)                                         sqlload apply
     └── masked  email (hmac)
 
 Loads (1)                                           sqlload load
-└── app__customers                                  replace
+└── raw.app__customers                              replace
     ├── source  postgres  app  public.customers
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── batch   about 1 GB at a time into a new table, swapped in once at the end
+    └── route   read as Arrow -> DuckDB takes Arrow
 
 Skipped (1)
-└── public.orders
+└── raw.app__orders
     └── reason  has column total, which matches skip_tables_with_columns
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load, 1 skipped

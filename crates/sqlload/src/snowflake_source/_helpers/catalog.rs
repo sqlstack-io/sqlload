@@ -61,6 +61,7 @@ pub(crate) fn catalog_tables(
         let table = tables
             .entry((schema.clone(), name.clone()))
             .or_insert_with(|| SourceTable {
+                split_pages: None,
                 schema,
                 name,
                 columns: Vec::new(),
@@ -108,6 +109,7 @@ pub(crate) fn listed_tables(
                 continue;
             }
             let table = SourceTable {
+                split_pages: None,
                 schema: schema.clone(),
                 name: name.clone(),
                 columns: Vec::new(),

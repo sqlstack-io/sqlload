@@ -60,6 +60,7 @@ use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::masking::models::MaskRules;
+use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
@@ -133,6 +134,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             }
         }
         tables.push(SourceTable {
+            split_pages: None,
             schema: String::new(),
             name: name.clone(),
             columns,
@@ -1089,7 +1091,8 @@ fn empty_problem(table: &TablePlan) -> Result<(), LoaderError> {
     });
     match minimum {
         Some(minimum) => Err(LoaderError::Invalid(format!(
-            "checks.min_rows failed: 0 row(s) staged, fewer than the {minimum} required; nothing was published"
+            "checks.min_rows failed: 0 rows staged, fewer than the {} required; nothing was published",
+            thousands(minimum)
         ))),
         None => Ok(()),
     }
@@ -1443,6 +1446,7 @@ impl ChildTables {
                     )
                     .await?;
                     opened.load_id = load_id.to_owned();
+                    opened.child = true;
                     opened.loaded_at = loaded_at.to_owned();
                     feed.publisher.insert(opened)
                 }
@@ -1573,6 +1577,7 @@ impl ChildTables {
                 Publisher::open(feed.table.clone(), (&self.destination, &self.options), None)
                     .await?;
             opened.load_id = load_id.to_owned();
+            opened.child = true;
             opened.loaded_at = loaded_at.to_owned();
             feed.publisher = Some(opened);
             self.feeds.push(feed);

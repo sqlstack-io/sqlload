@@ -28,22 +28,26 @@ path = "{source}/{table}/dt={cursor:date}/"
 A source's `destination_path`, or one table's, overrides the target's `path`.
 
 ```console
-$ sqlload load
+$ sqlload plan
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
 └── app__orders                                     delete_insert (cursor: updated_at)
     ├── source  postgres  app  public.orders
+    ├── reads   updated_at: first run, everything
     ├── files   out/app/orders/  parquet (zstd)  partitions dt={cursor:date}/
     ├── schema  first files, 7 columns
-    ├── batch   about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range
-    ├── cursor  updated_at first run, everything
-    └── note    each partition written or in the window gets its new files first, then its older files are deleted; not atomic, so a reader in between sees both
+    ├── note    each partition written or in the window gets its new files first, then its older files are deleted; not atomic, so a reader in between sees both
+    └── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range
 
 ✓ Plan complete  1 selected, 1 to load
-loaded   out/app/orders/  1,001 rows  0.0s
+$ sqlload load
+✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
 
-✓ Completed  1 loaded, 1,001 rows, 0.0s
+loaded  out/app/orders/  1,000 rows 0.1s
+
+✓ Completed  1 loaded, 1,000 rows, 0.1s
+└── slowest      out/app/orders/ 0.1s
 ```
 
 Files targets take `append`, `replace` and `delete_insert`. `merge` needs a table format that

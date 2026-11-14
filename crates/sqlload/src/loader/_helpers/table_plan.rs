@@ -45,6 +45,8 @@ use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
+use crate::loader::_helpers::render::up_to_date;
+use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
@@ -67,6 +69,7 @@ use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::loader::models::WholeReason;
+use crate::loader::models::{ProjectPlan, SkippedTable};
 use crate::loader::models::{WarehouseRoute, WarehouseSource};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::SourceTable;
@@ -1809,4 +1812,20 @@ pub(crate) async fn refused_bounds(
         ),
         (_, None) => format!("the cursor {}'s query fails: {error}", cursor.column),
     })
+}
+
+/// The plan with each files table that has nothing new to read moved to `skipped`, so `load` reads nothing for it (see [`up_to_date`]); `ranged` when the run has `--start-cursor` or `--end-cursor`.
+pub(crate) fn skip_up_to_date(mut plan: ProjectPlan, ranged: bool) -> ProjectPlan {
+    let (current, tables): (Vec<TablePlan>, Vec<TablePlan>) = std::mem::take(&mut plan.tables)
+        .into_iter()
+        .partition(|table| table.schema.blocked.is_none() && up_to_date(table, ranged).is_some());
+    plan.tables = tables;
+    plan.skipped
+        .extend(current.iter().map(|table| SkippedTable {
+            source_name: table.spec.source_name.clone(),
+            source_table: table.spec.source_table.qualified_name(),
+            destination: display_name(table.spec.warehouse, &table.spec.destination),
+            reason: up_to_date(table, ranged).unwrap_or_default(),
+        }));
+    plan
 }
