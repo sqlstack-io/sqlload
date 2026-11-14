@@ -6,6 +6,9 @@ use tokio::task::{Id, JoinError};
 use crate::cdc::main::load_cdc::load_cdc;
 use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
+use crate::adapters::contract::models::WriteMode;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
 use crate::project::models::ProjectConfig;
 
@@ -55,6 +58,40 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             skipped: false,
         },
     }
+}
+
+/// `table`'s write strategy as the load events name it.
+pub(crate) fn strategy_name(table: &TablePlan) -> &'static str {
+    match table.mode {
+        WriteMode::Merge { .. } => "merge",
+        WriteMode::DeleteInsert { .. } => "delete_insert",
+        WriteMode::Append => "append",
+        WriteMode::Replace => "replace",
+        WriteMode::Recreate => "recreate",
+        WriteMode::Changes(_) => "changes",
+    }
+}
+
+/// Send `outcome` as the load event it ends with: done, failed, or not started.
+pub(crate) fn emit_outcome(outcome: &TableOutcome) {
+    let elapsed_ms = u64::try_from(outcome.elapsed.as_millis()).unwrap_or(u64::MAX);
+    let kind = match &outcome.loaded {
+        Ok(loaded) => EventKind::TableDone {
+            rows: loaded.rows,
+            elapsed_ms,
+            position: loaded.note.clone(),
+            changes: loaded.changes.clone(),
+        },
+        Err(reason) if outcome.skipped => EventKind::TableNotStarted {
+            reason: reason.clone(),
+        },
+        Err(reason) => EventKind::TableFailed {
+            reason: reason.clone(),
+            retryable: outcome.retryable,
+            elapsed_ms,
+        },
+    };
+    emit(Some(&outcome.table), kind);
 }
 
 /// The destination table `table` loads into, as one key: its target and its qualified name.
@@ -112,7 +149,20 @@ impl<'a> TableQueue<'a> {
         run: &LoadRun<'_>,
         plan: &ProjectPlan,
     ) -> Vec<TableOutcome> {
-        load_cdc(run, plan, self.stopped.clone()).await
+        let captured = plan.tables.iter().filter(|table| {
+            table.spec.cdc.is_some() && table.schema.blocked.is_none() && self.stopped.is_none()
+        });
+        for table in captured {
+            emit(
+                Some(&table.outcome_name()),
+                EventKind::TableStarted {
+                    strategy: strategy_name(table).to_owned(),
+                },
+            );
+        }
+        let outcomes = load_cdc(run, plan, self.stopped.clone()).await;
+        outcomes.iter().for_each(emit_outcome);
+        outcomes
     }
 
     /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free, and whose destination table no other table is loading.
@@ -130,6 +180,12 @@ impl<'a> TableQueue<'a> {
         })?;
         let index = self.waiting.remove(position);
         let table = self.tables[index];
+        emit(
+            Some(&table.outcome_name()),
+            EventKind::TableStarted {
+                strategy: strategy_name(table).to_owned(),
+            },
+        );
         self.writing.insert(destination_key(table));
         let source = self.project.sources.get(&table.spec.source_name);
         if source.is_some_and(|source| source.shared_client && !source.parallel_tables) {
@@ -162,6 +218,7 @@ impl<'a> TableQueue<'a> {
             elapsed: std::time::Duration::ZERO,
             skipped: false,
         });
+        emit_outcome(&outcome);
         if self.fail_fast && self.stopped.is_none() && outcome.loaded.is_err() {
             self.stopped = Some(outcome.table.clone());
         }
@@ -173,6 +230,7 @@ impl<'a> TableQueue<'a> {
         if let Some(failed) = &self.stopped {
             for index in &self.waiting {
                 let skipped = TableOutcome::skipped(self.tables[*index], failed);
+                emit_outcome(&skipped);
                 self.outcomes.push((*index, skipped));
             }
         }

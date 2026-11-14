@@ -16,6 +16,8 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         },
         host: None,
         no_color: true,
+        streams: false,
+        log_json: false,
         variables: Default::default(),
     };
     tokio::runtime::Builder::new_current_thread()
@@ -42,6 +44,8 @@ pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
         command: cli.command,
         host: None,
         no_color: true,
+        streams: false,
+        log_json: false,
         variables: Default::default(),
     };
     tokio::runtime::Builder::new_current_thread()

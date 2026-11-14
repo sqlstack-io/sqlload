@@ -1,16 +1,22 @@
+use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
-use std::collections::BTreeMap;
-
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
-use crate::command::_helpers::output::confirm_reload;
+use crate::command::_helpers::load_output::{
+    EventsTarget, LoadOutput, change_tally_line, summary_lines, write_events,
+};
+use crate::command::_helpers::live_block::LiveState;
+use crate::command::_helpers::output::{confirm_reload, print_lines};
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
 use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT};
 use crate::command::errors::CommandError;
-use crate::command::models::{Command, ContractAction, LoaderArgs, LoaderRequest, StateAction};
+use crate::command::models::{
+    Command, ContractAction, EventsFormat, LoaderArgs, LoaderRequest, Progress, StateAction,
+};
 use crate::contract::main::compare_contracts::compare_contracts;
 use crate::contract::main::render_contract::render_contract;
 use crate::contract::main::write_contracts::write_contracts;
@@ -19,6 +25,10 @@ use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
+use crate::load_events::main::close::close;
+use crate::load_events::main::emit::emit;
+use crate::load_events::main::listen::listen;
+use crate::load_events::models::EventKind;
 use crate::loader::main::failing_sources::failing_sources;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
@@ -27,7 +37,7 @@ use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
 use crate::loader::models::{
-    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome,
+    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome, TablePlan,
 };
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
@@ -141,7 +151,10 @@ pub(crate) async fn run_loader(
                 .map(|(lines, agrees)| (lines, exit_code(agrees, false)))
                 .map_err(Into::into)
         }
-        command => run_command(&project, command, request.host.clone(), request.no_color).await,
+        command => {
+            let shown = (request.no_color, request.streams, request.log_json);
+            run_command(&project, command, request.host.clone(), shown).await
+        }
     };
     if let Some(host) = request.host {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
@@ -202,7 +215,7 @@ async fn run_command(
     project: &ProjectConfig,
     command: Command,
     host: Option<Arc<dyn PythonHost>>,
-    no_color: bool,
+    (no_color, streams, log_json): (bool, bool, bool),
 ) -> Result<(Vec<String>, u8), CommandError> {
     if let Command::Debug { no_connection } = command {
         let (lines, ok) = debug_project(project, !no_connection).await;
@@ -238,6 +251,21 @@ async fn run_command(
         args.follow.then_some(args.max_duration),
     );
     let started = (chrono::Utc::now(), std::time::Instant::now());
+    if !loads && (args.events.is_some() || args.events_file.is_some()) {
+        return Err("--events and --events-file apply to load only".to_owned().into());
+    }
+    let events = match (args.events, &args.events_file) {
+        (Some(EventsFormat::Jsonl), _) => Some(EventsTarget::Stderr),
+        (None, Some(path)) => Some(EventsTarget::File(std::fs::File::create(path).map_err(
+            |error| format!("cannot write --events-file {}: {error}", path.display()),
+        )?)),
+        (None, None) => None,
+    };
+    let draws = match args.progress {
+        Progress::Never => false,
+        Progress::Always => streams,
+        Progress::Auto => streams && !json && !log_json && std::io::stderr().is_terminal(),
+    };
     let options = options(args)?;
     let plan = plan_project(project, &destinations, &options).await?;
     if json && !applies {
@@ -303,6 +331,47 @@ async fn run_command(
         host,
         options: &options,
     };
+    if loads && follow.is_none() {
+        let streamed = StreamedLoad {
+            run: &run,
+            plan: &plan,
+            applied: &applied,
+            output: LoadOutput {
+                name_width: name_width(&plan, &applied),
+                print: streams && !json,
+                no_color,
+                events,
+                live: draws.then(|| {
+                    let tables = plan
+                        .tables
+                        .iter()
+                        .filter(|table| table.schema.blocked.is_none())
+                        .map(TablePlan::outcome_name)
+                        .collect();
+                    LiveState::new(tables, options.fail_fast)
+                }),
+            },
+            started,
+            planned: (planned, plan_retryable),
+        };
+        if streamed.output.print {
+            print_lines(std::mem::take(&mut lines), no_color);
+        }
+        let (outcomes, kept, code) = Box::pin(streamed_load(streamed)).await;
+        if json {
+            let run = RunReport {
+                command: "load",
+                applied: &applied,
+                outcomes: &outcomes,
+                started: started.0,
+                elapsed: started.1.elapsed(),
+            };
+            let (text, ok, retryable) = json_report(&plan, Some(&run));
+            return Ok((vec![text], exit_code(ok, retryable)));
+        }
+        lines.extend(kept);
+        return Ok((lines, code));
+    }
     let stop = follow.map(follow_stop);
     let outcomes = match loads {
         true => load_tables(&run, &plan, stop.as_ref()).await,
@@ -326,6 +395,88 @@ async fn run_command(
         lines,
         exit_code(planned && completed, plan_retryable && retryable),
     ))
+}
+
+/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
+struct StreamedLoad<'a> {
+    run: &'a LoadRun<'a>,
+    plan: &'a ProjectPlan,
+    applied: &'a [String],
+    output: LoadOutput,
+    started: (chrono::DateTime<chrono::Utc>, std::time::Instant),
+    planned: (bool, bool),
+}
+
+/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary), and the exit code, the same as a load without events.
+async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String>, u8) {
+    let receiver = listen(&uuid::Uuid::new_v4().to_string());
+    let width = load.output.name_width;
+    let mut first: Vec<String> = vec![String::new()];
+    first.extend(load.applied.iter().map(|line| change_tally_line(line, width)));
+    let print = load.output.print;
+    let no_color = load.output.no_color;
+    let mut kept: Vec<String> = Vec::new();
+    match print {
+        true => print_lines(first, no_color),
+        false => kept.extend(first),
+    }
+    let writer = tokio::spawn(write_events(load.output, receiver));
+    let selected = load.plan.tables.len();
+    let to_load = load
+        .plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+        .count();
+    emit(None, EventKind::RunStarted { selected, to_load });
+    let outcomes = load_tables(load.run, load.plan, None).await;
+    let completed = outcomes.iter().all(|outcome| outcome.loaded.is_ok());
+    let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
+    let code = exit_code(
+        load.planned.0 && completed,
+        load.planned.1 && retryable,
+    );
+    let elapsed_ms = u64::try_from(load.started.1.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let count = |loaded: bool, skipped: bool| {
+        outcomes
+            .iter()
+            .filter(|outcome| outcome.loaded.is_ok() == loaded && outcome.skipped == skipped)
+            .count()
+    };
+    emit(
+        None,
+        EventKind::RunFinished {
+            loaded: count(true, false),
+            failed: count(false, false),
+            not_started: count(false, true),
+            rows: outcomes
+                .iter()
+                .filter_map(|outcome| outcome.loaded.as_ref().ok())
+                .map(|loaded| loaded.rows)
+                .sum(),
+            elapsed_ms,
+            exit_code: code,
+        },
+    );
+    close();
+    let (lines, tally) = writer.await.unwrap_or_default();
+    kept.extend(lines);
+    kept.push(String::new());
+    kept.extend(summary_lines(&tally, elapsed_ms, code));
+    (outcomes, kept, code)
+}
+
+/// The width of the tally's name column: the widest name of a table the plan loads, or of an object `applied` changed, and two spaces.
+fn name_width(plan: &ProjectPlan, applied: &[String]) -> usize {
+    let tables = plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+        .map(|table| table.outcome_name().len());
+    let objects = applied.iter().map(|line| {
+        line.split_whitespace().nth(1).map_or(0, str::len)
+    });
+    tables.chain(objects).max().unwrap_or(0) + 2
 }
 
 /// Why `load --follow` did not start on a plan with errors: following past a source or table that did not plan would move the replication slot beyond its changes for good. Names how to leave each failing source out to follow the rest: `--exclude` for a source it does not follow, and the source's own `exclude` for the tables of a `postgres_cdc` source, which share its one slot.
