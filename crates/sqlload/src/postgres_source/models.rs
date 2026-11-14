@@ -33,9 +33,33 @@ pub struct SourceTable {
     pub estimated_bytes: i64,
     /// The table's own comment in the source (`COMMENT ON TABLE`), the description of a discovered table.
     pub comment: Option<String>,
+    /// The primary key and unique constraints the database lists for a table whose driver reported no primary key (ODBC, from `INFORMATION_SCHEMA`), which point at the driver's key lookup; empty otherwise.
+    pub listed_keys: Vec<ListedKey>,
+}
+
+/// A key constraint the database lists: `PRIMARY KEY` or `UNIQUE`, and its columns in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedKey {
+    pub constraint_type: String,
+    pub columns: Vec<String>,
 }
 
 impl SourceTable {
+    /// A table of `columns` without a schema, key, indexes, estimates or comment, as a files source's.
+    pub fn of_columns(name: String, columns: Vec<SourceColumn>) -> Self {
+        Self {
+            schema: String::new(),
+            name,
+            columns,
+            primary_key: Vec::new(),
+            indexed_columns: Vec::new(),
+            estimated_rows: -1,
+            estimated_bytes: -1,
+            comment: None,
+            listed_keys: Vec::new(),
+        }
+    }
+
     /// `schema.name`.
     pub fn qualified_name(&self) -> String {
         match self.schema.is_empty() {

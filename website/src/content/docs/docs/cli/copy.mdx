@@ -40,7 +40,7 @@ named connection.
 
 | Option | Meaning |
 |--------|---------|
-| `--write-strategy <STRATEGY>` | `append`, `merge`, `delete_insert` or `replace`. Default as for a project: `replace` without a cursor. |
+| `--write-strategy <STRATEGY>` | `append`, `merge`, `delete_insert` or `replace`. Default as for a project: `replace` without a cursor, `merge` with a cursor and a key; with a cursor and no key, from 0.44.0, set this or `--unique-key` (from files, set this). |
 | `--unique-key <COLUMN>...` | The key for `merge` and `delete_insert`. A Postgres table's primary key by default. |
 | `--cursor-column <COLUMN>` | The column incremental copies continue from. |
 | `--format <FORMAT>` | A files source's format: `parquet`, `ndjson`, `json` or `csv`. |

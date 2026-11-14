@@ -92,6 +92,9 @@ pub const SNOWFLAKE_SOURCE: &str = "snowflake";
 /// The `system` of an ODBC source's tables.
 pub const ODBC_SOURCE: &str = "odbc";
 
+/// The constraint type a database's `INFORMATION_SCHEMA` gives a primary key.
+pub const PRIMARY_KEY: &str = "PRIMARY KEY";
+
 /// The version of the document `apply --json` and `load --json` print; it changes only when a field changes meaning or goes away.
 pub const RESULT_SCHEMA_VERSION: u32 = 1;
 

@@ -69,6 +69,7 @@ pub(crate) fn catalog_tables(
                 estimated_rows: number(8).unwrap_or(-1),
                 estimated_bytes: number(9).unwrap_or(-1),
                 comment: cell(10).filter(|comment| !comment.trim().is_empty()),
+                listed_keys: Vec::new(),
             });
         table.columns.push(source_column(
             &text(2),
@@ -115,6 +116,7 @@ pub(crate) fn listed_tables(
                 estimated_rows: number("rows"),
                 estimated_bytes: number("bytes"),
                 comment: Some(text("comment")).filter(|comment| !comment.trim().is_empty()),
+                listed_keys: Vec::new(),
             };
             tables.insert((schema, name), table);
         }

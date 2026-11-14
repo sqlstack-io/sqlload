@@ -4,6 +4,7 @@
 #   PostgreSQL Unicode            psqlODBC, from the distribution
 #   ODBC Driver 18 for SQL Server Microsoft's msodbcsql18, the same release as on Windows (installing it accepts Microsoft's licence)
 #   MySQL ODBC Unicode Driver     MySQL Connector/ODBC, MySQL's package for this distribution release
+#   MariaDB Unicode               MariaDB Connector/ODBC 3.1, from the distribution (its package registers it)
 # Usage: install_odbc_drivers.sh [--with-dev]   (--with-dev adds the unixODBC headers to build against)
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -14,7 +15,7 @@ MYSQL_ODBC_NAME="MySQL ODBC Unicode Driver"
 
 sudo_() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 
-packages=(unixodbc odbc-postgresql curl ca-certificates)
+packages=(unixodbc odbc-postgresql odbc-mariadb curl ca-certificates)
 if [ "${1:-}" = "--with-dev" ]; then
 	packages+=(unixodbc-dev)
 fi

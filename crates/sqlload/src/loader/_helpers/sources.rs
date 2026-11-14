@@ -601,6 +601,7 @@ async fn sheets_tables(
             estimated_rows: read.rows as i64,
             estimated_bytes: 0,
             comment: None,
+            listed_keys: Vec::new(),
         });
     }
     match problems.is_empty() {
@@ -903,18 +904,12 @@ pub(crate) fn files_source_parts(
         inferred: Vec::new(),
     };
     let source_table = SourceTable {
-        schema: String::new(),
-        name: source_name.to_owned(),
-        columns,
-        primary_key: Vec::new(),
-        indexed_columns: Vec::new(),
-        estimated_rows: -1,
-        comment: None,
         estimated_bytes: table
             .files
             .iter()
             .map(|data| i64::try_from(data.file.size).unwrap_or(i64::MAX))
             .sum(),
+        ..SourceTable::of_columns(source_name.to_owned(), columns)
     };
     Ok((
         source_table,
@@ -1675,16 +1670,8 @@ fn drained_files(
         naming,
         sql_adapter(target.warehouse).max_identifier_length(),
     );
-    let listed = SourceTable {
-        schema: String::new(),
-        name: source_name.to_owned(),
-        columns: referenced_columns(overrides, rule),
-        primary_key: Vec::new(),
-        indexed_columns: Vec::new(),
-        estimated_rows: -1,
-        estimated_bytes: 0,
-        comment: None,
-    };
+    let listed =
+        SourceTable::of_columns(source_name.to_owned(), referenced_columns(overrides, rule));
     let table = TableName {
         database: target.database,
         schema: target.schema,
