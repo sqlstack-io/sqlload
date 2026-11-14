@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.45.0](https://github.com/sqlstack-io/sqlload/compare/v0.44.0...v0.45.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **types,files,http:** a list column pinned array(int) or array(decimal(p,s)) over Parquet, Arrow or JSON-text lists fails on an element it would round or cut, instead of loading it changed; an append files table that excludes _sqlload_source_version fails plan; and an sl.http offset run whose first page is short but not empty makes one more request, failing when the API returns rows there.
+* **load,kafka,http:** a Kafka stream whose committed offset can't be read stops instead of resuming from start_from; an append files table whose rows have an empty _sqlload_source_version fails until it is loaded with --reload; a pinned decimal or integer column on a Python, BigQuery or files source fails on a value with more decimal places than it keeps instead of rounding or truncating it; and an sl.http paginate or fan_out whose select path is missing from a response fails instead of reading no rows; set select_missing="empty" for APIs that leave out an empty list.
+
+### Bug Fixes
+
+* **load,kafka,http:** fail with clear errors instead of silent fallbacks ([#237](https://github.com/sqlstack-io/sqlload/issues/237)) ([c68a42e](https://github.com/sqlstack-io/sqlload/commit/c68a42e4485dc5b385ee466bf8f34891252ed1d1))
+* **types,files,http:** refuse lossy list elements, require the source version, probe short offset pages ([#240](https://github.com/sqlstack-io/sqlload/issues/240)) ([4f3e22d](https://github.com/sqlstack-io/sqlload/commit/4f3e22d94a4ab1a4b7e79c5aae172bbee43da5dd))
+
 ## [0.44.0](https://github.com/sqlstack-io/sqlload/compare/v0.43.0...v0.44.0) (2026-11-14)
 
 
