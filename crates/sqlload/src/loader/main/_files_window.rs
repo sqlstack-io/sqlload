@@ -141,7 +141,8 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             (Some(cursor_type), None),
             (from.as_deref().map(|from| (operator, from)), to.as_deref()),
             CursorBinding::Literals,
-        ),
+        )
+        .0,
         parameters: Vec::new(),
         bounds: (from, to),
         mode,

@@ -69,12 +69,12 @@ pub struct CursorSpec {
 }
 
 /// How a source filter writes a cursor's text, date and timestamp bounds.
-#[derive(Debug)]
-pub(crate) enum CursorBinding<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CursorBinding {
     /// As literals of the source's dialect.
     Literals,
-    /// As `?` placeholders, their values collected in order, a timestamp's with its column's fractional digits when the source reports them (an ODBC source's default).
-    Parameters(&'a mut Vec<BoundParameter>, Option<u16>),
+    /// As `?` placeholders bound in order, a timestamp's with its column's fractional digits when the source reports them (an ODBC source's default).
+    Parameters(Option<u16>),
     /// As ODBC escapes, a timestamp's fraction at its column's digits when the source reports them (`cursor_bounds = "literals"`).
     Escapes(Option<u16>),
 }

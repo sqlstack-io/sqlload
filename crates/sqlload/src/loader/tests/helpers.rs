@@ -354,9 +354,8 @@ pub(crate) fn refused_bounds_runs(
     test_case: &crate::loader::tests::test_types::RefusedBoundsTestCase,
 ) -> Result<(Option<String>, Vec<String>), String> {
     use crate::adapters::contract::models::BoundParameter;
-    use crate::column_types::models::ColumnType;
+    use crate::loader::_helpers::table_plan::refused_bounds;
     use crate::loader::_helpers::table_plan::{blocked_table, read_columns};
-    use crate::loader::main::_refused_bounds::refused_bounds;
     use crate::loader::models::ReadWindow;
     use crate::project::main::parse_project::parse_project;
     let project = parse_project(
@@ -367,12 +366,6 @@ pub(crate) fn refused_bounds_runs(
         &|_| None,
     )
     .map_err(|error| error.to_string())?;
-    let column_type = match test_case.cursor_type {
-        DataType::Timestamp(_, _) => ColumnType::TimestampNtz,
-        DataType::Date32 => ColumnType::Date,
-        DataType::Utf8 => ColumnType::Text,
-        _ => ColumnType::Int,
-    };
     let table = SourceTable {
         schema: "sales".to_owned(),
         name: "items".to_owned(),
@@ -380,7 +373,7 @@ pub(crate) fn refused_bounds_runs(
             name: "updated".to_owned(),
             postgres_type: test_case.cursor_type.to_string(),
             pg_type: PgType::Other,
-            column_type: Ok(column_type),
+            column_type: Ok(test_case.column_type.clone()),
             nullable: false,
             source_spelling: None,
         }],
@@ -407,23 +400,14 @@ pub(crate) fn refused_bounds_runs(
         maximum: Some(from.to_owned()),
     });
     let mut runs: Vec<String> = Vec::new();
-    let (refuses_parameter, refuses_escape, fails_first) = test_case.refuses;
     let stub = async |filter: String, parameters: Vec<BoundParameter>| {
         runs.push(format!("{filter} {parameters:?}"));
-        if fails_first && runs.len() == 1 {
-            return Err("[HYT00] Timeout expired".to_owned());
-        }
-        let timestamp = parameters
-            .iter()
-            .any(|parameter| matches!(parameter, BoundParameter::Timestamp(_, _)));
-        match (
-            refuses_parameter && timestamp,
-            refuses_escape && filter.contains("{ts"),
-        ) {
-            (true, _) => Err("[HY000] Invalid parameter type".to_owned()),
-            (_, true) => Err("[42000] Syntax error at {ts".to_owned()),
-            (false, false) => Ok(()),
-        }
+        test_case
+            .responses
+            .get(runs.len() - 1)
+            .copied()
+            .unwrap_or(Ok(()))
+            .map_err(str::to_owned)
     };
     let problem = tokio::runtime::Builder::new_current_thread()
         .enable_all()

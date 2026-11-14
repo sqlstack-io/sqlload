@@ -12,13 +12,15 @@ use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::sources::{
     admit_tables, destination_names, found_sources, selected, source_ends, unmatched_selectors,
 };
+#[cfg(feature = "odbc")]
+use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
-#[cfg(feature = "odbc")]
-use crate::loader::main::_refused_bounds::refused_bounds;
-use crate::loader::models::{FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
-use crate::project::models::ProjectConfig;
+use crate::loader::models::{
+    FilesSource, FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec,
+};
+use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -36,7 +38,6 @@ pub async fn plan_project(
         files,
     } in found.sources
     {
-        let module = project.python_modules.get(source_name);
         plan.problems.extend(resolved.problems);
         plan.warnings.extend(resolved.warnings);
         plan.skipped.extend(resolved.skipped);
@@ -46,25 +47,13 @@ pub async fn plan_project(
         plan.warnings
             .extend(unknown_sharing(&shared, &configured, &unresolved));
         let specs = source_ends(project, (source_name, source), shared, options).await?;
-        let mut planned: Vec<TablePlan> = Vec::new();
-        let mut unselected: Vec<TableSpec> = Vec::new();
-        for mut spec in specs {
-            spec.files = files.clone();
-            spec.python = module.map(|module| python_table(module, &spec.source_table));
-            let qualified = spec.source_table.qualified_name();
-            if !selected(options, (source_name, &spec.destination.table, &qualified)) {
-                unselected.push(spec);
-                continue;
-            }
-            let destination = destinations.get(&spec.target).ok_or_else(|| {
-                LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
-            })?;
-            planned.push(plan_table(&spec, destination, options).await?);
-        }
-        #[cfg(feature = "odbc")]
-        if source.kind == crate::project::models::SourceKind::Odbc {
-            block_refused_bounds(project, (source_name, source), &mut planned).await?;
-        }
+        let (planned, unselected) = planned_tables(
+            project,
+            (source_name, source, files),
+            specs,
+            (destinations, options),
+        )
+        .await?;
         plan = admit_tables(
             plan,
             (source_name, source),
@@ -80,40 +69,34 @@ pub async fn plan_project(
     ))
 }
 
-/// `planned`, each table blocked whose cursor bounds its ODBC source's driver refuses (see [`refused_bounds`]).
-#[cfg(feature = "odbc")]
-async fn block_refused_bounds(
+/// One source's `specs`: the selected ones planned against their destinations, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.
+async fn planned_tables(
     project: &ProjectConfig,
-    (source_name, source): (&str, &crate::project::models::SourceConfig),
-    planned: &mut [TablePlan],
-) -> Result<(), LoaderError> {
-    let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
-    for table in planned
-        .iter_mut()
-        .filter(|table| table.schema.blocked.is_none())
-    {
-        let (spec, read_columns) = (&table.spec, &table.read_columns);
-        let run = async |filter: String, parameters: Vec<_>| {
-            let request = crate::odbc_source::models::OdbcReadRequest {
-                table: &spec.source_table,
-                sql: spec
-                    .warehouse_source
-                    .as_ref()
-                    .and_then(|source| source.sql.as_deref()),
-                columns: read_columns,
-                filter: Some(&filter),
-                parameters: &parameters,
-                batch_rows: 1,
-            };
-            crate::odbc_source::main::run_query::run_query(&reader, &request)
-                .await
-                .map_err(|error| error.to_string())
-        };
-        if let Some(problem) = refused_bounds(table, source_name, run).await {
-            table.schema = blocked_plan(vec![problem]);
+    (source_name, source, files): (&str, &SourceConfig, Option<FilesSource>),
+    specs: Vec<TableSpec>,
+    (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
+) -> Result<(Vec<TablePlan>, Vec<TableSpec>), LoaderError> {
+    let module = project.python_modules.get(source_name);
+    let mut planned: Vec<TablePlan> = Vec::new();
+    let mut unselected: Vec<TableSpec> = Vec::new();
+    for mut spec in specs {
+        spec.files = files.clone();
+        spec.python = module.map(|module| python_table(module, &spec.source_table));
+        let qualified = spec.source_table.qualified_name();
+        if !selected(options, (source_name, &spec.destination.table, &qualified)) {
+            unselected.push(spec);
+            continue;
         }
+        let destination = destinations.get(&spec.target).ok_or_else(|| {
+            LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
+        })?;
+        planned.push(plan_table(&spec, destination, options).await?);
     }
-    Ok(())
+    if source.kind == SourceKind::Odbc {
+        #[cfg(feature = "odbc")]
+        block_refused_bounds(project, (source_name, source), &mut planned).await?;
+    }
+    Ok((planned, unselected))
 }
 
 /// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.

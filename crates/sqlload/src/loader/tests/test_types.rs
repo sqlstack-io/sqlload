@@ -2,6 +2,7 @@ use arrow_schema::Schema;
 
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::load_naming::models::Naming;
+use crate::loader::models::CursorBinding;
 
 pub(crate) struct FittingTypeTestCase {
     pub(crate) description: &'static str,
@@ -92,8 +93,8 @@ pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
     pub(crate) cursor_type: ColumnType,
     pub(crate) dialect: Option<Warehouse>,
-    /// For an ODBC source, whose text, date and timestamp bounds are bound parameters or escapes: whether they are escapes (`cursor_bounds = "literals"`), and the cursor column's fractional digits when the source reports them.
-    pub(crate) odbc: Option<(bool, Option<u16>)>,
+    /// How the bounds are written: literals, or, for an ODBC source, parameters or escapes with the cursor column's fractional digits when the source reports them.
+    pub(crate) binding: CursorBinding,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,
@@ -142,12 +143,13 @@ pub(crate) struct RefusedBoundsTestCase {
     pub(crate) description: &'static str,
     /// Lines added to `[sources.erp]`.
     pub(crate) source_settings: &'static str,
-    /// The cursor column's type, as the ODBC driver describes it.
+    /// The cursor column's type, as the ODBC driver describes it, and the portable type it reads as.
     pub(crate) cursor_type: arrow_schema::DataType,
+    pub(crate) column_type: ColumnType,
     /// The planned lower bound, when the destination has rows.
     pub(crate) from: Option<&'static str>,
-    /// Whether the stub driver refuses a bound timestamp parameter, whether it refuses a `{ts}` escape, and whether its first query fails for another reason.
-    pub(crate) refuses: (bool, bool, bool),
+    /// What the stub driver answers each query, in order; a query past the list runs.
+    pub(crate) responses: &'static [Result<(), &'static str>],
     pub(crate) expected_problem: Option<&'static str>,
     /// Each query the check ran: its filter and bound values.
     pub(crate) expected_runs: &'static [&'static str],
