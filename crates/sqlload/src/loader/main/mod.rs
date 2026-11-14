@@ -7,6 +7,8 @@ pub(in crate::loader) mod _load_table;
 pub(in crate::loader) mod _logged_plan;
 pub(in crate::loader) mod _mixed_cursors;
 pub(in crate::loader) mod _plan_files;
+#[cfg(feature = "odbc")]
+pub(in crate::loader) mod _refused_bounds;
 pub mod apply_project;
 pub mod connect_targets;
 pub mod debug_project;

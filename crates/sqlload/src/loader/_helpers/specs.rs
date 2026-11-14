@@ -25,8 +25,9 @@ use crate::loader::models::{
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection, SourceConfig,
-    SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
+    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
+    WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -762,6 +763,8 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
             &source.append_cursor_inclusive,
         )
         .is_some_and(|(value, _)| value),
+        literals: layered(&table.cursor_bounds, &source.cursor_bounds)
+            .is_some_and(|(value, _)| value == CursorBounds::Literals),
     })
 }
 

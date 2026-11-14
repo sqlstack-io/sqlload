@@ -347,3 +347,88 @@ pub(crate) fn live_paths(test_case: &ChildPathsTestCase) -> Result<Vec<(String, 
         .collect();
     Ok(child_paths(&spec, tables))
 }
+
+/// What `plan`'s cursor-bounds check says of ODBC table `sales.items` (cursor `updated`) against a stub driver refusing what `test_case` says, and each query it ran, as its filter and bound values.
+#[cfg(feature = "odbc")]
+pub(crate) fn refused_bounds_runs(
+    test_case: &crate::loader::tests::test_types::RefusedBoundsTestCase,
+) -> Result<(Option<String>, Vec<String>), String> {
+    use crate::adapters::contract::models::BoundParameter;
+    use crate::column_types::models::ColumnType;
+    use crate::loader::_helpers::table_plan::{blocked_table, read_columns};
+    use crate::loader::main::_refused_bounds::refused_bounds;
+    use crate::loader::models::ReadWindow;
+    use crate::project::main::parse_project::parse_project;
+    let project = parse_project(
+        &format!(
+            "[connections.erp]\nkind = \"odbc\"\nconnection_string = \"Driver=stub\"\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\ndescription = \"ERP.\"\ninclude = [\"sales.items\"]\nwrite_strategy = \"append\"\n{}\n[sources.erp.tables.\"sales.items\"]\ndescription = \"Items.\"\ncursor_column = \"updated\"\n",
+            test_case.source_settings
+        ),
+        &|_| None,
+    )
+    .map_err(|error| error.to_string())?;
+    let column_type = match test_case.cursor_type {
+        DataType::Timestamp(_, _) => ColumnType::TimestampNtz,
+        DataType::Date32 => ColumnType::Date,
+        DataType::Utf8 => ColumnType::Text,
+        _ => ColumnType::Int,
+    };
+    let table = SourceTable {
+        schema: "sales".to_owned(),
+        name: "items".to_owned(),
+        columns: vec![SourceColumn {
+            name: "updated".to_owned(),
+            postgres_type: test_case.cursor_type.to_string(),
+            pg_type: PgType::Other,
+            column_type: Ok(column_type),
+            nullable: false,
+            source_spelling: None,
+        }],
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        comment: None,
+        listed_keys: Vec::new(),
+    };
+    let resolved = resolve_tables(&project, "erp", &[table]);
+    let spec = resolved
+        .specs
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no spec: {:?}", resolved.problems))?;
+    let mut plan = blocked_table(&spec, Vec::new());
+    plan.read_columns = read_columns(&spec).map_err(|problems| problems.join("; "))?;
+    plan.window = test_case.from.map(|from| ReadWindow {
+        column: "updated".to_owned(),
+        from: Some(from.to_owned()),
+        to: None,
+        inclusive: false,
+        maximum: Some(from.to_owned()),
+    });
+    let mut runs: Vec<String> = Vec::new();
+    let (refuses_parameter, refuses_escape, fails_first) = test_case.refuses;
+    let stub = async |filter: String, parameters: Vec<BoundParameter>| {
+        runs.push(format!("{filter} {parameters:?}"));
+        if fails_first && runs.len() == 1 {
+            return Err("[HYT00] Timeout expired".to_owned());
+        }
+        let timestamp = parameters
+            .iter()
+            .any(|parameter| matches!(parameter, BoundParameter::Timestamp(_, _)));
+        match (
+            refuses_parameter && timestamp,
+            refuses_escape && filter.contains("{ts"),
+        ) {
+            (true, _) => Err("[HY000] Invalid parameter type".to_owned()),
+            (_, true) => Err("[42000] Syntax error at {ts".to_owned()),
+            (false, false) => Ok(()),
+        }
+    };
+    let problem = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?
+        .block_on(refused_bounds(&plan, "erp", stub));
+    Ok((problem, runs))
+}

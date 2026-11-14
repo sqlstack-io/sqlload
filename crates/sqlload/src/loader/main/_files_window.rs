@@ -10,6 +10,7 @@ use crate::adapters::files::models::{PartitionBy, PartitionWindowRequest};
 use crate::column_types::models::ColumnType;
 use crate::loader::_helpers::table_plan::{Window, source_cursor, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
+use crate::loader::models::CursorBinding;
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
 
@@ -139,7 +140,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             &expression,
             (Some(cursor_type), None),
             (from.as_deref().map(|from| (operator, from)), to.as_deref()),
-            None,
+            CursorBinding::Literals,
         ),
         parameters: Vec::new(),
         bounds: (from, to),

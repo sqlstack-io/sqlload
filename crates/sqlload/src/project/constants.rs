@@ -8,6 +8,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "lookahead",
     "lookback_from",
     "append_cursor_inclusive",
+    "cursor_bounds",
     "contract",
     "on_schema_change",
     "auto_widen",

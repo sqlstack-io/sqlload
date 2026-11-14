@@ -137,8 +137,8 @@ pub enum CursorValue {
 pub enum BoundParameter {
     /// A text cursor's bound.
     Text(String),
-    /// A wall-clock timestamp cursor's bound.
-    Timestamp(chrono::NaiveDateTime),
+    /// A wall-clock timestamp cursor's bound, and the fractional digits it is written with: its column's, as the source describes them, when it has no more, else `None` for every digit it has.
+    Timestamp(chrono::NaiveDateTime, Option<u16>),
     /// A date cursor's bound.
     Date(chrono::NaiveDate),
 }

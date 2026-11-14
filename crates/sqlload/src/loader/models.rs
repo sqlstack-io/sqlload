@@ -64,6 +64,19 @@ pub struct CursorSpec {
     pub from_now: bool,
     /// `append_cursor_inclusive`: `append` reads from the destination's maximum itself (true) rather than after it; a first run reads from `cursor_start` inclusively either way.
     pub inclusive: bool,
+    /// `cursor_bounds = "literals"`: an ODBC source writes the bounds into the query as escapes instead of binding them.
+    pub literals: bool,
+}
+
+/// How a source filter writes a cursor's text, date and timestamp bounds.
+#[derive(Debug)]
+pub(crate) enum CursorBinding<'a> {
+    /// As literals of the source's dialect.
+    Literals,
+    /// As `?` placeholders, their values collected in order, a timestamp's with its column's fractional digits when the source reports them (an ODBC source's default).
+    Parameters(&'a mut Vec<BoundParameter>, Option<u16>),
+    /// As ODBC escapes, a timestamp's fraction at its column's digits when the source reports them (`cursor_bounds = "literals"`).
+    Escapes(Option<u16>),
 }
 
 /// One table to load, with every setting resolved.

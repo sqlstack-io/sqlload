@@ -717,6 +717,9 @@ pub struct TableSettings {
     pub lookback_from: Option<LookbackFrom>,
     #[serde(default)]
     pub append_cursor_inclusive: Option<bool>,
+    /// How an ODBC source writes the cursor's bounds into its query: bound parameters (default) or ODBC escape literals.
+    #[serde(default)]
+    pub cursor_bounds: Option<CursorBounds>,
     #[serde(default)]
     pub contract: Option<Contract>,
     #[serde(default)]
@@ -853,6 +856,17 @@ pub enum CheckName {
     NotNull,
     MinRows,
     MaxRowDrop,
+}
+
+/// How an ODBC source writes a cursor's bounds into its query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorBounds {
+    /// `?` placeholders bound as the cursor's type.
+    #[default]
+    Parameters,
+    /// ODBC escapes written into the query: `{ts '…'}`, `{d '…'}`, numbers and quoted text, for a driver that refuses a bound value.
+    Literals,
 }
 
 /// What a cursor's `lookback` counts back from.

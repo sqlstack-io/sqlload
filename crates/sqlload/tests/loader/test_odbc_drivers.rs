@@ -20,6 +20,7 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
         OdbcDriverTestCase {
             description: "SQL Server through Microsoft's ODBC Driver 18: millisecond and date cursors on datetime2(3) and date",
             connection_options: "",
+            source_settings: "",
             database: OdbcDatabase::SqlServer,
             tables: ("erp.events", "erp.days"),
             setup: &[
@@ -38,6 +39,7 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
         OdbcDriverTestCase {
             description: "SQL Server's legacy datetime, whose 1/300 s ticks the driver reads rounded to milliseconds (.123 is .12333): a datetime2 bound would read the .123 row again, so it is bound as text in the column's own type, in ISO 8601 form, which a british session (day before month) reads alike: 2026-01-05 with a space would be 1 May",
             connection_options: "Language=British;",
+            source_settings: "",
             database: OdbcDatabase::SqlServer,
             tables: ("erp.events", "erp.days"),
             setup: &[
@@ -56,6 +58,7 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
         OdbcDriverTestCase {
             description: "MySQL through Connector/ODBC, a driver without schemas, in an ANSI_QUOTES session: millisecond and date cursors on DATETIME(3) and DATE",
             connection_options: "",
+            source_settings: "",
             database: OdbcDatabase::MySql,
             tables: ("events", "days"),
             setup: &[
@@ -73,6 +76,44 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
         OdbcDriverTestCase {
             description: "Postgres through psqlODBC: millisecond and date cursors on timestamp(3) and date",
             connection_options: "",
+            source_settings: "",
+            database: OdbcDatabase::Postgres,
+            tables: ("erp.events", "erp.days"),
+            setup: &[
+                "CREATE SCHEMA erp",
+                "CREATE TABLE erp.events (id int PRIMARY KEY, name varchar(40), happened_at timestamp(3) NOT NULL)",
+                "CREATE TABLE erp.days (id int PRIMARY KEY, opened date NOT NULL)",
+                "INSERT INTO erp.events VALUES (1, 'a', '2026-01-31 10:00:00'), (2, 'b', '2026-01-31 23:59:59.997')",
+                "INSERT INTO erp.days VALUES (1, '2026-01-30'), (2, '2026-01-31')",
+            ],
+            change: &[
+                "INSERT INTO erp.events VALUES (0, 'early', '2026-01-31 23:59:59.996'), (3, 'next', '2026-01-31 23:59:59.998'), (4, 'later', '2026-02-01 00:00:00')",
+                "INSERT INTO erp.days VALUES (3, '2026-01-31'), (4, '2026-02-01')",
+            ],
+            expected_tables: (FIRST, SECOND),
+        },
+        OdbcDriverTestCase {
+            description: "MySQL through Connector/ODBC under cursor_bounds = \"literals\": {ts} and {d} escapes resume exactly from DATETIME(3), which the driver describes without fractional digits, so the escape keeps the value's own",
+            connection_options: "",
+            source_settings: "cursor_bounds = \"literals\"",
+            database: OdbcDatabase::MySql,
+            tables: ("events", "days"),
+            setup: &[
+                "CREATE TABLE events (id int PRIMARY KEY, name varchar(40), happened_at DATETIME(3) NOT NULL)",
+                "CREATE TABLE days (id int PRIMARY KEY, opened DATE NOT NULL)",
+                "INSERT INTO events VALUES (1, 'a', '2026-01-31 10:00:00'), (2, 'b', '2026-01-31 23:59:59.997')",
+                "INSERT INTO days VALUES (1, '2026-01-30'), (2, '2026-01-31')",
+            ],
+            change: &[
+                "INSERT INTO events VALUES (0, 'early', '2026-01-31 23:59:59.996'), (3, 'next', '2026-01-31 23:59:59.998'), (4, 'later', '2026-02-01 00:00:00')",
+                "INSERT INTO days VALUES (3, '2026-01-31'), (4, '2026-02-01')",
+            ],
+            expected_tables: (FIRST, SECOND),
+        },
+        OdbcDriverTestCase {
+            description: "Postgres through psqlODBC under cursor_bounds = \"literals\": {ts} escapes at the column's three digits and {d} escapes resume exactly",
+            connection_options: "",
+            source_settings: "cursor_bounds = \"literals\"",
             database: OdbcDatabase::Postgres,
             tables: ("erp.events", "erp.days"),
             setup: &[
@@ -99,9 +140,12 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
             std::fs::write(
                 &config,
                 driver_project(
-                    &format!(
-                        "{}{}",
-                        server.connection_string, test_case.connection_options
+                    (
+                        &format!(
+                            "{}{}",
+                            server.connection_string, test_case.connection_options
+                        ),
+                        test_case.source_settings,
                     ),
                     test_case.tables,
                     &database,

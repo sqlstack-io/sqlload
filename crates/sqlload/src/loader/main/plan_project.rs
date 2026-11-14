@@ -15,6 +15,8 @@ use crate::loader::_helpers::sources::{
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
+#[cfg(feature = "odbc")]
+use crate::loader::main::_refused_bounds::refused_bounds;
 use crate::loader::models::{FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec};
 use crate::project::models::ProjectConfig;
 
@@ -59,6 +61,10 @@ pub async fn plan_project(
             })?;
             planned.push(plan_table(&spec, destination, options).await?);
         }
+        #[cfg(feature = "odbc")]
+        if source.kind == crate::project::models::SourceKind::Odbc {
+            block_refused_bounds(project, (source_name, source), &mut planned).await?;
+        }
         plan = admit_tables(
             plan,
             (source_name, source),
@@ -72,6 +78,42 @@ pub async fn plan_project(
         (&claims, &configured, &drained),
         (project, options),
     ))
+}
+
+/// `planned`, each table blocked whose cursor bounds its ODBC source's driver refuses (see [`refused_bounds`]).
+#[cfg(feature = "odbc")]
+async fn block_refused_bounds(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &crate::project::models::SourceConfig),
+    planned: &mut [TablePlan],
+) -> Result<(), LoaderError> {
+    let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
+    for table in planned
+        .iter_mut()
+        .filter(|table| table.schema.blocked.is_none())
+    {
+        let (spec, read_columns) = (&table.spec, &table.read_columns);
+        let run = async |filter: String, parameters: Vec<_>| {
+            let request = crate::odbc_source::models::OdbcReadRequest {
+                table: &spec.source_table,
+                sql: spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: read_columns,
+                filter: Some(&filter),
+                parameters: &parameters,
+                batch_rows: 1,
+            };
+            crate::odbc_source::main::run_query::run_query(&reader, &request)
+                .await
+                .map_err(|error| error.to_string())
+        };
+        if let Some(problem) = refused_bounds(table, source_name, run).await {
+            table.schema = blocked_plan(vec![problem]);
+        }
+    }
+    Ok(())
 }
 
 /// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.

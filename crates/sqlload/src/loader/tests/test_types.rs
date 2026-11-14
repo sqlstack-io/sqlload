@@ -92,8 +92,8 @@ pub(crate) struct SourceFilterTestCase {
     pub(crate) description: &'static str,
     pub(crate) cursor_type: ColumnType,
     pub(crate) dialect: Option<Warehouse>,
-    /// Whether the source is an ODBC source, whose text, date and timestamp bounds are bound parameters.
-    pub(crate) odbc: bool,
+    /// For an ODBC source, whose text, date and timestamp bounds are bound parameters or escapes: whether they are escapes (`cursor_bounds = "literals"`), and the cursor column's fractional digits when the source reports them.
+    pub(crate) odbc: Option<(bool, Option<u16>)>,
     pub(crate) lower: Option<(&'static str, &'static str)>,
     pub(crate) upper: Option<&'static str>,
     pub(crate) expected_filter: Option<&'static str>,
@@ -135,4 +135,20 @@ pub(crate) struct ChildPathsTestCase {
     pub(crate) tables: &'static [&'static str],
     /// Each table's dotted path, as `(path, table)`.
     pub(crate) expected_paths: &'static [(&'static str, &'static str)],
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct RefusedBoundsTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added to `[sources.erp]`.
+    pub(crate) source_settings: &'static str,
+    /// The cursor column's type, as the ODBC driver describes it.
+    pub(crate) cursor_type: arrow_schema::DataType,
+    /// The planned lower bound, when the destination has rows.
+    pub(crate) from: Option<&'static str>,
+    /// Whether the stub driver refuses a bound timestamp parameter, whether it refuses a `{ts}` escape, and whether its first query fails for another reason.
+    pub(crate) refuses: (bool, bool, bool),
+    pub(crate) expected_problem: Option<&'static str>,
+    /// Each query the check ran: its filter and bound values.
+    pub(crate) expected_runs: &'static [&'static str],
 }

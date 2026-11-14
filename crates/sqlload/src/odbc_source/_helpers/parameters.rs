@@ -11,7 +11,7 @@ use crate::odbc_source::constants::{
     LEGACY_DATETIME_DIGITS, SQL_SERVER_DBMS, TIMESTAMP_PARAMETER_PRECISION, TIMESTAMP_TEXT_DIGITS,
 };
 
-/// `parameters` as `prepared` binds them, in order: text as `VARCHAR`; a date as `DATE`; a timestamp as `TIMESTAMP` with seven fractional digits, which SQL Server compares as `datetime2(7)` (three would make it a `datetime`, rounding milliseconds), except against a SQL Server column the driver describes with one to three fractional digits, a legacy `datetime`: that compares a `datetime2` parameter with the column's exact 1/300 s ticks, which the driver rounded to milliseconds when the bound was read, so the bound goes as text, which SQL Server converts to the column's own type; when the driver can't describe the parameter, as text with seven digits, exact for `datetime2` and refused by a `datetime`.
+/// `parameters` as `prepared` binds them, in order: text as `VARCHAR`; a date as `DATE`; a timestamp as `TIMESTAMP` with the fractional digits it carries (its column's, when it has no more; see `source_filter`), as a driver may refuse a value with more digits than its column, and otherwise with seven. SQL Server ignores the column's digits, as a legacy `datetime` holds 1/300 s ticks rather than milliseconds: a timestamp binds with seven digits, which SQL Server compares as `datetime2(7)` (three would make it a `datetime`, rounding milliseconds), except against a column the driver describes with one to three fractional digits, a legacy `datetime`, which compares a `datetime2` parameter with the column's exact ticks, which the driver rounded to milliseconds when the bound was read, so the bound goes as text, which SQL Server converts to the column's own type; when the driver can't describe the parameter, as text with seven digits, exact for `datetime2` and refused by a `datetime`.
 pub(crate) fn bound_parameters<S: AsStatementRef>(
     prepared: &mut Prepared<S>,
     dbms: &str,
@@ -21,7 +21,7 @@ pub(crate) fn bound_parameters<S: AsStatementRef>(
         .iter()
         .zip(1u16..)
         .map(|(parameter, number)| match parameter {
-            BoundParameter::Timestamp(time) if dbms == SQL_SERVER_DBMS => {
+            BoundParameter::Timestamp(time, _) if dbms == SQL_SERVER_DBMS => {
                 match prepared.describe_param(number) {
                     Ok(described) => match described.data_type {
                         DataType::Timestamp { precision }
@@ -31,7 +31,7 @@ pub(crate) fn bound_parameters<S: AsStatementRef>(
                                 timestamp_text(time, precision.unsigned_abs()).into_parameter(),
                             )
                         }
-                        _ => odbc_parameter(parameter),
+                        _ => odbc_parameter(&BoundParameter::Timestamp(*time, None)),
                     },
                     Err(_) => {
                         Box::new(timestamp_text(time, TIMESTAMP_TEXT_DIGITS).into_parameter())
@@ -63,7 +63,7 @@ fn odbc_parameter(parameter: &BoundParameter) -> Box<dyn InputParameter> {
     let small = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
     match parameter {
         BoundParameter::Text(text) => Box::new(text.clone().into_parameter()),
-        BoundParameter::Timestamp(time) => Box::new(WithDataType::new(
+        BoundParameter::Timestamp(time, digits) => Box::new(WithDataType::new(
             Timestamp {
                 year: i16::try_from(time.year()).unwrap_or(i16::MAX),
                 month: small(time.month()),
@@ -74,7 +74,9 @@ fn odbc_parameter(parameter: &BoundParameter) -> Box<dyn InputParameter> {
                 fraction: time.nanosecond(),
             },
             DataType::Timestamp {
-                precision: TIMESTAMP_PARAMETER_PRECISION,
+                precision: digits.map_or(TIMESTAMP_PARAMETER_PRECISION, |digits| {
+                    i16::try_from(digits).unwrap_or(TIMESTAMP_PARAMETER_PRECISION)
+                }),
             },
         )),
         BoundParameter::Date(date) => Box::new(WithDataType::new(

@@ -82,7 +82,7 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::{binds_cursor, source_filter};
+use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -1633,7 +1633,7 @@ fn window_filter(
             window.from.as_deref().map(|from| (operator, from)),
             window.to.as_deref(),
         ),
-        binds_cursor(&table.spec).then_some(&mut parameters),
+        cursor_binding(&table.spec, None, &mut parameters),
     );
     (filter, parameters)
 }

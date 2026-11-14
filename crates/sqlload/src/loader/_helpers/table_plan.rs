@@ -1,7 +1,11 @@
+use arrow_schema::{DataType, TimeUnit};
+use chrono::Timelike;
+
 use crate::adapters::contract::main::bound_parameter::bound_parameter;
 use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::escape_literal::escape_literal;
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::MergeDedupe;
@@ -54,6 +58,7 @@ use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::CommitRule;
+use crate::loader::models::CursorBinding;
 use crate::loader::models::CursorSpec;
 use crate::loader::models::PlanOptions;
 use crate::loader::models::ReadWindow;
@@ -1193,26 +1198,43 @@ pub(crate) fn source_cursor(
     ))
 }
 
-/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text, date or wall-clock timestamp cursor's bounds as `?` placeholders when `parameters` collects them, in order, to bind as their type (an ODBC source's: no literal reads alike everywhere, since some databases read a backslash in a string as an escape, OpenEdge compares no string with a timestamp, and SQL Server's `{ts}` escape is a `datetime` that rounds milliseconds); any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
+/// `column >= 'from' AND column < 'to'`, from the bounds that are set, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text, date or wall-clock timestamp cursor's bounds as `binding` writes them: by default an ODBC source's as `?` placeholders bound as their type (no literal reads alike everywhere, since some databases read a backslash in a string as an escape, OpenEdge compares no string with a timestamp, and SQL Server's `{ts}` escape is a `datetime` that rounds milliseconds), or as ODBC escapes for a driver that refuses a bound value; a timestamp bound is written with its column's fractional digits when the source describes them and the bound has no more, else with every digit it has, never rounded, since a driver may describe fewer digits than its values hold; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
 pub(crate) fn source_filter(
     column: &str,
     (cursor_type, dialect): (Option<&ColumnType>, Option<Warehouse>),
     (lower, upper): (Option<(&str, &str)>, Option<&str>),
-    mut parameters: Option<&mut Vec<BoundParameter>>,
+    mut binding: CursorBinding<'_>,
 ) -> Option<String> {
     let adapter = sql_adapter(dialect.unwrap_or(Warehouse::Postgres));
-    let mut literal = |value: &str| match (
-        cursor_type.filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value)),
-        parameters
-            .as_mut()
-            .zip(cursor_type.and_then(|cursor_type| bound_parameter(value, cursor_type))),
-    ) {
-        (Some(cursor_type), _) => adapter.render_cursor_number(value, cursor_type),
-        (None, Some((parameters, parameter))) => {
-            parameters.push(parameter);
-            "?".to_owned()
+    let mut literal = |value: &str| {
+        if let Some(cursor_type) =
+            cursor_type.filter(|cursor_type| numeric_cursor(cursor_type) && is_number(value))
+        {
+            return adapter.render_cursor_number(value, cursor_type);
         }
-        (None, None) => adapter.render_loader_value_literal(value),
+        let digits = match &binding {
+            CursorBinding::Literals => return adapter.render_loader_value_literal(value),
+            CursorBinding::Parameters(_, digits) | CursorBinding::Escapes(digits) => *digits,
+        };
+        let parameter = cursor_type
+            .and_then(|cursor_type| bound_parameter(value, cursor_type))
+            .map(|parameter| match parameter {
+                BoundParameter::Timestamp(time, _) => BoundParameter::Timestamp(
+                    time,
+                    digits.filter(|digits| {
+                        time.nanosecond() % 10u32.pow(9u32.saturating_sub(u32::from(*digits))) == 0
+                    }),
+                ),
+                other => other,
+            });
+        match (&mut binding, parameter) {
+            (CursorBinding::Parameters(parameters, _), Some(parameter)) => {
+                parameters.push(parameter);
+                "?".to_owned()
+            }
+            (_, Some(parameter)) => escape_literal(&parameter),
+            (_, None) => adapter.render_loader_value_literal(value),
+        }
     };
     let mut bounds: Vec<String> = Vec::new();
     if let Some((operator, value)) = lower {
@@ -1224,19 +1246,42 @@ pub(crate) fn source_filter(
     (!bounds.is_empty()).then(|| bounds.join(" AND "))
 }
 
-/// Whether `spec`'s cursor bounds bind as parameters of the cursor's type: on a source that binds them (ODBC), unless the cursor column is pinned to a type other than text, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts; text binds as text whatever the column, as a literal would convert, without a database reading its backslashes.
-pub(crate) fn binds_cursor(spec: &TableSpec) -> bool {
-    let pinned_other = spec.cursor.as_ref().is_some_and(|cursor| {
-        spec.pinned.iter().any(|(name, column_type)| {
-            name.eq_ignore_ascii_case(&cursor.column)
-                && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
-        })
+/// How `spec`'s cursor bounds are written into its source filter: on a source that binds them (ODBC), as parameters of the cursor's type, or as ODBC escapes under `cursor_bounds = "literals"` (`escapes` overrides the setting), either with the cursor column's fractional digits; as literals otherwise, and when the cursor column is pinned to a type other than text, which may not be the source column's own (a `varchar` read as a timestamp), so its bounds stay literals the database converts; text binds as text whatever the column, as a literal would convert, without a database reading its backslashes.
+pub(crate) fn cursor_binding<'a>(
+    spec: &TableSpec,
+    escapes: Option<bool>,
+    parameters: &'a mut Vec<BoundParameter>,
+) -> CursorBinding<'a> {
+    let Some(cursor) = spec.cursor.as_ref() else {
+        return CursorBinding::Literals;
+    };
+    let pinned_other = spec.pinned.iter().any(|(name, column_type)| {
+        name.eq_ignore_ascii_case(&cursor.column)
+            && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
     });
-    !pinned_other
-        && spec
-            .warehouse_source
-            .as_ref()
-            .is_some_and(|source| source_binds_text(source.system))
+    let binds = spec
+        .warehouse_source
+        .as_ref()
+        .is_some_and(|source| source_binds_text(source.system));
+    let digits = spec
+        .source_table
+        .columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+        .and_then(|column| fraction_digits(&column.postgres_type));
+    match (binds && !pinned_other, escapes.unwrap_or(cursor.literals)) {
+        (false, _) => CursorBinding::Literals,
+        (true, false) => CursorBinding::Parameters(parameters, digits),
+        (true, true) => CursorBinding::Escapes(digits),
+    }
+}
+
+/// The fractional digits of a timestamp column an ODBC source describes as `source_type` (its Arrow type): 3 for milliseconds, 6 for microseconds; `None` for seconds, which a driver may report for a column with digits (MySQL's for `DATETIME(3)`), for nanoseconds, which no ODBC timestamp holds all of, and for any other type.
+fn fraction_digits(source_type: &str) -> Option<u16> {
+    [(TimeUnit::Millisecond, 3), (TimeUnit::Microsecond, 6)]
+        .into_iter()
+        .find(|(unit, _)| DataType::Timestamp(*unit, None).to_string() == source_type)
+        .map(|(_, digits)| digits)
 }
 
 /// Whether a cursor of `column_type` compares as a number.
@@ -1452,6 +1497,21 @@ pub(crate) async fn cursor_window(
     };
     let source = request.spec.warehouse_source.as_ref();
     let mut parameters: Vec<BoundParameter> = Vec::new();
+    let binding = cursor_binding(spec, None, &mut parameters);
+    let text = matches!(
+        request.cursor_type,
+        Some(ColumnType::Text | ColumnType::Varchar(_))
+    );
+    if let Some(bound) = [from.as_deref(), to.as_deref()]
+        .into_iter()
+        .flatten()
+        .find(|bound| text && bound.contains('\\'))
+        .filter(|_| matches!(binding, CursorBinding::Escapes(_)))
+    {
+        return Ok(Err(format!(
+            "the text cursor bound {bound:?} holds a backslash, which some databases (MySQL by default) read as an escape in a quoted literal, so under cursor_bounds = \"literals\" it could select other rows; bind it as a parameter (cursor_bounds = \"parameters\"), or start past it with --start-cursor"
+        )));
+    }
     let filter = source_filter(
         request.cursor_expression.unwrap_or_default(),
         (
@@ -1459,7 +1519,7 @@ pub(crate) async fn cursor_window(
             source.and_then(|source| source_dialect(source.system)),
         ),
         (from.as_deref().map(|from| (operator, from)), to.as_deref()),
-        binds_cursor(spec).then_some(&mut parameters),
+        binding,
     );
     Ok(Ok(Window {
         filter,

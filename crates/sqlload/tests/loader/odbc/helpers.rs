@@ -93,9 +93,9 @@ pub(crate) fn odbc_execute(connection_string: &str, statements: &[&str]) -> Resu
     })
 }
 
-/// A project reading an events table appended by its millisecond `happened_at` cursor and a days table replaced from its last `opened` day, through `connection_string`, into DuckDB.
+/// A project reading an events table appended by its millisecond `happened_at` cursor and a days table replaced from its last `opened` day, through `connection_string`, with `source_settings` added to the source, into DuckDB.
 pub(crate) fn driver_project(
-    connection_string: &str,
+    (connection_string, source_settings): (&str, &str),
     (events, days): (&str, &str),
     database: &std::path::Path,
 ) -> String {
@@ -118,6 +118,7 @@ kind = "odbc"
 connection = "erp"
 description = "Events and days of a generic ERP."
 include = ["{events}", "{days}"]
+{source_settings}
 
 [sources.erp.tables."{events}"]
 description = "Events, read after the newest happened_at."
