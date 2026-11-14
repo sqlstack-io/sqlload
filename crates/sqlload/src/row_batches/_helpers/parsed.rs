@@ -65,8 +65,7 @@ pub(crate) fn format_problem(parse: &Parse) -> Option<String> {
             "parse format {format:?} has a directive that is not a strftime one such as %Y, %m, %d, %H, %M, %S or %z"
         ));
     }
-    let nanoseconds =
-        |item: Item<'_>| matches!(item, Item::Numeric(Numeric::Nanosecond, _));
+    let nanoseconds = |item: Item<'_>| matches!(item, Item::Numeric(Numeric::Nanosecond, _));
     StrftimeItems::new(format).any(nanoseconds).then(|| {
         format!(
             "parse format {format:?} has %f, which reads nanoseconds here; write %.f for a fraction after a dot, as in \"%H:%M:%S%.f\" for 08:05:00.123456"
