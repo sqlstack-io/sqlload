@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::http::constants::{FIRST_SERVER_ERROR, TOO_MANY_REQUESTS};
 use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::fetch::{jittered, transport_text};
+use crate::http_source::_helpers::job::job_client;
 use crate::http_source::_helpers::urls::{encoded, redacted};
 use crate::http_source::constants::{
     ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_RETRY_DELAY, MAX_TOKEN_LIFETIME,
@@ -19,6 +20,13 @@ use crate::http_source::constants::{
 };
 use crate::http_source::models::{ClientAuth, Grant, Issued, OAuth2Spec, TokenSource, TokenState};
 use crate::python_sources::errors::ReadError;
+
+/// Every token source of this process, by connection and auth key.
+static SOURCES: OnceLock<Mutex<HashMap<String, Arc<TokenSource>>>> = OnceLock::new();
+
+/// The runtime token requests run on, and its HTTP client: one for the process, outliving any job's runtime, so a token request a cancelled page started still finishes and keeps what the server sent, such as a rotated refresh token.
+static RENEWALS: OnceLock<Result<(tokio::runtime::Runtime, reqwest::Client), String>> =
+    OnceLock::new();
 
 /// `spec`'s token URL, which must be `https`, or `http` on a loopback host, because the client's secret goes there.
 pub(crate) fn token_url(spec: &OAuth2Spec) -> Result<Url, String> {
@@ -39,6 +47,22 @@ pub(crate) fn token_url(spec: &OAuth2Spec) -> Result<Url, String> {
     }
 }
 
+fn renewals() -> Result<&'static (tokio::runtime::Runtime, reqwest::Client), String> {
+    RENEWALS
+        .get_or_init(|| {
+            let client = job_client(true)?;
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("sqlload-oauth2")
+                .enable_all()
+                .build()
+                .map_err(|error| format!("cannot start the OAuth2 token runtime: {error}"))?;
+            Ok((runtime, client))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
 /// The token source every job of `connection` with the same auth `key` shares in this process, so one load fetches one token.
 pub(crate) fn shared_token_source(
     connection: &str,
@@ -46,7 +70,6 @@ pub(crate) fn shared_token_source(
     spec: &OAuth2Spec,
     grant: Grant,
 ) -> Result<Arc<TokenSource>, String> {
-    static SOURCES: OnceLock<Mutex<HashMap<String, Arc<TokenSource>>>> = OnceLock::new();
     let token_url = token_url(spec)?;
     let mut sources = SOURCES
         .get_or_init(Mutex::default)
@@ -123,10 +146,10 @@ fn token_source(token_url: Url, spec: &OAuth2Spec, grant: Grant) -> TokenSource 
         form,
         refresh_form,
         basic,
-        state: tokio::sync::Mutex::new(TokenState {
+        state: Arc::new(tokio::sync::Mutex::new(TokenState {
             refresh_token,
             ..TokenState::default()
-        }),
+        })),
         secrets: Mutex::new(secrets),
     }
 }
@@ -149,12 +172,11 @@ impl TokenSource {
 
     /// The access token to send: the cached one while it is fresh and is not `refused`, else a new one from the token URL.
     pub(crate) async fn access_token(
-        &self,
-        http: &reqwest::Client,
+        self: &Arc<Self>,
         retries: u32,
         refused: Option<&str>,
     ) -> Result<String, ReadError> {
-        let mut state = self.state.lock().await;
+        let state = Arc::clone(&self.state).lock_owned().await;
         let fresh = state
             .renew_at
             .is_none_or(|renew_at| Instant::now() < renew_at);
@@ -162,6 +184,21 @@ impl TokenSource {
             Some(access) if fresh && Some(access.as_str()) != refused => return Ok(access.clone()),
             Some(_) | None => {}
         }
+        let (runtime, http) = renewals()?;
+        let source = Arc::clone(self);
+        runtime
+            .spawn(async move { source.renewed(http, retries, state).await })
+            .await
+            .map_err(|error| format!("the OAuth2 token request stopped: {error}"))?
+    }
+
+    /// A new access token from the token URL, kept in `state` with any rotated refresh token. It runs on the process's token runtime, so a request cut short while it waits, such as a page read ahead past the last one, or the end of its job's runtime, can't drop a refresh token the server has already replaced.
+    async fn renewed(
+        &self,
+        http: &reqwest::Client,
+        retries: u32,
+        mut state: tokio::sync::OwnedMutexGuard<TokenState>,
+    ) -> Result<String, ReadError> {
         let (issued, kept) = self
             .request(http, retries, state.refresh_token.clone())
             .await?;

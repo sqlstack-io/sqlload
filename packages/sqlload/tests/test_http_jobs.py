@@ -92,6 +92,8 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/offset": self.offset,
 			"/v1/ahead": self.ahead,
 			"/v1/ahead_short": self.ahead,
+			"/v1/ahead_end": self.ahead_end,
+			"/v1/refuse_once": self.refuse_once,
 			"/v1/pages": self.page_number,
 			"/v1/cursor": self.cursor,
 			"/v1/link": self.link,
@@ -193,6 +195,8 @@ class Api(BaseHTTPRequestHandler):
 			server.refresh_token = body["refresh_token"] = f"r3fresh-{len(server.token_requests) + 1}"  # type: ignore[attr-defined]
 		if oauth.get("stale_refresh"):
 			body["refresh_token"] = "stale"
+		if form.get("grant_type") == "refresh_token" and oauth.get("slow_refresh"):
+			time.sleep(oauth["slow_refresh"])
 		self.reply(200, body)
 
 	def access_allowed(self, bearer: str) -> bool:
@@ -205,6 +209,25 @@ class Api(BaseHTTPRequestHandler):
 		expired = oauth.get("lifetime") and time.monotonic() - issued["issued"] > oauth["lifetime"]
 		used_up = oauth.get("uses") and issued["uses"] > oauth["uses"]
 		return not (expired or used_up)
+
+	def ahead_end(self, query: dict[str, str]) -> None:
+		"""One order per offset: the empty page after the last order answers after 0.3 s, and every page past it answers 401 at once, so a page read
+		ahead asks for a new token just before the run ends."""
+		start = int(query["offset"])
+		if start > len(ORDERS):
+			self.server.refused += 1  # type: ignore[attr-defined]
+			return self.reply(401, {"message": "token refused"})
+		if start == len(ORDERS):
+			time.sleep(0.3)
+		self.reply(200, ORDERS[start : start + 1])
+
+	def refuse_once(self, query: dict[str, str]) -> None:
+		"""Answers 401 to its first request and the orders after it, so the run asks for a new token."""
+		if not self.server.refused_once:  # type: ignore[attr-defined]
+			self.server.refused_once = True  # type: ignore[attr-defined]
+			self.server.refused += 1  # type: ignore[attr-defined]
+			return self.reply(401, {"message": "token refused"})
+		self.reply(200, ORDERS)
 
 	def slow(self, query: dict[str, str]) -> None:
 		time.sleep(0.5)
@@ -368,6 +391,7 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server.open, server.most_open, server.ahead_failed = 0, 0, False  # type: ignore[attr-defined]
 	server.lookup_failed = False  # type: ignore[attr-defined]
 	server.refused = 0  # type: ignore[attr-defined]
+	server.refused_once = False  # type: ignore[attr-defined]
 	server.oauth = {}  # type: ignore[attr-defined]
 	server.tokens = {}  # type: ignore[attr-defined]
 	server.token_requests = []  # type: ignore[attr-defined]
@@ -956,6 +980,24 @@ def test_given_a_password_grant_without_a_refresh_token_or_with_a_refused_one_wh
 	sent = [(request["grant_type"], request.get("username"), request.get("password"), request.get("refresh_token")) for request in api.token_requests]  # type: ignore[attr-defined]
 	assert sent == expected
 	assert all(request["client"] == ["app", CLIENT_SECRET] for request in api.token_requests)  # type: ignore[attr-defined]
+
+
+def test_given_a_rotating_refresh_token_when_a_page_read_ahead_is_renewing_as_the_run_ends_then_the_rotated_token_is_kept(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	api.oauth = {"rotate": True, "slow_refresh": 1.0}  # type: ignore[attr-defined]
+	tables = (
+		"oauth = sl.http(shop, auth=sl.oauth2_refresh_token(TOKEN_URL))\n\n"
+		"@shop.table(description='T.')\ndef a_ahead(ctx):\n    return oauth.paginate('/ahead_end', paginator=sl.offset(limit=1, read_ahead=2))\n\n"
+		"@shop.table(description='T.')\ndef b_after(ctx):\n    return oauth.paginate('/refuse_once', paginator=sl.single())\n"
+	)
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load", "--concurrency", "1")
+	assert done.returncode == 0, done.stdout + done.stderr
+	for table in ("a_ahead", "b_after"):
+		assert query(project, f'SELECT order_id, status FROM "RAW".shop__{table} ORDER BY order_id') == ALL_ORDERS
+	sent = [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests]  # type: ignore[attr-defined]
+	assert sent == [("refresh_token", REFRESH_TOKEN), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]
 
 
 def test_given_a_token_endpoint_down_once_when_refreshing_after_a_password_grant_then_the_refresh_is_retried_without_the_password(

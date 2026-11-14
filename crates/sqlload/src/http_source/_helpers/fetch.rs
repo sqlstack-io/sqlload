@@ -31,7 +31,7 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
         let access = match &calls.endpoint.credential {
             Credential::OAuth2(tokens) => Some(
                 tokens
-                    .access_token(&calls.http, calls.retries, refused.as_deref())
+                    .access_token(calls.retries, refused.as_deref())
                     .await?,
             ),
             _ => None,
