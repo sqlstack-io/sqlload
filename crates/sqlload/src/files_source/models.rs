@@ -257,6 +257,9 @@ pub struct CsvOptions {
     pub encoding: String,
     /// Lines skipped at the start of each file, before the header (or the first record without one).
     pub skip_rows: u64,
+    /// The columns' names without a header, from the source's or table's `column_names`.
+    #[serde(skip)]
+    pub column_names: Option<Vec<String>>,
 }
 
 impl Default for CsvOptions {
@@ -268,6 +271,7 @@ impl Default for CsvOptions {
             null_values: vec![String::new()],
             encoding: DEFAULT_CSV_ENCODING.to_owned(),
             skip_rows: 0,
+            column_names: None,
         }
     }
 }
@@ -291,10 +295,17 @@ pub enum Charset {
 pub struct XlsxOptions {
     /// The worksheet, by name; the first one when omitted.
     pub sheet: Option<String>,
-    /// Whether the first row read holds the column names; without one, columns are `column_1`, `column_2`, ... by their place in the sheet.
+    /// Whether the first row read holds the column names; without one, columns are `column_1`, `column_2`, ... by their place in the range (the sheet without one), or `column_names`.
     pub header: bool,
     /// Rows skipped at the top of the sheet, before the header (or the first row without one).
     pub skip_rows: u32,
+    /// An A1 range such as `Prices!A3:C`: the sheet, columns and rows read, in place of `sheet` and `skip_rows`.
+    pub range: Option<String>,
+    /// The header's row, counting from 1 at the first row read; the rows above it are skipped. The first row holding a value when omitted.
+    pub header_row: Option<u32>,
+    /// The columns' names without a header row, from the source's or table's `column_names`.
+    #[serde(skip)]
+    pub column_names: Option<Vec<String>>,
 }
 
 impl Default for XlsxOptions {
@@ -303,6 +314,9 @@ impl Default for XlsxOptions {
             sheet: None,
             header: true,
             skip_rows: 0,
+            range: None,
+            header_row: None,
+            column_names: None,
         }
     }
 }

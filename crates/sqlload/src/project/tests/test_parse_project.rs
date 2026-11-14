@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0 }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0 }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten_objects: false }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten_objects: false }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -552,6 +552,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             ),
             expected_message: "[sources.app] schema is for warehouse targets",
         },
+        ParseProjectErrorTestCase {
+            description: "a sheet range the source's column_names reach that keeps its header row is refused",
+            text: "[connections.sheets]\nkind = \"google_sheets\"\nservice_account_json = \"{}\"\n[sources.ref]\nkind = \"google_sheets\"\nconnection = \"sheets\"\nspreadsheet_id = \"s\"\nwrite_strategy = \"replace\"\nranges = { a = \"A!A:C\", b = \"B!A:C\" }\ncolumn_names = [\"x\", \"y\", \"z\"]\n[sources.ref.tables.a]\nheader = false\n",
+            expected_message: "[sources.ref] column_names names the columns of data without a header row; set header = false",
+        },
+        ParseProjectErrorTestCase {
+            description: "column_names on whole CSV records is refused",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nshape = \"record\"\ncsv = { header = false }\ncolumn_names = [\"a\"]\n",
+            expected_message: "column_names is for columns of data without a header row",
+        },
+        ParseProjectErrorTestCase {
+            description: "an xlsx header_row past the range's rows is refused",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xlsx\"\nxlsx = { range = \"A1:C5\", header_row = 10 }\n",
+            expected_message: "[sources.raw] xlsx.header_row 10 is past the range's 5 rows",
+        },
     ];
     for test_case in test_cases {
         let text = format!("{CONNECTIONS}{}", test_case.text);
@@ -665,4 +680,34 @@ fn given_constant_columns_on_a_source_and_its_tables_when_parsing_then_a_tables_
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_column_names_on_a_sheets_source_when_every_table_using_them_is_headerless_then_it_parses()
+{
+    let sheets = "[connections.sheets]\nkind = \"google_sheets\"\nservice_account_json = \"{}\"\n[sources.ref]\nkind = \"google_sheets\"\nconnection = \"sheets\"\nspreadsheet_id = \"s\"\nwrite_strategy = \"replace\"\nranges = { a = \"A!A:C\", b = \"B!A:C\" }\ncolumn_names = [\"x\", \"y\", \"z\"]\n";
+    let test_cases = [
+        ParseProjectErrorTestCase {
+            description: "each range's table entry sets header = false",
+            text: "[sources.ref.tables.a]\nheader = false\n[sources.ref.tables.b]\nheader = false\n",
+            expected_message: "",
+        },
+        ParseProjectErrorTestCase {
+            description: "the source sets header = false for every table",
+            text: "header = false\n",
+            expected_message: "",
+        },
+    ];
+    for test_case in test_cases {
+        let text = format!("{CONNECTIONS}{sheets}{}", test_case.text);
+        let error = parse_project(&text, &environment)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert_eq!(
+            error, test_case.expected_message,
+            "{}",
+            test_case.description
+        );
+    }
 }

@@ -560,11 +560,22 @@ impl SourceConfig {
                 xml.lists.push(element);
             }
         }
+        let column_names = self
+            .tables
+            .values()
+            .find_map(|table| table.settings.column_names.clone())
+            .or_else(|| self.defaults.column_names.clone());
         FilesEncoding {
             format: self.format,
             compression: self.compression.unwrap_or_default(),
-            csv: self.csv.clone().unwrap_or_default(),
-            xlsx: self.xlsx.clone().unwrap_or_default(),
+            csv: CsvOptions {
+                column_names: column_names.clone(),
+                ..self.csv.clone().unwrap_or_default()
+            },
+            xlsx: XlsxOptions {
+                column_names,
+                ..self.xlsx.clone().unwrap_or_default()
+            },
             xml,
             members: self.members.clone(),
             record: (self.shape == RecordShape::Record).then(|| {
@@ -765,6 +776,9 @@ pub struct TableSettings {
     /// Which row of a sheet's range holds the header, counting from 1 (`google_sheets`); rows above it are skipped.
     #[serde(default)]
     pub header_row: Option<u32>,
+    /// The columns' names, in order, for data without a header row (CSV and Excel files, `google_sheets`); the count must match the data's columns.
+    #[serde(default)]
+    pub column_names: Option<Vec<String>>,
     /// Columns with the same value in every row, typed by their TOML values; a table's map replaces its source's.
     #[serde(default)]
     pub constant_columns: Option<ConstantColumns>,

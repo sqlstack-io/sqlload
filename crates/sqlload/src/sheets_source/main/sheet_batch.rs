@@ -13,7 +13,7 @@ use crate::sheets_source::models::{Grid, HeaderRule};
 /// The rows of `grid` under `rule` as one batch of `columns`, found by header name (ignoring case), each in its type; a column no longer in the header, an error cell or a value that does not convert is an error naming its cell.
 pub fn sheet_batch(
     grid: &Grid,
-    rule: HeaderRule,
+    rule: &HeaderRule,
     columns: &[(String, ColumnType)],
 ) -> Result<RecordBatch, String> {
     let names = header_names(grid, rule).map_err(|problems| problems.join("; "))?;

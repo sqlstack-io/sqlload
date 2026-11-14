@@ -54,3 +54,9 @@ pub const UNAUTHORIZED: u16 = 401;
 
 /// Who a client signed in as a Google user reads as, as messages name it.
 pub const GOOGLE_USER: &str = "the Google account that signed in";
+
+/// The most columns an A1 range may reach: Excel's XFD.
+pub const MAX_A1_COLUMNS: u32 = 16_384;
+
+/// The most rows an A1 range may reach: Excel's sheet height.
+pub const MAX_A1_ROWS: u32 = 1_048_576;

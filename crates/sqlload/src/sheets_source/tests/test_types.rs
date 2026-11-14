@@ -26,3 +26,10 @@ pub(crate) struct KeyTestCase {
     /// The account the client reads as, or why the key does not read.
     pub(crate) expected_result: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct A1RangeTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) range: &'static str,
+    /// The sheet, columns and rows read, or why the range is refused.
+    pub(crate) expected_range: Result<&'static str, &'static str>,
+}

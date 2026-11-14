@@ -1,3 +1,4 @@
+use crate::column_types::models::ColumnType;
 use crate::files_source::models::{SourceFormat, XlsxOptions, XmlOptions};
 use crate::files_source::tests::helpers::{block_on, container_encoding, read_rows, xml_at};
 use crate::files_source::tests::test_types::ReadTextFilesTestCase;
@@ -11,7 +12,17 @@ fn given_xlsx_xml_and_zip_files_when_reading_then_cells_load_typed_and_errors_na
         sheet: sheet.map(str::to_owned),
         header,
         skip_rows,
+        ..XlsxOptions::default()
     };
+    let ranged =
+        |range: &str, header_row: Option<u32>, column_names: Option<&[&str]>| XlsxOptions {
+            range: Some(range.to_owned()),
+            header: column_names.is_none(),
+            header_row,
+            column_names: column_names
+                .map(|names| names.iter().map(|name| (*name).to_owned()).collect()),
+            ..XlsxOptions::default()
+        };
     let xlsx = |options: XlsxOptions, members: Option<&'static str>| {
         container_encoding(
             SourceFormat::Xlsx,
@@ -82,6 +93,59 @@ fn given_xlsx_xml_and_zip_files_when_reading_then_cells_load_typed_and_errors_na
             exclude: &[],
             pinned: &[],
             expected_rows: Ok("1|a\n2|b"),
+        },
+        ReadTextFilesTestCase {
+            description: "xlsx range: only its sheet, columns and rows load, its first row the header",
+            encoding: xlsx(ranged("Data!B3:C5", None, None), None),
+            files: &[(
+                "a.xlsx",
+                "[Cover]\nn:99\n[Data]\nMonthly report\n\n|id|v|left out\n|n:7|x|y\nn:0|n:8|z\n|n:9|after\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("7|x\n8|z"),
+        },
+        ReadTextFilesTestCase {
+            description: "xlsx range: header_row counts from the range's first row, skipping a title row inside it",
+            encoding: xlsx(ranged("A2:B", Some(2), None), None),
+            files: &[("a.xlsx", "[S]\nabove\nTitle\nid|v\nn:1|a\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|a"),
+        },
+        ReadTextFilesTestCase {
+            description: "xlsx range without a header: column_names names its columns, so a type pinned by one of those names applies",
+            encoding: xlsx(
+                ranged("A:C", None, Some(&["metric", "category", "value"])),
+                None,
+            ),
+            files: &[("a.xlsx", "[S]\nrevenue|east|n:10|not read\ncost|west|n:4\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[("value", ColumnType::Float)],
+            expected_rows: Ok("revenue|east|10.0\ncost|west|4.0"),
+        },
+        ReadTextFilesTestCase {
+            description: "xlsx range: column_names with another count than the range's columns fails",
+            encoding: xlsx(ranged("A:C", None, Some(&["metric", "value"])), None),
+            files: &[("a.xlsx", "[S]\nrevenue|east|n:10\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "the range has 3 columns, but column_names names 2; name each column",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "xlsx range past the sheet's data loads no rows",
+            encoding: xlsx(ranged("F:G", None, None), None),
+            files: &[("a.xlsx", "[S]\nid|v\nn:1|a\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok(""),
         },
         ReadTextFilesTestCase {
             description: "xlsx: a sheet the workbook lacks fails, naming its sheets",

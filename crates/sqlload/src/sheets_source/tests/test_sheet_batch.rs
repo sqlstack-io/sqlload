@@ -120,7 +120,7 @@ fn given_a_tab_when_reading_its_rows_then_each_cell_loads_as_its_value_in_the_co
             .iter()
             .map(|(name, column_type)| ((*name).to_owned(), column_type.clone()))
             .collect();
-        let seen = sheet_batch(&parse_grid(&test_case.sheet), test_case.rule, &columns)
+        let seen = sheet_batch(&parse_grid(&test_case.sheet), &test_case.rule, &columns)
             .and_then(|batch| rows_text(&batch));
         assert_eq!(
             seen,

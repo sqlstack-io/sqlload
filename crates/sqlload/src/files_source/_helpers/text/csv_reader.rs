@@ -70,7 +70,8 @@ impl CsvReader {
                 break (first, chunk.is_empty());
             }
         };
-        let names = column_names(first, options.header && named)
+        let given = options.column_names.as_deref().filter(|_| named);
+        let names = column_names(first, options.header && named, given)
             .map_err(|error| shifted(&error, skipped))?;
         let decoder = match names.is_empty() {
             true => None,
@@ -177,12 +178,27 @@ fn ascii(character: char, setting: &str) -> Result<u8, String> {
     }
 }
 
-/// The header's names, checked; or `column_1`, ... for a file without a header.
-fn column_names(first: Vec<String>, header: bool) -> Result<Vec<String>, String> {
-    if !header {
-        return Ok((1..=first.len())
-            .map(|position| format!("column_{position}"))
-            .collect());
+/// The header's names, checked; or for a file without a header, `given` (one per field of the first record) or `column_1`, ...
+fn column_names(
+    first: Vec<String>,
+    header: bool,
+    given: Option<&[String]>,
+) -> Result<Vec<String>, String> {
+    match (header, given) {
+        (false, Some(given)) if first.len() == given.len() => return Ok(given.to_vec()),
+        (false, Some(given)) if !first.is_empty() => {
+            return Err(format!(
+                "line 1: the file has {} columns, but column_names names {}; name each column",
+                first.len(),
+                given.len()
+            ));
+        }
+        (false, _) => {
+            return Ok((1..=first.len())
+                .map(|position| format!("column_{position}"))
+                .collect());
+        }
+        (true, _) => {}
     }
     for (position, name) in first.iter().enumerate() {
         if name.is_empty() {

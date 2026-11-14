@@ -15,6 +15,7 @@ use crate::project::models::{
     CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig,
     SourceKind, TableSettings, WriteStrategy,
 };
+use crate::sheets_source::main::a1_range::a1_range;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -253,6 +254,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || !source.ranges.is_empty()
         || sheet_settings(source)
             .any(|settings| settings.header.is_some() || settings.header_row.is_some());
+    problems.extend(column_names_problems(place, source));
     if sheets_only && source.kind != SourceKind::GoogleSheets {
         problems.push(format!(
             "{place} spreadsheet_id, ranges, header and header_row are for kind = \"google_sheets\""
@@ -378,6 +380,89 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
 /// A source's settings and each of its tables'.
 fn sheet_settings(source: &SourceConfig) -> impl Iterator<Item = &TableSettings> {
     std::iter::once(&source.defaults).chain(source.tables.values().map(|table| &table.settings))
+}
+
+/// Where `column_names` does not fit: a source other than headerless CSV or Excel files or `google_sheets`, whole records, a table whose data has a header row, or names repeated ignoring case.
+fn column_names_problems(place: &str, source: &SourceConfig) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let named = sheet_settings(source).any(|settings| settings.column_names.is_some());
+    let fits = match source.kind {
+        SourceKind::GoogleSheets => true,
+        SourceKind::Files => {
+            matches!(source.format, SourceFormat::Csv | SourceFormat::Xlsx)
+                && source.shape != RecordShape::Record
+        }
+        _ => false,
+    };
+    if named && !fits {
+        problems.push(format!(
+            "{place} column_names is for columns of data without a header row: kind = \"files\" with format = \"csv\" or \"xlsx\" (not shape = \"record\"), or kind = \"google_sheets\""
+        ));
+        return problems;
+    }
+    let header = match source.kind {
+        SourceKind::GoogleSheets => "header = false",
+        _ if source.format == SourceFormat::Csv => "csv = { header = false }",
+        _ => "xlsx = { header = false }",
+    };
+    if named && headed_tables_named(source) {
+        problems.push(format!(
+            "{place} column_names names the columns of data without a header row; set {header}, or leave the names to the header"
+        ));
+    }
+    for names in sheet_settings(source).filter_map(|settings| settings.column_names.as_ref()) {
+        for (position, name) in names.iter().enumerate() {
+            if name.trim().is_empty() {
+                problems.push(format!(
+                    "{place} column_names has an empty name in place {}",
+                    position + 1
+                ));
+            } else if names[..position]
+                .iter()
+                .any(|earlier| earlier.eq_ignore_ascii_case(name))
+            {
+                problems.push(format!(
+                    "{place} column_names names {name} twice (ignoring case)"
+                ));
+            }
+        }
+    }
+    problems
+}
+
+/// Whether a table that `column_names` names, as its own setting or the source's, reads data with a header row: a files source's `csv` or `xlsx` header, or a sheet table's `header` (a tab no table entry or range names takes the source's).
+fn headed_tables_named(source: &SourceConfig) -> bool {
+    if source.kind != SourceKind::GoogleSheets {
+        return match source.format {
+            SourceFormat::Csv => source.csv.as_ref().is_none_or(|csv| csv.header),
+            _ => source.xlsx.as_ref().is_none_or(|xlsx| xlsx.header),
+        };
+    }
+    let defaults = &source.defaults;
+    let entries = source
+        .tables
+        .iter()
+        .map(|(name, table)| (name, Some(&table.settings)));
+    let ranged = source
+        .ranges
+        .keys()
+        .filter(|name| !source.tables.contains_key(*name))
+        .map(|name| (name, None));
+    let unlisted = source.ranges.is_empty().then_some(defaults);
+    entries
+        .chain(ranged)
+        .map(|(_, settings)| settings)
+        .chain(unlisted.map(Some))
+        .any(|settings| {
+            let pick = |value: fn(&TableSettings) -> Option<bool>| {
+                settings.and_then(value).or(value(defaults))
+            };
+            let named = settings
+                .and_then(|settings| settings.column_names.as_ref())
+                .or(defaults.column_names.as_ref())
+                .is_some();
+            named && pick(|settings| settings.header).unwrap_or(true)
+        })
 }
 
 /// What a `google_sheets` source needs and cannot take: a spreadsheet, and no cursor, since a sheet has no column to read after.
@@ -517,6 +602,31 @@ fn container_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let zip = source.compression == Some(Compression::Zip);
     if source.xlsx.is_some() && source.format != SourceFormat::Xlsx {
         problems.push(format!("{place} xlsx is for format = \"xlsx\""));
+    }
+    if let Some(xlsx) = &source.xlsx {
+        if let Some(range) = &xlsx.range {
+            if xlsx.sheet.is_some() || xlsx.skip_rows != 0 {
+                problems.push(format!(
+                    "{place} xlsx.range names the sheet and the first row itself; drop xlsx.sheet and xlsx.skip_rows"
+                ));
+            }
+            match (a1_range(range), xlsx.header_row) {
+                (Err(problem), _) => problems.push(format!("{place} xlsx.{problem}")),
+                (Ok(range), Some(header_row)) => {
+                    let rows = range.last_row.map(|last| last - range.first_row + 1);
+                    if rows.is_some_and(|rows| header_row > rows) {
+                        problems.push(format!(
+                            "{place} xlsx.header_row {header_row} is past the range's {} rows",
+                            rows.unwrap_or_default()
+                        ));
+                    }
+                }
+                (Ok(_), None) => {}
+            }
+        }
+        if xlsx.header_row == Some(0) {
+            problems.push(format!("{place} xlsx.header_row counts from 1"));
+        }
     }
     match (&source.xml, source.format) {
         (Some(_), format) if format != SourceFormat::Xml => {

@@ -22,6 +22,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "table_settings",
     "header",
     "header_row",
+    "column_names",
     "constant_columns",
     "on_duplicate_keys",
     "dedup_sort",
