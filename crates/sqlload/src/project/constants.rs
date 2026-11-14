@@ -31,6 +31,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "dedup_sort",
     "naming",
     "row_id",
+    "transform",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];

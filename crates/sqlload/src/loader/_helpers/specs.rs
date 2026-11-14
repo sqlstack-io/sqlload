@@ -1,3 +1,8 @@
+use std::sync::Arc;
+
+use arrow_array::RecordBatch;
+use arrow_schema::{DataType, Schema};
+
 use crate::adapters::contract::models::{ChangeApply, TableName, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
@@ -9,11 +14,18 @@ use crate::cdc::constants::{
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::main::constant_columns::constant_columns;
-use crate::files_source::models::AfterLoad;
+use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
+use crate::files_source::models::{
+    AfterLoad, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
+};
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
+use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
@@ -23,22 +35,28 @@ use crate::loader::constants::{
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
+    CdcSpec, CursorSpec, FilesTransform, SettingOrigin, TableLayout, TableSpec, WarehouseRoute,
+    WarehouseSource,
 };
 use crate::loader::models::{SourceReader, TablePlan};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
+use crate::postgres_source::models::{ReadColumn, WireType};
 use crate::project::models::{
     CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, SortDirection, SourceConfig, SourceKind, StateMode, TableOverride,
-    TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
+    OnDuplicateKeys, ProjectConfig, SortDirection, SourceConfig, SourceKind, StateMode,
+    TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
+use crate::python_sources::types::PythonHost;
 use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
+use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::models::Unnest;
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
+use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
 use crate::snowflake_source::main::count_rows::count_rows as count_snowflake_rows;
@@ -438,6 +456,7 @@ pub(crate) fn build_spec(
             _ => warehouse_source(context.source, overrides),
         },
         layout,
+        transform: None,
     })
 }
 
@@ -647,7 +666,7 @@ fn glob(pattern: &str) -> Result<Glob, String> {
 }
 
 /// A matcher for column name patterns such as `*email*`.
-fn column_matcher(patterns: &[String]) -> Result<GlobSet, String> {
+pub(crate) fn column_matcher(patterns: &[String]) -> Result<GlobSet, String> {
     let mut builder = GlobSetBuilder::new();
     for pattern in patterns {
         builder.add(glob(pattern)?);
@@ -1629,4 +1648,243 @@ pub(crate) fn checked_key<'a>(
         }
         _ => mode.staged_key(),
     }
+}
+
+/// What files source `source_name` fills from each file's path and its configuration, and the types of those columns in table order: `partition_columns`, `path_columns` captures, then its table's `constant_columns`; a `native(...)` type, which SQLLoad's reader cannot build, is refused.
+pub(crate) fn path_values(
+    (source_name, source): (&str, &SourceConfig),
+    warehouse: Warehouse,
+) -> Result<(PathValues, Vec<(String, ColumnType)>), LoaderError> {
+    let mut types: Vec<(String, ColumnType)> = Vec::new();
+    for (name, text) in &source.partition_columns {
+        let parsed = parse_type(text, &[warehouse])
+            .map_err(|error| LoaderError::Invalid(format!("partition column {name}: {error}")))?;
+        if matches!(parsed.column_type, ColumnType::Array(_)) {
+            return Err(LoaderError::Invalid(format!(
+                "partition column {name}: an array cannot come from a path"
+            )));
+        }
+        types.push((name.clone(), parsed.column_type));
+    }
+    let template = source
+        .path_columns
+        .as_deref()
+        .map(|text| path_template(text, &[warehouse]))
+        .transpose()
+        .map_err(LoaderError::Invalid)?;
+    types.extend(
+        template
+            .iter()
+            .flat_map(|template| template.captures.clone()),
+    );
+    let constants = constant_columns(&source.table_constants(source_name), &[warehouse])
+        .map_err(LoaderError::Invalid)?;
+    let typed = types
+        .iter()
+        .map(|(name, column_type)| (name, column_type))
+        .chain(
+            constants
+                .iter()
+                .map(|(name, column_type, _)| (name, column_type)),
+        );
+    for (name, column_type) in typed {
+        if arrow_field(name, column_type).is_none() {
+            return Err(LoaderError::Invalid(format!(
+                "column {name}: {column_type} has no Arrow type, so a partition, path or constant column cannot be one; pin a portable type"
+            )));
+        }
+    }
+    let values = PathValues {
+        partition_columns: source.partition_columns.keys().cloned().collect(),
+        template,
+        unmatched: source.unmatched_paths.unwrap_or_default(),
+        constants: constants
+            .iter()
+            .map(|(name, _, text)| (name.clone(), text.clone()))
+            .collect(),
+    };
+    types.extend(
+        constants
+            .into_iter()
+            .map(|(name, column_type, _)| (name, column_type)),
+    );
+    Ok((values, types))
+}
+
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
+pub(crate) fn pinned_unsampled(
+    overrides: Option<&TableOverride>,
+    (table, added, rule): (&FilesTable, &[&str], NameRule),
+    format: SourceFormat,
+) -> Result<Vec<String>, LoaderError> {
+    let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
+        return Ok(Vec::new());
+    };
+    let sampled: Vec<&str> = table
+        .columns
+        .iter()
+        .map(|column| column.name.as_str())
+        .collect();
+    let loaded = |name: &str| loaded_name(rule.0, name, rule.1);
+    let seen: Vec<String> = sampled
+        .iter()
+        .chain(added)
+        .map(|name| loaded(name))
+        .collect();
+    let mut unsampled: Vec<String> = Vec::new();
+    for name in overrides.columns.keys() {
+        if seen.contains(&loaded(name)) || is_child_column(name, overrides) {
+            continue;
+        }
+        let known = sampled.iter().chain(added).copied();
+        if let Some(close) = close_name(name, known) {
+            return Err(LoaderError::Invalid(format!(
+                "pinned column {name} was not seen in the sampled files; did you mean {close:?}? (pin a name exactly as it appears in the files)"
+            )));
+        }
+        unsampled.push(name.clone());
+    }
+    Ok(unsampled)
+}
+
+/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
+pub(crate) fn files_read_as(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    partition_types: &[(String, ColumnType)],
+) -> (Vec<DesiredColumn>, Vec<String>) {
+    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
+    let columns: Vec<DesiredColumn> = read_columns
+        .iter()
+        .map(|column| DesiredColumn {
+            name: spelled(&column.name),
+            column_type: column.output.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let filled: Vec<&str> = partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+        .collect();
+    let inferred: Vec<String> = read_columns
+        .iter()
+        .filter(|column| !spec.pinned.contains_key(&column.name))
+        .map(|column| spelled(&column.name))
+        .filter(|name| !filled.contains(&name.as_str()))
+        .collect();
+    (columns, inferred)
+}
+
+/// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
+pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut columns: Vec<ReadColumn> = Vec::new();
+    for column in &spec.source_table.columns {
+        let excluded = spec
+            .excluded_columns
+            .iter()
+            .any(|(excluded, _)| *excluded == column.name);
+        let output = match (spec.pinned.get(&column.name), &column.column_type) {
+            _ if excluded => continue,
+            (Some(pinned), _) => pinned.clone(),
+            (None, Ok(column_type)) => column_type.clone(),
+            (None, Err(reason)) => {
+                problems.push(format!("column {}: {reason}", column.name));
+                continue;
+            }
+        };
+        columns.push(ReadColumn {
+            name: column.name.clone(),
+            expression: column.name.clone(),
+            wire: WireType::Text,
+            output,
+        });
+    }
+    match problems.is_empty() {
+        true => Ok(columns),
+        false => Err(problems),
+    }
+}
+
+/// The function and the host that run table `name`'s `transform` (its own, else its source's), when it has one the host imported.
+pub(crate) fn runnable_transform(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+    name: &str,
+) -> Option<(Arc<dyn PythonHost>, String)> {
+    let function = source
+        .tables
+        .get(name)
+        .and_then(|table| table.settings.transform.clone())
+        .or_else(|| source.defaults.transform.clone())?;
+    let host = project.python_host.clone()?;
+    matches!(project.transforms.get(&function), Some(Ok(_))).then_some((host, function))
+}
+
+/// The columns of what a `transform` returned across its batches, typed as a Python table's yields are: a column only ever NULL as text.
+pub(crate) fn returned_columns(batches: &[RecordBatch]) -> Vec<(String, ColumnType)> {
+    let merged = batches.iter().fold(Schema::empty(), |seen, batch| {
+        merge_schema(&seen, &batch.schema())
+    });
+    merged
+        .fields()
+        .iter()
+        .map(|field| {
+            let column_type = match field.data_type() {
+                DataType::Null => ColumnType::Text,
+                _ => field_type(field),
+            };
+            (field.name().clone(), column_type)
+        })
+        .collect()
+}
+
+/// How each file of a files table with a `transform` is read for it: `table`'s sampled columns, less those `exclude_columns` drops (`patterns` holds it and `allow_columns`), as stored (Parquet) or as the workbook holds them (xlsx), JSON's nested values as JSON and every other value as text, so a value sampling did not see never fails the read.
+pub(crate) fn transform_input(
+    table: &FilesTable,
+    format: SourceFormat,
+    (exclude, allow): (Vec<String>, Vec<String>),
+) -> Result<FilesTransform, LoaderError> {
+    let excluded = column_matcher(&exclude).map_err(LoaderError::Invalid)?;
+    let allowed = column_matcher(&allow).map_err(LoaderError::Invalid)?;
+    let mut input: Vec<DesiredColumn> = Vec::new();
+    for column in &table.columns {
+        if excluded.is_match(&column.name) && !allowed.is_match(&column.name) {
+            continue;
+        }
+        let sampled = column
+            .column_type
+            .clone()
+            .map_err(|reason| LoaderError::Invalid(format!("column {}: {reason}", column.name)));
+        let column_type = match (format, sampled) {
+            (SourceFormat::Parquet | SourceFormat::Xlsx, sampled) => sampled?,
+            (
+                SourceFormat::Json | SourceFormat::Ndjson,
+                Ok(nested @ (ColumnType::Json | ColumnType::Array(_))),
+            ) => nested,
+            _ => ColumnType::Text,
+        };
+        input.push(DesiredColumn {
+            name: column.name.clone(),
+            column_type,
+            origin: ColumnOrigin::Source,
+        });
+    }
+    Ok(FilesTransform {
+        checks: TextChecks {
+            known: input.iter().map(|column| column.name.clone()).collect(),
+            exclude,
+            allow,
+            inferred: Vec::new(),
+        },
+        input,
+        nanos: table
+            .columns
+            .iter()
+            .filter(|column| column.stored_read == StoredRead::Nanos)
+            .map(|column| column.name.clone())
+            .collect(),
+        sample: String::new(),
+    })
 }

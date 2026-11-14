@@ -1,8 +1,11 @@
 use crate::command::_helpers::load_output::{Tally, event_lines, summary_lines};
 use crate::command::tests::helpers::{done, read_back};
-use crate::command::tests::test_types::{LoadEventsFileTestCase, LoadOutputTestCase};
+use crate::command::tests::test_types::{
+    LoadEventsFileTestCase, LoadOutputTestCase, TransformTallyTestCase,
+};
 use crate::load_events::constants::EVENTS_SCHEMA_VERSION;
 use crate::load_events::models::{EventKind, LoadEvent};
+use crate::python_sources::models::TransformTime;
 
 /// A `--fail-fast` run where every failure is retryable, as `--events jsonl` writes it.
 const FAIL_FAST_EVENTS: &str = include_str!("fixtures/fail_fast_retryable.jsonl");
@@ -38,6 +41,7 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
                     elapsed_ms: 300,
                     position: None,
                     changes: vec!["created  raw.a__items  6 columns".to_owned()],
+                    transforms: Vec::new(),
                 },
             )],
             name_width: 7,
@@ -131,4 +135,75 @@ loaded  workforce.people            304 rows 4.6s
         assert_eq!(lines, test_case.expected_lines, "{}", test_case.description);
     }
     Ok(())
+}
+
+#[test]
+fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_slow_dicts_a_hint()
+{
+    let indent = " ".repeat(15);
+    let test_cases = [
+        TransformTallyTestCase {
+            description: "each file's time on a line of its own, under the table's",
+            transforms: &[
+                ("./drop/a.csv", 120, 10, true),
+                ("./drop/b.csv", 4_560, 200_000, false),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  0.12s
+{indent}transform  ./drop/b.csv  4.56s",
+        },
+        TransformTallyTestCase {
+            description: "dicts for a large file that took a while get one hint, naming the slowest",
+            transforms: &[
+                ("./drop/a.csv", 6_000, 150_000, true),
+                ("./drop/b.csv", 8_000, 100_000, true),
+                ("./drop/c.csv", 9_000, 99_999, true),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  6.00s
+{indent}transform  ./drop/b.csv  8.00s
+{indent}transform  ./drop/c.csv  9.00s
+{indent}hint: the transform returned dicts for ./drop/b.csv (100,000 rows, 8.0s); a pyarrow Table or a DataFrame transforms faster",
+        },
+        TransformTallyTestCase {
+            description: "a large slow file that returned Arrow gets no hint, nor does a quick one that returned dicts",
+            transforms: &[
+                ("./drop/a.csv", 6_000, 150_000, false),
+                ("./drop/b.csv", 4_999, 150_000, true),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  6.00s
+{indent}transform  ./drop/b.csv  5.00s",
+        },
+    ];
+    for test_case in test_cases {
+        let event = LoadEvent {
+            schema_version: EVENTS_SCHEMA_VERSION,
+            run_id: "run".to_owned(),
+            at: "2026-11-14T00:00:00.000Z".to_owned(),
+            table: Some("RAW.M".to_owned()),
+            kind: EventKind::TableDone {
+                rows: 7,
+                elapsed_ms: 9_000,
+                position: None,
+                changes: Vec::new(),
+                transforms: test_case
+                    .transforms
+                    .iter()
+                    .map(|(file, milliseconds, rows, dicts)| TransformTime {
+                        file: (*file).to_owned(),
+                        milliseconds: *milliseconds,
+                        rows: *rows,
+                        dicts: *dicts,
+                    })
+                    .collect(),
+            },
+        };
+        assert_eq!(
+            event_lines(&event, (7, 5)).join("\n"),
+            test_case.expected_lines.replace("{indent}", &indent),
+            "{}",
+            test_case.description
+        );
+    }
 }

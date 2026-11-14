@@ -1,14 +1,17 @@
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
-use crate::after_load_helpers::run_after_load_case;
+use crate::after_load_helpers::{run_after_load_case, run_archived_reload};
 use crate::files_helpers::run_source_row_upgrade;
 use crate::helpers::{
-    local_store, run_async, run_files_scenario, run_large_partition, run_merge_case,
-    run_replaced_keys, seaweedfs_store,
+    int96_in_a_later_batch, local_store, run_async, run_file_set, run_files_scenario,
+    run_large_partition, run_replaced_keys, seaweedfs_store,
 };
+use crate::merge_helpers::run_merge_case;
 use crate::test_types::SourceRowUpgradeTestCase;
-use crate::test_types::{AfterLoadStep, AfterLoadTestCase};
+use crate::test_types::{
+    AfterLoadStep, AfterLoadTestCase, ArchivedReloadTestCase, FileSetTestCase,
+};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep, ReplacedKeysTestCase};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 
@@ -20,6 +23,9 @@ const NULL_MERGE_CHECK: &str = "SELECT (SELECT string_agg(COALESCE(CAST(id AS VA
 
 const NULL_FAIL_SETTINGS: &str =
     "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnull_keys = \"fail\"\n";
+
+/// Every row as `id:v`, the run log's events in order (each run with its file), and how many staging or build tables are left.
+const RELOAD_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT string_agg(event || coalesce(':' || regexp_extract(json_extract_string(record_json, '$.files[0]'), '([a-z]+[.]csv)', 1), ''), ',' ORDER BY recorded_at) FROM raw._sqlload_runs WHERE table_name = 'scores') || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%')";
 
 pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
@@ -561,6 +567,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_error: "",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
@@ -586,6 +593,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_error: "",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
@@ -603,6 +611,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     }],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
@@ -628,6 +637,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     ],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
                 }],
@@ -647,6 +657,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "_sqlload_source_row is not written, so a file's rows have no order to pick the last of a repeated key by",
                     },
@@ -659,6 +670,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
                         expected_plan: "",
                     },
@@ -678,6 +690,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     }],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "dedup_sort breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
                     expected_plan: "",
                 }],
@@ -696,6 +709,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     }],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/a.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (5)",
                     expected_plan: "",
                 }],
@@ -728,6 +742,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -740,6 +755,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "2 files, one commit each",
                     },
                     MergeStep {
@@ -748,6 +764,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                 ],
@@ -774,6 +791,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         ],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -782,6 +800,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         files: &[],
                         removed: &[],
                         loads: false,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -790,6 +809,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         files: &[],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "2 files, one commit each",
                     },
@@ -810,6 +830,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -822,6 +843,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "1 file, one commit each",
                     },
@@ -834,6 +856,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "1 file, one commit each",
                     },
@@ -862,6 +885,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -874,6 +898,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "1 file, one commit each",
                     },
                 ],
@@ -900,6 +925,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_error: "",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
                 check_query: NULL_MERGE_CHECK,
@@ -925,10 +951,159 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_error: "drop/b.csv: the file holds a NULL in its unique_key: 1 row(s) have no id, such as (NULL) of (id); null_keys = \"fail\" refuses a NULL in a key column",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "",
                 }],
                 check_query: NULL_MERGE_CHECK,
                 expected_result: "1:a|1",
+            },
+        ];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_order_into_a_new_table_swapped_in_with_its_records()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "--reload merges every file oldest first into a new table, records a reset and each file with the swap, and the next load reads none",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n1,c\n",
+                            modified_secs: 3_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: true,
+                        expected_error: "",
+                        expected_plan: "merge (unique_key: id; NULLs in keys match) into a new table, swapped in at the end (--reload)",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "up to date: 0 new of 3 files in",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:c,2:a|reset,run:a.csv,run:b.csv,reset,run:a.csv,run:b.csv,run:c.csv|0",
+            },
+            FilesMergeTestCase {
+                description: "a --reload failing on its third file leaves the old table, its run log and no build table",
+                settings: MERGE_FAIL_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n3,c\n3,cc\n",
+                            modified_secs: 3_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: true,
+                        expected_error: "drop/c.csv: the file repeats its unique_key",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:b,2:a|reset,run:a.csv,run:b.csv|0",
+            },
+            FilesMergeTestCase {
+                description: "a new file named as one move_to archived merges after the archived copy, so its newer rows win",
+                settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nafter_load = { move_to = \"done\" }\n",
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "export.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "export.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 2_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:b|reset,run:export.csv,reset,run:export.csv,run:export.csv|0",
             },
         ];
         for test_case in &test_cases {
@@ -972,6 +1147,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
                 expected_error: "",
                 removed: &[],
                 loads: true,
+                reload: false,
                 expected_plan: "1 batch, up to 1,000 files or about 1 GB per commit",
             }],
             check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY v) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = '_sqlload_runs')",
@@ -1008,6 +1184,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P01],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "delete_insert (cursor: file_version)",
                     },
@@ -1016,6 +1193,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P02],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1024,6 +1202,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P01_RESENT],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "le_LE-FY27-P01.csv changed since it was loaded",
                         expected_plan: "",
                     },
@@ -1032,6 +1211,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "but its file_version LE-FY27-P01 is below this load's range, which starts at LE-FY27-P02, so delete_insert would skip it and keep its old rows └── fix set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor LE-FY27-P01, or rebuild the table with --reload",
                         expected_plan: "",
                     },
@@ -1048,6 +1228,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P01_PART],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1056,6 +1237,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P02_PART],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1068,6 +1250,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/LE-FY27-P01/b.csv is new, but its file_version LE-FY27-P01 is below this load's range, which starts at LE-FY27-P02, and the table holds other files of file_version LE-FY27-P01, so delete_insert would skip it and never load its rows └── fix set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor LE-FY27-P01, or rebuild the table with --reload",
                         expected_plan: "",
                     },
@@ -1084,6 +1267,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P01_PART],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1092,6 +1276,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                         files: &[LE_P02_PART],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "the table has no _sqlload_source_version column, so delete_insert cannot find a file changed or added below this load's range, which it skips, keeping the partition's old rows",
                         expected_plan: "",
                     },
@@ -1107,6 +1292,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
                     files: &[LE_P01_PART],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "_sqlload_source_file must be loaded: delete_insert uses it to find a file changed or added below this load's range, which it would skip; stop excluding it",
                     expected_plan: "",
                 }],
@@ -1145,6 +1331,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "delete_insert (replace_key: le_version; NULLs in keys match)",
                     },
@@ -1153,6 +1340,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P02],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "1 file, one commit each, oldest modified first (ties by path), each recorded in the run log",
                     },
@@ -1161,6 +1349,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01_RESENT],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "├── files   1 new of 2 listed",
                     },
@@ -1169,6 +1358,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "reason  up to date: 0 new of 2 files in",
                     },
@@ -1184,6 +1374,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     files: &[LE_P01_CORRECTED, LE_P02, LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/le_LE-FY27-P01_corrected.csv: it holds the replace_key (le_version) value (LE-FY27-P01), which le_LE-FY27-P01.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows le_LE-FY27-P01.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows",
                     expected_plan: "",
                 }],
@@ -1209,6 +1400,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     ],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/a.csv: it holds the replace_key (le_version) value (LE-FY27-P05), which b.csv also holds, loaded earlier in this run",
                     expected_plan: "",
                 }],
@@ -1228,6 +1420,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         }],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1240,6 +1433,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         }],
                         removed: &["a.csv"],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1262,6 +1456,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     ],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/b.csv: the file holds a NULL in its replace_key: 1 row(s) have no le_version, such as (NULL) of (le_version); null_keys = \"fail\" refuses a NULL in a key column",
                     expected_plan: "",
                 }],
@@ -1277,6 +1472,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01_PART_0, LE_P01_PART_1],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/part-0001.csv: it holds the replace_key (le_version) value (LE-FY27-P01), which part-0000.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each (le_version) value in one file, or remove whichever of the two files is outdated from the folder",
                         expected_plan: "",
                     },
@@ -1285,6 +1481,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/part-0001.csv: the table holds rows of its replace_key (le_version) values from part-0000.csv, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by part-0001.csv would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each (le_version) value in one file, or remove the outdated file, part-0000.csv or part-0001.csv, from the folder",
                         expected_plan: "",
                     },
@@ -1301,6 +1498,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01, LE_P02],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1309,6 +1507,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01_CORRECTED],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/le_LE-FY27-P01_corrected.csv: the table holds rows of its replace_key (le_version) values from le_LE-FY27-P01.csv, which is still in the folder",
                         expected_plan: "",
                     },
@@ -1317,6 +1516,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[],
                         removed: &["le_LE-FY27-P01.csv"],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "├── files   1 new of 2 listed",
                     },
@@ -1333,6 +1533,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01, LE_P02],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1341,6 +1542,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         files: &[LE_P01_RESENT],
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -1379,6 +1581,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; merge does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key (merge matches rows one by one on unique_key)",
                     expected_plan: "",
                 }],
@@ -1393,6 +1596,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; append does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
                     expected_plan: "",
                 }],
@@ -1407,6 +1611,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; replace does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
                     expected_plan: "",
                 }],
@@ -1421,6 +1626,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "replace_key column version is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change) └── fix name a column the table loads in replace_key",
                     expected_plan: "",
                 }],
@@ -1435,6 +1641,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key └── fix set cursor_column, or replace_key = [\"version\"]",
                     expected_plan: "",
                 }],
@@ -1449,6 +1656,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "_sqlload_source_file must be loaded: delete_insert uses it to find the files a replace_key value's rows come from; stop excluding it",
                     expected_plan: "",
                 }],
@@ -1463,6 +1671,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "cursor_column file_version does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log └── fix remove cursor_column",
                     expected_plan: "",
                 }],
@@ -1477,6 +1686,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     files: &[LE_P01],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "cursor_column le_version must be one of the partition_columns or path_columns for a files source; to replace every row of each le_version value the files hold, set replace_key = [\"le_version\"] and drop cursor_column",
                     expected_plan: "",
                 }],
@@ -1557,4 +1767,61 @@ fn given_a_partition_cursor_without_the_source_file_column_when_reloading_then_o
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_a_later_batch_holding_a_column_duckdb_cannot_read_exactly_when_duckdb_reads_the_files_itself_then_the_load_stops_there()
+-> Result<(), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let test_cases = [FileSetTestCase {
+        description: "a batch of INT96 under embedded microseconds, which plan's sample of the newest files never saw, is refused by its own footers; the batch before it stays loaded",
+        settings: "write_strategy = \"append\"\n",
+        file_set: int96_in_a_later_batch,
+        expected_error: "DuckDB cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: column at is held as",
+        check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+        expected_result: "1000",
+    }];
+    run_async(async {
+        for test_case in &test_cases {
+            assert_eq!(
+                run_file_set(directory.path(), test_case).await?.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_an_append_parquet_table_with_move_to_when_reloading_then_each_archived_file_is_read_from_where_it_was_moved()
+-> Result<(), String> {
+    let test_cases = [ArchivedReloadTestCase {
+        description: "a.parquet loaded and moved to done/, then a new drop/a.parquet: the reload reads each copy once, the archived one from done/",
+        first: &[ParquetFile {
+            key: "a.parquet",
+            ids: &[1],
+            score: 1.0,
+            extra: None,
+        }],
+        later: &[ParquetFile {
+            key: "a.parquet",
+            ids: &[2],
+            score: 2.0,
+            extra: None,
+        }],
+        expected_plan: "route   read parquet into Arrow -> DuckDB takes Arrow (--reload also reads the files after_load moved to",
+        expected_rows: "1:1.0,2:2.0",
+    }];
+    for test_case in &test_cases {
+        let (plan, rows) = run_archived_reload(test_case)?;
+        assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
+        assert!(
+            plan.contains(test_case.expected_plan),
+            "{}:\n{plan}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

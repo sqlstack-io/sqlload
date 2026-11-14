@@ -20,6 +20,14 @@ pub(crate) struct SheetBatchTestCase {
     pub(crate) expected_result: Result<&'static str, &'static str>,
 }
 
+pub(crate) struct SheetInputTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) sheet: serde_json::Value,
+    pub(crate) rule: HeaderRule,
+    /// Each column as `name:type` joined by `,`, and the rows, each as its values joined by `|`, rows joined by `;`; or the error.
+    pub(crate) expected_result: Result<(&'static str, &'static str), &'static str>,
+}
+
 pub(crate) struct KeyTestCase {
     pub(crate) description: &'static str,
     pub(crate) source: crate::sheets_source::models::KeySource,

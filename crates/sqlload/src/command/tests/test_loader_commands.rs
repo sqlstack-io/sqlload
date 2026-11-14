@@ -20,6 +20,11 @@ fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_
             expected_error: "install it (for example `uv tool install sqlload`)",
         },
         LoaderCommandTestCase {
+            description: "a transform needs the Python package, named before python_paths are",
+            project: "python_paths = [\"transforms\"]\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.metrics]\nkind = \"files\"\nconnection = \"lake\"\npath = \"drop/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n[sources.metrics.tables.metrics]\ntransform = \"metrics\"\n",
+            expected_error: "table metrics.metrics sets transform, which runs only in the sqlload Python package's command",
+        },
+        LoaderCommandTestCase {
             description: "a project without python_paths runs",
             project: TARGET,
             expected_error: "",

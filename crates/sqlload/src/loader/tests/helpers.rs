@@ -7,6 +7,7 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::errors::StoreError;
+use crate::files_source::models::{FilesEncoding, FilesTable, TextChecks};
 use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::bound_array;
 use crate::loader::_helpers::python::child_paths;
@@ -14,17 +15,20 @@ use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
 };
 use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::_helpers::table_plan::reader_offer;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PlanDetail, PlanItem, TableSpec};
+use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
     BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
-    ItemSpec, SourceSpellingTestCase,
+    ItemSpec, OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase,
+    TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::python_sources::models::PythonSource;
 use crate::routing::models::{FileFormat, FileSet, Route, Step, Store};
 use crate::schema_plan::models::LiveColumn;
+use crate::store_paths::models::{Location, StoreKind};
 
 /// The columns of the inferred table, as `name:type` joined by commas.
 pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
@@ -275,8 +279,47 @@ pub(crate) fn merged_file_round_trip(
         .flat_map(|record| record.files)
         .next()
         .ok_or_else(|| format!("no file read back: {:?}", decoded.unreadable))?;
-    let loaded = crate::loader::_helpers::sources::loaded_file(file, true);
+    let loaded = crate::loader::_helpers::run_log::loaded_file(file, true);
     Ok((loaded.name, loaded.version))
+}
+
+/// The paths of `test_case`'s files in the order a merge `--reload` applies them.
+pub(crate) fn reload_keys(test_case: &ReloadOrderTestCase) -> Vec<String> {
+    use crate::file_store::models::StoredFile;
+    use crate::files_source::models::{DataFile, LoadedFile};
+    let files: Vec<DataFile> = test_case
+        .files
+        .iter()
+        .map(|(folder, key, modified_ms)| DataFile {
+            file: StoredFile {
+                path: object_store::path::Path::from(format!("{folder}{key}")),
+                relative_key: (*key).to_owned(),
+                size: 1,
+                etag: None,
+                modified_ms: *modified_ms,
+                member: None,
+            },
+            partitions: Vec::new(),
+        })
+        .collect();
+    let merged: Vec<LoadedFile> = test_case
+        .merged
+        .iter()
+        .map(|(name, version)| LoadedFile {
+            name: (*name).to_owned(),
+            version: (*version).to_owned(),
+        })
+        .collect();
+    let archive = crate::store_paths::models::Location {
+        store: crate::store_paths::models::StoreKind::Filesystem {
+            root: "/".to_owned(),
+        },
+        prefix: "done/".to_owned(),
+    };
+    crate::loader::_helpers::run_log::reload_order(files, "drop/", &merged, Some(&archive))
+        .into_iter()
+        .map(|data| data.file.path.to_string())
+        .collect()
 }
 
 /// A two-row batch with an `id` column and schema metadata through `with_constants`: whether the result equals the batch given, and each of its columns as `name:Arrow type=value,value`; or the error.
@@ -489,4 +532,76 @@ pub(crate) fn not_null_keys(
         .first()
         .map(|spec| spec.not_null_keys.join(", "))
         .ok_or_else(|| resolved.problems.join("; "))
+}
+
+/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform`.
+pub(crate) fn transform_reader(
+    test_case: &TransformReaderTestCase,
+) -> Result<Option<String>, String> {
+    let mut spec = python_spec("{}")?;
+    spec.python = None;
+    spec.files = Some(FilesSource {
+        location: Location {
+            store: StoreKind::Filesystem {
+                root: "/data".to_owned(),
+            },
+            prefix: "drop/".to_owned(),
+        },
+        table: FilesTable {
+            files: Vec::new(),
+            columns: Vec::new(),
+            problems: Vec::new(),
+            skipped: 0,
+            unmatched: 0,
+            dropped: Vec::new(),
+            objects: Vec::new(),
+        },
+        partition_types: Vec::new(),
+        constants: Vec::new(),
+        encoding: FilesEncoding::default(),
+        checks: TextChecks::default(),
+        notes: Vec::new(),
+        copy_to_internal_stage: false,
+        transform: None,
+        archive: None,
+    });
+    spec.transform = test_case.transform.map(|function| TableTransform {
+        function: function.to_owned(),
+        version: format!("{function}@0"),
+        older: 0,
+        creates_log: false,
+    });
+    Ok(reader_offer(&spec, None, None).needs_loader)
+}
+
+/// How many files `older_files` counts in the case's records, for table `t` of a Python source, whose `transform` is now at `f@2`.
+pub(crate) fn older_count(test_case: &OlderFilesTestCase) -> Result<usize, String> {
+    use crate::run_log::models::{RunRecord, StateEvent};
+    let spec = python_spec("{}")?;
+    let records: Vec<RunRecord> = test_case
+        .records
+        .iter()
+        .enumerate()
+        .map(|(index, (event, note, files, version))| {
+            let record = crate::run_log::main::event_record::event_record(
+                &crate::loader::_helpers::run_log::record_table(&spec),
+                StateEvent {
+                    event: *event,
+                    cursor_before: None,
+                    cursor_after: None,
+                    state: None,
+                    note: (*note).to_owned(),
+                    recorded_at: format!("2026-11-15T00:00:{index:02}.000000Z"),
+                },
+            );
+            RunRecord {
+                files: files.iter().map(|file| (*file).to_owned()).collect(),
+                transform: version.map(str::to_owned),
+                ..record
+            }
+        })
+        .collect();
+    Ok(crate::loader::_helpers::run_log::older_files(
+        &records, &spec, "f@2",
+    ))
 }

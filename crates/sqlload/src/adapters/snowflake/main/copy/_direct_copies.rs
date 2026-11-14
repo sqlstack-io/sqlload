@@ -13,7 +13,7 @@ pub(in crate::adapters) fn direct_copies(
     for data in request.files {
         let header = request
             .headers
-            .get(&data.file.relative_key)
+            .get(&data.file.store_key())
             .map(Vec::as_slice);
         match groups.iter_mut().find(|(seen, _)| *seen == header) {
             Some((_, files)) => files.push(data.clone()),

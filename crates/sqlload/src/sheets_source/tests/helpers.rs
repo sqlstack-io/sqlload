@@ -56,3 +56,83 @@ pub(crate) fn rows_text(batch: &RecordBatch) -> Result<String, String> {
         .collect();
     Ok(rows.join(";"))
 }
+
+/// A synthetic KPI tab: a merged title row, a header row, label-only rows, KPI blocks with their measures, a note, and a formula's `""` here and there.
+pub(crate) fn kpis() -> serde_json::Value {
+    let percent = |value: f64, shown: &str| number(value, shown, "PERCENT");
+    sheet(
+        "KPIs",
+        (0, 0),
+        vec![
+            vec![text("Service KPIs 2026")],
+            vec![
+                text("ID"),
+                text("KPI"),
+                text("Period 1"),
+                text("Period 2"),
+                text("Jan"),
+                text("Feb"),
+                text("Mar"),
+            ],
+            vec![blank(), text("Customer service")],
+            vec![
+                blank(),
+                text("Targets reviewed quarterly"),
+                text("note: P1 excludes returns"),
+            ],
+            vec![
+                text("K1"),
+                text("On-time delivery"),
+                percent(0.9, "90.0%"),
+                text(""),
+                percent(0.95, "95.0%"),
+                number(0.8, "0.8", ""),
+                text(""),
+            ],
+            vec![
+                blank(),
+                text("Delivered on time"),
+                number(9.0, "9", ""),
+                blank(),
+                number(19.0, "19", ""),
+                number(8.0, "8", ""),
+            ],
+            vec![
+                blank(),
+                text("Delivered"),
+                number(10.0, "10", ""),
+                number(0.0, "0", ""),
+                number(20.0, "20", ""),
+                number(10.0, "10", ""),
+                number(0.0, "0", ""),
+            ],
+            vec![
+                text("K2"),
+                text("First contact resolution"),
+                percent(0.5, "50.0%"),
+                percent(0.6, "60.0%"),
+                text(""),
+                percent(0.75, "75.0%"),
+                percent(1.0, "100.0%"),
+            ],
+            vec![
+                blank(),
+                text("Escalations"),
+                number(1.0, "1", ""),
+                text("n/a - system outage"),
+                blank(),
+                number(0.0, "0", ""),
+            ],
+            vec![],
+            vec![
+                text("K3"),
+                text("Average handle time (min)"),
+                number(6.5, "6.5", ""),
+                number(7.0, "7", ""),
+                number(6.25, "6.25", ""),
+                blank(),
+                number(5.5, "5.5", ""),
+            ],
+        ],
+    )
+}

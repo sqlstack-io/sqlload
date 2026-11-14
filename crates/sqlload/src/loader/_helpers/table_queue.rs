@@ -81,6 +81,7 @@ pub(crate) fn emit_outcome(outcome: &TableOutcome) {
             elapsed_ms,
             position: loaded.note.clone(),
             changes: loaded.changes.clone(),
+            transforms: loaded.transforms.clone(),
         },
         Err(reason) if outcome.skipped => EventKind::TableNotStarted {
             reason: reason.clone(),

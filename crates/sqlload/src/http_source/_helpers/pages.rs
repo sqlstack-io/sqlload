@@ -148,6 +148,8 @@ pub(crate) async fn paginate(
             path,
             source: shown,
             projection: projection.clone(),
+            number: step,
+            key: context.key.clone(),
         };
         if has_rows && pages.send(page).await.is_err() {
             return Ok(());

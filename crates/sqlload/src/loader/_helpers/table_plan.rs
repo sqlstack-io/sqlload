@@ -41,17 +41,18 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::destination::truncated_nanoseconds;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::render::up_to_date;
 use crate::loader::_helpers::resolve::display_name;
+use crate::loader::_helpers::run_log::with_transform_version;
 use crate::loader::_helpers::sources::column_fix;
-use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
-use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, with_live_types};
+use crate::loader::_helpers::specs::files_read_columns;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
@@ -253,7 +254,8 @@ pub(crate) async fn plan_table(
     plan.schema.warnings.extend(ignored_batch(&plan));
     plan.schema.warnings.extend(reload_range(spec, options));
     plan.schema.warnings.extend(split_ranking(&plan));
-    with_run_log(plan, destination, options).await
+    let plan = with_run_log(plan, destination, options).await?;
+    with_transform_version(plan, destination).await
 }
 
 /// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
@@ -1019,8 +1021,18 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     }
 }
 
+/// Why SQLLoad reads a `--reload`'s files itself when some come from `after_load`'s `move_to` folder: a destination reading the files addresses each by the source's folder and its key, which would read `done/a.parquet` as `drop/a.parquet`.
+pub(crate) fn archived_reason(spec: &TableSpec, read: Option<&FilesRead>) -> Option<String> {
+    let archive = spec.files.as_ref()?.archive.as_ref()?;
+    read?
+        .files
+        .iter()
+        .any(|data| data.file.path.as_ref().starts_with(&archive.prefix))
+        .then(|| format!("--reload also reads the files after_load moved to {archive}"))
+}
+
 /// What a table's source offers: rows as Arrow, plus the files themselves for a files source, with why the destination must not read them itself.
-fn reader_offer(
+pub(crate) fn reader_offer(
     spec: &TableSpec,
     read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
@@ -1081,7 +1093,13 @@ fn reader_offer(
                 _ => None,
             }
         }),
-    };
+    }
+    .or_else(|| {
+        spec.transform
+            .as_ref()
+            .map(|transform| format!("transform {} runs on each file", transform.function))
+    })
+    .or_else(|| archived_reason(spec, read));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },
@@ -1249,13 +1267,15 @@ pub(crate) struct Window {
     pub(crate) maximum: Option<String>,
 }
 
+/// The write mode of `spec`'s table: `--reload` rebuilds it, except that a files source's merge keeps merging, file by file, into the table it swaps in at the end.
 fn write_mode(
     spec: &TableSpec,
     reload: bool,
     from: Option<String>,
     to: Option<String>,
 ) -> WriteMode {
-    match (reload, spec.strategy) {
+    let merges_files = spec.files.is_some() && spec.strategy == WriteStrategy::Merge;
+    match (reload && !merges_files, spec.strategy) {
         (true, _) => WriteMode::Recreate,
         (false, WriteStrategy::Append) => WriteMode::Append,
         (false, WriteStrategy::Replace) => WriteMode::Replace,

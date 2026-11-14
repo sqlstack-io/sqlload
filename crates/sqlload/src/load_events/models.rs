@@ -43,6 +43,9 @@ pub enum EventKind {
         /// The `created` and `altered` lines of a table that made or widened its columns as it loaded (a Python table, or a nested one's child tables).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         changes: Vec<String>,
+        /// How long a files or Sheets table's `transform` took on each file or range.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transforms: Vec<crate::python_sources::models::TransformTime>,
     },
     /// A table failed, and whether running the load again may get past it.
     TableFailed {

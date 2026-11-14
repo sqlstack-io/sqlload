@@ -18,6 +18,16 @@ pub enum HttpJob {
     FanOut(Box<FanOut>),
 }
 
+impl HttpJob {
+    /// The `transform=` the rows of the job's pages go through.
+    pub fn transform(&self) -> Option<&PageTransform> {
+        match self {
+            Self::Paginate(request) => request.transform.as_ref(),
+            Self::FanOut(fan_out) => fan_out.request.transform.as_ref(),
+        }
+    }
+}
+
 /// One endpoint and how to page through it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Request {
@@ -57,6 +67,16 @@ pub struct Request {
     /// In a fan-out, where each record's key is, checked against the keys its request sent.
     #[serde(default)]
     pub key_path: Option<KeyPath>,
+    /// The function each page's rows go through before they load, which the Python crossing calls.
+    #[serde(default)]
+    pub transform: Option<PageTransform>,
+}
+
+/// `transform=` on a job: the key the Python side calls the function by, and the name errors show.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PageTransform {
+    pub function: String,
+    pub name: String,
 }
 
 /// `fan_out(key_path=...)`: a path to each record's key, from the record or an object around it (`sl.parent`).
@@ -352,6 +372,10 @@ pub struct HttpPage {
     pub source: String,
     /// The columns each row loads as, when the job names its fields.
     pub projection: Option<crate::row_batches::models::Projection>,
+    /// The page's number within its request, from 1.
+    pub number: u64,
+    /// The fields of the fan-out key the page was requested for; empty in a paginate or a batched fan-out.
+    pub key: Map<String, Value>,
 }
 
 /// A parsed `select`: the fields down to the rows and, for keys, the field of each row.

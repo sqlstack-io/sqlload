@@ -5,13 +5,18 @@ use std::collections::BTreeMap;
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
+use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::loader::main::plan_project::plan_project;
+use sqlload::loader::main::render_plan::render_plan;
+use sqlload::loader::models::PlanOptions;
 use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
-use crate::helpers::{described_project, load_selected, words};
+use crate::helpers::{described_project, load_selected, load_with_options, words};
 use crate::test_types::{
-    DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase, ReplaceKeyTargetTestCase,
+    DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, NullKeyTargetTestCase,
+    ReplaceKeyTargetTestCase,
 };
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
@@ -303,4 +308,95 @@ pub(crate) async fn run_dedupe_rules(
         rows.push(found.unwrap_or_default());
     }
     Ok(rows)
+}
+
+/// Run `test_case` against the target connection `target` (its TOML body), with a `loader_schema` of `schema`: CSV files written to a fresh folder with their modified times, loaded step by step; the check query's result.
+pub(crate) async fn run_merge_case(
+    (target, schema): (&str, &str),
+    test_case: &FilesMergeTestCase,
+) -> Result<Option<String>, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let root = directory.path().display().to_string();
+    let text = format!(
+        "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.target]\n{target}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"csv\"\n{}\n",
+        test_case.settings
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    std::fs::create_dir_all(directory.path().join("drop")).map_err(|error| error.to_string())?;
+    for (index, step) in test_case.steps.iter().enumerate() {
+        execute(
+            destination,
+            step.before.iter().map(|sql| (*sql).to_owned()).collect(),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        for key in step.removed {
+            std::fs::remove_file(directory.path().join("drop").join(key))
+                .map_err(|error| error.to_string())?;
+        }
+        for file in step.files {
+            let path = directory.path().join("drop").join(file.key);
+            std::fs::create_dir_all(path.parent().unwrap_or(directory.path()))
+                .map_err(|error| error.to_string())?;
+            std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
+            let modified =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|opened| opened.set_modified(modified))
+                .map_err(|error| error.to_string())?;
+        }
+        let outcome = run_step(&text, &destinations, (step.loads, step.reload)).await;
+        let (plan, error) = (
+            outcome.clone().unwrap_or_default(),
+            outcome.err().unwrap_or_default(),
+        );
+        assert!(
+            words(&error).contains(&words(step.expected_error))
+                && error.is_empty() == step.expected_error.is_empty(),
+            "{} step {}: {error}",
+            test_case.description,
+            index + 1
+        );
+        assert!(
+            plan.contains(step.expected_plan),
+            "{} step {}: {plan}",
+            test_case.description,
+            index + 1
+        );
+    }
+    single_text(destination, test_case.check_query.to_owned())
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Plan and apply once (with `--reload` when `reload`), then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
+async fn run_step(
+    project_text: &str,
+    destinations: &BTreeMap<String, Destination>,
+    (loads, reload): (bool, bool),
+) -> Result<String, String> {
+    let project = described_project(project_text).await?;
+    let options = PlanOptions {
+        reload,
+        ..PlanOptions::default()
+    };
+    let mut plan = plan_project(&project, destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (lines, ok) = render_plan(&plan);
+    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+    apply_project(&plan, destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    plan.tables.retain(|_| loads);
+    load_with_options(&project, &plan, destinations, &options).await?;
+    Ok(lines.join("\n"))
 }

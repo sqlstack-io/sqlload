@@ -49,6 +49,7 @@ from sqlload._http import (
 	single,
 )
 from sqlload._declare import Context, Source, Table, source, table
+from sqlload._transform import TransformContext, transform
 
 __version__: str = version("sqlload")
 
@@ -59,6 +60,7 @@ __all__ = [
 	"Job",
 	"Source",
 	"Table",
+	"TransformContext",
 	"__version__",
 	"api_key",
 	"basic",
@@ -83,6 +85,7 @@ __all__ = [
 	"single",
 	"source",
 	"table",
+	"transform",
 ]
 
 

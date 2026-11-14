@@ -158,6 +158,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         )),
     }
     problems.extend(kind_problems(&place, source));
+    problems.extend(transform_problems(project, &place, source));
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_name_problems(&place, name, source));
     }
@@ -372,6 +373,36 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     {
         problems.push(format!(
             "{place} format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\""
+        ));
+    }
+    problems
+}
+
+/// Where `transform` does not fit: a source other than files or `google_sheets`, an empty name, or a project without `python_paths` to find the function on.
+fn transform_problems(project: &ProjectConfig, place: &str, source: &SourceConfig) -> Vec<String> {
+    let transforms: Vec<&String> = sheet_settings(source)
+        .filter_map(|settings| settings.transform.as_ref())
+        .collect();
+    let mut problems: Vec<String> = Vec::new();
+    if transforms.is_empty() {
+        return problems;
+    }
+    if !matches!(source.kind, SourceKind::Files | SourceKind::GoogleSheets) {
+        problems.push(format!(
+            "{place} transform is for kind = \"files\" and kind = \"google_sheets\" tables; an sl.http job takes transform= on paginate or fan_out"
+        ));
+    }
+    if transforms
+        .iter()
+        .any(|transform| transform.trim().is_empty())
+    {
+        problems.push(format!(
+            "{place} transform is empty; give the name @sl.transform registered the function under"
+        ));
+    }
+    if project.python_paths.is_empty() {
+        problems.push(format!(
+            "{place} transform needs python_paths, naming the folder that holds the @sl.transform function"
         ));
     }
     problems

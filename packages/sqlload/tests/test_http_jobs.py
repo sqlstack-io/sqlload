@@ -129,6 +129,9 @@ class Api(BaseHTTPRequestHandler):
 		if url.path.startswith("/v1/tree/"):
 			return self.tree(url.path, query)
 		parts = url.path.split("/")
+		if len(parts) == 5 and parts[2] == "regions" and parts[4] == "orders":
+			page = int(query["p"])
+			return self.reply(200, {"items": [dict(row, region=parts[3]) for row in ORDERS[(page - 1) * 3 : page * 3]]})
 		if len(parts) == 5 and parts[2] == "orders" and parts[4] == "items":
 			order = int(parts[3])
 			return self.reply(404, {}) if order == 4 else self.reply(200, {"items": ITEMS[order]})
@@ -434,13 +437,11 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 	return tmp_path
 
 
-def sqlload(project: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def sqlload(project: Path, *args: str, script: str = "from sqlload._cli import main; main()") -> subprocess.CompletedProcess[str]:
 	home = project / "home"
 	home.mkdir(exist_ok=True)
 	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "SHOP_TOKEN": TOKEN, "SHOP_CLIENT_SECRET": CLIENT_SECRET, "SHOP_PASSWORD": PASSWORD}
-	return subprocess.run(
-		[sys.executable, "-c", "from sqlload._cli import main; main()", *args], cwd=project, env=env, capture_output=True, text=True, timeout=120
-	)
+	return subprocess.run([sys.executable, "-c", script, *args], cwd=project, env=env, capture_output=True, text=True, timeout=120)
 
 
 def query(project: Path, sql: str) -> list[tuple[Any, ...]]:
@@ -504,6 +505,83 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 	assert query(project, 'SELECT order_id, line FROM "RAW".shop__items ORDER BY 1, 2') == expected
 	requested = sorted(int(path.split("/")[3]) for path, _, _ in api.log if path.endswith("/items"))  # type: ignore[attr-defined]
 	assert requested == list(range(1, 8))
+
+
+#: A page transform logging each call to `calls.log`, then yielding the page's rows one at a time with where they came from.
+PAGE_TRANSFORM = """
+@sl.transform
+def tag_page(rows, ctx):
+    with open("calls.log", "a") as log:
+        log.write(f"{ctx.key['region']}:{ctx.page}\\n")
+    for position, row in enumerate(rows.to_pylist()):
+        yield {**row, "page": ctx.page, "position": position, "unit": ctx.unit, "key_region": ctx.key["region"]}
+
+"""
+
+
+@pytest.mark.parametrize("transform", ["tag_page", "'tag_page'"], ids=["the-function", "its-registered-name"])
+def test_given_a_fan_out_with_a_page_transform_when_loading_then_each_page_goes_through_it_once_in_page_order(
+	tmp_path: Path, api: ThreadingHTTPServer, transform: str
+) -> None:
+	job = f"api.fan_out('/regions/{{region}}/orders', over=['north', 'south'], concurrency=2, paginator=sl.page_number('p'), select='$.items', transform={transform})"
+	project = make_project(tmp_path, api, PAGE_TRANSFORM + f"@shop.table(description='Orders by region.')\ndef orders(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	calls = (project / "calls.log").read_text().split()
+	# Page 4 is the empty page that ends page-number paging: a page all the same, called with no rows.
+	assert sorted(calls) == [f"{region}:{page}" for region in ("north", "south") for page in range(1, 5)], calls
+	rows = query(project, 'SELECT region, key_region, unit, page, position, order_id FROM "RAW".shop__orders ORDER BY rowid')
+	assert {(region, key_region, unit) for region, key_region, unit, *_ in rows} == {("north", "north", "page"), ("south", "south", "page")}
+	for region in ("north", "south"):
+		loaded = [(page, position, order_id) for row_region, _, _, page, position, order_id in rows if row_region == region]
+		assert loaded == sorted(loaded), loaded
+		assert [order_id for *_, order_id in loaded] == [row["order_id"] for row in ORDERS], loaded
+
+
+def test_given_a_module_level_job_with_a_page_transform_when_loading_twice_in_one_process_then_both_loads_call_it(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	module = """
+@sl.transform
+def clean_page(rows, ctx):
+    with open("calls.log", "a") as log:
+        log.write(f"{ctx.page}\\n")
+    return rows
+
+orders_job = api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items', transform=clean_page)
+
+@shop.table(description='Orders.')
+def orders(ctx):
+    return orders_job
+"""
+	project = make_project(tmp_path, api, module)
+	# An orchestrator runs commands in its own process, where the module (and its job) stays imported between them.
+	twice = "from sqlload import _native; print('exit codes', [_native.run_cli(['sqlload', 'load']) for _ in range(2)])"
+	done = sqlload(project, script=twice)
+	assert "exit codes [0, 0]" in done.stdout, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, status FROM "RAW".shop__orders ORDER BY order_id') == ALL_ORDERS
+	pages = (project / "calls.log").read_text().split()
+	assert len(pages) % 2 == 0 and pages[: len(pages) // 2] == pages[len(pages) // 2 :], pages
+
+
+def test_given_a_page_transform_that_raises_when_loading_then_the_table_fails_naming_the_page(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	module = """
+@sl.transform
+def strict_page(rows, ctx):
+    if ctx.page == 2:
+        raise ValueError("page 2 is malformed")
+    return rows
+
+@shop.table(description='Orders.')
+def orders(ctx):
+    return api.paginate('/pages', paginator=sl.page_number('p'), select='$.items', transform=strict_page)
+"""
+	project = make_project(tmp_path, api, module)
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	output = done.stdout + done.stderr
+	assert "GET http://" in output and "/v1/pages?p=2: transform strict_page failed: ValueError: page 2 is malformed" in output, output
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__orders') == [(0,)]
 
 
 @pytest.mark.parametrize(

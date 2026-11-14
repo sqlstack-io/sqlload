@@ -25,7 +25,6 @@ use crate::adapters::dispatch::main::write::load_unloaded::load_unloaded;
 use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::dispatch::models::Writer;
-use crate::adapters::files::main::clear_pending::clear_pending;
 use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::open_writer::open_writer;
@@ -34,7 +33,6 @@ use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::write_loaded_files::write_loaded_files;
 use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::FilesWriter;
-use crate::adapters::files::models::PartitionFolder;
 use crate::adapters::files::models::PendingPhase;
 use crate::adapters::files::models::PendingRun;
 use crate::adapters::files::models::ReplacedFiles;
@@ -48,7 +46,6 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::open_folder::open_folder;
-use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
@@ -68,6 +65,7 @@ use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
+use crate::loader::_helpers::destination::{commit_deletes, nanosecond_columns, replace_files};
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -75,21 +73,21 @@ use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::python::without_deleted_items;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
-use crate::loader::_helpers::run_log::ensure_merge_log;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
-use crate::loader::_helpers::run_log::merged_record;
+use crate::loader::_helpers::run_log::transformed;
 use crate::loader::_helpers::run_log::{
-    in_file, listed_sources, merged_file_text, merged_name, with_file_keys,
+    commit_transform, in_file, listed_sources, merge_rebuild, merged_file_text, merged_name,
+    merged_record, swap_rebuild, with_file_keys, with_transform,
 };
 use crate::loader::_helpers::sources::ReadPart;
-use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
-use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
+use crate::loader::_helpers::sources::unarchived;
 use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::specs::checked_key;
+use crate::loader::_helpers::specs::files_read_as;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
     cursor_binding, source_cursor, source_filter, with_null_cursors,
@@ -106,6 +104,7 @@ use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
+use crate::loader::models::FilesSource;
 use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::ReplacedKeys;
@@ -113,6 +112,7 @@ use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
 use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
+use crate::loader::models::TransformRun;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
@@ -141,11 +141,8 @@ use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
 use crate::snowflake_source::models::UnloadedFiles;
-use crate::store_paths::models::Location;
-use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::take_lease::take_lease;
-use crate::table_lease::models::Lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
@@ -159,7 +156,6 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_cast::{CastOptions, cast, cast_with_options};
 use arrow_schema::Field;
 use arrow_schema::Schema;
-use bytes::Bytes;
 use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -491,7 +487,7 @@ fn written_only(batch: RecordBatch, written: &[DesiredColumn]) -> Result<RecordB
 }
 
 impl Publisher {
-    /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table.
+    /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table. A merge `--reload`'s build table is created last, so no failure here leaves it behind; from then on `close` drops it.
     pub(crate) async fn open(
         table: TablePlan,
         (destination, options): (&Destination, &PlanOptions),
@@ -502,9 +498,6 @@ impl Publisher {
         let runs_sql = sql_adapter(table.spec.warehouse).runs_sql();
         if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
-        }
-        if records_files(&table) {
-            ensure_merge_log(&table, &destination).await?;
         }
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
@@ -623,6 +616,10 @@ impl Publisher {
                 changes: Vec::new(),
             }),
         };
+        let rebuild = match records_files(&table) {
+            true => merge_rebuild(&table, &destination).await?,
+            false => None,
+        };
         Ok(Self {
             children,
             writer,
@@ -656,6 +653,8 @@ impl Publisher {
             run_keys: Default::default(),
             fed_files: Vec::new(),
             settled_files: Vec::new(),
+            rebuild,
+            transform: None,
         })
     }
 
@@ -860,11 +859,15 @@ impl Publisher {
             }
             _ => {}
         }
+        if let Some(rebuild) = &self.rebuild {
+            swap_rebuild(&self.table, &self.destination, rebuild).await?;
+        }
         let spec = &self.table.spec;
         let adapter = sql_adapter(spec.warehouse);
+        let swapped = self.at_end || self.rebuild.is_some();
         let comment = adapter
             .render_table_comment(&spec.destination, &spec.description)
-            .filter(|_| self.at_end && self.files.is_none() && !adapter.keeps_tables());
+            .filter(|_| swapped && self.files.is_none() && !adapter.keeps_tables());
         if let Some(comment) = comment
             && let Err(error) = execute(&self.destination, vec![comment]).await
         {
@@ -895,12 +898,14 @@ impl Publisher {
                 table: format!("{}{SWAP_SUFFIX}", staging.table),
                 ..staging.clone()
             };
+            let build = self.rebuild.as_ref().map(|rebuild| rebuild.build.clone());
             let drops: Vec<String> = [staging.clone(), aside]
-                .iter()
+                .into_iter()
+                .chain(build)
                 .map(|table| {
                     format!(
                         "DROP TABLE IF EXISTS {}",
-                        sql_adapter(warehouse).render_qualified_name(table)
+                        sql_adapter(warehouse).render_qualified_name(&table)
                     )
                 })
                 .collect();
@@ -1096,27 +1101,34 @@ impl Publisher {
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
         let file = self.merged_file.clone();
-        let merged = self.merged_file.take().map(|file| {
-            merged_record(
-                spec,
-                (&self.load_id, self.commits + 1),
-                (file, self.waiting_rows),
+        let ran = commit_transform(&self.table, self.transform.as_mut());
+        let mut merged = self.merged_file.take().map(|file| {
+            let record = (file, self.waiting_rows);
+            with_transform(
+                &self.table,
+                merged_record(spec, (&self.load_id, self.commits + 1), record),
             )
         });
-        let run_insert = match (&self.run, merged) {
+        let held = self.rebuild.as_ref().and_then(|_| merged.take());
+        let record = match (&self.run, merged) {
             (Some(_), _) => {
                 let record = self.record(self.waiting_rows)?;
-                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
+                Some(with_transform(&self.table, record))
             }
-            (None, Some(record)) => {
-                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
-            }
-            (None, None) => None,
+            (None, Some(record)) => Some(record),
+            (None, None) => ran.filter(|_| held.is_none()),
         };
+        let run_insert = record
+            .map(|record| insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid))
+            .transpose()?;
         let spec = &self.table.spec;
+        let target = self
+            .rebuild
+            .as_ref()
+            .map_or(&spec.destination, |rebuild| &rebuild.build);
         let statements = sql_adapter(warehouse).render_commit(
             &WriteStatementsRequest {
-                table: &spec.destination,
+                table: target,
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
                 hashed: &[],
@@ -1129,7 +1141,7 @@ impl Publisher {
             destination: &self.destination,
             warehouse,
             staging: &staging,
-            table: &spec.destination,
+            table: target,
             exists: self.table.exists,
             columns: &self.table.schema.write_columns,
             committed: self.committed_rows,
@@ -1195,6 +1207,9 @@ impl Publisher {
             false => None,
         };
         execute(&self.destination, statements).await?;
+        if let Some(rebuild) = self.rebuild.as_mut() {
+            rebuild.records.extend(held);
+        }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
         self.commits += 1;
@@ -1236,7 +1251,11 @@ impl Publisher {
         files: &[DataFile],
     ) -> Result<BatchFooters, LoaderError> {
         let spec = &self.table.spec;
-        let Some(source_files) = spec.files.as_ref() else {
+        let Some(source_files) = spec
+            .files
+            .as_ref()
+            .filter(|files| files.transform.is_none())
+        else {
             return Ok(BatchFooters::default());
         };
         if source_files.encoding.record.is_some() {
@@ -1326,7 +1345,10 @@ impl Publisher {
                 )));
             }
         };
-        widened.files = Some(files_source);
+        widened.files = Some(FilesSource {
+            archive: source_files.archive.clone(),
+            ..files_source
+        });
         widened.approved = spec.approved;
         let replanned_columns = replan_columns(
             &widened,
@@ -1372,6 +1394,17 @@ impl Publisher {
                 staging,
                 (&old, &staged_columns(&replanned)),
                 self.started_with(),
+            );
+            execute_ddl(&self.destination, changes).await?;
+        }
+        if let Some(rebuild) = &self.rebuild {
+            let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
+                &rebuild.build,
+                (
+                    &self.table.schema.write_columns,
+                    &replanned.schema.write_columns,
+                ),
+                Some(&[]),
             );
             execute_ddl(&self.destination, changes).await?;
         }
@@ -1447,11 +1480,18 @@ pub(crate) async fn publish_table(
     {
         return Err(LoaderError::Invalid(null_cursor_problem(&table.spec, rows)));
     }
-    let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
-    let published = feed(reader, table, publisher, run).await;
+    let mut publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
+    let transform = run.host.clone().map(TransformRun::new);
+    publisher.transform = transform.clone().map(|transform| (transform, 0));
+    let published = feed(reader, table, publisher, (run, transform.as_ref())).await;
     let (mut publisher, result) = published;
     publisher.close().await;
     let rows = result?;
+    let recorded = publisher
+        .transform
+        .as_ref()
+        .map_or(0, |(_, recorded)| *recorded);
+    let transforms = transformed(table, (destination, transform, recorded)).await;
     let report = match reader {
         SourceReader::Files(folder) => {
             after_load(folder, &table.spec.after_load, &publisher.settled_files).await
@@ -1464,6 +1504,7 @@ pub(crate) async fn publish_table(
         note: None,
         after_load: report,
         replaced_keys: publisher.replaced.clone(),
+        transforms,
     })
 }
 
@@ -1472,7 +1513,7 @@ async fn feed(
     reader: &SourceReader,
     table: &TablePlan,
     mut publisher: Publisher,
-    run: &LoadRun<'_>,
+    (run, transform): (&LoadRun<'_>, Option<&TransformRun>),
 ) -> (Publisher, Result<u64, LoaderError>) {
     let batch_bytes = run.options.batch_bytes;
     let fed = async {
@@ -1510,9 +1551,7 @@ async fn feed(
                     let merged = merging.then(|| merged_file_text(table, &files));
                     publisher.merged_file = merged.clone();
                     if table.spec.after_load != AfterLoad::Keep {
-                        publisher
-                            .fed_files
-                            .extend(files.iter().map(|data| data.file.clone()));
+                        publisher.fed_files.extend(unarchived(table, &files));
                     }
                     let fed_group = async {
                         let footers = match reader {
@@ -1548,6 +1587,7 @@ async fn feed(
                         let part = ReadPart {
                             files: Some(files),
                             footers,
+                            transform: transform.cloned(),
                             ..ReadPart::default()
                         };
                         let current = publisher.table.clone();
@@ -1610,6 +1650,7 @@ async fn feed(
             CommitRule::Size => {
                 let part = ReadPart {
                     batch_bytes,
+                    transform: transform.cloned(),
                     ..ReadPart::default()
                 };
                 match pulls_unloaded(table.route.as_ref()) {
@@ -1629,6 +1670,7 @@ async fn feed(
             CommitRule::Whole(_) => {
                 let part = ReadPart {
                     batch_bytes,
+                    transform: transform.cloned(),
                     ..ReadPart::default()
                 };
                 publisher.pass_part(reader, part).await?;
@@ -1695,37 +1737,6 @@ fn window_filter(
         true => (with_null_cursors(filter, &expression), parameters),
         false => (filter, parameters),
     }
-}
-
-/// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.
-fn commit_deletes(
-    replaced: &ReplacedFiles,
-    partition: Option<&PartitionFolder>,
-    (written, last): (&BTreeSet<String>, bool),
-    deleted: &BTreeSet<String>,
-) -> Vec<String> {
-    let folders: Vec<String> = match partition {
-        Some(partition) => written
-            .iter()
-            .map(|value| format!("{}/", partition.name(value)))
-            .collect(),
-        None => Vec::new(),
-    };
-    let mut keys: Vec<String> = written
-        .iter()
-        .flat_map(|value| replaced.by_partition.get(value).into_iter().flatten())
-        .cloned()
-        .collect();
-    for key in &replaced.always {
-        let written_folder = folders.iter().any(|folder| key.starts_with(folder));
-        if last || written_folder {
-            keys.push(key.clone());
-        }
-    }
-    keys.retain(|key| !deleted.contains(key));
-    keys.sort();
-    keys.dedup();
-    keys
 }
 
 impl Publisher {
@@ -1970,28 +1981,4 @@ impl Publisher {
             ))
         })
     }
-}
-
-/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
-async fn replace_files(
-    (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
-    file_id: &str,
-    (keys, run): (&[String], Option<&PendingRun>),
-) -> Result<(), LoaderError> {
-    keep_lease(table_folder, lease, lease_now())
-        .await?
-        .map_err(LoaderError::Invalid)?;
-    mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
-    if let Some(run) = run {
-        let records = OpenFolder {
-            store: folder.store.clone(),
-            location: Location {
-                store: folder.location.store.clone(),
-                prefix: run.prefix.clone(),
-            },
-        };
-        write_file(&records, &run.name, Bytes::from(run.json.clone())).await?;
-    }
-    delete_files(folder, keys).await?;
-    Ok(clear_pending(folder, file_id).await?)
 }
