@@ -280,6 +280,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `max_depth` | `1000` | From 0.40.0. In a table entry with `unnest`: how many levels of child tables it makes at most. |
 | `naming` | the target's | From 0.40.0. `sqlload` or `dlt`. See [Naming](/docs/concepts/nested-data/#naming). |
 | `row_id` | `false` | From 0.40.0. Give every row a unique id, in `_sqlload_row_id`. Always on with `unnest` and under `naming = "dlt"`, where it is `_dlt_id`. |
+| `column_names` | none | From 0.49.0. The columns' names, in order, for data without a header row: CSV and Excel files with `header = false`, and `google_sheets` ranges with `header = false`. The count must match the data's columns. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns). |
 
 ClickHouse targets also take these, for the tables SQLLoad creates. Other targets refuse them, and
 Python tables don't take them. See [Table layout](/docs/targets/clickhouse/#table-layout).

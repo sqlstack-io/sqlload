@@ -6,7 +6,8 @@ Each SQLLOAD is an installed `sqlload` command (the sqlload wheel's and the sqll
 must print VERSION for `--version`, then `load --json` a two-row CSV into a new DuckDB database: the
 report must say it succeeded and loaded both rows, and a second load must add none. The `sqll` installed
 beside each must be the same CLI: the same output and exit code for `--version`, a usage error and the
-load. With --lone-shim, a copy of the sqlload-cli wheel's `sqll` launcher alone in a folder must say
+load. With --lone-shim, a copy of the sqlload-cli wheel's `sqll` launcher (the binary, not the script that runs it from
+site-packages when the wheel bundles libraries) alone in a folder must say
 `sqlload` isn't installed next to it.
 """
 
@@ -68,6 +69,16 @@ def installed(command):
     return os.path.abspath(shutil.which(command) or command)
 
 
+def launcher(sqll):
+    """The `sqll` launcher itself: when a wheel bundles libraries, maturin installs a Python script in its place that runs it from
+    site-packages' sqlload_cli.scripts folder, and that script would still find `sqlload` there."""
+    if Path(sqll).read_bytes()[:2] != b"#!":
+        return sqll
+    found = sorted(Path(sqll).parent.parent.glob(f"lib/python*/site-packages/sqlload_cli.scripts/{Path(sqll).name}"))
+    check(len(found) == 1, f"{sqll} runs one sqll launcher from site-packages", "found " + ", ".join(map(str, found)))
+    return str(found[0])
+
+
 def same_cli(sqlload, sqll, args, folder=None):
     """Fails unless `sqll` gives `sqlload`'s exit code and output for `args`."""
     expected, shown = run([sqlload, *args], folder), run([sqll, *args], folder)
@@ -103,7 +114,7 @@ def main():
     if lone is not None:
         with tempfile.TemporaryDirectory() as name:
             copy = Path(name) / Path(lone).name
-            shutil.copy2(lone, copy)
+            shutil.copy2(launcher(lone), copy)
             shown = run([str(copy), "--version"])
             check(
                 shown.returncode == 1 and "sqll is a short name for sqlload, which isn't installed next to it" in shown.stderr,

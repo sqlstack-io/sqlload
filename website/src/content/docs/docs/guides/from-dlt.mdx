@@ -143,6 +143,10 @@ table is named after the source:
   deletes it. See [Deleting or moving loaded files](/docs/sources/files/#deleting-or-moving-loaded-files).
 - `format` is `parquet`, `csv`, `json`, `ndjson`, `xlsx` or `xml`, and the files can be on S3 or an
   SFTP server.
+- An Excel template read as a cell range without a header row, with its own column names
+  (`sheet_range: A:C` and `column_names: [metric, category, value]` in a pipeline's settings), is
+  `xlsx = { range = "A:C", header = false }` and `column_names = ["metric", "category", "value"]`
+  from 0.49.0. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns).
   See [Load files](/docs/guides/files/).
 
 ## Tables that look like dlt's

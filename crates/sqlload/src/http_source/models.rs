@@ -250,7 +250,8 @@ pub struct TokenSource {
     pub refresh_form: Option<Vec<(String, String)>>,
     /// `client_id` and `client_secret` for basic client auth, form-encoded as RFC 6749 asks.
     pub basic: Option<(String, String)>,
-    pub state: tokio::sync::Mutex<TokenState>,
+    /// Shared with a token request under way, which holds it until it has kept what the server sent.
+    pub state: std::sync::Arc<tokio::sync::Mutex<TokenState>>,
     /// Every secret of the token flow, including each access token issued, for redaction.
     pub secrets: Mutex<Vec<String>>,
 }

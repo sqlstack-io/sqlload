@@ -48,7 +48,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
                     vec![text("L3")],
                 ],
             ),
-            rule: header,
+            rule: header.clone(),
             expected: Ok((
                 "Code:text,Opened:date,Active:bool,Capacity:int,Ratio:float,Updated At:timestamp_ntz,Opens:time,Ref:text,Share:float",
                 3,
@@ -73,7 +73,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
                     vec![flag(true)],
                 ],
             ),
-            rule: header,
+            rule: header.clone(),
             expected: Ok(("mixed:text,when:timestamp_ntz", 3)),
             expected_warnings: &[
                 "Codes: column mixed holds int and text and bool values, so it loads as text as the sheet shows it; pin a type in columns to load it as another",
@@ -93,6 +93,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             rule: HeaderRule {
                 header: true,
                 header_row: 2,
+                ..HeaderRule::default()
             },
             expected: Ok(("Item:text,Qty:int", 1)),
             expected_warnings: &[
@@ -112,14 +113,52 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             rule: HeaderRule {
                 header: false,
                 header_row: 1,
+                ..HeaderRule::default()
             },
             expected: Ok(("column_1:text,column_2:int,column_3:text", 2)),
             expected_warnings: &[],
         },
         SheetTableTestCase {
+            description: "without a header, column_names names each column of the range, one with no values included",
+            sheet: sheet(
+                "Plain",
+                (2, 0),
+                vec![
+                    vec![text("revenue"), number(1.0, "1", "")],
+                    vec![text("cost"), number(2.0, "2", "")],
+                ],
+            ),
+            rule: HeaderRule {
+                header: false,
+                column_names: Some(vec![
+                    "metric".to_owned(),
+                    "amount".to_owned(),
+                    "note".to_owned(),
+                ]),
+                width: Some(3),
+                ..HeaderRule::default()
+            },
+            expected: Ok(("metric:text,amount:int,note:text", 2)),
+            expected_warnings: &[],
+        },
+        SheetTableTestCase {
+            description: "column_names fails when its count differs from the range's columns",
+            sheet: sheet("Plain", (0, 0), vec![vec![text("a"), number(1.0, "1", "")]]),
+            rule: HeaderRule {
+                header: false,
+                column_names: Some(vec!["metric".to_owned(), "amount".to_owned()]),
+                width: Some(3),
+                ..HeaderRule::default()
+            },
+            expected: Err(
+                "Plain: the range has 3 columns, but column_names names 2; name each column of the range",
+            ),
+            expected_warnings: &[],
+        },
+        SheetTableTestCase {
             description: "a header-only tab is a table of text columns without rows",
             sheet: sheet("Header Only", (0, 0), vec![vec![text("id"), text("name")]]),
-            rule: header,
+            rule: header.clone(),
             expected: Ok(("id:text,name:text", 0)),
             expected_warnings: &[],
         },
@@ -133,7 +172,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
                     vec![number(1.0, "1", ""), error("#DIV/0!")],
                 ],
             ),
-            rule: header,
+            rule: header.clone(),
             expected: Ok((
                 "id:int,ratio:error Errors!B2 holds the error #DIV/0!; fix the formula, or leave the row out of the range",
                 1,
@@ -150,7 +189,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
                     vec![number(1.0, "1", "")],
                 ],
             ),
-            rule: header,
+            rule: header.clone(),
             expected: Err(
                 "'Blank Header'!B1: the header cell is blank; name the column, or narrow the range; 'Blank Header'!C1: the header \"ID\" names an earlier column too (ignoring case); rename one",
             ),
@@ -162,6 +201,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             rule: HeaderRule {
                 header: false,
                 header_row: 3,
+                ..HeaderRule::default()
             },
             expected: Err(
                 "Plain: the range has no cells from its row 3; check the range and header_row",
@@ -171,7 +211,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
         SheetTableTestCase {
             description: "an empty tab has no header to name columns with",
             sheet: sheet("Empty", (0, 0), Vec::new()),
-            rule: header,
+            rule: header.clone(),
             expected: Err(
                 "Empty: the range has no header in its row 1; set header_row, or header = false",
             ),
@@ -179,7 +219,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
         },
     ];
     for test_case in test_cases {
-        let read = sheet_table(&parse_grid(&test_case.sheet), test_case.rule);
+        let read = sheet_table(&parse_grid(&test_case.sheet), &test_case.rule);
         let seen = read.as_ref().map(|table| {
             let columns: Vec<String> = table
                 .columns

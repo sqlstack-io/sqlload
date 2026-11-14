@@ -204,6 +204,43 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             expected_rows: Ok("1|2"),
         },
         ReadTextFilesTestCase {
+            description: "csv: column_names names the columns of a file without a header, so a type pinned by one of those names applies",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                column_names: Some(vec![
+                    "metric".to_owned(),
+                    "category".to_owned(),
+                    "value".to_owned(),
+                ]),
+                ..CsvOptions::default()
+            }),
+            files: &[(
+                "a.csv",
+                "revenue,east,10
+cost,west,4
+",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[("value", ColumnType::Float)],
+            expected_rows: Ok("revenue|east|10.0\ncost|west|4.0"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: a later file whose width differs from column_names fails, naming both counts and the file",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                column_names: Some(vec!["metric".to_owned(), "value".to_owned()]),
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "revenue,10\n")],
+            unsampled: &[("b.csv", "cost,west,4\n")],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "b.csv: line 1: the file has 3 columns, but column_names names 2; name each column",
+            ),
+        },
+        ReadTextFilesTestCase {
             description: "ndjson: only the last value of a key repeated in one object is checked against the inferred type, as Snowflake keeps only that one",
             encoding: encoding(SourceFormat::Ndjson),
             files: &[("b.ndjson", "{\"id\":1}\n")],

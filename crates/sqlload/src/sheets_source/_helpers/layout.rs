@@ -1,5 +1,6 @@
 //! Where a range's header and rows are, and the A1 names of its cells.
 
+use crate::sheets_source::constants::{MAX_A1_COLUMNS, MAX_A1_ROWS};
 use crate::sheets_source::models::{Cell, Grid, HeaderRule};
 
 /// A cell's A1 name in `grid`'s tab (its title quoted unless only letters, digits and `_`), from its row and column within the range (0-based).
@@ -29,13 +30,13 @@ pub(crate) fn quoted_title(title: &str) -> String {
 }
 
 /// The header row's index within the range, if the range has one and reaches it.
-pub(crate) fn header_index(grid: &Grid, rule: HeaderRule) -> Option<usize> {
+pub(crate) fn header_index(grid: &Grid, rule: &HeaderRule) -> Option<usize> {
     let index = rule.header_row.saturating_sub(1) as usize;
     (rule.header && index < grid.rows.len()).then_some(index)
 }
 
 /// The rows below the header (from the header row when there is none), by index within the range, leaving out rows with nothing in their first `width` cells.
-pub(crate) fn data_rows(grid: &Grid, rule: HeaderRule, width: usize) -> Vec<usize> {
+pub(crate) fn data_rows(grid: &Grid, rule: &HeaderRule, width: usize) -> Vec<usize> {
     let first = match rule.header {
         true => rule.header_row as usize,
         false => rule.header_row.saturating_sub(1) as usize,
@@ -66,7 +67,7 @@ fn header_text(cell: &Cell) -> String {
 }
 
 /// The range's column names, one per column up to its last named one (`column_1`, … up to its widest row without a header); `Err` names each blank header cell and each name used twice, ignoring case, by cell.
-pub(crate) fn header_names(grid: &Grid, rule: HeaderRule) -> Result<Vec<String>, Vec<String>> {
+pub(crate) fn header_names(grid: &Grid, rule: &HeaderRule) -> Result<Vec<String>, Vec<String>> {
     let Some(index) = header_index(grid, rule) else {
         let width = data_rows(grid, rule, usize::MAX)
             .iter()
@@ -82,9 +83,18 @@ pub(crate) fn header_names(grid: &Grid, rule: HeaderRule) -> Result<Vec<String>,
                 "{}: the range has no cells from its row {}; check the range and header_row",
                 grid.title, rule.header_row
             )]),
-            false => Ok((1..=width)
-                .map(|number| format!("column_{number}"))
-                .collect()),
+            false => match &rule.column_names {
+                Some(names) if names.len() == rule.width.unwrap_or(width) => Ok(names.clone()),
+                Some(names) => Err(vec![format!(
+                    "{}: the range has {} columns, but column_names names {}; name each column of the range",
+                    grid.title,
+                    rule.width.unwrap_or(width),
+                    names.len()
+                )]),
+                None => Ok((1..=width)
+                    .map(|number| format!("column_{number}"))
+                    .collect()),
+            },
         };
     };
     let names: Vec<String> = grid.rows[index].iter().map(header_text).collect();
@@ -117,4 +127,27 @@ pub(crate) fn header_names(grid: &Grid, rule: HeaderRule) -> Result<Vec<String>,
         (true, _) => Ok(names.into_iter().take(width).collect()),
         (false, _) => Err(problems),
     }
+}
+
+/// A corner's column (0-based) and row (from 1), if it has one; `None` when it is not letters then optional digits, or is past a sheet's size.
+pub(crate) fn corner(text: &str) -> Option<(u32, Option<u32>)> {
+    let split = text
+        .find(|character: char| !character.is_ascii_alphabetic())
+        .unwrap_or(text.len());
+    let (letters, digits) = text.split_at(split);
+    let column = letters.bytes().try_fold(0_u32, |number, letter| {
+        number
+            .checked_mul(26)?
+            .checked_add(u32::from(letter.to_ascii_uppercase() - b'A') + 1)
+    })?;
+    let row = match digits {
+        "" => None,
+        _ if digits.starts_with('0') => return None,
+        _ => Some(digits.bytes().try_fold(0_u32, |number, digit| {
+            let digit = digit.is_ascii_digit().then(|| u32::from(digit - b'0'))?;
+            number.checked_mul(10)?.checked_add(digit)
+        })?),
+    };
+    let fits = (1..=MAX_A1_COLUMNS).contains(&column) && row.is_none_or(|row| row <= MAX_A1_ROWS);
+    fits.then_some((column - 1, row))
 }

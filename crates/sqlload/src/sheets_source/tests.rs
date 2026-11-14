@@ -1,3 +1,5 @@
+#[path = "tests/test_a1_range.rs"]
+mod a1_range;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_sheet_batch.rs"]

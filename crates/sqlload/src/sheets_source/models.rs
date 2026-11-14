@@ -85,12 +85,16 @@ pub struct Grid {
 }
 
 /// Where a range's header is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeaderRule {
-    /// Whether the range has a header row; without one, columns are `column_1`, `column_2`, ….
+    /// Whether the range has a header row; without one, columns are `column_1`, `column_2`, … or `column_names`.
     pub header: bool,
     /// The header's row within the range, counting from 1; the rows above it are skipped.
     pub header_row: u32,
+    /// The columns' names for a range without a header row, one per column of the range.
+    pub column_names: Option<Vec<String>>,
+    /// How many columns the range spans, when it names them (`A:C`); else its widest row's.
+    pub width: Option<usize>,
 }
 
 impl Default for HeaderRule {
@@ -98,6 +102,8 @@ impl Default for HeaderRule {
         Self {
             header: true,
             header_row: 1,
+            column_names: None,
+            width: None,
         }
     }
 }
@@ -126,4 +132,21 @@ pub struct SheetTable {
     pub columns: Vec<SheetColumn>,
     pub rows: usize,
     pub warnings: Vec<String>,
+}
+
+/// An A1 range: its sheet when it names one, its first and last columns (0-based), and its first row and last row (from 1; the sheet's last row when `None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct A1Range {
+    pub sheet: Option<String>,
+    pub first_column: u32,
+    pub last_column: u32,
+    pub first_row: u32,
+    pub last_row: Option<u32>,
+}
+
+impl A1Range {
+    /// How many columns the range spans.
+    pub fn width(&self) -> usize {
+        (self.last_column - self.first_column) as usize + 1
+    }
 }

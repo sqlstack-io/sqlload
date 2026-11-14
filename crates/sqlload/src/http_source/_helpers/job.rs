@@ -609,7 +609,7 @@ fn fan_out_posts(fan_out: &FanOut) -> bool {
 }
 
 /// A pooled client that follows redirects only within the first request's origin, so connection headers and credentials never reach another host; when the job `posts`, it also stops at 301, 302 and 303, which would resend the request as a `GET` without its body.
-fn job_client(posts: bool) -> Result<reqwest::Client, String> {
+pub(crate) fn job_client(posts: bool) -> Result<reqwest::Client, String> {
     install_tls_provider();
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {

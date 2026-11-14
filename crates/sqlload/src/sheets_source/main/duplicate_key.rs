@@ -10,7 +10,7 @@ use crate::sheets_source::models::{Grid, HeaderRule, SheetTable};
 /// The first row of `grid` whose `key` (column names, matched ignoring case) repeats an earlier row's, as the key's values load in `table`'s types, naming both rows; merge matches one row per key. Key columns not in the header, or holding an error, are left to plan's other checks.
 pub fn duplicate_key(
     grid: &Grid,
-    rule: HeaderRule,
+    rule: &HeaderRule,
     table: &SheetTable,
     key: &[String],
 ) -> Option<String> {

@@ -78,6 +78,7 @@ use crate::project::models::{
 use crate::row_batches::main::loaded_batch::loaded_batch;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
+use crate::sheets_source::main::a1_width::a1_width;
 use crate::sheets_source::main::duplicate_key::duplicate_key;
 use crate::sheets_source::main::read_grids::read_grids;
 use crate::sheets_source::main::sheet_batch::sheet_batch;
@@ -500,6 +501,10 @@ pub(crate) fn sheet_rule(source: &SourceConfig, name: &str) -> HeaderRule {
     HeaderRule {
         header: pick(|settings| settings.header.map(u32::from)).is_none_or(|header| header == 1),
         header_row: pick(|settings| settings.header_row).unwrap_or(1),
+        column_names: table
+            .and_then(|settings| settings.column_names.clone())
+            .or_else(|| source.defaults.column_names.clone()),
+        width: source.ranges.get(name).and_then(|range| a1_width(range)),
     }
 }
 
@@ -545,7 +550,7 @@ async fn sheets_tables(
             ));
             continue;
         }
-        let mut read = match sheet_table(&grid, sheet_rule(source, &name)) {
+        let mut read = match sheet_table(&grid, &sheet_rule(source, &name)) {
             Ok(read) => read,
             Err(found) => {
                 problems.extend(found);
@@ -566,7 +571,7 @@ async fn sheets_tables(
             .or(source.defaults.on_duplicate_keys)
             == Some(OnDuplicateKeys::Fail);
         let duplicate = key.filter(|_| merge && fails).and_then(|key| {
-            let problem = duplicate_key(&grid, sheet_rule(source, &name), &read, key)?;
+            let problem = duplicate_key(&grid, &sheet_rule(source, &name), &read, key)?;
             Some((problem, key.first()?.clone()))
         });
         if let Some((problem, first)) = duplicate
@@ -681,7 +686,7 @@ async fn sheet_rows(
             )
         })
         .collect();
-    sheet_batch(&grid, read.rule, &columns).map_err(LoaderError::Invalid)
+    sheet_batch(&grid, &read.rule, &columns).map_err(LoaderError::Invalid)
 }
 
 /// A warning when source `source_name` reads `address` over the network in plain text because the server refused TLS under `sslmode = "prefer"`; none for a loopback or Unix socket host, whose traffic stays on the machine, or for an explicit `disable`.

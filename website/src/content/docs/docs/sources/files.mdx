@@ -29,8 +29,8 @@ cursor_column = "dt"
 | `path` | The folder holding the files, relative to the connection. |
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; from 0.35.0, also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; from 0.35.0, also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
-| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0, also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). |
-| `xlsx` | From 0.35.0. `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0, also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). From 0.49.0, `column_names` names the columns of files without a header; see [Naming headerless columns](#naming-headerless-columns). |
+| `xlsx` | From 0.35.0. `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. From 0.49.0, also `range` and `header_row`; see [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
 | `xml` | From 0.35.0. `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
 | `members` | From 0.35.0. With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
 | `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
@@ -85,6 +85,51 @@ NULL. Columns are typed from a sample, as for CSV, and a later value that doesn'
 row; pin a type in `columns` to convert instead. Formulas load their cached values. Older `.xls`
 workbooks aren't read. A headerless column whose `column_N` name the header already uses fails, and
 so does a sheet holding over 20 million values.
+
+From 0.49.0, `xlsx.range` reads an A1 range, as [Google Sheets `ranges`](/docs/sources/google-sheets/)
+do: an optional sheet (in single quotes when its name has spaces, as in `'Q4 Report'!B3:H`), the
+columns, and optional rows; an open-ended range such as `A3:C` runs to the last row. It replaces
+`sheet` and `skip_rows`, and setting it with either fails `plan`. Cells outside the range don't load,
+and a range past the sheet's data loads no rows, like an empty sheet. Its first row holding a value
+names the columns; `xlsx.header_row` names another, counting from the range's first row, for title
+rows inside it. Without a header, columns are `column_1`, `column_2`, … by their place in the range,
+or the names in `column_names`:
+
+```toml
+xlsx = { range = "Prices!A3:C" }          # sheet, first row and columns in one place
+xlsx = { range = "A:C", header = false }  # first sheet, columns A to C, no header row
+column_names = ["metric", "category", "value"]
+```
+
+### Naming headerless columns
+
+From 0.49.0, `column_names` names the columns of CSV or Excel files without a header row, in order;
+types, keys and other settings then use those names:
+
+```toml
+[sources.metrics]
+kind = "files"
+connection = "inbox"
+format = "xlsx"
+xlsx = { range = "A:C", header = false }
+column_names = ["metric", "category", "value"]
+write_strategy = "merge"
+unique_key = ["metric", "category"]
+
+[sources.metrics.tables.metrics]
+columns = { value = "decimal(12,2)" }
+```
+
+- It's for `csv = { header = false }` and `xlsx = { header = false }`; with a header row, the names
+  come from the data, and `plan` fails.
+- The count must match the data's columns exactly: the range's width for Excel (the columns up to
+  the last one holding a value without a range), and each file's for CSV. Otherwise `plan` fails, or
+  for a later file the load, naming both counts and the file, so a shifted layout fails rather than
+  loading under the wrong names.
+- The names become columns like header names, under the target's `naming`. Two names equal ignoring
+  case fail `plan`.
+- Renaming the columns of data that has a header is modelling work for downstream; SQLLoad has no
+  general `rename`.
 
 **XML (`format = "xml"`).** Each element at `xml.record_path` is a row. Its attributes and child
 elements are its columns, by name without a namespace prefix. A child that appears more than once

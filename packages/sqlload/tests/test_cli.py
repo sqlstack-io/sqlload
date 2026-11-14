@@ -365,3 +365,76 @@ def test_given_a_native_type_for_a_column_from_paths_or_configuration_when_plann
 	planned = run("plan", "-c", str(config))
 	assert planned.returncode == 1, planned.stdout + planned.stderr
 	assert 'column day: native("HUGEINT") has no Arrow type, so a partition, path or constant column cannot be one; pin a portable type' in planned.stdout + planned.stderr, planned.stdout + planned.stderr
+
+
+def headerless_project(tmp_path: Path, settings: str) -> Path:
+	(tmp_path / "data").mkdir(exist_ok=True)
+	config = tmp_path / "sqlload.toml"
+	config.write_text(
+		f'[connections.files]\nkind = "filesystem"\nroot = "{tmp_path}"\n\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n\n[sources.metrics]\nkind = "files"\nconnection = "files"\npath = "data/"\ndescription = "Metrics."\n'
+		+ settings
+	)
+	return config
+
+
+def test_given_headerless_csv_with_column_names_when_merging_then_types_and_keys_use_those_names(tmp_path: Path) -> None:
+	import duckdb
+	from decimal import Decimal
+
+	config = headerless_project(
+		tmp_path,
+		'format = "csv"\ncsv = { header = false }\ncolumn_names = ["metric", "category", "value"]\nwrite_strategy = "merge"\nunique_key = ["metric", "category"]\n'
+		'\n[sources.metrics.tables.metrics]\ncolumns = { value = "decimal(12,2)" }\n',
+	)
+	(tmp_path / "data" / "a.csv").write_text("revenue,east,10.5\ncost,west,4\n")
+	first = run("load", "-c", str(config))
+	assert first.returncode == 0, first.stdout + first.stderr
+	(tmp_path / "data" / "b.csv").write_text("revenue,east,11\n")
+	second = run("load", "-c", str(config))
+	assert second.returncode == 0, second.stdout + second.stderr
+	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as connection:
+		rows = connection.execute('SELECT metric, category, value, typeof(value) FROM "RAW"."metrics" ORDER BY metric').fetchall()
+	assert rows == [("cost", "west", Decimal("4.00"), "DECIMAL(12,2)"), ("revenue", "east", Decimal("11.00"), "DECIMAL(12,2)")]
+
+
+@pytest.mark.parametrize(
+	("settings", "files", "expected_text"),
+	[
+		(
+			'format = "csv"\ncolumn_names = ["metric", "value"]\nwrite_strategy = "replace"\n',
+			{"a.csv": "metric,value\nrevenue,1\n"},
+			'column_names names the columns of data without a header row; set csv = { header = false }',
+		),
+		(
+			'format = "csv"\ncsv = { header = false }\ncolumn_names = ["metric", "Metric"]\nwrite_strategy = "replace"\n',
+			{"a.csv": "revenue,1\n"},
+			"column_names names Metric twice (ignoring case)",
+		),
+		(
+			'format = "csv"\ncsv = { header = false }\ncolumn_names = ["metric", "value"]\nwrite_strategy = "replace"\n',
+			{"a.csv": "revenue,east,1\n"},
+			"line 1: the file has 3 columns, but column_names names 2; name each column",
+		),
+		(
+			'format = "xlsx"\nxlsx = { range = "Prices!A3:C", skip_rows = 2 }\nwrite_strategy = "replace"\n',
+			{},
+			"xlsx.range names the sheet and the first row itself; drop xlsx.sheet and xlsx.skip_rows",
+		),
+		(
+			'format = "parquet"\ncolumn_names = ["metric"]\nwrite_strategy = "replace"\n',
+			{},
+			'column_names is for columns of data without a header row: kind = "files" with format = "csv" or "xlsx" (not shape = "record"), or kind = "google_sheets"',
+		),
+	],
+	ids=["with-a-header", "repeated-ignoring-case", "count-differs", "range-with-skip-rows", "parquet"],
+)
+def test_given_column_names_or_an_xlsx_range_that_do_not_fit_when_planning_then_plan_fails_saying_why(
+	tmp_path: Path, settings: str, files: dict[str, str], expected_text: str
+) -> None:
+	config = headerless_project(tmp_path, settings)
+	for name, text in files.items():
+		(tmp_path / "data" / name).write_text(text)
+	done = run("plan", "-c", str(config))
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr

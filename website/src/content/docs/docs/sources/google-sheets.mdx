@@ -94,6 +94,7 @@ from a terminal again; Google's account chooser then lets you pick the account.
 | `ranges` | Tables by name: a tab's name, or an A1 range such as `"Locations!A:F"` or `"'Q4 Report'!B3:H"`. Without it, every tab loads as a table named after it (`Q4 Report` as `q4_report`); empty tabs are left out with a warning. |
 | `header` | `false` when a range has no header row; its columns are then `column_1`, `column_2`, …. Table or source setting. |
 | `header_row` | The range's row holding the header, counting from 1, when title rows sit above it. Table or source setting. |
+| `column_names` | From 0.49.0. With `header = false`, the columns' names in order, one per column of the range (`A:C` is three), as for [headerless files](/docs/sources/files/#naming-headerless-columns). Another count fails `plan`. Table or source setting. |
 
 Per-table settings go under `[sources.<name>.tables.<table>]`, where `<table>` is the name in
 `ranges` (or the tab's table name), as for other sources: `columns`, `unique_key`, `header` and so on.
