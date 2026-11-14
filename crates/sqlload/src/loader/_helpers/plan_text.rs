@@ -376,11 +376,15 @@ fn driver_message(text: &str) -> String {
     }
 }
 
-/// `text` wrapped at word boundaries so each line fits the plan's error width after a branch, its indent and a label, its lines joined by `\n`, which `tree` lines up under the first.
+/// `text` wrapped at word boundaries so each line fits the plan's error width after a branch, its indent and a label, its lines joined by `\n`, which `tree` lines up under the first; a line already laid out in columns (holding two spaces in a row) is left as it is.
 fn wrapped(text: &str) -> String {
     let width = PLAN_ERROR_WIDTH - 8 - LABEL_WIDTH;
     let mut lines: Vec<String> = Vec::new();
     for paragraph in text.split('\n') {
+        if paragraph.contains("  ") {
+            lines.push(paragraph.to_owned());
+            continue;
+        }
         let mut line = String::new();
         for word in paragraph.split(' ') {
             if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > width {
