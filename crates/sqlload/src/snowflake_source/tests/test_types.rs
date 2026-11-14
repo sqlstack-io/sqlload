@@ -74,3 +74,11 @@ pub(crate) struct DescribedColumnsTestCase {
     /// Each column's loaded name, nullability and type.
     pub(crate) expected_columns: Vec<(&'static str, bool, Result<ColumnType, String>)>,
 }
+
+pub(crate) struct CountQueryTestCase {
+    pub(crate) description: &'static str,
+    /// The table's query; `None` counts the table itself.
+    pub(crate) sql: Option<&'static str>,
+    pub(crate) filter: &'static str,
+    pub(crate) expected_query: &'static str,
+}

@@ -162,6 +162,8 @@ pub(crate) struct MaxCursorTestCase {
     pub(crate) warehouse: Warehouse,
     /// The table's constant columns: name, type and value as text.
     pub(crate) scope: Vec<(String, ColumnType, String)>,
+    /// The further columns of a coalesced cursor.
+    pub(crate) coalesce: Vec<String>,
     pub(crate) expected_query: &'static str,
 }
 

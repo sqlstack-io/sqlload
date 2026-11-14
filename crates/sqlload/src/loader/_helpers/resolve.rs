@@ -412,7 +412,7 @@ pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> Table
     TableSettings {
         unique_key: settings.unique_key.as_ref().map(names),
         replace_key: settings.replace_key.as_ref().map(names),
-        cursor_column: settings.cursor_column.as_deref().map(name),
+        cursor_column: settings.cursor_column.as_ref().map(names),
         constant_columns: settings
             .constant_columns
             .as_ref()

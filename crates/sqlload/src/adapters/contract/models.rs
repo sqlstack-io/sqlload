@@ -148,6 +148,8 @@ pub struct TableShape {
 pub struct CursorQuery<'a> {
     pub table: &'a TableName,
     pub column: &'a str,
+    /// The further columns of a coalesced cursor: the maximum is then of the first non-NULL of `column` and these, as the source filter reads it.
+    pub coalesce: &'a [String],
     pub column_type: &'a ColumnType,
     pub lookback: Option<Duration>,
     /// The table's `constant_columns` (name, type and value as text): only the rows holding these values count, so tables sharing a destination each read from their own maximum.

@@ -179,3 +179,15 @@ pub(crate) struct KeyNullsTestCase {
     /// The key columns compared with `=`, joined by `, `; or the problem `plan` reports.
     pub(crate) expected_keys: Result<&'static str, &'static str>,
 }
+
+/// A coalesced or plain cursor's bounded filter under `null_cursor = "include"`, in one dialect.
+pub(crate) struct NullCursorFilterTestCase {
+    pub(crate) description: &'static str,
+    /// The cursor's source expression, as `source_cursor` writes it.
+    pub(crate) expression: &'static str,
+    pub(crate) dialect: Option<Warehouse>,
+    pub(crate) binding: CursorBinding,
+    pub(crate) expected_filter: Option<&'static str>,
+    /// How many values are bound to the filter's placeholders.
+    pub(crate) expected_parameters: usize,
+}

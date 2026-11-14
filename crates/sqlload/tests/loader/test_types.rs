@@ -1253,3 +1253,39 @@ pub(crate) struct PipedOutputTestCase {
     pub(crate) args: &'static [&'static str],
     pub(crate) expected_table: &'static str,
 }
+
+/// A NULL cursor setting on `public.t` and what its first `plan` and load say.
+pub(crate) struct NullCursorPlanTestCase {
+    pub(crate) description: &'static str,
+    /// The table's settings in `[sources.app.tables."public.t"]`.
+    pub(crate) settings: &'static str,
+    /// Text the rendered plan (or the error that refused it) must contain, whitespace collapsed.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// One load of `erp.t` over ODBC with a NULL cursor rule, after a change at the source.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcNullCursorTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The table's cursor settings.
+    pub(crate) settings: &'static str,
+    /// Whether `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// The loaded rows, as `id:v`.
+    pub(crate) expected_result: &'static str,
+}
+
+/// Two loads of a BigQuery table whose first rows include one with a NULL cursor.
+pub(crate) struct BigQueryNullCursorTestCase {
+    pub(crate) description: &'static str,
+    /// Extra lines for the table entry.
+    pub(crate) settings: &'static str,
+    /// Whether the second `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// Whether the second load ran the NULL count as a query job.
+    pub(crate) expected_count_query: bool,
+    /// The loaded labels, NULL as `NULL`.
+    pub(crate) expected_values: &'static str,
+}

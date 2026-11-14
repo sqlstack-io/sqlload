@@ -9,6 +9,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "lookback_from",
     "append_cursor_inclusive",
     "cursor_bounds",
+    "null_cursor",
     "contract",
     "on_schema_change",
     "auto_widen",

@@ -51,6 +51,8 @@ mod test_loader_edge_cases;
 mod test_merge_dedupe;
 #[path = "loader/test_mixed_cursors.rs"]
 mod test_mixed_cursors;
+#[path = "loader/test_null_cursors.rs"]
+mod test_null_cursors;
 #[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_drivers.rs"]
 mod test_odbc_drivers;

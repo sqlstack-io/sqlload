@@ -18,7 +18,8 @@ $ sqlload plan app__orders
 
 | Setting | Meaning |
 |---------|---------|
-| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. |
+| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. From 0.51.0, a list of columns of one type family, such as `["updated_at", "created_at"]`, reads the first non-NULL of them in each row. See [NULL cursor values](#null-cursor-values). |
+| `null_cursor` | From 0.51.0. `fail` (default), `include` or `ignore`: what a read does with source rows whose cursor is NULL. See [NULL cursor values](#null-cursor-values). |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
 | `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
 | `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
@@ -52,6 +53,70 @@ collation, could then read rows again on every run.
   timestamps.
 - DuckDB, BigQuery and Databricks compare by code point unless a dataset, schema, table or
   column sets a collation, which SQLLoad doesn't override.
+
+## NULL cursor values
+
+A read from the destination's maximum compares each row's cursor with it, and a NULL compares with
+nothing. A row whose cursor is NULL loads on the first run, which reads everything, and is never read
+again while its cursor stays NULL: an edit to it, or a new row with a NULL cursor, never loads.
+Systems that set a modified date only after the first edit leave it NULL on every row never edited.
+
+From 0.51.0, a load that would skip such rows fails the table instead. Before the read, SQLLoad
+counts the source rows with a NULL cursor (`SELECT count(*) ... WHERE <cursor> IS NULL` on a
+database or warehouse source; a Python table counts the rows it yields). When there are any, the
+table fails and nothing is written:
+
+```console
+$ sqlload load
+…
+failed  raw.app__orders  2 source rows have a NULL updated_at, which an incremental read never selects, so they would never load; set null_cursor = "include" to read them on every run, list a column that is always set to coalesce with it (such as cursor_column = ["updated_at", "created_at"]), or set null_cursor = "ignore" to skip them
+…
+```
+
+Choose one fix per table:
+
+| Fix | Effect |
+|-----|--------|
+| `cursor_column = ["updated_at", "created_at"]` | The cursor is the first non-NULL of the columns in each row (`COALESCE`), for the read, the destination's maximum, `lookback` and `batch_size`. A row never edited is read by its `created_at`, and again once its `updated_at` is set. The columns must be of one type family: integers, text, dates, timestamps, or timestamps with a time zone. A row where every one is NULL follows `null_cursor`. |
+| `null_cursor = "include"` | Every run reads the rows whose cursor is NULL as well as its range: `cursor >= ? OR cursor IS NULL`. `merge` only, which merges them again on each run; `plan` refuses it on `append` and `delete_insert`, which would insert them again on every run. |
+| `null_cursor = "ignore"` | Skip them, for tables where a NULL cursor marks rows that should not load. |
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+write_strategy = "merge"
+unique_key = "{primary_key}"
+cursor_column = ["updated_at", "created_at"]
+```
+
+`plan` names the rule on the table's `reads` line. `fail the load` shows when the source reports the
+cursor column nullable, and nothing when it reports it `NOT NULL`, which skips the count:
+
+```console
+$ sqlload plan app__orders
+…
+    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum) (NULL cursors: included)
+…
+```
+
+| `null_cursor` | `reads` line ends with |
+|---------------|------------------------|
+| `fail`, cursor nullable at the source | `(NULL cursors: fail the load)` |
+| `include` | `(NULL cursors: included)` |
+| `ignore` | `(NULL cursors: skipped)` |
+
+Sources differ in what they check:
+
+- Postgres, ODBC, Snowflake and BigQuery sources count with one query per load, and a table read
+  through `sql` counts that query's rows. ODBC counts the same way under either `cursor_bounds`.
+- A Python table counts the rows it yields with a NULL cursor. A function that filters by
+  `ctx.cursor_value` itself drops them before SQLLoad sees them, so yield them too, or under
+  `null_cursor = "include"`. A Python table takes one `cursor_column`: yield the first set value as
+  one field and name that field.
+- A files source's cursor is a partition or path column, set from each file's path, so it is never
+  NULL. Its `cursor_column` is one column.
+- A files target, and `delete_insert`, take one `cursor_column`: they partition and replace by one
+  column's values.
 
 ## Backfilling a range
 

@@ -25,7 +25,7 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullKeys, OnDuplicateKeys, OnSchemaChange, OutputEncoding,
+    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange, OutputEncoding,
     Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -68,6 +68,34 @@ pub struct CursorSpec {
     pub inclusive: bool,
     /// `cursor_bounds = "literals"`: an ODBC source writes the bounds into the query as escapes instead of binding them.
     pub literals: bool,
+    /// The further columns of a coalesced cursor (`cursor_column = ["updated_at", "created_at"]`), whose value is the first non-NULL of `column` and these; empty for one column.
+    pub coalesce: Vec<String>,
+    /// What an incremental read does with source rows whose cursor is NULL.
+    pub null_cursor: NullCursor,
+}
+
+impl CursorSpec {
+    /// Every column of the cursor, `column` first.
+    pub fn columns(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.column.as_str()).chain(self.coalesce.iter().map(String::as_str))
+    }
+
+    /// Whether `name` is one of the cursor's columns, ignoring case.
+    pub fn names(&self, name: &str) -> bool {
+        self.columns()
+            .any(|column| column.eq_ignore_ascii_case(name))
+    }
+
+    /// The cursor as messages and `plan` name it: its column, or `coalesce(updated_at, created_at)`.
+    pub fn label(&self) -> String {
+        match self.coalesce.is_empty() {
+            true => self.column.clone(),
+            false => format!(
+                "coalesce({})",
+                self.columns().collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
 }
 
 /// How a source filter writes a cursor's text, date and timestamp bounds.
@@ -724,6 +752,8 @@ pub struct PythonFeed {
     pub rows: u64,
     /// Rows the function yielded outside the cursor window, which were skipped.
     pub outside: u64,
+    /// Of those, the rows whose cursor was NULL, which fail the table unless `null_cursor` says otherwise.
+    pub null_cursors: u64,
     /// Opened once the table exists for the data.
     pub publisher: Option<Publisher>,
     /// `created ...` and `altered ...` lines.

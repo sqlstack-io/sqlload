@@ -2,6 +2,8 @@
 mod catalog;
 #[path = "tests/test_convert_batch.rs"]
 mod convert_batch;
+#[path = "tests/test_count_query.rs"]
+mod count_query;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_rows_unloaded.rs"]

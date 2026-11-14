@@ -3,7 +3,9 @@ use sqlload_testkit::fake_bigquery::models::FakeReadSession;
 
 use crate::bigquery_helpers::{first_orders, later_orders, source_project};
 use crate::helpers::{duckdb_text, run_async, run_sqlload};
-use crate::test_types::{BigQueryCursorTestCase, BigQuerySourceTestCase};
+use crate::test_types::{
+    BigQueryCursorTestCase, BigQueryNullCursorTestCase, BigQuerySourceTestCase,
+};
 
 const ORDERS_TABLE: &str = "[sources.marts.tables.\"marts.orders\"]\ndescription = \"Orders.\"\ncursor_column = \"id\"\nwrite_strategy = \"append\"\n";
 
@@ -147,6 +149,85 @@ fn given_text_and_decimal_cursors_when_loading_from_bigquery_then_their_bounds_a
                     &format!(
                         "SELECT string_agg(CAST(\"{name}\" AS VARCHAR), ',' ORDER BY \"{name}\") FROM raw.marts__values"
                     )
+                )?,
+                test_case.expected_values,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_bigquery_row_whose_cursor_is_null_when_loading_incrementally_then_the_load_counts_it_with_a_query_job_and_fails_unless_null_cursor_reads_it()
+-> Result<(), String> {
+    let test_cases = [
+        BigQueryNullCursorTestCase {
+            description: "by default the next run counts the NULL-cursor row with one query job and fails, naming it, and writes nothing",
+            settings: "",
+            expected_output: (
+                false,
+                "1 source row has a NULL label, which an incremental read never selects",
+            ),
+            expected_count_query: true,
+            expected_values: "a,NULL",
+        },
+        BigQueryNullCursorTestCase {
+            description: "null_cursor = \"ignore\" skips it without counting, as before",
+            settings: "null_cursor = \"ignore\"\n",
+            expected_output: (true, "1 row"),
+            expected_count_query: false,
+            expected_values: "a,b,NULL",
+        },
+    ];
+    run_async(async {
+        for test_case in test_cases {
+            let fake = start_fake_bigquery().await?;
+            fake.place_table("marts.values", &[("label", "STRING")]);
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let database = folder.path().join("out.duckdb");
+            let config = folder.path().join("sqlload.toml");
+            let table = format!(
+                "[sources.marts.tables.\"marts.values\"]\ndescription = \"Values.\"\ncursor_column = \"label\"\nwrite_strategy = \"append\"\n{}",
+                test_case.settings
+            );
+            std::fs::write(&config, source_project(&fake, &database, &table))
+                .map_err(|error| error.to_string())?;
+            fake.place_rows(
+                "marts.values",
+                &[
+                    serde_json::json!({ "label": "a" }),
+                    serde_json::json!({ "label": null }),
+                ],
+            );
+            let (first, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(
+                first,
+                "{}: the first run reads every row:\n{output}",
+                test_case.description
+            );
+            fake.place_rows("marts.values", &[serde_json::json!({ "label": "b" })]);
+            let (succeeded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            let (expected_success, expected_text) = test_case.expected_output;
+            assert!(
+                succeeded == expected_success && output.contains(expected_text),
+                "{}:\n{output}",
+                test_case.description
+            );
+            let counted = fake.state.lock().statements.iter().any(|statement| {
+                statement
+                    == "SELECT COUNT(*) FROM `fake-project.marts.values` WHERE `label` IS NULL"
+            });
+            assert_eq!(
+                counted, test_case.expected_count_query,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                duckdb_text(
+                    &database,
+                    "SELECT string_agg(COALESCE(label, 'NULL'), ',' ORDER BY label NULLS LAST) FROM raw.marts__values"
                 )?,
                 test_case.expected_values,
                 "{}",

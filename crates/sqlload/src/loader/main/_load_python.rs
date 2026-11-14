@@ -21,6 +21,7 @@ pub(in crate::loader) async fn load_python(
         merged: arrow_schema::Schema::empty(),
         rows: 0,
         outside: 0,
+        null_cursors: 0,
         publisher: None,
         changes: Vec::new(),
         state,

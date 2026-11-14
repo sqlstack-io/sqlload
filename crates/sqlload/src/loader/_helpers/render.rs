@@ -37,6 +37,7 @@ use crate::loader::models::{
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
+use crate::project::models::NullCursor;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::models::Unnest;
@@ -397,7 +398,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("delete_insert ({})", parts.join(", "))
         }
         WriteMode::Append => match &spec.cursor {
-            Some(cursor) => format!("append (cursor: {})", cursor.column),
+            Some(cursor) => format!("append (cursor: {})", cursor.label()),
             None => "append".to_owned(),
         },
         WriteMode::Replace => "replace".to_owned(),
@@ -634,12 +635,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
-    details.extend(
-        table
-            .cursor_note
-            .iter()
-            .map(|note| detail("cursor", note.as_str())),
-    );
+    details.extend(table.cursor_note.iter().map(|note| {
+        let text = match null_cursor_rule(table) {
+            Some(rule) => format!("{note} ({rule})"),
+            None => note.clone(),
+        };
+        detail("cursor", text)
+    }));
     details.extend(table.logged.as_ref().map(|logged| {
         detail(
             "state",
@@ -1549,8 +1551,36 @@ fn key_line(table: &TablePlan) -> Option<String> {
     })
 }
 
-/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`.
+/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by what it does with rows whose cursor is NULL, when [`null_cursor_rule`] says.
 pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
+    let line = reads_text(table, precise)?;
+    Some(
+        match null_cursor_rule(table).filter(|_| table.logged.is_none()) {
+            Some(rule) => format!("{line} ({rule})"),
+            None => line,
+        },
+    )
+}
+
+/// What a cursor read does with source rows whose cursor is NULL, for `plan`: `NULL cursors: included` or `skipped` as `null_cursor` says, and by default `fail the load` when the source reports a cursor column nullable; `None` when it reports one NOT NULL or reports nothing (a Python table), and for a files source, whose cursor comes from each file's path.
+pub(crate) fn null_cursor_rule(table: &TablePlan) -> Option<&'static str> {
+    let spec = &table.spec;
+    let cursor = spec.cursor.as_ref().filter(|_| spec.files.is_none())?;
+    let nullable = cursor.columns().all(|name| {
+        spec.source_table
+            .column(name)
+            .is_some_and(|column| column.nullable)
+    });
+    match cursor.null_cursor {
+        NullCursor::Include => Some("NULL cursors: included"),
+        NullCursor::Ignore => Some("NULL cursors: skipped"),
+        NullCursor::Fail if nullable => Some("NULL cursors: fail the load"),
+        NullCursor::Fail => None,
+    }
+}
+
+/// [`reads_line`] without the NULL cursor rule.
+fn reads_text(table: &TablePlan, precise: bool) -> Option<String> {
     if let Some(logged) = &table.logged {
         return Some(match &logged.current {
             Some(record) => {

@@ -86,7 +86,10 @@ use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
-use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
+use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
+use crate::loader::_helpers::table_plan::{
+    cursor_binding, source_cursor, source_filter, with_null_cursors,
+};
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
@@ -109,7 +112,7 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
-use crate::project::models::NullKeys;
+use crate::project::models::{NullCursor, NullKeys};
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
@@ -1409,12 +1412,18 @@ fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
     }
 }
 
-/// Load a table's rows from `reader` commit by commit, as its plan cuts them; a failure stops the table there, keeping what committed before.
+/// Load a table's rows from `reader` commit by commit, as its plan cuts them; a failure stops the table there, keeping what committed before. A table whose source has rows with a NULL cursor, which its read would skip, fails first (see [`null_cursor_rows`]).
 pub(crate) async fn publish_table(
     reader: &SourceReader,
     table: &TablePlan,
     (destination, run): (&Destination, &LoadRun<'_>),
 ) -> Result<TableLoaded, LoaderError> {
+    if let Some(rows) = null_cursor_rows(reader, table)
+        .await?
+        .filter(|rows| *rows > 0)
+    {
+        return Err(LoaderError::Invalid(null_cursor_problem(&table.spec, rows)));
+    }
     let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
     let published = feed(reader, table, publisher, run).await;
     let (mut publisher, result) = published;
@@ -1449,7 +1458,7 @@ async fn feed(
                 snapshot(reader, SNAPSHOT_BEGIN).await?;
                 for index in 0..windows.count {
                     let window = &window_at(windows, index).map_err(LoaderError::Invalid)?;
-                    let (filter, parameters) = window_filter(table, window);
+                    let (filter, parameters) = window_filter(table, window, index == 0);
                     let part = ReadPart {
                         filter,
                         parameters,
@@ -1656,17 +1665,23 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Load
     publisher.stage(batch, None).await
 }
 
-/// The source filter reading one cursor window, in the source's dialect, and the values bound to its placeholders: an ODBC source's date and timestamp bounds (`split_windows` cuts only number and time cursors, never a text one).
+/// The source filter reading one cursor window, in the source's dialect, and the values bound to its placeholders: an ODBC source's date and timestamp bounds (`split_windows` cuts only number and time cursors, never a text one). Under `null_cursor = "include"` the `first` window reads the rows whose cursor is NULL too, once per run.
 fn window_filter(
     table: &TablePlan,
     window: &CursorWindow,
+    first: bool,
 ) -> (Option<String>, Vec<BoundParameter>) {
-    let Some(column) = table.spec.cursor.as_ref().and_then(|cursor| {
+    let Some((cursor, column)) = table.spec.cursor.as_ref().and_then(|cursor| {
         table
             .read_columns
             .iter()
             .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+            .map(|column| (cursor, column))
     }) else {
+        return (None, Vec::new());
+    };
+    let Some(expression) = source_cursor(&table.spec, &table.read_columns, Some(&column.output))
+    else {
         return (None, Vec::new());
     };
     let operator = match window.inclusive {
@@ -1674,8 +1689,8 @@ fn window_filter(
         false => EXCLUSIVE_BOUND,
     };
     let source = table.spec.warehouse_source.as_ref();
-    source_filter(
-        &column.expression,
+    let (filter, parameters) = source_filter(
+        &expression,
         (
             Some(&column.output),
             source.and_then(|source| source_dialect(source.system)),
@@ -1685,7 +1700,11 @@ fn window_filter(
             window.to.as_deref(),
         ),
         cursor_binding(&table.spec, None),
-    )
+    );
+    match cursor.null_cursor == NullCursor::Include && first {
+        true => (with_null_cursors(filter, &expression), parameters),
+        false => (filter, parameters),
+    }
 }
 
 /// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.

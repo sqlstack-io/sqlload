@@ -1535,6 +1535,31 @@ fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRe
     }
 }
 
+/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
+fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
+    let mut columns: Vec<String> = Vec::new();
+    for name in spec.cursor.as_ref()?.columns() {
+        let column = spec
+            .source_table
+            .columns
+            .iter()
+            .find(|column| column.name == name)?;
+        if !matches!(
+            column.column_type,
+            Ok(ColumnType::Int | ColumnType::SmallInt)
+        ) {
+            return None;
+        }
+        columns.push(
+            column
+                .source_spelling
+                .clone()
+                .unwrap_or_else(|| column.name.clone()),
+        );
+    }
+    Some(columns)
+}
+
 /// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
 pub(crate) async fn source_ends(
     project: &ProjectConfig,
@@ -1547,27 +1572,10 @@ pub(crate) async fn source_ends(
     }
     let mut client: Option<Client> = None;
     for spec in &mut specs {
-        let integer_cursor = spec.cursor.as_ref().and_then(|cursor| {
-            spec.source_table
-                .columns
-                .iter()
-                .find(|column| column.name == cursor.column)
-                .filter(|column| {
-                    matches!(
-                        column.column_type,
-                        Ok(ColumnType::Int | ColumnType::SmallInt)
-                    )
-                })
-                .map(|column| {
-                    column
-                        .source_spelling
-                        .clone()
-                        .unwrap_or_else(|| column.name.clone())
-                })
-        });
+        let integer_cursor = integer_cursor(spec);
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
             && selected(options, (source_name, &spec_names(spec)));
-        let Some(column) = integer_cursor.filter(|_| wanted) else {
+        let Some(columns) = integer_cursor.filter(|_| wanted) else {
             continue;
         };
         if client.is_none() {
@@ -1577,7 +1585,7 @@ pub(crate) async fn source_ends(
             continue;
         };
         spec.source_end = Some(
-            match cursor_end(connected, &spec.source_table, &column).await? {
+            match cursor_end(connected, &spec.source_table, &columns).await? {
                 Some((maximum, end)) => SourceEnd::Maximum { maximum, end },
                 None => SourceEnd::Empty,
             },

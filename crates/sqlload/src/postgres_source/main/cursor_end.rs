@@ -5,14 +5,18 @@ use tokio_postgres::Client;
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::SourceTable;
 
-/// The largest value of integer column `column` in `table` and one past it, as text; `None` when the table has no value there.
+/// The largest value of integer cursor `columns` in `table` (of several, the first non-NULL of each row's) and one past it, as text; `None` when the table has no value there.
 pub async fn cursor_end(
     client: &Client,
     table: &SourceTable,
-    column: &str,
+    columns: &[String],
 ) -> Result<Option<(String, String)>, PostgresError> {
     let quote = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
-    let column = quote(column);
+    let quoted: Vec<String> = columns.iter().map(|name| quote(name)).collect();
+    let column = match quoted.as_slice() {
+        [one] => one.clone(),
+        many => format!("COALESCE({})", many.join(", ")),
+    };
     let sql = format!(
         "SELECT max({column})::text, (max({column})::numeric + 1)::text FROM {}.{}",
         quote(&table.schema),

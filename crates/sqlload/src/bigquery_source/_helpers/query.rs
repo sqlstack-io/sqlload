@@ -1,6 +1,7 @@
 //! GoogleSQL for reading a table or query through a query job.
 
 use crate::bigquery_source::models::BigQueryReadRequest;
+use crate::postgres_source::models::SourceTable;
 
 /// `name` in backticks, with `\` and `` ` `` escaped, as GoogleSQL reads a quoted identifier.
 pub(crate) fn quote_identifier(name: &str) -> String {
@@ -26,6 +27,19 @@ pub(crate) fn select_query(project: &str, request: &BigQueryReadRequest<'_>) -> 
         .map(|filter| format!(" WHERE {filter}"))
         .unwrap_or_default();
     format!("SELECT {} FROM {from}{filter}", columns.join(", "))
+}
+
+/// `SELECT COUNT(*) FROM <the query or table> WHERE <filter>`, the table and query written as `select_query` writes them: how many rows `filter` selects.
+pub(crate) fn count_query(
+    project: &str,
+    (table, sql): (&SourceTable, Option<&str>),
+    filter: &str,
+) -> String {
+    let from = match sql {
+        Some(sql) => subquery(sql),
+        None => quote_identifier(&format!("{project}.{}.{}", table.schema, table.name)),
+    };
+    format!("SELECT COUNT(*) FROM {from} WHERE {filter}")
 }
 
 /// Query `sql` in parentheses, as a `FROM` item: without its final semicolons, and closed on a line of its own so a trailing `--` comment ends first. `plan` dry-runs it in this form, so a query it can't wrap fails there, not at load.

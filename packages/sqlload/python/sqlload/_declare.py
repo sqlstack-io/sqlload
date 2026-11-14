@@ -31,6 +31,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"lookback",
 		"naming",
 		"null_keys",
+		"null_cursor",
 		"on_duplicate_keys",
 		"on_schema_change",
 		"replace_key",

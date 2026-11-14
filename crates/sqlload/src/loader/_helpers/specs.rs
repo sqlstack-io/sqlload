@@ -2,6 +2,7 @@ use crate::adapters::contract::models::{ChangeApply, TableName};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
+use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -15,17 +16,21 @@ use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
+use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
     DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE,
     UNNEST_ALL,
 };
+use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
+use crate::loader::models::{SourceReader, TablePlan};
 use crate::masking::models::MaskRules;
+use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullKeys, OnDuplicateKeys,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys, OnDuplicateKeys,
     SortDirection, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage,
     UnnestSetting, WriteStrategy,
 };
@@ -36,6 +41,7 @@ use crate::row_batches::models::Unnest;
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
+use crate::snowflake_source::main::count_rows::count_rows as count_snowflake_rows;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -212,6 +218,12 @@ pub(crate) fn build_spec(
     };
     problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
     problems.extend(column_reference_problems(table, overrides));
+    problems.extend(cursor_problems(
+        context,
+        (settings, defaults),
+        strategy,
+        cursor.as_ref(),
+    ));
     let constants = match table_constants(context, table, (settings, defaults), &columns.excluded) {
         Ok(constants) => constants,
         Err(found) => {
@@ -224,9 +236,7 @@ pub(crate) fn build_spec(
             .iter()
             .filter(|(name, _, _)| {
                 context.source.kind != SourceKind::Files
-                    && cursor
-                        .as_ref()
-                        .is_some_and(|cursor| cursor.column.eq_ignore_ascii_case(name))
+                    && cursor.as_ref().is_some_and(|cursor| cursor.names(name))
             })
             .map(|(name, _, _)| {
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
@@ -270,7 +280,7 @@ pub(crate) fn build_spec(
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
-        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
+        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.names(masked));
         let is_key = (uses_key && unique_key.contains(masked)) || replace_key.contains(masked);
         (is_cursor || is_key).then(|| {
             format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key or replace_key")
@@ -780,9 +790,14 @@ pub(crate) fn layered<T: Clone>(
 
 /// The cursor a table's settings describe, if any.
 pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<CursorSpec> {
-    let (column, _) = layered(&table.cursor_column, &source.cursor_column)?;
+    let (columns, _) = layered(&table.cursor_column, &source.cursor_column)?;
+    let (column, coalesce) = columns.split_first()?;
     Some(CursorSpec {
-        column,
+        column: column.clone(),
+        coalesce: coalesce.to_vec(),
+        null_cursor: layered(&table.null_cursor, &source.null_cursor)
+            .map(|(value, _)| value)
+            .unwrap_or_default(),
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
         lookback: layered(&table.lookback, &source.lookback).map(|(value, _)| value),
         lookahead: layered(&table.lookahead, &source.lookahead).map(|(value, _)| value),
@@ -1097,10 +1112,180 @@ pub(crate) fn strategy_problems(
     if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback.is_none()) {
         problems.push(format!(
             "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
-            cursor.column
+            cursor.label()
         ));
     }
     problems
+}
+
+/// Why the table's cursor columns and `null_cursor` cannot apply: an empty or repeating `cursor_column` list; a coalesced cursor where its value is one column's (a files source's partition or path column, a Python table's field, a files target's partitions, `delete_insert`'s replaced range); `null_cursor` on a table entry without a cursor; and `null_cursor = "include"`, which reads the NULL-cursor rows on every run, on anything but `merge`.
+fn cursor_problems(
+    context: &SourceContext<'_>,
+    (settings, defaults): (&TableSettings, &TableSettings),
+    strategy: WriteStrategy,
+    cursor: Option<&CursorSpec>,
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let listed = layered(&settings.cursor_column, &defaults.cursor_column).map(|(value, _)| value);
+    if listed.as_ref().is_some_and(Vec::is_empty) {
+        problems.push("cursor_column = [] names no column; name one, or list the columns to coalesce, such as [\"updated_at\", \"created_at\"]".to_owned());
+    }
+    let listed = listed.unwrap_or_default();
+    for (index, column) in listed.iter().enumerate() {
+        if listed[..index]
+            .iter()
+            .any(|earlier| earlier.eq_ignore_ascii_case(column))
+        {
+            problems.push(format!(
+                "cursor_column lists {column} twice; list each column once"
+            ));
+            break;
+        }
+    }
+    if layered(&settings.null_cursor, &defaults.null_cursor)
+        .is_some_and(|(_, origin)| origin == SettingOrigin::Table)
+        && cursor.is_none()
+    {
+        problems.push("null_cursor says what a cursor read does with rows whose cursor is NULL, but the table has no cursor_column; remove it".to_owned());
+    }
+    let Some(cursor) = cursor else {
+        return problems;
+    };
+    let label = cursor.label();
+    let coalesced = !cursor.coalesce.is_empty();
+    let one_column = match context.source.kind {
+        SourceKind::Files => Some(
+            "a files source's cursor is one partition or path column, the same in every row of a file",
+        ),
+        SourceKind::Python => Some(
+            "a Python table's cursor is one field of the rows it yields; yield the first set value as one field (such as row[\"updated_at\"] or row[\"created_at\"]) and name that field",
+        ),
+        _ if context.target.path.is_some() => {
+            Some("a files target partitions and reads its maximum by one cursor column")
+        }
+        _ if strategy == WriteStrategy::DeleteInsert => Some(
+            "delete_insert replaces the destination rows in a range of one cursor column; use merge, or name one column",
+        ),
+        _ => None,
+    };
+    if let Some(reason) = one_column.filter(|_| coalesced) {
+        problems.push(format!(
+            "cursor_column lists several columns to coalesce ({label}), but {reason}"
+        ));
+    }
+    if cursor.null_cursor == NullCursor::Include {
+        let refusal = match strategy {
+            WriteStrategy::Append => Some((
+                "append would append them again on every run, duplicating them",
+                format!(
+                    "use write_strategy = \"merge\" with a unique_key, or coalesce a column that is always set (such as cursor_column = [\"{}\", \"created_at\"]), or set null_cursor = \"ignore\" to skip them",
+                    cursor.column
+                ),
+            )),
+            WriteStrategy::DeleteInsert => Some((
+                "they sit outside every cursor range delete_insert replaces, so it would insert them again on every run, duplicating them",
+                "use write_strategy = \"merge\" with a unique_key, or set null_cursor = \"ignore\" to skip them".to_owned(),
+            )),
+            WriteStrategy::Merge | WriteStrategy::Replace => None,
+        };
+        if let Some((duplicates, fix)) = refusal {
+            problems.push(format!(
+                "null_cursor = \"include\" reads the rows whose {label} is NULL on every run, and {duplicates}; {fix}"
+            ));
+        }
+    }
+    problems
+}
+
+/// How many of `table`'s source rows have a NULL cursor, which its read's bounds never select, when the table fails on them (`null_cursor` unset), counted by the database: `SELECT count(*) ... WHERE <cursor> IS NULL`. `None` when nothing is counted: the read has no bounds (a first run reads those rows too), `null_cursor` includes or skips them, the source reports a cursor column NOT NULL, or the source is not a database: a Python table's rows are counted as they arrive, and a files source's cursor is each file's path value, never NULL.
+pub(crate) async fn null_cursor_rows(
+    reader: &SourceReader,
+    table: &TablePlan,
+) -> Result<Option<u64>, LoaderError> {
+    let spec = &table.spec;
+    let (Some(cursor), Some(window)) = (&spec.cursor, &table.window) else {
+        return Ok(None);
+    };
+    let bounded = window.from.is_some() || window.to.is_some();
+    let not_null = cursor.columns().any(|name| {
+        spec.source_table
+            .column(name)
+            .is_some_and(|column| !column.nullable)
+    });
+    if !bounded || not_null || cursor.null_cursor != NullCursor::Fail {
+        return Ok(None);
+    }
+    let cursor_type = table
+        .read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+        .map(|column| &column.output);
+    let Some(expression) = source_cursor(spec, &table.read_columns, cursor_type) else {
+        return Ok(None);
+    };
+    let filter = format!("{expression} IS NULL");
+    let sql = spec
+        .warehouse_source
+        .as_ref()
+        .and_then(|source| source.sql.as_deref());
+    let counted = match reader {
+        SourceReader::Postgres(client, _) => {
+            count_postgres_rows(client, &spec.source_table, &filter).await?
+        }
+        SourceReader::Snowflake(snowflake) => {
+            count_snowflake_rows(snowflake, (&spec.source_table, sql), &filter).await?
+        }
+        SourceReader::BigQuery(bigquery) => {
+            count_bigquery_rows(bigquery, (&spec.source_table, sql), &filter).await?
+        }
+        #[cfg(feature = "odbc")]
+        SourceReader::Odbc(odbc) => {
+            crate::odbc_source::main::count_rows::count_rows(
+                odbc,
+                (&spec.source_table, sql),
+                &filter,
+            )
+            .await?
+        }
+        SourceReader::Files(_) | SourceReader::Sheets(..) => return Ok(None),
+    };
+    Ok(Some(counted))
+}
+
+/// Why `spec`'s load fails: `rows` source rows have a NULL cursor, which its incremental read never selects, so they would never load; with the fixes `plan` accepts for the table: `null_cursor = "include"` on `merge`, a coalesced cursor where one may be listed (not a Python table, `delete_insert` or a files target), and `null_cursor = "ignore"`.
+pub(crate) fn null_cursor_problem(spec: &TableSpec, rows: u64) -> String {
+    let (cursor, label) = match &spec.cursor {
+        Some(cursor) => (cursor.column.as_str(), cursor.label()),
+        None => ("", String::new()),
+    };
+    let (have, they) = match rows {
+        1 => ("row has", "it"),
+        _ => ("rows have", "they"),
+    };
+    let coalesces = spec.python.is_none()
+        && spec.strategy != WriteStrategy::DeleteInsert
+        && spec.destination_path.is_none();
+    let fixes: Vec<String> = [
+        (spec.strategy == WriteStrategy::Merge)
+            .then(|| "set null_cursor = \"include\" to read them on every run".to_owned()),
+        coalesces.then(|| {
+            format!(
+                "list a column that is always set to coalesce with it (such as cursor_column = [\"{cursor}\", \"created_at\"])"
+            )
+        }),
+        Some("set null_cursor = \"ignore\" to skip them".to_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let fixes = match fixes.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{}, or {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    format!(
+        "{rows} source {have} a NULL {label}, which an incremental read never selects, so {they} would never load; {fixes}"
+    )
 }
 
 /// Why a files source's `after_load` cannot apply to its table: only `append`, `merge` and `delete_insert` by a `replace_key` (`keyed`) never read a loaded file again, and a files target commits its own way.

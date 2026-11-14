@@ -79,7 +79,7 @@ use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
-use crate::project::models::{OnDuplicateKeys, SortDirection};
+use crate::project::models::{NullCursor, OnDuplicateKeys, SortDirection};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -595,10 +595,84 @@ fn streamed_array_problems(table: &SourceTable, read: &[ReadColumn]) -> Vec<Stri
     problems
 }
 
+/// `schema` blocked when a column of `spec`'s cursor is not written to the table (a Python table's cursor no row has shown yet, `unseen`, is not checked), or when a coalesced cursor's columns are of different type families.
+fn checked_cursor(
+    spec: &TableSpec,
+    schema: SchemaPlan,
+    (desired, unseen): (&[DesiredColumn], bool),
+) -> SchemaPlan {
+    let unwritten = spec
+        .cursor
+        .iter()
+        .flat_map(CursorSpec::columns)
+        .find(|name| !unseen && !writes(&schema, name));
+    if let Some(problem) = unwritten_column(spec, &schema, unwritten) {
+        return blocked_plan(vec![problem]);
+    }
+    match coalesce_problem(spec, desired).filter(|_| schema.blocked.is_none()) {
+        Some(problem) => blocked_plan(vec![problem]),
+        None => schema,
+    }
+}
+
+/// Whether `schema` writes column `name`, ignoring case.
+fn writes(schema: &SchemaPlan, name: &str) -> bool {
+    schema
+        .write_columns
+        .iter()
+        .any(|column| column.name.eq_ignore_ascii_case(name))
+}
+
+/// Whether the live table has every column of `spec`'s cursor, ignoring case; false without a cursor or a table.
+fn has_cursor(spec: &TableSpec, live: Option<&[LiveColumn]>) -> bool {
+    let (Some(cursor), Some(live)) = (&spec.cursor, live) else {
+        return false;
+    };
+    cursor.columns().all(|name| lists_column(live, name))
+}
+
+/// Whether `live` has column `name`, ignoring case.
+fn lists_column(live: &[LiveColumn], name: &str) -> bool {
+    live.iter()
+        .any(|column| column.name.eq_ignore_ascii_case(name))
+}
+
+/// Why a coalesced cursor's columns cannot read as one cursor: they must share a type family (integers, text, dates, wall-clock timestamps or timestamps with a time zone), so their `COALESCE` has the type its bounds and maximum are written in.
+fn coalesce_problem(spec: &TableSpec, desired: &[DesiredColumn]) -> Option<String> {
+    let cursor = spec
+        .cursor
+        .as_ref()
+        .filter(|cursor| !cursor.coalesce.is_empty())?;
+    let family = |column_type: &ColumnType| match column_type {
+        ColumnType::SmallInt | ColumnType::Int => "integer".to_owned(),
+        ColumnType::Text | ColumnType::Varchar(_) => "text".to_owned(),
+        other => other.to_string(),
+    };
+    let mut typed: Vec<(&str, &ColumnType)> = Vec::new();
+    for name in cursor.columns() {
+        if let Some(column) = desired
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(name))
+        {
+            typed.push((name, &column.column_type));
+        }
+    }
+    let first = typed.first()?;
+    typed
+        .iter()
+        .find(|(_, column_type)| family(column_type) != family(first.1))
+        .map(|(name, column_type)| {
+            format!(
+                "cursor_column coalesces {} ({}) and {name} ({column_type}), which are different kinds of value; list columns of one type family (integers, text, dates, timestamps, or timestamps with a time zone), or pin them to one type in columns",
+                first.0, first.1
+            )
+        })
+}
+
 /// The read window for a load that filters its own rows, from the window chosen.
 pub(crate) fn read_window(spec: &TableSpec, window: &Window) -> Option<ReadWindow> {
     spec.cursor.as_ref().map(|cursor| ReadWindow {
-        column: cursor.column.clone(),
+        column: cursor.label(),
         from: window.bounds.0.clone(),
         to: window.bounds.1.clone(),
         inclusive: window.inclusive,
@@ -722,20 +796,8 @@ async fn plan_table_once(
         false => cursor_type,
     };
     let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
-    let written = unseen_python_cursor
-        || cursor_name.is_some_and(|name| {
-            schema
-                .write_columns
-                .iter()
-                .any(|column| column.name.eq_ignore_ascii_case(name))
-        });
-    if let Some(problem) = unwritten_column(spec, &schema, cursor_name.filter(|_| !written)) {
-        schema = blocked_plan(vec![problem]);
-    }
-    let cursor_in_table = live.as_deref().is_some_and(|live| {
-        live.iter()
-            .any(|column| cursor_name.is_some_and(|name| column.name.eq_ignore_ascii_case(name)))
-    });
+    schema = checked_cursor(spec, schema, (&desired, unseen_python_cursor));
+    let cursor_in_table = has_cursor(spec, live.as_deref());
     let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
         live.is_some() && cursor_name.is_some() && !cursor_in_table && !options.reload;
@@ -1196,18 +1258,24 @@ fn write_mode(
     }
 }
 
-/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when the cursor is not read.
+/// The source expression of `spec`'s cursor among `read_columns`, as its filter compares it: a coalesced cursor's columns in `COALESCE`, as the destination's maximum reads them; a text cursor bytewise, in code point order, in the source's own dialect (`render_binary_text`), as the destination's maximum is read, whatever collation the source column has; any other cursor, and a source no filter reaches, as it is. `None` when a cursor column is not read.
 pub(crate) fn source_cursor(
     spec: &TableSpec,
     read_columns: &[ReadColumn],
     cursor_type: Option<&ColumnType>,
 ) -> Option<String> {
-    let name = spec.cursor.as_ref()?.column.as_str();
-    let expression = read_columns
-        .iter()
-        .find(|column| column.name.eq_ignore_ascii_case(name))?
-        .expression
-        .as_str();
+    let mut expressions: Vec<&str> = Vec::new();
+    for name in spec.cursor.as_ref()?.columns() {
+        let read = read_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(name))?;
+        expressions.push(read.expression.as_str());
+    }
+    let coalesced = match expressions.as_slice() {
+        [one] => (*one).to_owned(),
+        many => format!("COALESCE({})", many.join(", ")),
+    };
+    let expression = coalesced.as_str();
     let text = matches!(cursor_type, Some(ColumnType::Text | ColumnType::Varchar(_)));
     let dialect = match (text, &spec.warehouse_source) {
         (false, _) => None,
@@ -1220,6 +1288,11 @@ pub(crate) fn source_cursor(
         || expression.to_owned(),
         |dialect| sql_adapter(dialect).render_binary_text(expression),
     ))
+}
+
+/// `filter` widened to the rows whose cursor `expression` is NULL too, which no bound selects (`null_cursor = "include"`); no filter stays none, which reads them already.
+pub(crate) fn with_null_cursors(filter: Option<String>, expression: &str) -> Option<String> {
+    filter.map(|filter| format!("(({filter}) OR {expression} IS NULL)"))
 }
 
 /// `column >= 'from' AND column < 'to'`, from the bounds that are set, and the values bound to its `?` placeholders, in order, as literals of the source's `dialect` (Postgres's when `None`): a numeric cursor's plain-number bounds as numbers (`render_cursor_number`), as BigQuery compares a number with no string; a text, date or wall-clock timestamp cursor's bounds as `binding` writes them: by default an ODBC source's as `?` placeholders bound as their type (no literal reads alike everywhere, since some databases read a backslash in a string as an escape, OpenEdge compares no string with a timestamp, and SQL Server's `{ts}` escape is a `datetime` that rounds milliseconds), or as ODBC escapes for a driver that refuses a bound value; a timestamp bound is written with its column's fractional digits when the source describes them and the bound has no more, else with every digit it has, never rounded, since a driver may describe fewer digits than its values hold; any other bound as the dialect's string literal, so a value holding a quote or a backslash stays one string.
@@ -1284,8 +1357,7 @@ pub(crate) fn cursor_binding(spec: &TableSpec, escapes: Option<bool>) -> CursorB
         return CursorBinding::Literals;
     };
     let pinned_other = spec.pinned.iter().any(|(name, column_type)| {
-        name.eq_ignore_ascii_case(&cursor.column)
-            && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
+        cursor.names(name) && !matches!(column_type, ColumnType::Text | ColumnType::Varchar(_))
     });
     let binds = spec
         .warehouse_source
@@ -1345,7 +1417,7 @@ async fn lower_bound(
     if let Some(start) = start_flag {
         return Ok(Ok((
             Some(start.to_owned()),
-            format!("{} from {start} (--start-cursor)", cursor.column),
+            format!("{} from {start} (--start-cursor)", cursor.label()),
             None,
         )));
     }
@@ -1367,7 +1439,7 @@ async fn lower_bound(
         };
         let note = format!(
             "{} from {from} (now minus lookback {})",
-            cursor.column,
+            cursor.label(),
             humantime::format_duration(lookback)
         );
         return Ok(Ok((Some(from), note, None)));
@@ -1381,16 +1453,21 @@ async fn lower_bound(
         return Ok(Ok(match &cursor_start {
             Some(start) => (
                 Some(start.clone()),
-                format!("{} {label}, from cursor_start {start}", cursor.column),
+                format!("{} {label}, from cursor_start {start}", cursor.label()),
                 None,
             ),
-            None => (None, format!("{} {label}, everything", cursor.column), None),
+            None => (
+                None,
+                format!("{} {label}, everything", cursor.label()),
+                None,
+            ),
         }));
     }
     let spec = request.spec;
     let query = sql_adapter(spec.warehouse).render_max_cursor(&CursorQuery {
         table: &spec.destination,
         column: &cursor.column,
+        coalesce: &cursor.coalesce,
         column_type: cursor_type,
         lookback: cursor.lookback,
         scope: match spec.shared_destination {
@@ -1401,7 +1478,7 @@ async fn lower_bound(
     let Some(query) = query else {
         return Ok(Err(format!(
             "lookback needs a timestamp or date cursor, but {} is {cursor_type}",
-            cursor.column
+            cursor.label()
         )));
     };
     let lookback = cursor
@@ -1431,18 +1508,18 @@ async fn lower_bound(
             };
             let note = format!(
                 "{} {bound} {maximum} (destination maximum{lookback})",
-                cursor.column
+                cursor.label()
             );
             (Some(maximum), note, data_maximum)
         }
         (None, Some(start)) => (
             Some(start.clone()),
-            format!("{} empty table, from cursor_start {start}", cursor.column),
+            format!("{} empty table, from cursor_start {start}", cursor.label()),
             None,
         ),
         (None, None) => (
             None,
-            format!("{} empty table, everything", cursor.column),
+            format!("{} empty table, everything", cursor.label()),
             None,
         ),
     }))
@@ -1539,8 +1616,9 @@ pub(crate) async fn cursor_window(
             "the text cursor bound {bound:?} holds a backslash, which some databases (MySQL by default) read as an escape in a quoted literal, so under cursor_bounds = \"literals\" it could select other rows; bind it as a parameter (cursor_bounds = \"parameters\"), or start past it with --start-cursor"
         )));
     }
+    let expression = request.cursor_expression.unwrap_or_default();
     let (filter, parameters) = source_filter(
-        request.cursor_expression.unwrap_or_default(),
+        expression,
         (
             request.cursor_type,
             source.and_then(|source| source_dialect(source.system)),
@@ -1548,6 +1626,10 @@ pub(crate) async fn cursor_window(
         (from.as_deref().map(|from| (operator, from)), to.as_deref()),
         binding,
     );
+    let filter = match cursor.null_cursor {
+        NullCursor::Include => with_null_cursors(filter, expression),
+        NullCursor::Fail | NullCursor::Ignore => filter,
+    };
     Ok(Ok(Window {
         filter,
         parameters,
@@ -1626,6 +1708,8 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
         .is_some_and(|column| column.expression == quoted(&column.name));
     let indexed = spec.python.is_none()
         && plain_column
+        && cursor.coalesce.is_empty()
+        && cursor.null_cursor != NullCursor::Include
         && spec.source_table.indexed_columns.contains(&cursor.column);
     let ordered_mode = matches!(
         request.mode,
@@ -1802,8 +1886,9 @@ pub(crate) async fn refused_bounds(
         if binding == CursorBinding::Literals {
             return None;
         }
+        let expression = source_cursor(&table.spec, &table.read_columns, Some(&column.output))?;
         let (filter, parameters) = source_filter(
-            &column.expression,
+            &expression,
             (Some(&column.output), None),
             (
                 Some((crate::loader::constants::EXCLUSIVE_BOUND, value)),

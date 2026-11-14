@@ -15,12 +15,22 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::schema_plan::models::DesiredColumn;
 
-/// A query for `MAX(column)` over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
+/// A query for `MAX(column)` (of a coalesced cursor, `MAX(COALESCE(column, ...))`) over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column. `MAX` skips a row whose cursor is NULL, so such rows never move it.
 pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &CursorQuery<'_>,
 ) -> Option<CursorRead> {
-    let column = adapter.render_identifier(request.column);
+    let column = match request.coalesce.is_empty() {
+        true => adapter.render_identifier(request.column),
+        false => format!(
+            "COALESCE({})",
+            std::iter::once(request.column)
+                .chain(request.coalesce.iter().map(String::as_str))
+                .map(|name| adapter.render_identifier(name))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
+    };
     let column = match request.column_type {
         ColumnType::Text | ColumnType::Varchar(_) => adapter.render_binary_text(&column),
         _ => column,

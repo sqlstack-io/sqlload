@@ -291,6 +291,26 @@ impl FakeState {
                 .collect();
             return Ok((vec!["table_name".to_owned()], rows));
         }
+        if let Some(name) = name_after(statement, "SELECT COUNT(*) FROM ")
+            && let Some((_, condition)) = statement.split_once(" WHERE ")
+            && let Some(column) = condition.strip_suffix(" IS NULL")
+        {
+            let parts: Vec<&str> = name.trim_matches('`').split('.').collect();
+            let key = parts[parts.len().saturating_sub(2)..]
+                .join(".")
+                .to_ascii_lowercase();
+            let column = column.trim_matches('`');
+            let found = self
+                .tables
+                .get(&key)
+                .ok_or_else(|| format!("Not found: Table {name}"))?;
+            let nulls = found
+                .rows
+                .iter()
+                .filter(|row| row.get(column).is_none_or(Value::is_null))
+                .count();
+            return Ok((vec!["f0_".to_owned()], vec![vec![json!(nulls.to_string())]]));
+        }
         if let Some(name) = name_after(statement, "SELECT CAST(COUNT(*) AS STRING) FROM ") {
             let rows = self
                 .tables

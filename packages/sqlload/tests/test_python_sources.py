@@ -231,6 +231,20 @@ def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_win
 	assert query(project, 'SELECT id FROM "RAW"."shop__rows" ORDER BY id') == [(1,), (2,), (3,)]
 
 
+def test_given_rows_yielded_with_a_null_cursor_when_loading_again_then_the_table_fails_naming_them_unless_null_cursor_says(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', cursor_column='at')(rows)\n")
+	give(project, "rows", [{"id": 1, "v": "a", "at": "2026-01-01T10:00:00Z"}, {"id": 2, "v": "b", "at": None}])
+	load(project)
+	give(project, "rows", [{"id": 1, "v": "a2", "at": "2026-01-03T10:00:00Z"}, {"id": 2, "v": "b2", "at": None}, {"id": 3, "v": "c", "at": None}])
+	done = sqlload(project, "load")
+	assert done.returncode != 0
+	assert "2 source rows have a NULL at, which an incremental read never selects" in done.stdout + done.stderr
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "a"), (2, "b")]
+	(project / "sources" / "shop.py").write_text((project / "sources" / "shop.py").read_text().replace("cursor_column='at')", "cursor_column='at', null_cursor='include')"))
+	load(project)
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "a2"), (2, "b2"), (3, "c")]
+
+
 def test_given_a_generator_that_raises_when_loading_then_only_its_table_fails_and_nothing_is_left_behind(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='good')(rows)\nshop.table(description='Test table.', name='bad')(rows)\n")
 	give(project, "good", [{"id": 1}])
