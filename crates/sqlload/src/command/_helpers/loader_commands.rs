@@ -25,7 +25,7 @@ use crate::load_events::main::close::close;
 use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::models::EventKind;
-use crate::loader::constants::NO_PYTHON_HOST;
+use crate::loader::constants::{NO_PYTHON_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
@@ -98,6 +98,10 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
 async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, String> {
     let lookup = |name: &str| variable(&request.variables, name);
     let project = parse_project(request.text, &lookup).map_err(|error| error.to_string())?;
+    let transforms = transform_places(&project);
+    if let (None, Some((place, _))) = (&request.host, transforms.first()) {
+        return Err(NO_TRANSFORM_HOST.replace("{place}", place));
+    }
     if project.python_paths.is_empty() {
         return Ok(project);
     }
@@ -110,10 +114,41 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let paths = project.python_paths.clone();
-    let found = tokio::task::spawn_blocking(move || host.discover(&root, &paths))
+    let discovering = Arc::clone(&host);
+    let found = tokio::task::spawn_blocking(move || discovering.discover(&root, &paths))
         .await
         .map_err(|error| format!("Python discovery failed: {error}"))??;
-    parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())
+    let mut project =
+        parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())?;
+    for (_, function) in transforms {
+        if project.transforms.contains_key(&function) {
+            continue;
+        }
+        let checking = Arc::clone(&host);
+        let called = function.clone();
+        let version = tokio::task::spawn_blocking(move || checking.transform_version(&called))
+            .await
+            .map_err(|error| format!("Python transform check failed: {error}"))?;
+        project.transforms.insert(function, version);
+    }
+    project.python_host = Some(host);
+    Ok(project)
+}
+
+/// Each source or table in `project` that sets `transform` (`source x` or `table x.y`), with its function.
+fn transform_places(project: &ProjectConfig) -> Vec<(String, String)> {
+    let mut places: Vec<(String, String)> = Vec::new();
+    for (name, source) in &project.sources {
+        if let Some(function) = &source.defaults.transform {
+            places.push((format!("source {name}"), function.clone()));
+        }
+        for (table, overrides) in &source.tables {
+            if let Some(function) = &overrides.settings.transform {
+                places.push((format!("table {name}.{table}"), function.clone()));
+            }
+        }
+    }
+    places
 }
 
 /// The exit code of a command that succeeded (`ok`), or failed only in `retryable` ways, or failed otherwise.

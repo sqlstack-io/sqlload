@@ -26,7 +26,7 @@ use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
 use crate::test_types::{
-    CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase, FilesScenario,
+    CdcStep, CursorSource, DebugStageTestCase, FileSetTestCase, FilesScenario,
     FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
     MetadataRoundTripTestCase, ParquetFile, ReplacedKeysTestCase, RouteFiles, RouteOutcome,
     RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
@@ -148,26 +148,6 @@ pub(crate) async fn load_selected(
         .await
         .map_err(|error| error.to_string())?;
     load_with_options(project, &plan, destinations, &options).await?;
-    Ok(lines.join("\n"))
-}
-
-/// Plan and apply once, then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
-async fn run_step(
-    project_text: &str,
-    destinations: &BTreeMap<String, Destination>,
-    loads: bool,
-) -> Result<String, String> {
-    let project = described_project(project_text).await?;
-    let mut plan = plan_project(&project, destinations, &PlanOptions::default())
-        .await
-        .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
-    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
-    apply_project(&plan, destinations)
-        .await
-        .map_err(|error| error.to_string())?;
-    plan.tables.retain(|_| loads);
-    load_all(&project, &plan, destinations).await?;
     Ok(lines.join("\n"))
 }
 
@@ -418,6 +398,29 @@ pub(crate) async fn run_files_scenario(
         check_query: test_case.check_query,
     };
     run_written_files(endpoint, directory, scenario).await
+}
+
+/// Load `test_case`'s file set once from a local folder into DuckDB, checking the load's error; the check query's result.
+pub(crate) async fn run_file_set(
+    directory: &std::path::Path,
+    test_case: &FileSetTestCase,
+) -> Result<Option<String>, String> {
+    let files = (test_case.file_set)()?;
+    let scenario = FilesScenario {
+        description: test_case.description,
+        store: local_store,
+        settings: test_case.settings,
+        runs: vec![WrittenRun {
+            files: files
+                .iter()
+                .map(|(key, contents)| (key.as_str(), contents.clone()))
+                .collect(),
+            expected_error: test_case.expected_error,
+            expected_plan: "",
+        }],
+        check_query: test_case.check_query,
+    };
+    run_written_files("", directory, scenario).await
 }
 
 /// Run a JSON or CSV files scenario like [`run_files_scenario`].
@@ -1784,73 +1787,6 @@ pub(crate) fn ssh_settings(
         .replace("SSH_PORT", &bastion.port.to_string())
         .replace("KEYS", &bastion.files.path().display().to_string())
         .replace("FILES", files)
-}
-
-/// Run `test_case` against the target connection `target` (its TOML body), with a `loader_schema` of `schema`: CSV files written to a fresh folder with their modified times, loaded step by step; the check query's result.
-pub(crate) async fn run_merge_case(
-    (target, schema): (&str, &str),
-    test_case: &FilesMergeTestCase,
-) -> Result<Option<String>, String> {
-    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-    let root = directory.path().display().to_string();
-    let text = format!(
-        "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.target]\n{target}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"csv\"\n{}\n",
-        test_case.settings
-    );
-    let project = described_project(&text).await?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let destination = destinations
-        .get("dev")
-        .ok_or_else(|| "no dev destination".to_owned())?;
-    std::fs::create_dir_all(directory.path().join("drop")).map_err(|error| error.to_string())?;
-    for (index, step) in test_case.steps.iter().enumerate() {
-        execute(
-            destination,
-            step.before.iter().map(|sql| (*sql).to_owned()).collect(),
-        )
-        .await
-        .map_err(|error| error.to_string())?;
-        for key in step.removed {
-            std::fs::remove_file(directory.path().join("drop").join(key))
-                .map_err(|error| error.to_string())?;
-        }
-        for file in step.files {
-            let path = directory.path().join("drop").join(file.key);
-            std::fs::create_dir_all(path.parent().unwrap_or(directory.path()))
-                .map_err(|error| error.to_string())?;
-            std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
-            let modified =
-                std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
-            std::fs::File::options()
-                .write(true)
-                .open(&path)
-                .and_then(|opened| opened.set_modified(modified))
-                .map_err(|error| error.to_string())?;
-        }
-        let outcome = run_step(&text, &destinations, step.loads).await;
-        let (plan, error) = (
-            outcome.clone().unwrap_or_default(),
-            outcome.err().unwrap_or_default(),
-        );
-        assert!(
-            words(&error).contains(&words(step.expected_error))
-                && error.is_empty() == step.expected_error.is_empty(),
-            "{} step {}: {error}",
-            test_case.description,
-            index + 1
-        );
-        assert!(
-            plan.contains(step.expected_plan),
-            "{} step {}: {plan}",
-            test_case.description,
-            index + 1
-        );
-    }
-    single_text(destination, test_case.check_query.to_owned())
-        .await
-        .map_err(|error| error.to_string())
 }
 
 /// Write a project loading the NDJSON files of `root/drop/` into `[connections.wh]` (given as `connection`'s settings, schema `raw`) with `settings` added, then load once per run, each after writing its new file; returns the project's file, and fails with the output of a load that fails.

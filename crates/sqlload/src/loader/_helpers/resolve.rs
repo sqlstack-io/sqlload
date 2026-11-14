@@ -1,24 +1,34 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::connection_warehouse::connection_warehouse;
+use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::adapters::dispatch::main::session::live_columns::live_columns;
+use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::Warehouse;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::specs::ColumnSelection;
+use crate::loader::_helpers::specs::missing_description;
 use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
 };
-use crate::loader::constants::PRIMARY_KEY_PLACEHOLDER;
-use crate::loader::models::{ResolvedTables, SkippedTable, TableSpec, UnreadSource};
+use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
+use crate::loader::constants::{NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER};
+use crate::loader::errors::LoaderError;
+use crate::loader::models::{
+    PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, TablePlan, TableSpec, TableTransform,
+    UnreadSource,
+};
 use crate::postgres_source::models::SourceTable;
 use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConfigLines, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig, SourceKind,
-    TableOverride, TableSettings, UnnestSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, ProjectConfig, SourceConfig,
+    SourceKind, TableOverride, TableSettings, UnnestSetting,
 };
+use crate::similar_names::main::nearest_name::nearest_name;
 use crate::ssh_tunnel::models::SshTunnel;
 use std::collections::BTreeMap;
 
@@ -64,7 +74,16 @@ pub(crate) fn resolve_tables(
             );
             target_display_name(&target, name)
         };
-        match resolve_table(&context, table, &overrides) {
+        let transform = table_transform(project, (source, &overrides), &qualified);
+        let resolved_table = match (resolve_table(&context, table, &overrides), transform) {
+            (Err(problems), _) => Err(problems),
+            (Ok(_), Err(problem)) => Err(vec![problem]),
+            (Ok(found), Ok(transform)) => Ok(found.map(|mut spec| {
+                spec.transform = transform;
+                spec
+            })),
+        };
+        match resolved_table {
             Ok(Ok(mut spec)) => {
                 let lines = &project.config_lines;
                 spec.settings_at = settings_at(lines, source_name, &qualified);
@@ -126,6 +145,32 @@ pub(crate) fn resolve_tables(
         }
     }
     resolved
+}
+
+/// The `transform` a table runs (its own, else its source's) with the version `project` imported it at, or why it cannot run.
+fn table_transform(
+    project: &ProjectConfig,
+    (source, overrides): (&SourceConfig, &TableOverride),
+    qualified: &str,
+) -> Result<Option<TableTransform>, String> {
+    let Some(function) = overrides
+        .settings
+        .transform
+        .clone()
+        .or_else(|| source.defaults.transform.clone())
+    else {
+        return Ok(None);
+    };
+    match project.transforms.get(&function) {
+        Some(Ok(version)) => Ok(Some(TableTransform {
+            function,
+            version: version.clone(),
+            older: 0,
+            creates_log: false,
+        })),
+        Some(Err(reason)) => Err(format!("transform {function}: {reason}")),
+        None => Err(NO_TRANSFORM_HOST.replace("{place}", &format!("table {qualified}"))),
+    }
 }
 
 /// A problem for each pair of `specs` (one source's) that dlt's naming loads into one table although their names differ (`order-items` and `order_items`), where one would overwrite or mix with the other's rows.
@@ -548,4 +593,131 @@ pub(crate) fn spec_names(spec: &TableSpec) -> [String; 3] {
         display_name(spec.warehouse, &spec.destination),
         spec.source_table.qualified_name(),
     ]
+}
+
+/// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
+pub(crate) async fn admit_tables(
+    mut plan: ProjectPlan,
+    (source_name, source): (&String, &SourceConfig),
+    (planned, unselected): (Vec<TablePlan>, &[TableSpec]),
+    found: (&BTreeMap<String, Destination>, &PlanOptions),
+) -> Result<ProjectPlan, LoaderError> {
+    let first_load = first_load(&planned, unselected, found).await?;
+    let mut planned = planned;
+    if let Some(problem) = partial_capture(source_name, source.kind, (&planned, unselected)) {
+        for table in &mut planned {
+            table.schema = blocked_plan(vec![problem.clone()]);
+        }
+    }
+    for mut table in planned {
+        let spec = &table.spec;
+        let qualified = spec.source_table.qualified_name();
+        let is_new = !first_load && !table.exists && !spec.approved;
+        let has_settings = source.tables.contains_key(&qualified);
+        match (is_new, spec.new_tables, has_settings) {
+            (true, NewTables::Skip, true) => plan.skipped.push(SkippedTable {
+                source_name: source_name.clone(),
+                source_table: qualified,
+                destination: display_name(spec.warehouse, &spec.destination),
+                reason: "new table (new_tables = \"skip\") has settings but is not approved; add it to include".to_owned(),
+            }),
+            (true, NewTables::Skip, false) => plan.skipped.push(SkippedTable {
+                source_name: source_name.clone(),
+                source_table: qualified,
+                destination: display_name(spec.warehouse, &spec.destination),
+                reason: "new table (new_tables = \"skip\"); add it to include to sync it".to_owned(),
+            }),
+            (true, NewTables::Fail, _) => {
+                plan.failed_sources.insert(source_name.clone());
+                let problem = format!(
+                    "{qualified}: new table and new_tables = \"fail\"; add it to include or exclude it"
+                );
+                plan.problem_names.push((
+                    problem.clone(),
+                    display_name(spec.warehouse, &spec.destination),
+                ));
+                plan.problems.push(problem);
+            }
+            _ => {
+                if let Some(problem) = missing_description(source_name, source, &spec.source_table)
+                {
+                    table.schema = blocked_plan(vec![problem]);
+                }
+                plan.tables.push(table);
+            }
+        }
+    }
+    Ok(plan)
+}
+
+/// Why the selection cannot load `postgres_cdc` source `name`, which blocks every table it picks: it picks some of its tables (`planned`) but not all (`unselected`), and the slot they share would confirm the left-out tables' changes unwritten. A plan problem alone would not stop the picked tables loading.
+fn partial_capture(
+    name: &str,
+    kind: SourceKind,
+    (planned, unselected): (&[TablePlan], &[TableSpec]),
+) -> Option<String> {
+    let partial = kind == SourceKind::PostgresCdc && !planned.is_empty() && !unselected.is_empty();
+    partial.then(|| {
+        let left_out: Vec<String> = unselected
+            .iter()
+            .map(|spec| spec.source_table.qualified_name())
+            .collect();
+        format!(
+            "this selection leaves out {} of source {name}, whose changes share its one slot and would be skipped; select the whole source, or move those tables to another postgres_cdc source",
+            left_out.join(", ")
+        )
+    })
+}
+
+/// Whether this is the source's first load: none of its tables exists in the destination, whether selected (`planned`) or not (`unselected`, looked up only while none is found, a table that cannot be read counting as absent), so `--select` cannot make a later table look present at the first load.
+async fn first_load(
+    planned: &[TablePlan],
+    unselected: &[TableSpec],
+    (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
+) -> Result<bool, LoaderError> {
+    if planned.iter().any(|table| table.exists) {
+        return Ok(false);
+    }
+    for spec in unselected {
+        let Some(destination) = destinations.get(&spec.target) else {
+            continue;
+        };
+        let exists = match files_destination(destination) {
+            Some(_) => plan_table(spec, destination, options)
+                .await
+                .is_ok_and(|table| table.exists),
+            None => live_columns(destination, &spec.destination)
+                .await
+                .is_ok_and(|live| live.is_some()),
+        };
+        if exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// A warning for each selector matching no source or table, with the nearest name: `load` would otherwise say only `0 selected`.
+pub(crate) fn unmatched_selectors(
+    project: &ProjectConfig,
+    options: &PlanOptions,
+    names: &[String],
+) -> Vec<String> {
+    let known: Vec<&str> = names
+        .iter()
+        .map(String::as_str)
+        .chain(project.sources.keys().map(String::as_str))
+        .collect();
+    options
+        .select
+        .iter()
+        .chain(&options.exclude)
+        .filter(|selector| !known.contains(&selector.as_str()))
+        .map(
+            |selector| match nearest_name(selector, known.iter().copied()) {
+                Some(nearest) => format!("no table matches {selector}; did you mean {nearest}?"),
+                None => format!("no table matches {selector}"),
+            },
+        )
+        .collect()
 }

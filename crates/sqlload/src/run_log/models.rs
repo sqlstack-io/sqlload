@@ -53,6 +53,9 @@ pub struct RunRecord {
     /// The run's commit this record went with, from 1, when the run committed in batches.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch: Option<u64>,
+    /// The version of the table's `transform` a load ran (its name, `@` and a hash of the file it is defined in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<String>,
 }
 
 /// What a finished run adds to its record.

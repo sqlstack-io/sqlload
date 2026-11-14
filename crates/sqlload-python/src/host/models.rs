@@ -1,19 +1,19 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
 use pyo3::types::PyAnyMethods;
-use pyo3::{PyResult, Python};
+use pyo3::{Py, PyAny, PyResult, Python};
 use sqlload::python_sources::errors::ReadError;
-use sqlload::python_sources::models::{PythonSource, TableRead};
+use sqlload::python_sources::models::{PythonSource, TableRead, TransformCall};
 use sqlload::python_sources::types::{BatchStream, PythonHost, Streamed};
 
-use crate::bindings::constants::{
-    DEFAULT_BATCH_ROWS, DEFAULT_DICT_CROSSING, DEFAULT_MAX_QUEUED, DEFAULT_MAX_QUEUED_BYTES,
-};
 use crate::crossing::errors::CrossError;
-use crate::crossing::main::default_parse_threads::default_parse_threads;
+use crate::crossing::main::crossing_options::crossing_options;
+use crate::crossing::main::returned_batches::returned_batches;
 use crate::crossing::main::table_batches::table_batches;
-use crate::crossing::models::{CrossingOptions, Polled, ReadContext, TableBatches};
+use crate::crossing::models::{Polled, ReadContext, TableBatches};
 use crate::host::_helpers::python_errors::{error_text, read_error};
 use crate::host::constants::RUNTIME_MODULE;
 
@@ -39,14 +39,7 @@ impl PythonHost for ExtensionHost {
 
     fn read_table(&self, request: &TableRead) -> Result<Box<dyn BatchStream>, String> {
         let text = serde_json::to_string(request).map_err(|error| error.to_string())?;
-        let options = CrossingOptions {
-            batch_rows: DEFAULT_BATCH_ROWS,
-            max_queued: DEFAULT_MAX_QUEUED,
-            dict_crossing: DEFAULT_DICT_CROSSING,
-            parse_threads: default_parse_threads(),
-            panic_at: None,
-            max_queued_bytes: DEFAULT_MAX_QUEUED_BYTES,
-        };
+        let options = crossing_options();
         Python::attach(|py| -> PyResult<TableBatches> {
             let runtime = py.import(RUNTIME_MODULE)?;
             let iterator = runtime.call_method1("start_table", (text,))?;
@@ -63,6 +56,7 @@ impl PythonHost for ExtensionHost {
                 snapshot.as_ref(),
                 options,
                 ReadContext {
+                    table: request.table.clone(),
                     flatten: request.flatten.clone(),
                     connections: request.connections.clone(),
                     cursor_column: request.cursor.as_ref().map(|cursor| cursor.column.clone()),
@@ -83,6 +77,33 @@ impl PythonHost for ExtensionHost {
                 .extract()
         })
         .map_err(|error| error_text(&error))
+    }
+
+    fn transform_version(&self, name: &str) -> Result<String, String> {
+        let checked = Python::attach(|py| -> PyResult<(Option<String>, Option<String>)> {
+            py.import(RUNTIME_MODULE)?
+                .call_method1("transform_version", (name,))?
+                .extract()
+        })
+        .map_err(|error| error_text(&error))?;
+        match checked {
+            (Some(version), _) => Ok(version),
+            (None, problem) => Err(problem.unwrap_or_else(|| format!("{name} cannot run"))),
+        }
+    }
+
+    fn transform(
+        &self,
+        call: &TransformCall,
+        rows: Vec<RecordBatch>,
+        schema: SchemaRef,
+    ) -> Result<Box<dyn BatchStream>, String> {
+        let (batches, returned) =
+            returned_batches(call, (rows, schema), (crossing_options(), Vec::new()))?;
+        Ok(Box::new(TransformBatches {
+            batches: PythonBatches(batches),
+            returned,
+        }))
     }
 
     fn finish(&self) {
@@ -113,5 +134,28 @@ impl BatchStream for PythonBatches {
                 Polled::Finished => return None,
             }
         }
+    }
+}
+
+/// What a `transform` returned or yielded, as the engine reads it, and the Python object noting whether any of it was dicts.
+#[derive(Debug)]
+pub struct TransformBatches {
+    batches: PythonBatches,
+    returned: Py<PyAny>,
+}
+
+impl BatchStream for TransformBatches {
+    fn next_batch(&mut self) -> Option<Result<Streamed, ReadError>> {
+        self.batches.next_batch()
+    }
+
+    fn crossed_dicts(&self) -> bool {
+        Python::attach(|py| {
+            self.returned
+                .bind(py)
+                .getattr("dicts")
+                .and_then(|dicts| dicts.extract::<bool>())
+                .is_ok_and(|dicts| dicts)
+        })
     }
 }

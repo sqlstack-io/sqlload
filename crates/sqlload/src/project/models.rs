@@ -52,6 +52,12 @@ pub struct ProjectConfig {
     /// Where settings are written in the project's file, for hints; empty for a project parsed from text alone.
     #[serde(skip)]
     pub config_lines: ConfigLines,
+    /// The Python host that imported `python_paths`, which runs `transform` functions; `None` in the standalone executable.
+    #[serde(skip)]
+    pub python_host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
+    /// Each `transform` named in the project: its version (a hash of the file it is defined in), or why it cannot run.
+    #[serde(skip)]
+    pub transforms: BTreeMap<String, Result<String, String>>,
 }
 
 /// The lines of a project file's sources, tables and their `unique_key` (see [`crate::project::main::config_lines::config_lines`]).
@@ -819,6 +825,9 @@ pub struct TableSettings {
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
+    /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
+    #[serde(default)]
+    pub transform: Option<String>,
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.

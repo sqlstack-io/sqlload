@@ -5,7 +5,8 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_tls::start_postgres_tls;
 
-use crate::helpers::{described_project, run_async, run_merge_case, run_sqlload, words};
+use crate::helpers::{described_project, run_async, run_sqlload, words};
+use crate::merge_helpers::run_merge_case;
 use crate::postgres_helpers::{load_once, project_text, text};
 use crate::test_files_to_duckdb::{
     MERGE_CHECK, MERGE_FAIL_SETTINGS, MERGE_SETTINGS, MERGE_SORT_SETTINGS,
@@ -339,6 +340,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     expected_error: "",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
@@ -364,6 +366,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     expected_error: "",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
@@ -381,6 +384,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     }],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
@@ -406,6 +410,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     ],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
                 }],
@@ -424,6 +429,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     }],
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/a.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (5)",
                     expected_plan: "",
                 }],
@@ -456,6 +462,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -468,6 +475,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "2 files, one commit each",
                     },
                     MergeStep {
@@ -476,6 +484,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                 ],
@@ -503,6 +512,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -515,6 +525,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "1 file, one commit each",
                     },
                 ],
@@ -539,6 +550,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "merge (unique_key: id; repeated keys fail; NULLs in keys match)",
                     },
                     MergeStep {
@@ -551,6 +563,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                         expected_error: "",
                         removed: &[],
                         loads: true,
+                        reload: false,
                         expected_plan: "1 file, one commit each",
                     },
                 ],
@@ -573,6 +586,7 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                     expected_error: "create one that treats them as equal, CREATE UNIQUE INDEX CONCURRENTLY ON \"raw\".\"scores\" (\"id\") NULLS NOT DISTINCT, then ALTER TABLE raw.scores DROP CONSTRAINT scores_id_key",
                     removed: &[],
                     loads: true,
+                    reload: false,
                     expected_plan: "",
                 }],
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",

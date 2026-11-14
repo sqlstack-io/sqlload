@@ -11,7 +11,7 @@ pub fn batch_refusals(
 ) -> Vec<(String, String)> {
     let mut refused: Vec<(String, String)> = Vec::new();
     for data in files {
-        let Some(footer) = footers.parquet.get(&data.file.relative_key) else {
+        let Some(footer) = footers.parquet.get(&data.file.store_key()) else {
             continue;
         };
         for column in parquet_columns(footer) {

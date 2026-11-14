@@ -1038,6 +1038,8 @@ pub(crate) struct MergeStep {
     pub(crate) removed: &'static [&'static str],
     /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
     pub(crate) loads: bool,
+    /// Whether the step plans and loads with `--reload`.
+    pub(crate) reload: bool,
     /// Text the load's error must contain; empty when it must succeed.
     pub(crate) expected_error: &'static str,
     /// Text the plan must contain when the load succeeds.
@@ -1306,4 +1308,28 @@ pub(crate) struct BigQueryNullCursorTestCase {
     pub(crate) expected_count_query: bool,
     /// The loaded labels, NULL as `NULL`.
     pub(crate) expected_values: &'static str,
+}
+
+/// A Parquet files source into DuckDB loaded once from a file set: the load's error and the rows it left.
+pub(crate) struct FileSetTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: SourceFiles,
+    /// Text the load's error must contain; empty when it must succeed.
+    pub(crate) expected_error: &'static str,
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// An append Parquet source under `drop/` with `after_load = { move_to = "done" }`, loaded into DuckDB by the executable, then given `later` files and loaded again with `--reload --yes`.
+pub(crate) struct ArchivedReloadTestCase {
+    pub(crate) description: &'static str,
+    /// The files the first load reads and moves to `done/`, by key below `drop/`.
+    pub(crate) first: &'static [ParquetFile],
+    /// The files written to `drop/` before the reload.
+    pub(crate) later: &'static [ParquetFile],
+    /// Text the reload's plan must contain.
+    pub(crate) expected_plan: &'static str,
+    /// Every row as `id:score`, in order, after the reload.
+    pub(crate) expected_rows: &'static str,
 }

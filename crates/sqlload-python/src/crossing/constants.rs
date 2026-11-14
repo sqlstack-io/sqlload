@@ -21,3 +21,6 @@ pub(crate) const HTTP_JOB_METHOD: &str = "__sqlload_http_job__";
 
 /// The method of an `sl.checkpoint` that returns its state as JSON.
 pub(crate) const CHECKPOINT_METHOD: &str = "__sqlload_checkpoint__";
+
+/// How long a page `transform`'s crossing is waited on at a time; it polls again until the function's output ends.
+pub(crate) const PAGE_POLL: std::time::Duration = std::time::Duration::from_secs(3600);

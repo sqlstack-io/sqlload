@@ -2,19 +2,27 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
+use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
+use crate::adapters::files::main::clear_pending::clear_pending;
+use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::table_path::table_path;
 use crate::adapters::files::models::{
     FilesDestination, FolderClaim, TableFiles, TablePath, TablePathRequest,
 };
+use crate::adapters::files::models::{PartitionFolder, PendingPhase, PendingRun, ReplacedFiles};
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::delete_files::delete_files;
+use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
+use crate::files_source::constants::NANOSECOND_SCALE;
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::files_source::models::{FileColumn, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
@@ -23,12 +31,14 @@ use crate::loader::models::{
 };
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
-use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
+use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
@@ -294,7 +304,7 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             removing.strategy
         ));
     }
-    if table.mode == WriteMode::Recreate {
+    if table.mode == WriteMode::Recreate || table.schema.action == TableAction::Recreate {
         problems.push(format!(
             "{place}; --reload would drop the other tables' rows"
         ));
@@ -425,4 +435,122 @@ pub(crate) async fn give_back(folder: &OpenFolder, lease: &Lease) {
     if let Err(error) = release_lease(folder, lease).await {
         tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
     }
+}
+
+/// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.
+pub(crate) fn nanosecond_columns(
+    spec: &TableSpec,
+    columns: &[FileColumn],
+    live: Option<&[LiveColumn]>,
+) -> Vec<String> {
+    match sql_adapter(spec.warehouse).keeps_nanoseconds() {
+        true => columns
+            .iter()
+            .filter(|column| {
+                matches!(
+                    column.stored_read,
+                    StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+                )
+            })
+            .filter(|column| {
+                let loaded = spec.source_table.loaded_as(&column.name);
+                !spec.pinned.contains_key(loaded) && fewer_digits(live, loaded).is_none()
+            })
+            .map(|column| column.name.clone())
+            .collect(),
+        false => Vec::new(),
+    }
+}
+
+/// A warning for each column the files store at nanoseconds but the live table holds at fewer digits, so the load cuts them; a column whose type is pinned is the user's choice and is not warned about.
+pub(crate) fn truncated_nanoseconds(spec: &TableSpec, live: Option<&[LiveColumn]>) -> Vec<String> {
+    let Some(files) = &spec.files else {
+        return Vec::new();
+    };
+    files
+        .table
+        .columns
+        .iter()
+        .filter(|column| {
+            matches!(
+                column.stored_read,
+                StoredRead::Nanos | StoredRead::Epoch(NANOSECOND_SCALE)
+            ) && !spec
+                .pinned
+                .contains_key(spec.source_table.loaded_as(&column.name))
+        })
+        .filter_map(|column| truncated_warning(live, spec.source_table.loaded_as(&column.name)))
+        .collect()
+}
+
+/// The warning for column `name` when the live column holds fewer than nanosecond digits.
+fn truncated_warning(live: Option<&[LiveColumn]>, name: &str) -> Option<String> {
+    let digits = fewer_digits(live, name)?;
+    Some(format!(
+        "{name}: nanoseconds in the files, but the column holds {digits} digits after the second, so they are truncated.\nRebuild the column at (9) (--reload) to keep them."
+    ))
+}
+
+/// The digits after the second the live column `name` holds, when fewer than nanoseconds, so SQLLoad's reader cuts its values.
+fn fewer_digits(live: Option<&[LiveColumn]>, name: &str) -> Option<i64> {
+    live.into_iter()
+        .flatten()
+        .find(|existing| existing.name.eq_ignore_ascii_case(name))
+        .and_then(|existing| existing.fraction_digits)
+        .filter(|digits| *digits < i64::from(NANOSECOND_SCALE))
+}
+
+/// The replaced files a commit deletes: those of the partitions it wrote, and, at the last commit, every other file the load replaces (everything for `replace`, the window's partitions for `delete_insert`); never one already deleted.
+pub(crate) fn commit_deletes(
+    replaced: &ReplacedFiles,
+    partition: Option<&PartitionFolder>,
+    (written, last): (&BTreeSet<String>, bool),
+    deleted: &BTreeSet<String>,
+) -> Vec<String> {
+    let folders: Vec<String> = match partition {
+        Some(partition) => written
+            .iter()
+            .map(|value| format!("{}/", partition.name(value)))
+            .collect(),
+        None => Vec::new(),
+    };
+    let mut keys: Vec<String> = written
+        .iter()
+        .flat_map(|value| replaced.by_partition.get(value).into_iter().flatten())
+        .cloned()
+        .collect();
+    for key in &replaced.always {
+        let written_folder = folders.iter().any(|folder| key.starts_with(folder));
+        if last || written_folder {
+            keys.push(key.clone());
+        }
+    }
+    keys.retain(|key| !deleted.contains(key));
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+pub(crate) async fn replace_files(
+    (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
+    file_id: &str,
+    (keys, run): (&[String], Option<&PendingRun>),
+) -> Result<(), LoaderError> {
+    keep_lease(table_folder, lease, lease_now())
+        .await?
+        .map_err(LoaderError::Invalid)?;
+    mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
+    if let Some(run) = run {
+        let records = OpenFolder {
+            store: folder.store.clone(),
+            location: Location {
+                store: folder.location.store.clone(),
+                prefix: run.prefix.clone(),
+            },
+        };
+        write_file(&records, &run.name, Bytes::from(run.json.clone())).await?;
+    }
+    delete_files(folder, keys).await?;
+    Ok(clear_pending(folder, file_id).await?)
 }

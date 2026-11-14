@@ -295,8 +295,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail")` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. From 0.45.0, a response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail")` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` is as for `paginate`. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail", transform=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. From 0.45.0, a response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). From 0.52.0, `transform` reshapes each page's rows in Python before they load; see [Transforming each page](#transforming-each-page). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail", transform=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` is as for `paginate`. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). From 0.52.0, `transform` is as for `paginate`, called once per page of each key. |
 
 | Paginator | Next page |
 |-----------|-----------|
@@ -327,8 +327,9 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
   Another status fails, unless `on_status` maps it to `"skip"`.
 - The job is checked before any request. Errors name the request, the status and the start of the
   body, with the connection's secrets replaced by `***`.
-- A job's rows never come back into Python. Reading a row from a job fails (rule
-  `python_row_loop`); filter rows downstream.
+- A job's rows never come back into Python one at a time. Reading a row from a job fails (rule
+  `python_row_loop`); filter rows downstream, or reshape each page with
+  [`transform`](#transforming-each-page).
 
 ### Reading pages ahead
 
@@ -367,6 +368,77 @@ that way.
 or empty pointer, or no `rel="next"` link. That is how an API says it has no more pages, so SQLLoad
 can't tell it from an error response that also leaves the pointer out; with `select` set, such a
 response usually lacks the rows' path too, and fails as above.
+
+### Transforming each page
+
+From 0.52.0. `transform=` on `paginate` or `fan_out` calls a Python function once per page, in page
+order, on the page's rows after `select`, `fields` and `cells`. SQLLoad still makes every request,
+with its paging, retries and read-ahead; the function only reshapes what a page returned. It's the
+same kind of function a [files table's `transform`](/docs/sources/files/#transforming-each-file)
+runs: `f(rows, ctx)`, with the page's rows as a `pyarrow.Table`, returning or yielding dicts, lists of
+dicts, a `pyarrow.Table`, or a polars or pandas DataFrame. Pass the function itself, or the name
+`@sl.transform` registered it under. A function passed itself is the one called, even when another
+file registers a function of the same name, and it needn't be registered at all:
+
+```python title="sources/shop.py"
+import json
+
+import sqlload as sl
+
+shop = sl.source("shop", connection="shop", write_strategy="replace")
+api = sl.http(shop)
+
+
+@sl.transform
+def order_lines(rows, ctx):
+    for order in rows.to_pylist():
+        for line in json.loads(order["lines"]):
+            yield {"region": ctx.key["region"], "order_id": order["id"], **line}
+
+
+@shop.table(description="Order lines, one row per line, by region.")
+def lines(ctx):
+    return api.fan_out("/regions/{region}/orders", over=["north", "south"], select="$.orders",
+                       transform=order_lines)
+```
+
+```console
+$ sqlload load
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+
+created  raw.shop__lines  6 columns
+loaded  raw.shop__lines      6 rows 0.1s
+
+✓ Completed  1 loaded, 6 rows, 0.2s
+├── slowest      raw.shop__lines 0.1s
+└── peak memory  133 MiB
+```
+
+- `ctx.unit` is `"page"`, `ctx.page` the page's number within its request (from 1), and
+  `ctx.key` the fields of the key a fan-out requested it for (`None` in a `paginate` or with
+  `batch=`). `ctx.table` is the table's name.
+- A page's nested objects and lists arrive as JSON text, as `lines` does above: `json.loads` them,
+  or pick their values with [`fields`](#fields) first.
+- Every page that's read goes through the function once, including an empty last page, such as the
+  one that ends `sl.page_number` paging. What it returns or yields loads in page order, batch by
+  batch, and `flatten`, `columns` and `mask` apply to it.
+- A function that raises, or returns or yields something else, fails the table, naming the request:
+  `GET .../regions/north/orders: transform order_lines failed: ...`.
+- `plan` never calls the table function, so it checks a `transform="name"` written as a literal and
+  fails when no function, or two, are registered under it, as for [field paths](#fields):
+
+  ```console
+  $ sqlload plan
+  Plan ready  1 selected
+
+  Errors (1)
+  └── raw.shop__lines
+      └── reason  transform order_line: no function is registered as order_line with @sl.transform; the registered ones are order_lines
+
+  ✗ Plan failed with errors  1 selected
+  ```
+
+- `transform` is for the job whose rows load; a job given as a fan-out's `over=` refuses it.
 
 ### Multi-level fan-out
 
@@ -584,3 +656,5 @@ To inspect or correct a logged position, see [`sqlload logged-state`](/docs/cli/
 |------|---------|
 | `sl.__version__` | The package version. |
 | `sl.executable()` | The path of the `sqlload` command installed with the package, else the one on `PATH`. |
+| `@sl.transform`, `@sl.transform("name")` | From 0.52.0. Registers a function under its own name, or the one given, as a transform for a [files](/docs/sources/files/#transforming-each-file) or [Google Sheets](/docs/sources/google-sheets/#transforming-each-range) table's `transform = "name"`, or an `sl.http` job's [`transform=`](#transforming-each-page). Returns the function unchanged. |
+| `sl.TransformContext` | From 0.52.0. The `ctx` a transform gets: `unit` (`"file"`, `"range"` or `"page"`), `table`, and the unit's details. |

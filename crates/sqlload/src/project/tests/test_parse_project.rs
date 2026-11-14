@@ -325,6 +325,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] format = \"xml\" needs xml.record_path",
         },
         ParseProjectErrorTestCase {
+            description: "a transform is for files and google_sheets tables",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\ntransform = \"fix_rows\"\n",
+            expected_message: "[sources.app] transform is for kind = \"files\" and kind = \"google_sheets\" tables",
+        },
+        ParseProjectErrorTestCase {
+            description: "a transform names the function it runs",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ntransform = \" \"\n",
+            expected_message: "[sources.raw] transform is empty; give the name @sl.transform registered the function under",
+        },
+        ParseProjectErrorTestCase {
+            description: "a transform is found on python_paths",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ntransform = \"metrics\"\n",
+            expected_message: "[sources.raw] transform needs python_paths, naming the folder that holds the @sl.transform function",
+        },
+        ParseProjectErrorTestCase {
             description: "xlsx options need format = xlsx",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nxlsx = { sheet = \"Orders\" }\n",
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
