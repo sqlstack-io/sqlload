@@ -20,7 +20,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
     BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
-    ItemSpec, SourceSpellingTestCase, TransformReaderTestCase,
+    ItemSpec, ReloadOrderTestCase, SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -280,6 +280,39 @@ pub(crate) fn merged_file_round_trip(
     Ok((loaded.name, loaded.version))
 }
 
+/// The keys of `test_case`'s files in the order a merge `--reload` applies them.
+pub(crate) fn reload_keys(test_case: &ReloadOrderTestCase) -> Vec<String> {
+    use crate::file_store::models::StoredFile;
+    use crate::files_source::models::{DataFile, LoadedFile};
+    let files: Vec<DataFile> = test_case
+        .files
+        .iter()
+        .map(|(key, modified_ms)| DataFile {
+            file: StoredFile {
+                path: object_store::path::Path::from(*key),
+                relative_key: (*key).to_owned(),
+                size: 1,
+                etag: None,
+                modified_ms: *modified_ms,
+                member: None,
+            },
+            partitions: Vec::new(),
+        })
+        .collect();
+    let merged: Vec<LoadedFile> = test_case
+        .merged
+        .iter()
+        .map(|(name, version)| LoadedFile {
+            name: (*name).to_owned(),
+            version: (*version).to_owned(),
+        })
+        .collect();
+    crate::loader::_helpers::run_log::reload_order(files, "drop/", &merged)
+        .into_iter()
+        .map(|data| data.file.relative_key)
+        .collect()
+}
+
 /// A two-row batch with an `id` column and schema metadata through `with_constants`: whether the result equals the batch given, and each of its columns as `name:Arrow type=value,value`; or the error.
 pub(crate) fn constants_added(
     constants: &[(&str, crate::column_types::models::ColumnType, &str)],
@@ -449,6 +482,7 @@ pub(crate) fn transform_reader(
         notes: Vec::new(),
         copy_to_internal_stage: false,
         transform: None,
+        archive: None,
     });
     spec.transform = test_case.transform.map(|function| TableTransform {
         function: function.to_owned(),

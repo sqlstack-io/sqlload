@@ -19,7 +19,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec};
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
-use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::{LiveColumn, TableAction};
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
 pub(crate) async fn clean_staging(run: &LoadRun<'_>, plan: &ProjectPlan) {
@@ -276,7 +276,7 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             removing.strategy
         ));
     }
-    if table.mode == WriteMode::Recreate {
+    if table.mode == WriteMode::Recreate || table.schema.action == TableAction::Recreate {
         problems.push(format!(
             "{place}; --reload would drop the other tables' rows"
         ));

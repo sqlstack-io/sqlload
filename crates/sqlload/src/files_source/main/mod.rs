@@ -5,6 +5,7 @@ pub mod batch_headers;
 pub mod batch_refusals;
 pub mod constant_columns;
 pub mod discover_files;
+pub mod discover_reload_files;
 pub mod footer_columns;
 pub mod key_columns;
 pub mod merge_order;

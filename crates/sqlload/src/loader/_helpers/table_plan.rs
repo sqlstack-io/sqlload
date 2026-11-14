@@ -1143,13 +1143,15 @@ pub(crate) struct Window {
     pub(crate) maximum: Option<String>,
 }
 
+/// The write mode of `spec`'s table: `--reload` rebuilds it, except that a files source's merge keeps merging, file by file, into the table it swaps in at the end.
 fn write_mode(
     spec: &TableSpec,
     reload: bool,
     from: Option<String>,
     to: Option<String>,
 ) -> WriteMode {
-    match (reload, spec.strategy) {
+    let merges_files = spec.files.is_some() && spec.strategy == WriteStrategy::Merge;
+    match (reload && !merges_files, spec.strategy) {
         (true, _) => WriteMode::Recreate,
         (false, WriteStrategy::Append) => WriteMode::Append,
         (false, WriteStrategy::Replace) => WriteMode::Replace,

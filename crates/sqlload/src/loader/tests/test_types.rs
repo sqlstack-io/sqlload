@@ -131,6 +131,15 @@ pub(crate) struct MergedFileTestCase {
     pub(crate) expected_file: (&'static str, &'static str),
 }
 
+pub(crate) struct ReloadOrderTestCase {
+    pub(crate) description: &'static str,
+    /// The files listed now below `drop/`, by key and modified time (their version is `1-{time}`).
+    pub(crate) files: &'static [(&'static str, i64)],
+    /// The table's merge records, oldest first, as name (`drop/{key}`) and version.
+    pub(crate) merged: &'static [(&'static str, &'static str)],
+    pub(crate) expected_keys: &'static [&'static str],
+}
+
 pub(crate) struct ConstantsAddedTestCase {
     pub(crate) description: &'static str,
     /// The constants added: name, type and value as text.

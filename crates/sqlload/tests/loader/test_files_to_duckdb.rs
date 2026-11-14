@@ -2,15 +2,19 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    local_store, run_async, run_files_scenario, run_large_partition, run_merge_case,
-    run_source_row_upgrade, seaweedfs_store,
+    local_store, run_async, run_files_scenario, run_large_partition, run_source_row_upgrade,
+    seaweedfs_store,
 };
+use crate::merge_helpers::run_merge_case;
 use crate::test_types::SourceRowUpgradeTestCase;
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 
 /// Every row as `id:v`, then how many merged files the run log records.
 pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+
+/// Every row as `id:v`, the run log's events in order (each run with its file), and how many staging or build tables are left.
+const RELOAD_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT string_agg(event || coalesce(':' || regexp_extract(json_extract_string(record_json, '$.files[0]'), '([a-z]+[.]csv)', 1), ''), ',' ORDER BY recorded_at) FROM raw._sqlload_runs WHERE table_name = 'scores') || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%')";
 
 pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
@@ -488,6 +492,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     ],
                     expected_error: "",
                     loads: true,
+                    reload: false,
                     expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
@@ -512,6 +517,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     ],
                     expected_error: "",
                     loads: true,
+                    reload: false,
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
@@ -528,6 +534,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         modified_secs: 1_000,
                     }],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "merge (unique_key: id)",
                 }],
@@ -552,6 +559,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         },
                     ],
                     loads: true,
+                    reload: false,
                     expected_error: "",
                     expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
                 }],
@@ -570,6 +578,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 1_000,
                         }],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "_sqlload_source_row is not written, so a file's rows have no order to pick the last of a repeated key by",
                     },
@@ -581,6 +590,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 2_000,
                         }],
                         loads: true,
+                        reload: false,
                         expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
                         expected_plan: "",
                     },
@@ -599,6 +609,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         modified_secs: 1_000,
                     }],
                     loads: true,
+                    reload: false,
                     expected_error: "dedup_sort breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
                     expected_plan: "",
                 }],
@@ -616,6 +627,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         modified_secs: 1_000,
                     }],
                     loads: true,
+                    reload: false,
                     expected_error: "drop/a.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (5)",
                     expected_plan: "",
                 }],
@@ -647,6 +659,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         ],
                         expected_error: "drop/b.csv: the file repeats its unique_key: 1 value(s) of (id) appear in more than one row, such as (1)",
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -658,6 +671,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         expected_error: "",
                         loads: true,
+                        reload: false,
                         expected_plan: "2 files, one commit each",
                     },
                     MergeStep {
@@ -665,6 +679,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         files: &[],
                         expected_error: "",
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                 ],
@@ -690,6 +705,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             },
                         ],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -697,6 +713,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         before: &["DROP TABLE raw.scores"],
                         files: &[],
                         loads: false,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -704,6 +721,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         before: &[],
                         files: &[],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "2 files, one commit each",
                     },
@@ -723,6 +741,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 1_000,
                         }],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "",
                     },
@@ -734,6 +753,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 2_000,
                         }],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "1 file, one commit each",
                     },
@@ -745,6 +765,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                             modified_secs: 1_000,
                         }],
                         loads: true,
+                        reload: false,
                         expected_error: "",
                         expected_plan: "1 file, one commit each",
                     },
@@ -772,6 +793,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         ],
                         expected_error: "",
                         loads: true,
+                        reload: false,
                         expected_plan: "",
                     },
                     MergeStep {
@@ -783,11 +805,121 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         }],
                         expected_error: "",
                         loads: true,
+                        reload: false,
                         expected_plan: "1 file, one commit each",
                     },
                 ],
                 check_query: MERGE_CHECK,
                 expected_result: "1:a2|3",
+            },
+        ];
+        for test_case in &test_cases {
+            let result = run_merge_case(
+                ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+                test_case,
+            )
+            .await?;
+            assert_eq!(
+                result.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_order_into_a_new_table_swapped_in_with_its_records()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [
+            FilesMergeTestCase {
+                description: "--reload merges every file oldest first into a new table, records a reset and each file with the swap, and the next load reads none",
+                settings: MERGE_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n1,c\n",
+                            modified_secs: 3_000,
+                        }],
+                        loads: true,
+                        reload: true,
+                        expected_error: "",
+                        expected_plan: "merge (unique_key: id) into a new table, swapped in at the end (--reload)",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "0 new of 3 listed",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:c,2:a|reset,run:a.csv,run:b.csv,reset,run:a.csv,run:b.csv,run:c.csv|0",
+            },
+            FilesMergeTestCase {
+                description: "a --reload failing on its third file leaves the old table, its run log and no build table",
+                settings: MERGE_FAIL_SETTINGS,
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[
+                            MergeFile {
+                                key: "a.csv",
+                                contents: "id,v\n1,a\n2,a\n",
+                                modified_secs: 1_000,
+                            },
+                            MergeFile {
+                                key: "b.csv",
+                                contents: "id,v\n1,b\n",
+                                modified_secs: 2_000,
+                            },
+                        ],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "c.csv",
+                            contents: "id,v\n3,c\n3,cc\n",
+                            modified_secs: 3_000,
+                        }],
+                        loads: true,
+                        reload: true,
+                        expected_error: "drop/c.csv: the file repeats its unique_key",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:b,2:a|reset,run:a.csv,run:b.csv|0",
             },
         ];
         for test_case in &test_cases {
@@ -830,6 +962,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
                 ],
                 expected_error: "",
                 loads: true,
+                reload: false,
                 expected_plan: "1 batch of whole partitions, up to 1,000 files or about 1 GB per commit",
             }],
             check_query: "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY v) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = '_sqlload_runs')",

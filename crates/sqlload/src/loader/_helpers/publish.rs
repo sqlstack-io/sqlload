@@ -52,7 +52,7 @@ use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::batch_columns::batch_columns;
@@ -73,14 +73,16 @@ use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::python::without_deleted_items;
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::append_run;
-use crate::loader::_helpers::run_log::ensure_merge_log;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
-use crate::loader::_helpers::run_log::merged_record;
 use crate::loader::_helpers::run_log::transformed;
+use crate::loader::_helpers::run_log::{
+    in_file, merge_rebuild, merged_file_text, merged_record, swap_rebuild,
+};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
+use crate::loader::_helpers::sources::unarchived;
 use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::specs::files_read_as;
 use crate::loader::_helpers::table_plan::{cursor_binding, source_filter};
@@ -94,6 +96,7 @@ use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
 use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
+use crate::loader::models::FilesSource;
 use crate::loader::models::FolderSwap;
 use crate::loader::models::Publisher;
 use crate::loader::models::RunEntry;
@@ -491,9 +494,10 @@ impl Publisher {
         if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
         }
-        if merges_files(&table) {
-            ensure_merge_log(&table, &destination).await?;
-        }
+        let rebuild = match merges_files(&table) {
+            true => merge_rebuild(&table, &destination).await?,
+            false => None,
+        };
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
@@ -640,6 +644,7 @@ impl Publisher {
             merged_file: None,
             fed_files: Vec::new(),
             settled_files: Vec::new(),
+            rebuild,
         })
     }
 
@@ -817,11 +822,15 @@ impl Publisher {
             }
             _ => {}
         }
+        if let Some(rebuild) = &self.rebuild {
+            swap_rebuild(&self.table, &self.destination, rebuild).await?;
+        }
         let spec = &self.table.spec;
         let adapter = sql_adapter(spec.warehouse);
+        let swapped = self.at_end || self.rebuild.is_some();
         let comment = adapter
             .render_table_comment(&spec.destination, &spec.description)
-            .filter(|_| self.at_end && self.files.is_none() && !adapter.keeps_tables());
+            .filter(|_| swapped && self.files.is_none() && !adapter.keeps_tables());
         if let Some(comment) = comment
             && let Err(error) = execute(&self.destination, vec![comment]).await
         {
@@ -852,12 +861,14 @@ impl Publisher {
                 table: format!("{}{SWAP_SUFFIX}", staging.table),
                 ..staging.clone()
             };
+            let build = self.rebuild.as_ref().map(|rebuild| rebuild.build.clone());
             let drops: Vec<String> = [staging.clone(), aside]
-                .iter()
+                .into_iter()
+                .chain(build)
                 .map(|table| {
                     format!(
                         "DROP TABLE IF EXISTS {}",
-                        sql_adapter(warehouse).render_qualified_name(table)
+                        sql_adapter(warehouse).render_qualified_name(&table)
                     )
                 })
                 .collect();
@@ -1046,13 +1057,14 @@ impl Publisher {
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
-        let merged = self.merged_file.take().map(|file| {
+        let mut merged = self.merged_file.take().map(|file| {
             merged_record(
                 spec,
                 (&self.load_id, self.commits + 1),
                 (file, self.waiting_rows),
             )
         });
+        let held = self.rebuild.as_ref().and_then(|_| merged.take());
         let run_insert = match (&self.run, merged) {
             (Some(_), _) => {
                 let record = self.record(self.waiting_rows)?;
@@ -1064,9 +1076,13 @@ impl Publisher {
             (None, None) => None,
         };
         let spec = &self.table.spec;
+        let target = self
+            .rebuild
+            .as_ref()
+            .map_or(&spec.destination, |rebuild| &rebuild.build);
         let statements = sql_adapter(warehouse).render_commit(
             &WriteStatementsRequest {
-                table: &spec.destination,
+                table: target,
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
                 hashed: &[],
@@ -1084,7 +1100,7 @@ impl Publisher {
                 destination: &self.destination,
                 warehouse,
                 staging: &staging,
-                table: &spec.destination,
+                table: target,
                 exists: self.table.exists,
                 columns: &self.table.schema.write_columns,
                 committed: self.committed_rows,
@@ -1096,7 +1112,7 @@ impl Publisher {
                 destination: &self.destination,
                 warehouse,
                 staging: &staging,
-                table: &spec.destination,
+                table: target,
                 exists: self.table.exists,
                 columns: &self.table.schema.write_columns,
                 committed: self.committed_rows,
@@ -1127,6 +1143,9 @@ impl Publisher {
             false => None,
         };
         execute(&self.destination, statements).await?;
+        if let Some(rebuild) = self.rebuild.as_mut() {
+            rebuild.records.extend(held);
+        }
         self.committed_rows += self.waiting_rows;
         self.waiting_rows = 0;
         self.commits += 1;
@@ -1259,7 +1278,10 @@ impl Publisher {
                 )));
             }
         };
-        widened.files = Some(files_source);
+        widened.files = Some(FilesSource {
+            archive: source_files.archive.clone(),
+            ..files_source
+        });
         widened.approved = spec.approved;
         let replanned_columns = replan_columns(
             &widened,
@@ -1305,6 +1327,17 @@ impl Publisher {
                 staging,
                 (&old, &staged_columns(&replanned)),
                 self.started_with(),
+            );
+            execute_ddl(&self.destination, changes).await?;
+        }
+        if let Some(rebuild) = &self.rebuild {
+            let changes = sql_adapter(replanned.spec.warehouse).render_staging_changes(
+                &rebuild.build,
+                (
+                    &self.table.schema.write_columns,
+                    &replanned.schema.write_columns,
+                ),
+                Some(&[]),
             );
             execute_ddl(&self.destination, changes).await?;
         }
@@ -1436,9 +1469,7 @@ async fn feed(
                     let merged = merging.then(|| merged_file_text(table, &files));
                     publisher.merged_file = merged.clone();
                     if table.spec.after_load != AfterLoad::Keep {
-                        publisher
-                            .fed_files
-                            .extend(files.iter().map(|data| data.file.clone()));
+                        publisher.fed_files.extend(unarchived(table, &files));
                     }
                     let fed_group = async {
                         let footers = match reader {
@@ -1580,39 +1611,6 @@ pub(crate) fn merges_files(table: &TablePlan) -> bool {
     table.files.is_some()
         && table.spec.files.is_some()
         && table.spec.strategy == WriteStrategy::Merge
-}
-
-/// The file a files merge group reads (it holds one), as its run record names it: `name|version`.
-fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
-    let location = table
-        .spec
-        .files
-        .as_ref()
-        .map(|files| files.location.to_string())
-        .unwrap_or_default();
-    files
-        .iter()
-        .map(|data| {
-            format!(
-                "{location}{}{VERSION_SEPARATOR}{}",
-                data.file.relative_key,
-                data.file.version()
-            )
-        })
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
-fn in_file(merged: &str, error: LoaderError) -> LoaderError {
-    let name = merged
-        .rsplit_once(VERSION_SEPARATOR)
-        .map_or(merged, |(name, _)| name);
-    let text = format!("{name}: {error}");
-    match error.is_retryable() {
-        true => LoaderError::Transient(text),
-        false => LoaderError::Invalid(text),
-    }
 }
 
 async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), LoaderError> {

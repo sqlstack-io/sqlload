@@ -13,7 +13,7 @@ use crate::files_source::models::SourceFormat;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
-use crate::loader::_helpers::sources::source_readers;
+use crate::loader::_helpers::sources::{source_readers, unarchived};
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
     CONSTANT_NOTE, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER,
@@ -319,8 +319,12 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 true => format!(" ← {PRIMARY_KEY_PLACEHOLDER}"),
                 false => String::new(),
             };
+            let rebuilt = match table.schema.action {
+                TableAction::Recreate => " into a new table, swapped in at the end (--reload)",
+                _ => "",
+            };
             format!(
-                "merge (unique_key: {}{origin}{repeats})",
+                "merge (unique_key: {}{origin}{repeats}){rebuilt}",
                 unique_key.join(", ")
             )
         }
@@ -352,7 +356,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         }
     };
     let source = match (&spec.files, &spec.python) {
-        (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
+        (Some(files), _) => match &files.archive {
+            Some(archive) => format!(
+                "files  {} and {archive}  {}",
+                files.location, files.encoding
+            ),
+            None => format!("files  {}  {}", files.location, files.encoding),
+        },
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
         (None, None) if spec.warehouse_source.is_some() => {
             let read = spec
@@ -453,14 +463,28 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                     0 => String::new(),
                     count => format!(", {count} skipped (paths that do not match path_columns)"),
                 };
-                let fresh = match table.mode {
-                    WriteMode::Recreate | WriteMode::Replace => "to read",
+                let fresh = match (&table.mode, &table.schema.action) {
+                    (WriteMode::Recreate | WriteMode::Replace, _) | (_, TableAction::Recreate) => {
+                        "to read"
+                    }
                     _ => "new",
+                };
+                let folders = match &source.archive {
+                    Some(archive) => {
+                        let archived = read.files.len() - unarchived(table, &read.files).len();
+                        format!(
+                            ": {} in {}, {} in {archive}",
+                            thousands((read.files.len() - archived) as u64),
+                            source.location,
+                            thousands(archived as u64)
+                        )
+                    }
+                    None => String::new(),
                 };
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{skipped}{unmatched}",
+                        "{} {fresh} of {} listed{folders}{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
                         thousands(source.table.files.len() as u64)
                     ),
