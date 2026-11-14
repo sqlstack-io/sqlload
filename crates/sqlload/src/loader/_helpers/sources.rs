@@ -1529,14 +1529,14 @@ fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRe
     }
 }
 
-/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.
+/// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor` to end its windows, or that `--reload` reads (which then refuses `--end-cursor`): the cursor's current maximum, read once at plan; the source is connected only when one needs it.
 pub(crate) async fn source_ends(
     project: &ProjectConfig,
     (source_name, source): (&str, &SourceConfig),
     mut specs: Vec<TableSpec>,
     options: &PlanOptions,
 ) -> Result<Vec<TableSpec>, LoaderError> {
-    if source.kind != SourceKind::Postgres || options.end_cursor.is_some() {
+    if source.kind != SourceKind::Postgres || (options.end_cursor.is_some() && !options.reload) {
         return Ok(specs);
     }
     let mut client: Option<Client> = None;

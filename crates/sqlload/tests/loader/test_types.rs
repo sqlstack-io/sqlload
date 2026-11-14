@@ -342,6 +342,8 @@ pub(crate) struct BatchedRun {
     pub(crate) destination_change: &'static str,
     /// `--end-cursor-*`.
     pub(crate) end_cursor: Option<&'static str>,
+    /// `--reload`.
+    pub(crate) reload: bool,
     /// A query on DuckDB after the run, giving one text result.
     pub(crate) check_query: &'static str,
     /// Add the plan line holding this text to the run's outcome, from that text on; empty adds none.

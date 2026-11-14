@@ -82,6 +82,9 @@ loaded  raw.app__customers     50 rows 0.0s
 └── slowest      raw.app__customers 0.0s
 ```
 
+`--reload` takes no `--start-cursor`. It takes `--end-cursor` only where a table's integer
+`batch_size` needs an end the source can't report; see [Batches](/docs/concepts/cursors/#batches).
+
 A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` refuses it. See
 [Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is also refused on
 [Postgres targets](/docs/targets/postgres/).

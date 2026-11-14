@@ -209,7 +209,7 @@ pub(crate) async fn load_with_options(
         .ok_or_else(|| failures.join("\n"))
 }
 
-/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, or ok> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
+/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, ok, or plan: <reason>> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
 pub(crate) async fn run_batched(
     client: &Client,
     port: u16,
@@ -247,6 +247,7 @@ pub(crate) async fn run_batched(
             .map_err(|error| error.to_string())?;
         let options = PlanOptions {
             end_cursor: run.end_cursor.map(str::to_owned),
+            reload: run.reload,
             batch_bytes: test_case.batch_bytes,
             concurrency: test_case.concurrency,
             ..PlanOptions::default()
@@ -255,17 +256,18 @@ pub(crate) async fn run_batched(
             .await
             .map_err(|error| error.to_string())?;
         let (lines, ok) = render_plan(&plan);
-        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
-        apply_project(&plan, &destinations)
-            .await
-            .map_err(|error| error.to_string())?;
-        let error = load_with_options(&project, &plan, &destinations, &options)
-            .await
-            .err()
-            .map_or_else(
-                || "ok".to_owned(),
-                |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
-            );
+        let refused = lines.iter().filter(|_| !ok).find_map(|line| {
+            line.split_once("reason  ")
+                .map(|(_, reason)| format!("plan: {reason}"))
+        });
+        let loaded = futures_util::future::OptionFuture::from(
+            refused
+                .is_none()
+                .then(|| apply_and_load(&project, &plan, &destinations, &options)),
+        )
+        .await
+        .transpose()?;
+        let error = refused.or(loaded).unwrap_or_default();
         let result = single_text(duckdb, run.check_query.to_owned())
             .await
             .map_err(|error| error.to_string())?
@@ -279,6 +281,27 @@ pub(crate) async fn run_batched(
         outcomes.push(format!("{error} => {result}{shown}"));
     }
     Ok(outcomes)
+}
+
+/// Apply `plan` and load it, failing when the plan has errors; the load error cut to its first two parts (`table: what failed`), or `ok`.
+async fn apply_and_load(
+    project: &ProjectConfig,
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
+) -> Result<String, String> {
+    let (lines, ok) = render_plan(plan);
+    ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+    apply_project(plan, destinations)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(load_with_options(project, plan, destinations, options)
+        .await
+        .err()
+        .map_or_else(
+            || "ok".to_owned(),
+            |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
+        ))
 }
 
 /// The rendered plan, or the error that stopped it.
