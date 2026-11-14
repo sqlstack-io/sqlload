@@ -635,6 +635,7 @@ const PLAIN_SOURCE: &str = r#"
 kind = "postgres"
 connection = "pg"
 include = ["public.items"]
+write_strategy = "replace"
 
 [sources.plain.tables."public.items"]
 description = "Items, read whole."
