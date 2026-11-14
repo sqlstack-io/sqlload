@@ -16,3 +16,6 @@ hostssl replication all all scram-sha-256
 ";
 /// The TLS-only server's start: the key readable by the server alone, as Postgres requires, then the image's entrypoint with TLS on.
 pub const TLS_START: &str = "mkdir -p /tls && cp /tls-in/* /tls/ && chown postgres:postgres /tls/* && chmod 600 /tls/server.key && exec docker-entrypoint.sh postgres -c wal_level=logical -c ssl=on -c ssl_cert_file=/tls/server.pem -c ssl_key_file=/tls/server.key -c ssl_ca_file=/tls/ca.pem -c hba_file=/tls/pg_hba.conf";
+/// Checks for a free replication slot before a load starts, [`SLOT_RETRY_DELAY`] apart: a minute.
+pub const SLOT_ATTEMPTS: usize = 600;
+pub const SLOT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(100);

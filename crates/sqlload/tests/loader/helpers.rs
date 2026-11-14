@@ -20,6 +20,7 @@ use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
+use sqlload_testkit::postgres::main::wait_for_free_slots::wait_for_free_slots;
 use sqlload_testkit::seaweedfs::constants::REGION;
 use tokio_postgres::Client;
 
@@ -1654,6 +1655,7 @@ pub(crate) async fn run_cdc_steps(
             .batch_execute(step.source_change)
             .await
             .map_err(|error| error.to_string())?;
+        wait_for_free_slots(client).await?;
         let (success, output) = run_sqlload(config, step.args, (step.crash_at, spill_bytes))?;
         assert_eq!(
             success,
