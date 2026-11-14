@@ -39,7 +39,11 @@ pub(crate) fn decimal_places(text: &str) -> i64 {
         None => (unsigned, 0),
     };
     let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let significant = format!("{whole}{fraction}").trim_end_matches('0').len() as i64;
+    let fraction = fraction.trim_end_matches('0');
+    let significant = match fraction.is_empty() {
+        true => whole.trim_end_matches('0').len(),
+        false => whole.len() + fraction.len(),
+    } as i64;
     if significant == 0 {
         return 0;
     }

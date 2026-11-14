@@ -9,7 +9,7 @@ use arrow_schema::DataType;
 
 use crate::column_types::_helpers::exact::{is_decimal, more_places, type_name};
 
-/// `array` as `to`, failing on a value that does not convert or that `to` would round, truncate or cut short: text and floats (by their shortest text, which is also how a float goes into a decimal, since Arrow's float arithmetic would put `437548739.2281` into `decimal(38,9)` as `437548739.228100032`) must have no more decimal places than a decimal's scale, or none for an integer type, and other numbers must come back unchanged. The error shows the first such value.
+/// `array` as `to`, failing on a value that does not convert or that `to` would round, truncate or cut short: decimal text, and floats (by their shortest text, which is also how a float goes into a decimal, since Arrow's float arithmetic would put `437548739.2281` into `decimal(38,9)` as `437548739.228100032`) must have no more decimal places than a decimal's scale, or none for an integer type, and other numbers must come back unchanged. Text into an integer type needs no check, as the cast already refuses a fraction. The error shows the first such value.
 pub fn exact_cast(array: &ArrayRef, to: &DataType) -> Result<ArrayRef, String> {
     let strict = CastOptions {
         safe: false,
@@ -38,6 +38,7 @@ pub fn exact_cast(array: &ArrayRef, to: &DataType) -> Result<ArrayRef, String> {
         _ => 0,
     };
     let changed = match from {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View if to.is_integer() => None,
         DataType::Utf8 => more_places(array.as_string::<i32>().iter(), scale),
         DataType::LargeUtf8 => more_places(array.as_string::<i64>().iter(), scale),
         DataType::Utf8View => more_places(array.as_string_view().iter(), scale),
