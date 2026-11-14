@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.43.0](https://github.com/sqlstack-io/sqlload/compare/v0.42.1...v0.43.0) (2026-11-13)
+
+
+### Features
+
+* **http,load:** fan-out keys in POST bodies and batches of keys, load --fail-fast, and MySQL Connector/ODBC loader errors ([#233](https://github.com/sqlstack-io/sqlload/issues/233)) ([548f665](https://github.com/sqlstack-io/sqlload/commit/548f665110c4cd86347cb7cc17d1a74f2e9b3dbd))
+
 ## [0.42.1](https://github.com/sqlstack-io/sqlload/compare/v0.42.0...v0.42.1) (2026-11-13)
 
 
