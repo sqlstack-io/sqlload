@@ -418,18 +418,7 @@ impl StreamTask {
                 self.consumer.committed_offsets(list, KAFKA_TIMEOUT)
             })
             .map_err(|error| error.to_string())
-            .and_then(|found| {
-                found
-                    .elements()
-                    .first()
-                    .map(|element| {
-                        element
-                            .error()
-                            .map(|()| element.offset())
-                            .map_err(|error| error.to_string())
-                    })
-                    .transpose()
-            });
+            .and_then(|found| committed_offset(&found));
             match resume_offset(found, self.start_from) {
                 Ok(offset) => return Ok(Some(offset)),
                 Err(error) if started.elapsed() > GIVE_UP_AFTER => {
@@ -584,6 +573,15 @@ impl StreamTask {
             }
         }
     }
+}
+
+/// The committed offset in the one-partition list `found`, `None` when the list is empty; an error Kafka reports for the partition is an error, not a missing offset.
+fn committed_offset(found: &TopicPartitionList) -> Result<Option<Offset>, String> {
+    let Some(element) = found.elements().into_iter().next() else {
+        return Ok(None);
+    };
+    element.error().map_err(|error| error.to_string())?;
+    Ok(Some(element.offset()))
 }
 
 /// Where a partition resumes from the committed offset Kafka `found` for the group: after it, or `start_from` when the group has none; a failed read stays an error, to retry, never `start_from`.
