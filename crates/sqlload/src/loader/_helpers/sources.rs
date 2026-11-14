@@ -1306,6 +1306,7 @@ pub(crate) async fn plan_files(
         location: &location,
         loaded: &loaded,
         removed: spec.after_load != AfterLoad::Keep,
+        versions_known: live_has(SOURCE_VERSION_COLUMN),
         cursor,
         from: request.bounds.0,
         to: request.bounds.1,

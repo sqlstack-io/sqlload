@@ -221,15 +221,15 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail")` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. From 0.45.0, a response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail")` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` is as for `paginate`. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). |
 
 | Paginator | Next page |
 |-----------|-----------|
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
 | `sl.link_header()` | The `Link` header's `rel="next"`. |
-| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query")` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0. From 0.45.0, a run that ends after a first page shorter than `limit` warns: an API capping its pages below `limit` ends it there too, so set `limit` to the API's cap. |
 | `sl.page_number(param="page", *, start=1, location="query")` | Counts pages; ends at an empty page. `location` is from 0.36.0. |
 | `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
 
@@ -255,6 +255,27 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
   body, with the connection's secrets replaced by `***`.
 - A job's rows never come back into Python. Reading a row from a job fails (rule
   `python_row_loop`); filter rows downstream.
+
+### A missing select path
+
+From 0.45.0, a response without the `select` path, as opposed to one where it holds an empty list
+or null, fails the load. The error names the request, the path, and the response's top-level
+keys, so an API that answers an error with a 200 status, such as `{"error": {"message": "daily
+quota used"}}` on page 4, fails there rather than ending the read with the rows so far:
+
+```text
+GET https://api.shop.example/v1/orders?p=4: select "$.items" is not in the response, which holds the keys error; an API can answer an error with a 200 status, so check the response. For an API that leaves an empty list out, set select_missing="empty" to read such a page as no rows
+```
+
+Some APIs leave an empty list out instead of sending `[]`, as Google's do: an empty grid has no
+`rowData`, and a list with no results has no list at all. For those, `select_missing="empty"` reads
+a response without the path as no rows. Before 0.45.0 every response without the path was read
+that way.
+
+`sl.next_link`, `sl.cursor` and `sl.link_header` end at a response without a next page: a missing
+or empty pointer, or no `rel="next"` link. That is how an API says it has no more pages, so SQLLoad
+can't tell it from an error response that also leaves the pointer out; with `select` set, such a
+response usually lacks the rows' path too, and fails as above.
 
 ### Multi-level fan-out
 
@@ -345,6 +366,7 @@ def parts(ctx):
 
   ```python
   api.paginate("/spreadsheets/ID", paginator=sl.single(), select="$.sheets[0].data[0].rowData",
+               select_missing="empty",
                cells=sl.cells("$.values", key=None, header_row=True,
                               value=["$.effectiveValue.stringValue", "$.effectiveValue.numberValue",
                                      "$.effectiveValue.boolValue"]))

@@ -49,6 +49,36 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             expected_rows: Err("a.ndjson: line 3: id: cannot convert to Int64"),
         },
         ReadTextFilesTestCase {
+            description: "a pinned decimal refuses a value with more places than its scale rather than rounding it",
+            encoding: encoding(SourceFormat::Ndjson),
+            files: &[("a.ndjson", "{\"v\":1.25}\n{\"v\":1.239}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[(
+                "v",
+                ColumnType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+            )],
+            expected_rows: Err("holds 1.239, which decimal(10,2) can't hold without losing digits"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: a pinned decimal refuses text with more places than its scale",
+            encoding: csv_encoding(CsvOptions::default()),
+            files: &[("a.csv", "v\n1.25\n1.239\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[(
+                "v",
+                ColumnType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+            )],
+            expected_rows: Err("holds 1.239, which decimal(10,2) can't hold without losing digits"),
+        },
+        ReadTextFilesTestCase {
             description: "json reads objects over several lines, and in a top-level array",
             encoding: encoding(SourceFormat::Json),
             files: &[

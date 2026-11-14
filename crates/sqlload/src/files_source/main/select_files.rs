@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 
 use crate::files_source::_helpers::plan::window::in_window;
+use crate::files_source::constants::SOURCE_VERSION_COLUMN;
 use crate::files_source::models::{DataFile, FileSelection};
 
-/// The files of `request` not loaded yet (a loaded file that changed is an error, unless loaded files leave the folder, when it is a new file) whose partition cursor (if any) lies in `from <= value < to`.
+/// The files of `request` not loaded yet (a loaded file that changed, or whose loaded version is unknown while the destination records versions, is an error, unless loaded files leave the folder, when a changed one is a new file) whose partition cursor (if any) lies in `from <= value < to`.
 pub fn select_files(request: &FileSelection<'_>) -> Result<Vec<DataFile>, String> {
     let mut loaded: HashMap<&str, Vec<&str>> = HashMap::new();
     for file in request.loaded {
@@ -19,8 +20,16 @@ pub fn select_files(request: &FileSelection<'_>) -> Result<Vec<DataFile>, String
         let name = format!("{}{}", request.location, data.file.relative_key);
         let version = data.file.version();
         match loaded.get(name.as_str()).map(Vec::as_slice) {
-            Some(versions) if versions.iter().any(|was| was.is_empty() || *was == version) => {
+            Some(versions) if versions.contains(&version.as_str()) => continue,
+            Some(versions)
+                if versions.contains(&"") && (request.removed || !request.versions_known) =>
+            {
                 continue;
+            }
+            Some(versions) if versions.contains(&"") => {
+                return Err(format!(
+                    "{name} was loaded without its version ({SOURCE_VERSION_COLUMN} is empty, as in rows loaded before SQLLoad recorded it), so whether it was rewritten in place since can't be told; load the table again with --reload, which records each file's version"
+                ));
             }
             Some([.., was]) if !request.removed => {
                 return Err(format!(

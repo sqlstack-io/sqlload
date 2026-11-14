@@ -90,6 +90,8 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/cycle": lambda query: self.reply(200, {"items": [], "next": "B" if query.get("c") == "A" else "A"}),
 			"/v1/wrapped": lambda query: self.reply(200, {"items": ORDERS[:2]}),
 			"/v1/gap": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {}),
+			"/v1/quota": lambda query: self.reply(200, {"items": ORDERS[:3]} if query["p"] == "1" else {"error": {"message": "daily quota used"}}),
+			"/v1/capped": lambda query: self.reply(200, ORDERS[int(query["offset"]) : int(query["offset"]) + 3]),
 			"/v1/comma": self.comma,
 			"/v1/sheet": self.sheet,
 			"/v1/grid": lambda query: self.reply(200, [GRID, GRID_BLANK_PAGE, GRID_END][int(query["page"]) - 1]),
@@ -393,7 +395,7 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		("api.paginate('/link', paginator=sl.link_header())", ALL_ORDERS),
 		("api.paginate('/flaky', paginator=sl.single())", ALL_ORDERS[:2]),
 		("api.paginate('/comma', paginator=sl.link_header())", ALL_ORDERS),
-		("api.paginate('/gap', paginator=sl.page_number('p'), select='$.items')", ALL_ORDERS[:3]),
+		("api.paginate('/gap', paginator=sl.page_number('p'), select='$.items', select_missing='empty')", ALL_ORDERS[:3]),
 		("api.paginate('/moved', paginator=sl.next_link('$.next'), select='$.items')", ALL_ORDERS),
 		("api.paginate('/sparse', paginator=sl.link_header())", ALL_ORDERS[:2]),
 	],
@@ -405,7 +407,7 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		"link-header",
 		"retries-429-and-503",
 		"link-with-comma-unquoted-rel",
-		"page-without-the-selected-key-ends",
+		"page-without-the-selected-key-ends-with-select-missing-empty",
 		"same-origin-redirect-then-relative-next-link",
 		"link-header-through-empty-pages",
 	],
@@ -477,6 +479,14 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12', 'X-Credential': 'abc123secret'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
 			"version 1 session *** credential ***",
 		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/gap', paginator=sl.page_number('p'), select='$.items')\n",
+			"/v1/gap?p=2: select \"$.items\" is not in the response, which holds an empty object; an API can answer an error with a 200 status, so check the response. For an API that leaves an empty list out, set select_missing=\"empty\"",
+		),
+		(
+			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/quota', paginator=sl.page_number('p'), select='$.items')\n",
+			"/v1/quota?p=2: select \"$.items\" is not in the response, which holds the keys error;",
+		),
 	],
 	ids=[
 		"server-error-retried-and-redacted",
@@ -488,6 +498,8 @@ def test_given_a_fan_out_when_loading_then_each_key_is_requested_and_a_skipped_s
 		"token-at-the-excerpt-cut",
 		"page-number-api-ignoring-the-page",
 		"only-secret-looking-headers-redacted",
+		"page-without-the-selected-key-fails",
+		"error-body-with-status-200-fails",
 	],
 )
 def test_given_a_failing_job_when_loading_then_the_error_names_the_request_and_hides_secrets(
@@ -619,6 +631,14 @@ def test_given_a_bad_definition_when_loading_then_no_request_is_sent(tmp_path: P
 	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/next', paginator=sl.single(), select='$.a[*]')\n")
 	assert sqlload(project, "load").returncode == 1
 	assert api.log == []  # type: ignore[attr-defined]
+
+
+def test_given_offset_paging_when_the_first_page_is_shorter_than_limit_then_the_run_ends_there_with_a_warning(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/capped', paginator=sl.offset(limit=5))\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(3,)]
+	assert "the first page held 3 rows, fewer than limit 5, so offset paging ended after it; if the API caps its pages below 5 rows, set limit to that cap" in done.stderr, done.stderr
 
 
 def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_connection(tmp_path: Path, api: ThreadingHTTPServer) -> None:
@@ -1116,7 +1136,7 @@ def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_mul
 
 SHEET = "api.paginate('/sheet', paginator=sl.page_number('page'), select='$.rows', cells=sl.cells(value=['$.value', '$.displayValue']){extra})"
 GRID_JOB = (
-	"api.paginate('/grid', paginator=sl.page_number('page'), select='$.sheets[0].data[0].rowData', cells=sl.cells('$.values', key=None, "
+	"api.paginate('/grid', paginator=sl.page_number('page'), select='$.sheets[0].data[0].rowData', select_missing='empty', cells=sl.cells('$.values', key=None, "
 	"value=['$.effectiveValue.stringValue', '$.effectiveValue.numberValue', '$.effectiveValue.boolValue'], header_row=True))"
 )
 

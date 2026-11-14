@@ -20,6 +20,7 @@ use crate::cdc::constants::DELETE_OP;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
+use crate::column_types::main::exact_cast::exact_cast;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::child_table_name::child_table_name;
@@ -690,10 +691,6 @@ fn read_schema(table: &TablePlan) -> SchemaRef {
 
 /// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the list, or from the JSON text a list arrives as); a value that does not convert is an error naming the column.
 fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, LoaderError> {
-    let strict = CastOptions {
-        safe: false,
-        ..CastOptions::default()
-    };
     let arrays: Vec<ArrayRef> = target
         .fields()
         .iter()
@@ -710,7 +707,7 @@ fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, Lo
                         LoaderError::Invalid(format!("column {}: {error}", field.name()))
                     })
                 }
-                _ => cast_with_options(&column, field.data_type(), &strict).map_err(|error| {
+                _ => exact_cast(&column, field.data_type()).map_err(|error| {
                     LoaderError::Invalid(format!(
                         "column {}: {error}; pin a type for {} in columns that holds every value",
                         field.name(),

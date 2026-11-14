@@ -38,6 +38,15 @@ fn given_read_api_arrow_when_converting_then_records_become_json_and_pins_conver
             expected_value: Some("1.25"),
         },
         ConvertBatchTestCase {
+            description: "a NUMERIC with more places than the pinned scale fails rather than rounding",
+            read: numeric,
+            output: ColumnType::Decimal {
+                precision: 12,
+                scale: 1,
+            },
+            expected_value: None,
+        },
+        ConvertBatchTestCase {
             description: "a value too wide for the pinned decimal fails rather than loading as NULL",
             read: numeric,
             output: ColumnType::Decimal {

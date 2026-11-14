@@ -228,15 +228,19 @@ class Http:
 		json_body: Mapping[str, Any] | None = None,
 		key: str | None = None,
 		cells: Cells | None = None,
+		select_missing: str = "fail",
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
+
+		A response without the `select` path fails the load, naming what it holds, unless `select_missing="empty"` reads it as
+		no rows, for APIs that leave an empty list out (as Google's do); an empty list or null is no rows either way.
 
 		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
 		row's whole object as a JSON column. `method="POST"` sends `json_body` as JSON with every page, each page's copy
 		holding the paginator's values when its `location` is `"body"`. As a fan-out's `over`, `key` names the
 		placeholder the selected values fill when it is not the field's own name (`select="$.items[*].id", key="order_id"`)."""
 		request = self._request(path, paginator, params, select, on_status, (method, json_body))
-		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key), **_cells(cells)})
+		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key), **_cells(cells), **_select_missing(select_missing)})
 
 	def fan_out(
 		self,
@@ -255,6 +259,7 @@ class Http:
 		key: str | None = None,
 		cells: Cells | None = None,
 		batch: int | None = None,
+		select_missing: str = "fail",
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -268,14 +273,14 @@ class Http:
 		a value that is just `"{id}"` takes the key as it is (a number stays a number), and `plan` checks a level
 		above gives every one. `batch=1000` sends up to 1000 keys per request instead, each such value holding the
 		list of the batch's keys (`{"ids": "{id}"}` sends `{"ids": [1, 2, 3]}`); each batch is one request,
-		retried as a whole."""
+		retried as a whole. `select_missing` is as for `paginate`."""
 		if isinstance(over, (str, bytes)):
 			raise TypeError("fan_out over= takes a paginate or fan_out job or a list of values, not one string")
 		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
 		batched = {} if batch is None else {"batch": batch}
-		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), "over": over_spec, "concurrency": concurrency, **batched})
+		return Job({"kind": "fan_out", **request, **projected, **_key(key), **_cells(cells), **_select_missing(select_missing), "over": over_spec, "concurrency": concurrency, **batched})
 
 	def _request(
 		self,
@@ -309,6 +314,13 @@ def _key(key: str | None) -> dict[str, Any]:
 def _cells(cells: Cells | None) -> dict[str, Any]:
 	"""`cells` as a job field, left out when unset so jobs without it are unchanged."""
 	return {} if cells is None else {"cells": dict(cells.spec)}
+
+
+def _select_missing(select_missing: str) -> dict[str, Any]:
+	"""`select_missing` as a job field, left out at its default so jobs without it are unchanged."""
+	if select_missing not in ("fail", "empty"):
+		raise ValueError(f'select_missing must be "fail" or "empty", not {select_missing!r}')
+	return {} if select_missing == "fail" else {"select_missing": select_missing}
 
 
 def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:

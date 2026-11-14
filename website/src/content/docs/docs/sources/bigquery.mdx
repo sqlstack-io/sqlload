@@ -110,9 +110,9 @@ project, including the source's `project`.
 
 Pin a type to load a column another way, such as `columns = { total = "decimal(18,2)" }`. A value
 that doesn't convert to the pinned type fails the read, naming the column, rather than loading as
-NULL. A pinned `decimal` with fewer decimal places than the values rounds them, half away from
-zero; if that column is also the cursor, rows between a value and its rounded maximum are skipped
-by the next read, so pin a cursor's decimal wide enough. NaN and infinities inside a repeated
+NULL. From 0.45.0, a value with more decimal places than a pinned `decimal` keeps, or a
+fraction in a pinned integer, fails the read too; before, it was rounded half away from zero, and a
+rounded cursor skipped rows on the next read. NaN and infinities inside a repeated
 `FLOAT64` load as `null` in its JSON. See
 [Types](/docs/concepts/types/).
 
