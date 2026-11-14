@@ -56,3 +56,14 @@ pub(crate) struct ExitCodeTestCase {
     /// The last line: `exit 1` or `exit 75`.
     pub(crate) expected_exit: &'static str,
 }
+
+/// Load events in, the lines `load` prints for them out.
+pub(crate) struct LoadOutputTestCase {
+    pub(crate) description: &'static str,
+    /// Each event's table and kind, in order.
+    pub(crate) events: Vec<(Option<&'static str>, crate::load_events::models::EventKind)>,
+    pub(crate) name_width: usize,
+    pub(crate) elapsed_ms: u64,
+    pub(crate) exit_code: u8,
+    pub(crate) expected_lines: &'static str,
+}

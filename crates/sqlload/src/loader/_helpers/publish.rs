@@ -1,4 +1,6 @@
 use crate::adapters::contract::constants::COMMIT_STATEMENT;
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::staging_id::staging_id;
@@ -807,6 +809,14 @@ impl Publisher {
             ))
             .await?;
         }
+        if !self.direct && pending {
+            emit(
+                Some(&self.table.outcome_name()),
+                EventKind::TableCommitting {
+                    rows: self.waiting_rows + self.committed_rows,
+                },
+            );
+        }
         match (self.direct, pending, &self.run) {
             (false, true, _) => self.commit(true).await?,
             (_, _, Some(_)) if self.commits == 0 || self.state != self.committed_state => {
@@ -917,6 +927,14 @@ impl Publisher {
         self.batch_rows = 0;
         self.arrow_bytes = 0;
         self.writer.next_batch();
+        emit(
+            Some(&self.table.outcome_name()),
+            EventKind::TableProgress {
+                unit: "batch".to_owned(),
+                count: self.batch,
+                rows: self.committed_rows + self.waiting_rows,
+            },
+        );
         Ok(())
     }
 

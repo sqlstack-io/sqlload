@@ -31,7 +31,7 @@ doc = false
 [features]
 default = ["cli", "duckdb"]
 # The `sqlload` executable and its command-line parsing.
-cli = ["dep:clap", "dep:rlimit", "dep:tracing-subscriber"]
+cli = ["dep:clap", "dep:console", "dep:indicatif", "dep:rlimit", "dep:tracing-subscriber"]
 # TLS and SASL support in the bundled librdkafka.
 ssl = ["rdkafka/ssl"]
 # TLS with OpenSSL built in, so the binary needs no system OpenSSL (PyPI wheels).
@@ -64,6 +64,8 @@ calamine.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 clap = { workspace = true, optional = true }
+console = { workspace = true, optional = true }
+indicatif = { workspace = true, optional = true }
 csv-core.workspace = true
 duckdb = { workspace = true, optional = true }
 encoding_rs.workspace = true
