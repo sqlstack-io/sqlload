@@ -100,41 +100,44 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 |--------|--------|
 | psqlODBC (`PostgreSQL Unicode`) | Yes, against Postgres 17 in containers on Linux and on Windows. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
 | Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
-| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. From 0.43.0, each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel with libstdc++ preloaded; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
+| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. From 0.43.0, each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel's `sqlload` with nothing set; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
 | MariaDB Connector/ODBC 3.1 | Against MySQL 8.4 by hand, not in the driver tests: it reports no primary keys there, so name each `merge` table's `unique_key` columns instead of `"{primary_key}"`; see [MariaDB Connector/ODBC 3.1](#mariadb-connectorodbc-31). |
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values, binding timestamp bounds and writing them as `{ts}` escapes), not against a live server. Run `sqlload plan` first: it checks that the driver takes the cursor's bounds, and names `cursor_bounds = "literals"` when the driver only takes escapes; see [Cursor bounds](#cursor-bounds). |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
 
 ### MySQL Connector/ODBC on Linux
 
-MySQL's Debian and Ubuntu packages of Connector/ODBC 9.7 and 26.10 can fail to load in a Python
-process, such as the `sqlload` command of the `sqlload` package or a Python program using SQLLoad,
-while `isql` and the `sqlload-cli` package's `sqlload` load them. unixODBC reports every library it
-couldn't load as missing, even one that exists:
+MySQL's Debian and Ubuntu packages of Connector/ODBC 9.7 and 26.10 are built for static
+thread-local storage that reaches into libstdc++'s (the driver's dynamic section sets `STATIC_TLS`;
+`readelf -d` shows it). The dynamic loader can't give it that once a process that loaded libstdc++
+after it started has used libstdc++'s thread-locals, as a Python process with a C++ extension,
+SQLLoad's included, has. unixODBC then reports the driver as missing, even though it exists:
 
 ```text
 [unixODBC][Driver Manager]Can't open lib '/usr/lib/x86_64-linux-gnu/odbc/libmyodbc9w.so' : file not found
 ```
 
-The driver is built for static thread-local storage that reaches into libstdc++'s (its dynamic
-section sets `STATIC_TLS`; `readelf -d` shows it). The dynamic loader can't give it that once a
-process that loaded libstdc++ after it started has used libstdc++'s thread-locals, as a Python
-process with a C++ extension, SQLLoad's included, has. Any ODBC program in such a process fails the
-same way, pyodbc included. Start the process with libstdc++ preloaded, so it's in place from the
-start:
+From 0.51.0, on Linux, the `sqlload` command of the `sqlload` package starts itself again once with
+libstdc++ in `LD_PRELOAD`, so the driver loads with nothing set. Processes it starts, such as a
+Python source's subprocesses, inherit that `LD_PRELOAD`. When libstdc++ isn't installed, it runs
+as it is. `SQLLOAD_NO_PRELOAD=1` turns the preload off. The `sqlload-cli` package's `sqlload`
+loads the driver as is.
+
+A Python program that imports SQLLoad and loads in its own process needs libstdc++ preloaded from
+its start, as does any ODBC program in such a process, pyodbc included:
 
 ```bash
-LD_PRELOAD=libstdc++.so.6 sqlload load
+LD_PRELOAD=libstdc++.so.6 python load.py
 ```
 
-Or install the `sqlload-cli` package, whose `sqlload` loads the driver as is. From 0.43.0, SQLLoad
-adds what to check under unixODBC's message: that the driver library doesn't exist, that it is
-built for static thread-local storage and needs the preload above, or else that a library it needs
-doesn't load (`ldd` on the driver lists them).
+From 0.43.0, SQLLoad adds what to check under unixODBC's message: that the driver library doesn't
+exist, that it is built for static thread-local storage and needs the preload above, or else that a
+library it needs doesn't load (`ldd` on the driver lists them).
 
 MySQL's Debian 13 package of Connector/ODBC 9.7 also registers its drivers under `/usr/lib//odbc/`,
-where they aren't, so every driver manager, `isql` included, reports `file not found`. Point the
-registration at the installed files in `/etc/odbcinst.ini`:
+where they aren't, so every driver manager, `isql` included, reports `file not found`. From 0.51.0,
+SQLLoad's message names the installed file and the fix. Point the registration at the installed
+files in `/etc/odbcinst.ini`:
 
 ```bash
 sudo sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini

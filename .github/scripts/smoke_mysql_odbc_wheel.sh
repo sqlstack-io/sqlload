@@ -2,12 +2,15 @@
 # Load a MySQL 8.4 table with each Linux x86_64 wheel through MySQL Connector/ODBC from MySQL's
 # Debian 13 package, in python:3.12-slim (Debian 13), through the wheel's bundled unixODBC.
 #
+# The package registers the driver under /usr/lib//odbc/, where it isn't: before that is corrected,
+# a load must fail naming the installed file and the sed that corrects it.
+#
 # The driver is built for static thread-local storage into libstdc++ (its dynamic section sets
 # STATIC_TLS), which glibc can't give it once a process that loaded libstdc++ after it started has
-# used libstdc++'s thread-locals, as the sqlload wheel's Python process has by the time it connects.
-# So the sqlload-cli wheel must load as is, the sqlload wheel with LD_PRELOAD=libstdc++.so.6, and the
-# sqlload wheel without it must fail with SQLLoad's error naming STATIC_TLS and the preload, as the
-# ODBC source's docs say.
+# used libstdc++'s thread-locals, as a Python process has by the time it connects. So the sqlload-cli
+# wheel must load as is; the sqlload wheel's console script, which starts again with libstdc++
+# preloaded, must load with nothing set; and with SQLLOAD_NO_PRELOAD=1 it must fail with SQLLoad's
+# error naming STATIC_TLS and the preload, as the ODBC source's docs say.
 #
 # Usage: smoke_mysql_odbc_wheel.sh DIST   (DIST holds the sqlload and sqlload-cli wheels)
 set -euo pipefail
@@ -52,8 +55,6 @@ curl -fsSL --retry 3 --retry-all-errors -o "/tmp/$package" "https://cdn.mysql.co
 	curl -fsSL --retry 3 --retry-all-errors -o "/tmp/$package" "https://downloads.mysql.com/archives/get/p/10/file/$package"
 echo "$MYSQL_ODBC_SHA256  /tmp/$package" | sha256sum -c --quiet -
 apt-get -o Acquire::Retries=3 install -y -qq "/tmp/$package" > /dev/null
-# The package registers the driver under /usr/lib//odbc/, where it isn't; register it where it is.
-sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini
 python -m venv /v && /v/bin/pip install --quiet /dist/sqlload-*.whl
 python -m venv /c && /c/bin/pip install --quiet /dist/sqlload_cli-*.whl
 
@@ -88,18 +89,28 @@ load() {
 }
 loaded() { grep -q '"loaded": *1' <<< "$1" && grep -q '"rows": *3' <<< "$1"; }
 
+fix="sudo sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini"
+out="$(load /c/bin/sqlload)" || true
+if loaded "$out" || ! grep -qF "$fix" <<< "$out"; then
+	echo "$out"
+	echo "FAIL: with the package's registration, the load didn't fail naming: $fix" >&2
+	exit 1
+fi
+echo "ok: the package's /usr/lib//odbc/ registration fails naming the sed that corrects it"
+sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini
+
 out="$(load /c/bin/sqlload)" || true
 loaded "$out" || { echo "$out"; echo "FAIL: the sqlload-cli wheel didn't load the table through the driver" >&2; exit 1; }
 echo "ok: the sqlload-cli wheel loads through MySQL Connector/ODBC ${MYSQL_ODBC_VERSION}"
-out="$(load LD_PRELOAD=libstdc++.so.6 /v/bin/sqlload)" || true
-loaded "$out" || { echo "$out"; echo "FAIL: the sqlload wheel, libstdc++ preloaded, didn't load the table" >&2; exit 1; }
-echo "ok: the sqlload wheel loads through it with libstdc++ preloaded"
 out="$(load /v/bin/sqlload)" || true
+loaded "$out" || { echo "$out"; echo "FAIL: the sqlload wheel's console script, nothing set, didn't load the table" >&2; exit 1; }
+echo "ok: the sqlload wheel's console script loads through it with nothing set"
+out="$(load SQLLOAD_NO_PRELOAD=1 /v/bin/sqlload)" || true
 driver=/usr/lib/x86_64-linux-gnu/odbc/libmyodbc${MYSQL_ODBC_VERSION%%.*}w.so
 expected="The driver library $driver exists, and is built for static thread-local storage (STATIC_TLS), which the dynamic loader refuses once it reaches thread-locals already in use, as libstdc++'s are in a Python process that loaded libstdc++ after it started. Start the process with LD_PRELOAD=libstdc++.so.6, or use the sqlload-cli package's sqlload. If it still fails, \`ldd $driver\` lists the libraries it needs."
 if loaded "$out" || ! grep -qF "$expected" <<< "$out"; then
 	echo "$out"
-	echo "FAIL: without the preload, the sqlload wheel's load didn't fail with: $expected" >&2
+	echo "FAIL: with SQLLOAD_NO_PRELOAD=1, the sqlload wheel's load didn't fail with: $expected" >&2
 	exit 1
 fi
-echo "ok: without the preload, the sqlload wheel fails naming STATIC_TLS and the preload"
+echo "ok: with SQLLOAD_NO_PRELOAD=1, the sqlload wheel fails naming STATIC_TLS and the preload"
