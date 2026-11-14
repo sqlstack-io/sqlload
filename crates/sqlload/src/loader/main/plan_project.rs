@@ -1,6 +1,7 @@
 //! Plan every selected table of a project against its live source and destination.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::Ordering;
 
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::main::folder_conflict::folder_conflict;
@@ -8,6 +9,7 @@ use crate::adapters::files::models::FolderClaim;
 use crate::loader::_helpers::destination::{
     block_shared_destinations, mark_shared_destinations, unknown_sharing,
 };
+use crate::loader::_helpers::progress::PLANNED_SOURCES;
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::sources::{
     admit_tables, destination_names, found_sources, selected, source_ends, spec_names,
@@ -29,9 +31,14 @@ pub async fn plan_project(
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
 ) -> Result<ProjectPlan, LoaderError> {
+    PLANNED_SOURCES.store(0, Ordering::Relaxed);
     let found = found_sources(project, destinations, options).await?;
     let (mut plan, claims, configured) = (found.plan, found.claims, found.configured);
     let (unresolved, drained) = (found.unresolved, found.drained);
+    PLANNED_SOURCES.store(
+        project.sources.len() - found.sources.len(),
+        Ordering::Relaxed,
+    );
     for FoundSource {
         name: source_name,
         source,
@@ -68,6 +75,7 @@ pub async fn plan_project(
             (destinations, options),
         )
         .await?;
+        PLANNED_SOURCES.fetch_add(1, Ordering::Relaxed);
     }
     Ok(block_conflicts(
         plan,

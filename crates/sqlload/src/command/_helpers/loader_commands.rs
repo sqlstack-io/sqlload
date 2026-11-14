@@ -7,7 +7,7 @@ use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::command::_helpers::live_block::LiveState;
 use crate::command::_helpers::load_output::{
-    EventsTarget, LoadOutput, change_tally_line, start_lines, summary_lines, write_events,
+    EventsTarget, LoadOutput, change_tally_line, planning, start_lines, summary_lines, write_events,
 };
 use crate::command::_helpers::output::{confirm_reload, print_lines};
 use crate::command::_helpers::project_file::replace_file;
@@ -269,7 +269,12 @@ async fn run_command(
         Progress::Auto => streams && !json && !log_json && std::io::stderr().is_terminal(),
     };
     let options = options(args)?;
-    let plan = plan_project(project, &destinations, &options).await?;
+    let plan = planning(
+        plan_project(project, &destinations, &options),
+        project.sources.len(),
+        (draws, no_color),
+    )
+    .await?;
     if json && !applies {
         let (text, ok, retryable) = json_report(&plan, None);
         return Ok((vec![text], exit_code(ok, retryable)));
