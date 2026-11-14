@@ -392,7 +392,10 @@ impl StreamTask {
             self.resume_after.insert(partition.clone(), committed);
             let offset = match committed {
                 Some(committed) => Offset::Offset(committed + 1),
-                None => self.kafka_committed(&partition),
+                None => match self.kafka_committed(&partition).await? {
+                    Some(offset) => offset,
+                    None => return Ok(()),
+                },
             };
             self.seek(&partition, offset).map_err(|error| {
                 format!(
@@ -404,22 +407,35 @@ impl StreamTask {
         Ok(())
     }
 
-    fn kafka_committed(&self, partition: &Partition) -> Offset {
-        let mut list = TopicPartitionList::new();
-        list.add_partition(&partition.topic, partition.partition);
-        let found =
-            tokio::task::block_in_place(|| self.consumer.committed_offsets(list, KAFKA_TIMEOUT));
-        let committed = match found {
-            Ok(found) => found.elements().first().map(|element| element.offset()),
-            Err(error) => {
-                tracing::warn!(stream = %self.stream.name, %error, "cannot read the committed offset; using start_from");
-                None
+    /// Where `partition` resumes from Kafka's committed offset for the group: after it, or `start_from` when the group has none. Reading it is retried; when it still fails, the stream stops rather than resume from `start_from`, which with `latest` would skip records. `None` when cancelled.
+    async fn kafka_committed(&mut self, partition: &Partition) -> Result<Option<Offset>, String> {
+        let started = std::time::Instant::now();
+        let mut attempt = 0;
+        loop {
+            let mut list = TopicPartitionList::new();
+            list.add_partition(&partition.topic, partition.partition);
+            let found = tokio::task::block_in_place(|| {
+                self.consumer.committed_offsets(list, KAFKA_TIMEOUT)
+            })
+            .map_err(|error| error.to_string())
+            .and_then(|found| committed_offset(&found));
+            match resume_offset(found, self.start_from) {
+                Ok(offset) => return Ok(Some(offset)),
+                Err(error) if started.elapsed() > GIVE_UP_AFTER => {
+                    return Err(format!(
+                        "cannot read the committed offset of {}/{} for consumer group {} after {attempt} retries: {error}; the stream stops rather than resume from start_from, which could skip records. Fix: check the brokers and the group, then restart",
+                        partition.topic, partition.partition, self.stream.consumer_group
+                    ));
+                }
+                Err(error) => {
+                    attempt += 1;
+                    tracing::warn!(stream = %self.stream.name, topic = %partition.topic, partition = partition.partition, %error, attempt, "cannot read the committed offset; retrying");
+                    tokio::select! {
+                        () = self.cancel.cancelled() => return Ok(None),
+                        () = sleep(self.retry.delay(attempt)) => {}
+                    }
+                }
             }
-        };
-        match (committed, self.start_from) {
-            (Some(Offset::Offset(offset)), _) => Offset::Offset(offset),
-            (_, StartFrom::Earliest) => Offset::Beginning,
-            (_, StartFrom::Latest) => Offset::End,
         }
     }
 
@@ -556,5 +572,26 @@ impl StreamTask {
                 sleep(poll.min(left)).await;
             }
         }
+    }
+}
+
+/// The committed offset in the one-partition list `found`, `None` when the list is empty; an error Kafka reports for the partition is an error, not a missing offset.
+fn committed_offset(found: &TopicPartitionList) -> Result<Option<Offset>, String> {
+    let Some(element) = found.elements().into_iter().next() else {
+        return Ok(None);
+    };
+    element.error().map_err(|error| error.to_string())?;
+    Ok(Some(element.offset()))
+}
+
+/// Where a partition resumes from the committed offset Kafka `found` for the group: after it, or `start_from` when the group has none; a failed read stays an error, to retry, never `start_from`.
+pub(crate) fn resume_offset(
+    found: Result<Option<Offset>, String>,
+    start_from: StartFrom,
+) -> Result<Offset, String> {
+    match (found?, start_from) {
+        (Some(Offset::Offset(offset)), _) => Ok(Offset::Offset(offset)),
+        (_, StartFrom::Earliest) => Ok(Offset::Beginning),
+        (_, StartFrom::Latest) => Ok(Offset::End),
     }
 }

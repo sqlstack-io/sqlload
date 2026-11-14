@@ -12,15 +12,16 @@ use crate::http_source::_helpers::cells::pivoted_rows;
 use crate::http_source::_helpers::fetch::fetch;
 use crate::http_source::_helpers::job::request_projection;
 use crate::http_source::_helpers::selector::{
-    pointer_text, pointer_value, selected_node, selector,
+    missing_path, pointer_text, pointer_value, selected_node, selector,
 };
 use crate::http_source::_helpers::urls::{redacted, request_url};
 use crate::http_source::models::{
-    Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request, Selector,
+    Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request,
+    SelectMissing, Selector,
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is missing or null has no rows and is not sent. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that ends after a first page shorter than its limit warns, as an API capping its pages lower would end it there too. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
 pub(crate) async fn paginate(
     calls: &Calls,
     request: &Request,
@@ -60,12 +61,33 @@ pub(crate) async fn paginate(
         previous = digest;
         let document = parsed(request, &rows, &fetched.bytes)
             .map_err(|error| format!("{shown}: the response is not JSON: {error}"))?;
+        if let Some(document) = &document
+            && request.select_missing == SelectMissing::Fail
+            && missing_path(document, &rows)
+        {
+            return Err(format!(
+                "{shown}: select {:?} is not in the response, which holds {}; an API can answer an error with a 200 status, so check the response. For an API that leaves an empty list out, set select_missing=\"empty\" to read such a page as no rows",
+                request.select.clone().unwrap_or_default(),
+                top_level(document)
+            )
+            .into());
+        }
         let next = next_call(
             request,
             (&first, &call),
             (&fetched, document.as_ref(), step),
         )
         .map_err(|error| format!("{shown}: {error}"))?;
+        if let (1, None, Paginator::Offset { limit, .. }, Some(document)) =
+            (step, &next, &request.paginator, &document)
+        {
+            let read = page_rows(document, request).map_err(|error| format!("{shown}: {error}"))?;
+            if read > 0 && read < *limit {
+                tracing::warn!(
+                    "{shown}: the first page held {read} rows, fewer than limit {limit}, so offset paging ended after it; if the API caps its pages below {limit} rows, set limit to that cap, or the rows after the first page are never read"
+                );
+            }
+        }
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
         });
@@ -93,6 +115,22 @@ pub(crate) async fn paginate(
         }
     }
     Ok(())
+}
+
+/// What a response holds at its top level, for an error: its keys, or the kind of value it is.
+fn top_level(document: &Value) -> String {
+    match document {
+        Value::Object(fields) if fields.is_empty() => "an empty object".to_owned(),
+        Value::Object(fields) => {
+            let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
+            format!("the keys {}", keys.join(", "))
+        }
+        Value::Array(_) => "a list".to_owned(),
+        Value::String(_) => "text".to_owned(),
+        Value::Number(_) => "a number".to_owned(),
+        Value::Bool(_) => "true or false".to_owned(),
+        Value::Null => "null".to_owned(),
+    }
 }
 
 /// The response as JSON when the selector or the paginator reads it, else `None`.

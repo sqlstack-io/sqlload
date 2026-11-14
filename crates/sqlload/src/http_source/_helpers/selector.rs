@@ -85,6 +85,21 @@ pub(crate) fn selected_node<'a>(document: &'a Value, selector: &Selector) -> Opt
         .try_fold(document, |node, name| step(node, name))
 }
 
+/// Whether `selector`'s path is missing from `document`: a field or item on the way is absent, rather than the path ending at a value or passing a null.
+pub(crate) fn missing_path(document: &Value, selector: &Selector) -> bool {
+    let mut node = document;
+    for name in &selector.rows {
+        if node.is_null() {
+            return false;
+        }
+        match step(node, name) {
+            Some(next) => node = next,
+            None => return true,
+        }
+    }
+    false
+}
+
 /// The rows `selector` points at in `document`: an array's items, one object, or none.
 pub(crate) fn selected_rows<'a>(document: &'a Value, selector: &Selector) -> Vec<&'a Value> {
     match selected_node(document, selector) {

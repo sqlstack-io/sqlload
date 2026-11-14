@@ -24,3 +24,19 @@ pub(crate) struct ArrowFieldTestCase {
     pub(crate) expected_data_type: Option<&'static str>,
     pub(crate) expected_metadata: Option<&'static str>,
 }
+
+pub(crate) struct ExactCastTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) input: arrow_array::ArrayRef,
+    pub(crate) to: arrow_schema::DataType,
+    /// The first value as it converts.
+    pub(crate) expected_value: &'static str,
+}
+
+pub(crate) struct ExactCastErrorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) input: arrow_array::ArrayRef,
+    pub(crate) to: arrow_schema::DataType,
+    /// Text the error must contain.
+    pub(crate) expected_message: &'static str,
+}

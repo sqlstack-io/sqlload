@@ -93,9 +93,9 @@ Arrays come from:
 - Python lists, in dicts or in Arrow data.
 
 A value that doesn't convert to `T`, such as `"abc"` in an `array(int)`, fails the load rather than
-loading as NULL. Elements convert as a pinned column of `T` would: from JSON text, `1.5` in an
-`array(int)` fails; a Parquet list of floats pinned `array(int)` is cut to whole numbers (from
-0.29.0, `plan` notes this on the column), and extra decimal places are rounded to
+loading as NULL. From JSON text, `1.5` in an `array(int)` fails. Elements of a Parquet or Arrow
+list don't yet get the exact check a pinned column gets: floats pinned `array(int)` are cut to whole
+numbers (from 0.29.0, `plan` notes this on the column), and extra decimal places are rounded to
 the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
 0.29.0, a list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
 converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values. In
@@ -162,3 +162,9 @@ Columns pinned in `columns` are read as the pinned type, when the source type ca
 Python values are typed as described in the [Python API](/docs/sources/python/#types). Parquet columns
 keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
 want typed differently.
+
+From 0.45.0, a value that a pinned `decimal(p,s)` or integer type can't hold exactly fails the read,
+naming the column and the value, on every source: `12.345` pinned `decimal(10,2)` and `1.5` pinned
+`int` fail rather than load as `12.35` and `1`. Before 0.45.0, Python, Parquet, CSV, JSON and
+BigQuery values were rounded or cut to fit. Pin a type that holds every value, such as a wider
+scale or `text`.

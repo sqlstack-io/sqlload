@@ -18,7 +18,7 @@ every section.
 | `include` | required | Topic patterns to export. |
 | `exclude` | none | Topic patterns to leave out. |
 | `consumer_group` | `sqlload-{stream}` | The consumer group template; see [Naming topics](/docs/kafka/naming/#naming). |
-| `start_from` | `latest` | Where a group with no committed offset starts: `earliest` or `latest`. |
+| `start_from` | `latest` | Where a group with no committed offset starts: `earliest` or `latest`. From 0.45.0, it applies only to a group that has no committed offset: when the committed offset can't be read, the read is retried for 4 minutes and the stream then stops with an error, rather than start from `start_from`, which with `latest` would skip records. |
 | `discovery_interval` | `5m` | How often new topics are looked for. |
 | `shards` | `1` | How many instances split the streams between them. Each runs with its own `--shard`. |
 | `shard` | `0` | This instance's index below `shards`. `run --shard`, or `SQLLOAD_SHARD`, overrides it. |

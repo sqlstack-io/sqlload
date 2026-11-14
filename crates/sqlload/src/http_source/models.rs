@@ -49,6 +49,18 @@ pub struct Request {
     /// Each row's list of cells, pivoted into one column per named column before the rows load.
     #[serde(default)]
     pub cells: Option<Cells>,
+    /// What a response without the `select` path means.
+    #[serde(default)]
+    pub select_missing: SelectMissing,
+}
+
+/// What a response without a request's `select` path means: an error (an API answering an error with a 200 status looks like this), or, chosen for APIs that leave empty lists out, no rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectMissing {
+    #[default]
+    Fail,
+    Empty,
 }
 
 /// How each row's list of cells becomes columns: where the cells are, each one's column and value, and where the columns' names come from.

@@ -7,6 +7,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow_select::concat::concat;
 
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::main::exact_cast::exact_cast;
 use crate::files_source::constants::{
     MAX_TEXT_ARRAY_BYTES, NESTED_JSON_SLICE_ROWS, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN,
     SOURCE_VERSION_COLUMN,
@@ -124,11 +125,7 @@ fn shape_column(
             ),
         });
     }
-    let strict = CastOptions {
-        safe: false,
-        ..CastOptions::default()
-    };
-    cast_with_options(&source, field.data_type(), &strict).map_err(|error| ShapeError {
+    exact_cast(&source, field.data_type()).map_err(|error| ShapeError {
         row: failing_row(&source, field.data_type()),
         reason: format!(
             "{}: cannot convert to {}: {error}",

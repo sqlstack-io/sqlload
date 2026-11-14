@@ -726,6 +726,26 @@ def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_r
 	assert [value for (value,) in query(project, 'SELECT v FROM "RAW"."shop__rows" ORDER BY v')] == expected
 
 
+@pytest.mark.parametrize(
+	("column_type", "value", "message"),
+	[
+		("decimal(10,2)", 1.239, "amount: holds 1.239, which decimal(10,2) can't hold without losing digits"),
+		("decimal(10,2)", "1.239", "amount: holds 1.239, which decimal(10,2) can't hold without losing digits"),
+		("int", 2.5, "amount: holds 2.5, which int64 can't hold without losing digits"),
+	],
+	ids=["float-to-decimal", "text-to-decimal", "float-to-int"],
+)
+def test_given_a_pinned_narrower_type_when_a_value_would_lose_digits_then_the_load_fails_and_nothing_loads(
+	tmp_path: Path, column_type: str, value: Any, message: str
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', columns={{'amount': '{column_type}'}})(rows)\n")
+	give(project, "rows", [{"id": 1, "amount": 1}, {"id": 2, "amount": value}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert message in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW"."shop__rows"') == [(0,)]
+
+
 def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_the_same_type_on_every_run(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
 	give(project, "rows", [])

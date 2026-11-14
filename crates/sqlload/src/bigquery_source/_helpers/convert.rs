@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, Schema, SchemaRef};
 
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::main::exact_cast::exact_cast;
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::ReadColumn;
 use crate::row_batches::main::normalise_batch::normalise_batch;
@@ -55,10 +55,6 @@ pub(crate) fn convert_batch(
                 .and_then(|nested| normalise_batch(&nested, &[]))?,
         ),
     };
-    let strict = CastOptions {
-        safe: false,
-        ..CastOptions::default()
-    };
     let columns: Vec<ArrayRef> = schema
         .fields()
         .iter()
@@ -68,7 +64,7 @@ pub(crate) fn convert_batch(
                 .and_then(|texts| texts.column_by_name(field.name()))
                 .or_else(|| batch.column_by_name(field.name()))
                 .ok_or_else(|| format!("the read has no column {}", field.name()))?;
-            cast_with_options(read, field.data_type(), &strict)
+            exact_cast(read, field.data_type())
                 .map_err(|error| format!("{}: {error}", field.name()))
         })
         .collect::<Result<_, String>>()?;
