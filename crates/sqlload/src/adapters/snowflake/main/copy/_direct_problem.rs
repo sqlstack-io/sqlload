@@ -68,7 +68,7 @@ pub(in crate::adapters) fn direct_problem(check: &DirectCheck<'_>) -> Option<Str
         let read = check
             .columns
             .iter()
-            .any(|column| column.name == *name && matches!(column.value, CopyValue::File { .. }));
+            .any(|column| column.source == *name && matches!(column.value, CopyValue::File { .. }));
         if read {
             return Some(format!(
                 "{name} is {arrow_type} in the files, which the direct COPY does not load exactly"

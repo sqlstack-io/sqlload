@@ -118,30 +118,6 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// Why a files table's columns need SQLLoad's reader for their names: some load under another name than the files give them (`naming`, `rename` or numbering), or repeat a header, which a warehouse reading the files itself binds by name.
-fn renamed_reason(spec: &TableSpec) -> Option<String> {
-    spec.files.as_ref()?;
-    let renamed: Vec<&str> = spec
-        .names
-        .columns
-        .iter()
-        .filter(|column| column.loaded != column.source || column.read_as != column.source)
-        .map(|column| column.source.as_str())
-        .collect();
-    let shown = match renamed.as_slice() {
-        [] => return None,
-        [one] => format!("column {one} loads"),
-        [first, second] => format!("columns {first} and {second} load"),
-        [first, second, ..] => format!(
-            "columns {first}, {second} and {} more load",
-            renamed.len() - 2
-        ),
-    };
-    Some(format!(
-        "{shown} under names the files don't hold, which SQLLoad gives them"
-    ))
-}
-
 /// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
     let sampled = spec.python.is_some()
@@ -1084,8 +1060,7 @@ pub(crate) fn reader_offer(
         spec.transform
             .as_ref()
             .map(|transform| format!("transform {} runs on each file", transform.function))
-    })
-    .or_else(|| renamed_reason(spec));
+    });
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },

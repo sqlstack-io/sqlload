@@ -11,7 +11,11 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
     let file = PulledFile {
         url: "https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet"
             .to_owned(),
-        in_file: vec!["id".to_owned(), "raw".to_owned(), "day".to_owned()],
+        in_file: vec![
+            ("id".to_owned(), "Order ID".to_owned()),
+            ("raw".to_owned(), "raw".to_owned()),
+            ("day".to_owned(), "day".to_owned()),
+        ],
         constants: vec![
             ("day".to_owned(), Some("2026-01-01".to_owned())),
             ("region".to_owned(), None),
@@ -24,7 +28,7 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
     };
     let test_cases = [
         PullInsertTestCase {
-            description: "credentials are named as query parameters, never written into the statement, and escaped as ClickHouse reads parameter values; the folder's value wins over the file's day, a column no file holds and a missing folder are NULL, a fixed-size binary keeps its zero bytes, and rows are numbered in stored order by one thread",
+            description: "credentials are named as query parameters, never written into the statement, and escaped as ClickHouse reads parameter values; the folder's value wins over the file's day, a column no file holds and a missing folder are NULL, a fixed-size binary keeps its zero bytes, a column takes the file's column of its source name (`Order ID` into `id`), and rows are numbered in stored order by one thread",
             columns: vec![
                 desired("id", ColumnType::Int),
                 desired("raw", ColumnType::Binary),
@@ -40,7 +44,7 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
                 ("param_sqlload_secret", "it's a\\\\b\\tc\\nd"),
                 ("param_sqlload_token", "token"),
             ],
-            expected_insert: "INSERT INTO `raw`.`s` (`id`, `raw`, `gone`, `day`, `region`, `_sqlload_source_row`, `_sqlload_loaded_at`) SELECT CAST(`id` AS Nullable(int)), CAST(substring(`raw`, 1) AS Nullable(binary)), CAST(NULL AS Nullable(text)), CAST(CAST('2026-01-01' AS Date32) AS Nullable(date)), CAST(NULL AS Nullable(text)), CAST(rowNumberInAllBlocks() + 1 AS Nullable(int)), CAST(parseDateTime64BestEffort('2026-11-08T07:00:00Z', 6, 'UTC') AS Nullable(timestamp_tz)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', {sqlload_key_id:String}, {sqlload_secret:String}, {sqlload_token:String}, 'Parquet') SETTINGS max_threads = 1, max_insert_threads = 1, input_format_parquet_preserve_order = 1",
+            expected_insert: "INSERT INTO `raw`.`s` (`id`, `raw`, `gone`, `day`, `region`, `_sqlload_source_row`, `_sqlload_loaded_at`) SELECT CAST(`Order ID` AS Nullable(int)), CAST(substring(`raw`, 1) AS Nullable(binary)), CAST(NULL AS Nullable(text)), CAST(CAST('2026-01-01' AS Date32) AS Nullable(date)), CAST(NULL AS Nullable(text)), CAST(rowNumberInAllBlocks() + 1 AS Nullable(int)), CAST(parseDateTime64BestEffort('2026-11-08T07:00:00Z', 6, 'UTC') AS Nullable(timestamp_tz)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', {sqlload_key_id:String}, {sqlload_secret:String}, {sqlload_token:String}, 'Parquet') SETTINGS max_threads = 1, max_insert_threads = 1, input_format_parquet_preserve_order = 1",
         },
         PullInsertTestCase {
             description: "without row numbers the read keeps ClickHouse's parallelism, and a public bucket's read is unsigned, with no credentials sent",
@@ -50,7 +54,7 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
             ],
             signed: false,
             expected_parameters: &[],
-            expected_insert: "INSERT INTO `raw`.`s` (`id`, `_sqlload_load_id`) SELECT CAST(`id` AS Nullable(int)), CAST(CAST('load1' AS String) AS Nullable(text)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', NOSIGN, 'Parquet')",
+            expected_insert: "INSERT INTO `raw`.`s` (`id`, `_sqlload_load_id`) SELECT CAST(`Order ID` AS Nullable(int)), CAST(CAST('load1' AS String) AS Nullable(text)) FROM s3('https://example-bucket.s3.eu-west-2.amazonaws.com/lake/day=2026-01-01/a.parquet', NOSIGN, 'Parquet')",
         },
     ];
     let sql_type = |column_type: &ColumnType| format!("Nullable({column_type})");

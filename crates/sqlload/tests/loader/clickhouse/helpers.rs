@@ -261,7 +261,7 @@ fn row_grouped_parquet(batch: &RecordBatch) -> Result<bytes::Bytes, String> {
     Ok(bytes::Bytes::from(buffer))
 }
 
-/// Parquet holding `ids`, a fixed-size `raw` value ending in zero bytes, and `note` when given.
+/// Parquet holding `ids`, a fixed-size `raw` value ending in zero bytes, and `Note Text` (loaded as `note_text`) when given.
 pub(crate) fn events_parquet(
     ids: std::ops::RangeInclusive<i64>,
     note: Option<&str>,
@@ -279,7 +279,7 @@ pub(crate) fn events_parquet(
     columns.extend(note.map(|note| {
         let array: arrow_array::ArrayRef =
             std::sync::Arc::new(arrow_array::StringArray::from(vec![note; rows]));
-        ("note", array)
+        ("Note Text", array)
     }));
     row_grouped_parquet(&RecordBatch::try_from_iter(columns).map_err(|error| error.to_string())?)
 }

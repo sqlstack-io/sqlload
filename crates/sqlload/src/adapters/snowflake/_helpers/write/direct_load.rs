@@ -432,6 +432,7 @@ fn filled_columns(
         };
         filled.push(CopyColumn {
             name: column.name.clone(),
+            source: found.map_or_else(|| column.name.clone(), |found| found.source.clone()),
             column_type: column.column_type.clone(),
             value,
         });

@@ -642,8 +642,8 @@ fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_stra
         MaskMatrixTestCase {
             description: "a column loading under another name than the files give it",
             mask: "[sources.orders.tables.orders]\nrename = { COLUMN = \"renamed\" }",
-            expected_plan: &[READS],
-            expected_unplanned: &[PULLS_ANY],
+            expected_plan: &[PULLS_ANY],
+            expected_unplanned: &[READS],
         },
     ];
     run_async(async {

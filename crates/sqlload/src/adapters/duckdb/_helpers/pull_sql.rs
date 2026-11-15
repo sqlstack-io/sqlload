@@ -19,10 +19,10 @@ pub(crate) struct PulledFile {
     pub constants: Vec<(String, Option<String>)>,
 }
 
-/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
+/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
 pub(crate) fn pull_insert(
     into: &TableName,
-    (columns, in_files): (&[DesiredColumn], &[String]),
+    (columns, in_files): (&[DesiredColumn], &[(String, String)]),
     files: &[PulledFile],
     (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
@@ -56,8 +56,8 @@ pub(crate) fn pull_insert(
                         column,
                     )
                 }
-                (_, name) if in_files.contains(&name.to_owned()) => {
-                    cast(format!("f.{}", identifier(name)), column)
+                (_, name) if let Some(file) = in_file(in_files, name) => {
+                    cast(format!("f.{}", identifier(file)), column)
                 }
                 _ => "NULL".to_owned(),
             },
@@ -75,6 +75,14 @@ pub(crate) fn pull_insert(
         values.join(", "),
         urls.join(", ")
     )
+}
+
+/// The name in the files of the column the table holds as `name`, when the files hold it.
+fn in_file<'a>(in_files: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    in_files
+        .iter()
+        .find(|(held, _)| held == name)
+        .map(|(_, file)| file.as_str())
 }
 
 /// `file`'s constant `name`: `Some(None)` when its folder lacks it, `None` when it has no such constant.

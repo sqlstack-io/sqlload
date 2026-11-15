@@ -28,15 +28,13 @@ server are not an exception: no warehouse reads SFTP, so they never had a direct
 
 A table with a `transform` (from 0.52.0) is read by SQLLoad too, since its Python function runs on
 each file's rows before they load: `reader_offer` gives the reason `transform <function> runs on
-each file`, and `plan_route` takes the same path as for `hmac`.
+each file`, and `plan_route` takes the same path as for `hmac`. Without a `transform`, nothing else
+changes, and the route test below still checks that only `hmac` reaches SQLLoad's reader among the
+settings it plans.
 
-A table with a column that loads under another name than its files give it is read by SQLLoad too:
-`naming` changed it (`Order ID` loads as `order_id`), `rename` named it, or numbering numbered a
-repeated or colliding header. A warehouse reading the files itself binds columns by the files'
-names. `reader_offer` gives the reason `columns X and Y load under names the files don't hold,
-which SQLLoad gives them`. Files whose columns all load under their own names take the direct route
-as before, and the route test below checks that only `hmac` and a renamed column reach SQLLoad's
-reader among the settings it plans.
+A column that loads under another name than its files give it (`naming`, `rename` or numbering) is
+no reason to read the files: each direct route selects it by its name in the files and loads it
+under its own (`f."Order ID"` into `order_id`; a repeated CSV header by its place).
 
 Anything else fails rather than falling back to SQLLoad:
 
@@ -52,6 +50,6 @@ These checks enforce the rule:
   - `plan_route` sends a warehouse destination without `hmac` to `warehouse_reads`, and that function never reaches the reader.
 - The route test `given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_strategy_then_only_hmac_reaches_sqlloads_reader`
   plans every format, type and write strategy, unmasked, hashed, `hmac`-masked and with a renamed
-  column, and checks that only `hmac` and the renamed column reach SQLLoad's reader.
+  column, and checks that only `hmac` reaches SQLLoad's reader.
 
 Warehouse-specific code lives in `crates/sqlload/src/adapters` (fensu rule `XSL001`).

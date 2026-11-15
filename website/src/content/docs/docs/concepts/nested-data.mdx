@@ -176,10 +176,6 @@ source's own names, and `flatten` the names a Python table yields. A Python tabl
 `ctx.cursor_column` is the cursor's loaded name (`updated_at` for a field yielded as `UpdatedAt`).
 The target schema keeps the name it is given.
 
-On a files source whose warehouse reads the files itself, a table with a column that loads under
-another name than its files give it is read by SQLLoad instead, and `plan` says why on its `route`
-line.
-
 ### rename
 
 `rename` is a map of source names to loaded names, or the name of a Python function:

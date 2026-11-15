@@ -15,7 +15,10 @@ fn given_parquet_files_when_duckdb_reads_them_itself_then_each_column_comes_from
             column("_sqlload_source_row", ColumnType::Int),
             column("_sqlload_load_id", ColumnType::Text),
         ],
-        in_files: vec!["id".to_owned(), "day".to_owned()],
+        in_files: vec![
+            ("id".to_owned(), "Order ID".to_owned()),
+            ("day".to_owned(), "day".to_owned()),
+        ],
         files: vec![
             PulledFile {
                 url: "s3://b/x/a.parquet".to_owned(),
@@ -26,7 +29,7 @@ fn given_parquet_files_when_duckdb_reads_them_itself_then_each_column_comes_from
                 constants: vec![("day".to_owned(), None)],
             },
         ],
-        expected_sql: "INSERT INTO \"RAW\".\"orders\" (\"id\", \"day\", \"note\", \"_sqlload_source_row\", \"_sqlload_load_id\") SELECT CAST(f.\"id\" AS BIGINT), CAST(['2026-01-01', NULL][CAST(f.file_index AS BIGINT) + 1] AS DATE), NULL, CAST(f.file_row_number + 1 AS BIGINT), CAST('L1' AS VARCHAR) FROM read_parquet(['s3://b/x/a.parquet', 's3://b/x/it''s.parquet'], union_by_name = true, file_row_number = true, hive_partitioning = false) AS f",
+        expected_sql: "INSERT INTO \"RAW\".\"orders\" (\"id\", \"day\", \"note\", \"_sqlload_source_row\", \"_sqlload_load_id\") SELECT CAST(f.\"Order ID\" AS BIGINT), CAST(['2026-01-01', NULL][CAST(f.file_index AS BIGINT) + 1] AS DATE), NULL, CAST(f.file_row_number + 1 AS BIGINT), CAST('L1' AS VARCHAR) FROM read_parquet(['s3://b/x/a.parquet', 's3://b/x/it''s.parquet'], union_by_name = true, file_row_number = true, hive_partitioning = false) AS f",
     }];
     let table = TableName {
         database: None,
