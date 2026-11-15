@@ -175,5 +175,12 @@ pub const UNNEST_ALL: &str = "all";
 /// How many dropped rows' ordinals one `DELETE` from a child table's staging table lists.
 pub const DROPPED_CHUNK: usize = 1000;
 
+/// The length of a date written as `YYYY-MM-DD`; a longer `--start-cursor-ts` value has a time of day.
+pub const DATE_TEXT_LENGTH: usize = 10;
+
+/// Why a cursor range can't apply to a table without a cursor.
+pub const RANGE_NEEDS_CURSOR: &str =
+    "--start-cursor/--end-cursor and their -ts and -int forms need a cursor_column";
+
 /// The note of a `transform` record whose load rewrote the table whole, so the files earlier records name are gone from it.
 pub const TRANSFORM_REWROTE_NOTE: &str = "transform, table rewritten";

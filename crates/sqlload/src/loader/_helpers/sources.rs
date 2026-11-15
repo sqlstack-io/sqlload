@@ -1649,7 +1649,10 @@ pub(crate) async fn source_ends(
     mut specs: Vec<TableSpec>,
     options: &PlanOptions,
 ) -> Result<Vec<TableSpec>, LoaderError> {
-    if source.kind != SourceKind::Postgres || options.end_cursor.is_some() {
+    if source.kind != SourceKind::Postgres
+        || options.end_cursor.is_some()
+        || options.typed_cursors.end_int.is_some()
+    {
         return Ok(specs);
     }
     let mut client: Option<Client> = None;

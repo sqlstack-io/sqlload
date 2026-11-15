@@ -14,7 +14,7 @@ use crate::load_naming::models::Naming;
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
-    deserialize_optional_percent,
+    deserialize_optional_lookback, deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -746,8 +746,8 @@ pub struct TableSettings {
     pub cursor_column: Option<Vec<String>>,
     #[serde(default)]
     pub cursor_start: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_duration")]
-    pub lookback: Option<Duration>,
+    #[serde(default, deserialize_with = "deserialize_optional_lookback")]
+    pub lookback: Option<Lookback>,
     /// Read only cursor values before now plus this (a date cursor: up to and including today plus this many days).
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub lookahead: Option<Duration>,
@@ -945,6 +945,13 @@ pub enum NullCursor {
     Include,
     /// Skip them, as a cursor filter does.
     Ignore,
+}
+
+/// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lookback {
+    Duration(Duration),
+    Units(i64),
 }
 
 /// What a cursor's `lookback` counts back from.

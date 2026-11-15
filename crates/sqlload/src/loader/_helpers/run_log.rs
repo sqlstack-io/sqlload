@@ -291,7 +291,7 @@ pub(crate) fn run_entry(
     let logged = load.table.logged.as_ref()?;
     let spec = &table.spec;
     let options = load.options;
-    let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
+    let backfill = options.ranged();
     let previous = logged
         .current
         .as_ref()

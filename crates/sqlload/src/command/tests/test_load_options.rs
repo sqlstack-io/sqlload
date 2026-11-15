@@ -20,9 +20,33 @@ fn given_selection_and_cursor_flags_when_parsing_a_load_then_the_plan_options_ho
             expected_options: Ok(" |  | 100 | 2026-11-05"),
         },
         LoadOptionsTestCase {
-            description: "the typed cursor flags are gone",
-            argv: &["--start-cursor-int", "7"],
-            expected_options: Err("unexpected argument '--start-cursor-int'"),
+            description: "the -ts and -int flags combine, as in SQLBuild, each for its own cursor family",
+            argv: &[
+                "--start-cursor-ts",
+                "2026-10-01",
+                "--end-cursor-int",
+                "2027",
+            ],
+            expected_options: Ok(" |  |  | "),
+        },
+        LoadOptionsTestCase {
+            description: "the untyped and typed flags are refused together, in SQLBuild's words",
+            argv: &["--start-cursor", "100", "--end-cursor-int", "200"],
+            expected_options: Err(
+                "--start-cursor/--end-cursor cannot be combined with the -ts or -int cursor flags",
+            ),
+        },
+        LoadOptionsTestCase {
+            description: "an -int value must be a whole number",
+            argv: &["--start-cursor-int", "3.14"],
+            expected_options: Err("--start-cursor-int value '3.14' is not a whole number"),
+        },
+        LoadOptionsTestCase {
+            description: "a -ts value must be an RFC 3339 timestamp or a date",
+            argv: &["--end-cursor-ts", "yesterday"],
+            expected_options: Err(
+                "--end-cursor-ts value 'yesterday' is not an RFC 3339 timestamp or a date",
+            ),
         },
         LoadOptionsTestCase {
             description: "--threads is gone; --concurrency replaces it",
