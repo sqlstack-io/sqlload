@@ -1189,27 +1189,30 @@ fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
     ))
 }
 
-/// `plan`, planned again when the table's run log holds the names numbering gave its columns in earlier loads and this plan's numbering names them otherwise, so each keeps its number; a number whose source column has gone, which another column would take, blocks the table instead, as does a clash on a column the table has that no record says which source column holds. A Python table, whose columns are named as they arrive, only keeps the names for its load.
+/// `plan`, planned again when the table's run log holds the names numbering gave its columns in earlier loads and this plan's numbering names them otherwise, so each keeps its number; a number whose source column has gone, which another column would take, blocks the table instead, as does a clash on a column the table has that no record says which source column holds. A Python table, whose columns are named as they arrive, takes the names and the table's columns for its load, which refuses such a clash then.
 pub(crate) async fn with_kept_names(
     project: &ProjectConfig,
     spec: TableSpec,
     mut plan: TablePlan,
     (destination, options): (&Destination, &PlanOptions),
 ) -> Result<TablePlan, LoaderError> {
-    let clash = plan.exists
-        && !options.reload
+    let existing: Vec<String> = match plan.exists && !options.reload {
+        true => plan
+            .live
+            .iter()
+            .flatten()
+            .map(|column| column.name.clone())
+            .collect(),
+        false => Vec::new(),
+    };
+    plan.spec.name_rules.existing.clone_from(&existing);
+    let clash = !existing.is_empty()
         && plan.schema.blocked.is_none()
         && !plan.spec.names.numbered.is_empty();
     let kept = kept_numbered(&plan, destination, options.reload).await?;
     let Some(kept) = kept.or_else(|| clash.then(Vec::new)) else {
         return Ok(plan);
     };
-    let existing: Vec<String> = plan
-        .live
-        .iter()
-        .flatten()
-        .map(|column| column.name.clone())
-        .collect();
     plan.spec.names.kept.clone_from(&kept);
     plan.spec.name_rules.kept.clone_from(&kept);
     let Some(listed) = spec.listed.as_deref() else {

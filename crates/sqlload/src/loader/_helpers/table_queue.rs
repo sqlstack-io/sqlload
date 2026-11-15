@@ -9,6 +9,7 @@ use crate::cdc::main::follow_cdc::follow_cdc;
 use crate::cdc::main::load_cdc::load_cdc;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
+use crate::loader::_helpers::run_log::record_numbered;
 use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
@@ -91,9 +92,29 @@ pub(crate) async fn follow_tables(
             },
         );
     }
+    record_cdc_names(run, plan).await;
     let outcomes = Box::pin(follow_cdc(run, plan.clone(), stop)).await;
     outcomes.iter().for_each(emit_outcome);
     outcomes
+}
+
+/// Before `plan`'s `postgres_cdc` sources load: the names numbering gave each unblocked table's columns, in its run log, as other tables record them once loaded; numbers are fixed at plan, and a stream has no end to record them at. A table whose names could not be written warns: its next plan refuses a clash on its columns rather than number them anew.
+async fn record_cdc_names(run: &LoadRun<'_>, plan: &ProjectPlan) {
+    let captured = plan
+        .tables
+        .iter()
+        .filter(|table| table.spec.cdc.is_some() && table.schema.blocked.is_none());
+    for table in captured {
+        let Some(destination) = run.destinations.get(&table.spec.target) else {
+            continue;
+        };
+        if let Err(error) = Box::pin(record_numbered(table, destination)).await {
+            tracing::warn!(
+                table = %table.spec.destination.table,
+                "could not record the names numbering gave its columns: {error}"
+            );
+        }
+    }
 }
 
 /// `table`'s write strategy as the load events name it.
@@ -199,6 +220,9 @@ impl<'a> TableQueue<'a> {
                     strategy: strategy_name(table).to_owned(),
                 },
             );
+        }
+        if self.stopped.is_none() {
+            record_cdc_names(run, plan).await;
         }
         let outcomes = load_cdc(run, plan, self.stopped.clone()).await;
         outcomes.iter().for_each(emit_outcome);

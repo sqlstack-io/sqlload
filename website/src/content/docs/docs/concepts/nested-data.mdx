@@ -249,9 +249,11 @@ The order of the numbers on a new table:
   `OrderID`, so `Order ID` keeps `order_id` and `OrderID` loads as `order_id_1`.
 
 Once a table exists, a number stays with the source name it was given to. The table's run log
-records them. A later file that adds `ORDER_ID`, which sorts first, gets the next free number,
-`order_id_2`, and the other two keep their columns. When the source name a numbered column holds
-is gone and another one would take its column, `plan` fails rather than load other data into it:
+records them, for every kind of table, `state = "logged"` Python tables included. A later file that
+adds `ORDER_ID`, which sorts first, gets the next free number, `order_id_2`, and the other two keep
+their columns. A clash on a column the table has, when no load recorded which source name it holds,
+fails rather than number the columns afresh. When the source name a numbered column holds is gone
+and another one would take its column, `plan` fails rather than load other data into it:
 
 ```console
 Errors (1)

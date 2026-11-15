@@ -1,5 +1,6 @@
 """`rename` end to end: an `@sl.rename` function picked by name in `sqlload.toml` or passed to a Python table, into DuckDB."""
 
+import json
 import os
 import subprocess
 import sys
@@ -188,3 +189,64 @@ def test_a_python_table_takes_the_rename_function_itself_and_snake_cases_the_res
 	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
 	assert columns(tmp_path, "shop__shop_orders") == [("order_ref",), ("row_number",)]
 	assert columns(tmp_path, "shop__lines") == [("orderId",), ("rowNumber",)]
+
+
+#: A logged Python table yielding the rows in data/orders.json, which counts its runs in ctx.state and records the state it started from.
+LOGGED = """
+import json
+from pathlib import Path
+
+import sqlload as sl
+
+HERE = Path(__file__).resolve().parent.parent
+shop = sl.source("shop", write_strategy="append")
+
+
+@shop.table(description="Orders.", state="logged")
+def orders(ctx):
+    (HERE / "state.json").write_text(json.dumps(ctx.state))
+    yield from json.loads((HERE / "data" / "orders.json").read_text())
+    ctx.state = (ctx.state or 0) + 1
+"""
+
+
+def logged_project(tmp_path: Path) -> Path:
+	(tmp_path / "sources").mkdir()
+	(tmp_path / "data").mkdir()
+	(tmp_path / "sqlload.toml").write_text(PYTHON_PROJECT)
+	(tmp_path / "sources" / "shop.py").write_text(LOGGED)
+	return tmp_path
+
+
+def load_rows(project: Path, rows: list[dict[str, int]]) -> subprocess.CompletedProcess[str]:
+	(project / "data" / "orders.json").write_text(json.dumps(rows))
+	return sqlload(project, "load")
+
+
+def test_a_logged_table_keeps_the_numbers_it_gave_and_its_state(tmp_path: Path) -> None:
+	project = logged_project(tmp_path)
+	first = load_rows(project, [{"OrderID": 1, "Order ID": 2}])
+	assert first.returncode == 0, first.stdout + first.stderr
+	assert "names  OrderID -> order_id_1 (numbered)" in first.stdout, first.stdout
+	second = load_rows(project, [{"OrderID": 3, "Order ID": 4, "ORDER_ID": 5}])
+	assert second.returncode == 0, second.stdout + second.stderr
+	assert "names  ORDER_ID -> order_id_2 (numbered)" in second.stdout, second.stdout
+	assert columns(project, "shop__orders") == [("order_id_1",), ("order_id",), ("order_id_2",)]
+	with duckdb.connect(str(project / "wh.duckdb"), read_only=True) as connection:
+		rows = connection.execute("SELECT order_id_1, order_id, order_id_2 FROM raw.shop__orders ORDER BY order_id_1").fetchall()
+	assert rows == [(1, 2, None), (3, 4, 5)]
+	assert json.loads((project / "state.json").read_text()) == 1
+
+
+def test_a_clash_on_a_column_no_load_recorded_fails_the_load_rather_than_renumber(tmp_path: Path) -> None:
+	project = logged_project(tmp_path)
+	first = load_rows(project, [{"OrderID": 1}])
+	assert first.returncode == 0, first.stdout + first.stderr
+	second = load_rows(project, [{"OrderID": 2, "Order ID": 3}])
+	assert second.returncode == 1, second.stdout + second.stderr
+	assert (
+		'columns "Order ID" and "OrderID" now both load as order_id, which the table already has, and no earlier load recorded which of them it holds; give all but one a name of its own with rename'
+		in second.stdout
+	), second.stdout
+	with duckdb.connect(str(project / "wh.duckdb"), read_only=True) as connection:
+		assert connection.execute("SELECT order_id FROM raw.shop__orders").fetchall() == [(1,)]

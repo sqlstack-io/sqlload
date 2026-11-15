@@ -81,7 +81,7 @@ use crate::loader::_helpers::run_log::{
     in_file, listed_sources, merge_rebuild, merged_file_text, merged_name, merged_record,
     swap_rebuild, with_file_keys,
 };
-use crate::loader::_helpers::run_log::{record_numbered, transformed};
+use crate::loader::_helpers::run_log::{record_numbered, recorded_names, transformed};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
@@ -1228,6 +1228,7 @@ impl Publisher {
             ));
         };
         run.record.state = self.state.clone();
+        run.record.numbered = recorded_names(&self.table.spec);
         let mut record = run.finished(RunOutcome {
             run_id: self.load_id.clone(),
             recorded_at: now_utc_text(),
@@ -1344,7 +1345,13 @@ impl Publisher {
                 .cloned()
                 .collect(),
             named: None,
-            existing: Vec::new(),
+            existing: self
+                .table
+                .live
+                .iter()
+                .flatten()
+                .map(|column| column.name.clone())
+                .collect(),
         };
         let resolved = resolve_known(run.project, &spec.source_name, &[source_table], &known);
         let mut widened = match (resolved.problems.first(), resolved.specs.into_iter().next()) {

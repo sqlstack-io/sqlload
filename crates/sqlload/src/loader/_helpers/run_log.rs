@@ -537,7 +537,7 @@ pub(crate) fn transform_record(spec: &TableSpec, version: &str) -> RunRecord {
 }
 
 /// The names numbering gave `spec`'s columns and those its earlier loads gave that no column now loads as otherwise, for its run log; none when they are the ones the log holds already.
-fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
+pub(crate) fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
     let names = &spec.names;
     let taken = |column: &str| {
         names
@@ -566,7 +566,7 @@ fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
     }
 }
 
-/// Once a load that is not logged succeeded, the names numbering gave its columns, when they are not the ones its run log holds already, so the next plan keeps them.
+/// Once a load that is not logged succeeded, the names numbering gave its columns, when they are not the ones its run log holds already, so the next plan keeps them; a logged table's own run records carry them instead (see [`recorded_names`]), so its current state stays its newest run.
 pub(crate) async fn record_numbered(
     table: &TablePlan,
     destination: &Destination,
