@@ -487,7 +487,7 @@ fn written_only(batch: RecordBatch, written: &[DesiredColumn]) -> Result<RecordB
 }
 
 impl Publisher {
-    /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table.
+    /// A table's load ready for its first batch: its own connection, and (unless the batches go straight into the table) a fresh staging table. A merge `--reload`'s build table is created last, so no failure here leaves it behind; from then on `close` drops it.
     pub(crate) async fn open(
         table: TablePlan,
         (destination, options): (&Destination, &PlanOptions),
@@ -499,10 +499,6 @@ impl Publisher {
         if run.is_some() && runs_sql {
             ensure_runs_table(&table, &destination).await?;
         }
-        let rebuild = match records_files(&table) {
-            true => merge_rebuild(&table, &destination).await?,
-            false => None,
-        };
         let load_id = uuid::Uuid::new_v4().to_string();
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
@@ -619,6 +615,10 @@ impl Publisher {
                 ignored: Vec::new(),
                 changes: Vec::new(),
             }),
+        };
+        let rebuild = match records_files(&table) {
+            true => merge_rebuild(&table, &destination).await?,
+            false => None,
         };
         Ok(Self {
             children,
