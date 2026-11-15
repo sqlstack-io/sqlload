@@ -106,6 +106,19 @@ impl PythonHost for ExtensionHost {
         }))
     }
 
+    fn rename(&self, name: &str, columns: Option<&str>, context: &str) -> Result<String, String> {
+        let called = Python::attach(|py| -> PyResult<(Option<String>, Option<String>)> {
+            py.import(RUNTIME_MODULE)?
+                .call_method1("rename", (name, columns, context))?
+                .extract()
+        })
+        .map_err(|error| error_text(&error))?;
+        match called {
+            (Some(names), _) => Ok(names),
+            (None, problem) => Err(problem.unwrap_or_else(|| format!("{name} cannot run"))),
+        }
+    }
+
     fn finish(&self) {
         let closed = Python::attach(|py| -> PyResult<()> {
             py.import(RUNTIME_MODULE)?.call_method0("finish_run")?;

@@ -5,18 +5,26 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::load_naming::main::loaded_columns::loaded_columns;
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{
+    ColumnName, Compat, LoadedColumn, LoadedNames, NameRules, Naming, NumberedName, RenameColumn,
+};
+use crate::load_naming::types::RenameFunction;
+use crate::loader::_helpers::run_log::kept_numbered;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::missing_description;
 use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
-    ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
+    ColumnChoices, SourceContext, build_spec, column_selection, layered, pinned_types,
+    table_compat, table_naming,
 };
-use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
+use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, plan_table};
 use crate::loader::constants::{
-    DATE_TEXT_LENGTH, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER, RANGE_NEEDS_CURSOR,
+    DATE_TEXT_LENGTH, NO_RENAME_HOST, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER,
+    RANGE_NEEDS_CURSOR,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -28,8 +36,9 @@ use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, ProjectConfig,
-    SourceConfig, SourceKind, TableOverride, TableSettings, UnnestSetting,
+    RenameSetting, SourceConfig, SourceKind, TableOverride, TableSettings, UnnestSetting,
 };
+use crate::python_sources::types::PythonHost;
 use crate::schema_plan::models::SchemaPlan;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::ssh_tunnel::models::SshTunnel;
@@ -40,6 +49,16 @@ pub(crate) fn resolve_tables(
     project: &ProjectConfig,
     source_name: &str,
     discovered: &[SourceTable],
+) -> ResolvedTables {
+    resolve_known(project, source_name, discovered, &KnownNames::default())
+}
+
+/// [`resolve_tables`] for tables planned before, whose names `known` keeps.
+pub(crate) fn resolve_known(
+    project: &ProjectConfig,
+    source_name: &str,
+    discovered: &[SourceTable],
+    known: &KnownNames,
 ) -> ResolvedTables {
     let mut resolved = ResolvedTables::default();
     let Some(source) = project.sources.get(source_name) else {
@@ -78,7 +97,13 @@ pub(crate) fn resolve_tables(
             target_display_name(&target, name)
         };
         let transform = table_transform(project, (source, &overrides), &qualified);
-        let resolved_table = match (resolve_table(&context, table, &overrides), transform) {
+        let call = |function: &str, columns: &[RenameColumn]| {
+            renamed_by(project, (source_name, &qualified), function, columns)
+        };
+        let resolved_table = match (
+            resolve_table(&context, (table, known), &overrides, &call),
+            transform,
+        ) {
             (Err(problems), _) => Err(problems),
             (Ok(_), Err(problem)) => Err(vec![problem]),
             (Ok(found), Ok(transform)) => Ok(found.map(|mut spec| {
@@ -176,7 +201,7 @@ fn table_transform(
     }
 }
 
-/// A problem for each pair of `specs` (one source's) that dlt's naming loads into one table although their names differ (`order-items` and `order_items`), where one would overwrite or mix with the other's rows.
+/// A problem for each pair of `specs` (one source's) that the naming loads into one table although their names differ (`order-items` and `order_items`), where one would overwrite or mix with the other's rows.
 fn merged_names(source_name: &str, source: &SourceConfig, specs: &[TableSpec]) -> Vec<String> {
     let written = |spec: &TableSpec| {
         let name = source
@@ -186,19 +211,17 @@ fn merged_names(source_name: &str, source: &SourceConfig, specs: &[TableSpec]) -
         table_name(
             (source_name, source),
             name,
-            (&spec.source_table, (Naming::Sqlload, None)),
+            (&spec.source_table, (Naming::Source, None)),
         )
     };
     let mut problems: Vec<String> = Vec::new();
     for (index, spec) in specs.iter().enumerate() {
         let clash = specs[..index].iter().find(|earlier| {
-            (spec.naming == Naming::Dlt || earlier.naming == Naming::Dlt)
-                && earlier.destination.table == spec.destination.table
-                && written(earlier) != written(spec)
+            earlier.destination.table == spec.destination.table && written(earlier) != written(spec)
         });
         if let Some(earlier) = clash {
             problems.push(format!(
-                "{} and {}: both load as table {} under naming = \"dlt\"; give one a name of its own with name",
+                "{} and {}: both load as table {}; give one a name of its own with name",
                 earlier.source_table.qualified_name(),
                 spec.source_table.qualified_name(),
                 spec.destination.table
@@ -208,38 +231,61 @@ fn merged_names(source_name: &str, source: &SourceConfig, specs: &[TableSpec]) -
     problems
 }
 
-/// One table's spec, `Ok(Err(reason))` if the column rules skip it, or its problems.
+/// A table's rename function by the name `@sl.rename` registered it under: the names it gives the columns, by position, or why it gives none.
+type RenameCall<'a> = &'a dyn Fn(&str, &[RenameColumn]) -> Result<BTreeMap<usize, String>, String>;
+
+/// One table's spec, `Ok(Err(reason))` if the column rules skip it, or its problems: every column it keeps named as it loads (see [`loaded_table`]), and the settings naming columns by either name.
 fn resolve_table(
     context: &SourceContext<'_>,
-    table: &SourceTable,
+    (table, known): (&SourceTable, &KnownNames),
     overrides: &TableOverride,
+    rename_call: RenameCall<'_>,
 ) -> Result<Result<TableSpec, String>, Vec<String>> {
     let mut excluded =
         match column_selection(context, table, overrides).map_err(|problem| vec![problem])? {
             ColumnSelection::Skip(reason) => return Ok(Err(reason)),
             ColumnSelection::Keep(excluded) => excluded,
         };
-    let naming = table_naming(
-        (&overrides.settings, &context.source.defaults),
-        context.target.naming,
-    );
-    if naming == Naming::Sqlload {
-        let pinned = pinned_types(overrides, context.target.warehouse)?;
-        return build_spec(
-            context,
-            table,
-            overrides,
-            ColumnChoices { excluded, pinned },
+    let settings = (&overrides.settings, &context.source.defaults);
+    let rules = NameRules {
+        naming: table_naming(settings, context.target.naming),
+        max_length: sql_adapter(context.target.warehouse).max_identifier_length(),
+        renamed: match layered(&overrides.settings.rename, &context.source.defaults.rename) {
+            Some((RenameSetting::Map(map), _)) => map,
+            _ => BTreeMap::new(),
+        },
+        on_duplicate_names: layered(
+            &overrides.settings.on_duplicate_names,
+            &context.source.defaults.on_duplicate_names,
         )
-        .map(Ok);
-    }
-    let rule = (
-        naming,
-        sql_adapter(context.target.warehouse).max_identifier_length(),
-    );
-    let overrides = loaded_overrides(overrides, rule);
+        .map(|(value, _)| value)
+        .unwrap_or_default(),
+        kept: known.numbered.clone(),
+        existing: known.existing.clone(),
+        function: match layered(&overrides.settings.rename, &context.source.defaults.rename) {
+            Some((RenameSetting::Function(function), _))
+                if context.source.kind != SourceKind::Python =>
+            {
+                Some(function)
+            }
+            _ => None,
+        },
+    };
+    let compat = table_compat(settings, context.target.compat);
+    let rename = |columns: &[RenameColumn]| match &rules.function {
+        Some(function) if !columns.is_empty() => rename_call(function, columns),
+        _ => Ok(BTreeMap::new()),
+    };
+    let names = match known.named {
+        Some(_) => same_names(table),
+        None => loaded_table_names(table, (&excluded, compat), &rules, &rename)?,
+    };
+    let mut problems = unknown_renames(context, overrides, &names);
+    let loaded = renamed_table(table, &names);
+    let name = |column: &str| setting_name(column, (&names, known), &rules);
+    let overrides = loaded_overrides(overrides, &name);
     let source = SourceConfig {
-        defaults: loaded_settings(&context.source.defaults, rule),
+        defaults: loaded_settings(&context.source.defaults, &name),
         ..context.source.clone()
     };
     let context = SourceContext {
@@ -247,20 +293,226 @@ fn resolve_table(
         source: &source,
         target: context.target,
     };
-    excluded.retain(|(column, _)| {
-        !overrides
-            .mask
-            .contains_key(&loaded_name(naming, column, rule.1))
-    });
-    let loaded = loaded_table(table, &excluded, rule)?;
-    let pinned = pinned_types(&overrides, context.target.warehouse)?;
-    build_spec(
-        &context,
-        &loaded,
-        &overrides,
-        ColumnChoices { excluded, pinned },
-    )
-    .map(Ok)
+    excluded.retain(|(column, _)| !overrides.mask.contains_key(&name(column)));
+    let pinned = pinned_types(&overrides, context.target.warehouse);
+    let spec = match pinned {
+        Ok(pinned) => build_spec(
+            &context,
+            &loaded,
+            &overrides,
+            ColumnChoices { excluded, pinned },
+        ),
+        Err(found) => Err(found),
+    };
+    match spec {
+        Ok(mut spec) if problems.is_empty() => {
+            spec.listed =
+                (context.source.kind != SourceKind::Python).then(|| Box::new(table.clone()));
+            spec.names = names;
+            spec.name_rules = NameRules {
+                function: layered(&overrides.settings.rename, &context.source.defaults.rename)
+                    .and_then(|(rename, _)| match rename {
+                        RenameSetting::Function(function) => Some(function),
+                        RenameSetting::Map(_) => None,
+                    }),
+                ..rules
+            };
+            Ok(Ok(spec))
+        }
+        Ok(_) => Err(problems),
+        Err(found) => {
+            problems.extend(found);
+            Err(problems)
+        }
+    }
+}
+
+/// What a re-plan already knows of a table's names: the names numbering gave before, which stay; and, for a Python table whose batches arrive named, that its columns are already loaded names, with each yielded name's loaded one.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KnownNames {
+    pub(crate) numbered: Vec<NumberedName>,
+    pub(crate) named: Option<BTreeMap<String, String>>,
+    /// The columns the table already has, when it exists.
+    pub(crate) existing: Vec<String>,
+}
+
+/// What a load re-planning `table` as new columns arrive knows of its names: the numbers this load and earlier ones gave, which stay, and the columns the table has.
+pub(crate) fn known_names(table: &TablePlan) -> KnownNames {
+    let names = &table.spec.names;
+    KnownNames {
+        numbered: names.numbered.iter().chain(&names.kept).cloned().collect(),
+        named: None,
+        existing: table
+            .live
+            .iter()
+            .flatten()
+            .map(|column| column.name.clone())
+            .collect(),
+    }
+}
+
+/// The names of `table`'s columns through the name pipeline under `rules` (an excluded column, and one a files source adds such as `_sqlload_source_file`, keeps its own), or its problems, with a column loading as one the load adds under `compat`.
+fn loaded_table_names(
+    table: &SourceTable,
+    (excluded, compat): (&[(String, String)], Compat),
+    rules: &NameRules,
+    rename: RenameFunction<'_>,
+) -> Result<LoadedNames, Vec<String>> {
+    let kept: Vec<ColumnName> = table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| !is_excluded(excluded, &column.name))
+        .filter(|(_, column)| !column.name.starts_with(SQLLOAD_PREFIX))
+        .map(|(index, column)| ColumnName {
+            position: index + 1,
+            source: column
+                .repeat_of
+                .clone()
+                .unwrap_or_else(|| column.name.clone()),
+            read_as: column.name.clone(),
+        })
+        .collect();
+    let names = loaded_columns(&kept, rules, rename)?;
+    let problems: Vec<String> = names
+        .columns
+        .iter()
+        .filter(|column| column.loaded != column.source && is_load_column(compat, &column.loaded))
+        .map(|column| {
+            format!(
+                "column {:?} loads as {}, a column the load adds; rename it, or exclude it with exclude_columns",
+                column.source, column.loaded
+            )
+        })
+        .collect();
+    match problems.is_empty() {
+        true => Ok(names),
+        false => Err(problems),
+    }
+}
+
+/// `table`'s columns under their own names, for a table whose columns are already loaded names.
+fn same_names(table: &SourceTable) -> LoadedNames {
+    LoadedNames {
+        columns: table
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| LoadedColumn {
+                position: index + 1,
+                source: column.name.clone(),
+                read_as: column.name.clone(),
+                loaded: column.name.clone(),
+                change: None,
+            })
+            .collect(),
+        numbered: Vec::new(),
+        kept: Vec::new(),
+    }
+}
+
+/// A problem for each key of a table's own `rename` map that names none of its columns, by source or default name; a source's map may name columns of other tables. A Python table's columns are known only at load.
+fn unknown_renames(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+    names: &LoadedNames,
+) -> Vec<String> {
+    let Some(RenameSetting::Map(map)) = &overrides.settings.rename else {
+        return Vec::new();
+    };
+    if context.source.kind == SourceKind::Python {
+        return Vec::new();
+    }
+    map.keys()
+        .filter(|key| !names_column(names, key))
+        .map(|key| format!("rename {key:?}: the table has no such column"))
+        .collect()
+}
+
+/// Whether `key` names a column of `names`: by its source name, its read name or its loaded one.
+fn names_column(names: &LoadedNames, key: &str) -> bool {
+    names
+        .columns
+        .iter()
+        .any(|column| column.source == key || column.loaded == key || column.read_as == key)
+}
+
+/// Whether `excluded`, the columns `exclude_columns` leaves out with their patterns, has `name`.
+fn is_excluded(excluded: &[(String, String)], name: &str) -> bool {
+    excluded.iter().any(|(column, _)| column == name)
+}
+
+/// `table` with each column under the name `names` gives it, remembering how the source spells it (`source_spelling`), and its key and indexed columns renamed with them.
+fn renamed_table(table: &SourceTable, names: &LoadedNames) -> SourceTable {
+    let mut loaded = table.clone();
+    let mut renamed: BTreeMap<String, String> = BTreeMap::new();
+    for column in &mut loaded.columns {
+        let Some(name) = names
+            .columns
+            .iter()
+            .find(|name| name.read_as == column.name)
+        else {
+            continue;
+        };
+        if name.loaded != column.name {
+            renamed
+                .entry(column.name.clone())
+                .or_insert_with(|| name.loaded.clone());
+            column.source_spelling = Some(
+                column
+                    .source_spelling
+                    .take()
+                    .unwrap_or_else(|| column.name.clone()),
+            );
+            column.name.clone_from(&name.loaded);
+        }
+    }
+    let rename = |columns: &mut Vec<String>| {
+        for name in columns {
+            if let Some(loaded) = renamed.get(name) {
+                name.clone_from(loaded);
+            }
+        }
+    };
+    rename(&mut loaded.primary_key);
+    rename(&mut loaded.indexed_columns);
+    loaded
+}
+
+/// The column a setting's `key` names, as it loads: the column whose source name it is (the first, for a repeated header), else one loading under it, else `key` as `rules` would name a column of that name (a Python table's columns are known only at load); a dotted path (a nested field's), part by part.
+fn setting_name(
+    key: &str,
+    (names, known): (&LoadedNames, &KnownNames),
+    rules: &NameRules,
+) -> String {
+    let column = names
+        .columns
+        .iter()
+        .find(|column| column.source == key)
+        .or_else(|| names.columns.iter().find(|column| column.read_as == key));
+    if let Some(column) = column {
+        return column.loaded.clone();
+    }
+    if names.columns.iter().any(|column| column.loaded == key) {
+        return key.to_owned();
+    }
+    if let Some(loaded) = known.named.as_ref().and_then(|named| named.get(key)) {
+        return loaded.clone();
+    }
+    if key.contains('.') {
+        return key
+            .split('.')
+            .map(|part| setting_name(part, (names, known), rules))
+            .collect::<Vec<_>>()
+            .join(".");
+    }
+    let named = loaded_name(rules.naming, key, rules.max_length);
+    rules
+        .renamed
+        .get(key)
+        .or_else(|| rules.renamed.get(&named))
+        .cloned()
+        .unwrap_or(named)
 }
 
 /// Where a source's tables go.
@@ -272,8 +524,10 @@ pub(crate) struct ResolvedTarget {
     pub(crate) schema: String,
     /// The table folder template, for a files target.
     pub(crate) path: Option<String>,
-    /// How its tables name the columns a load adds, unless a source or table says.
+    /// How its tables and columns are named, unless a source or table says.
     pub(crate) naming: Option<Naming>,
+    /// Whose names the columns a load adds take, unless a source or table says.
+    pub(crate) compat: Option<Compat>,
 }
 
 /// The target `source` loads into: its own, the project default, or the only target.
@@ -313,6 +567,7 @@ pub(crate) fn source_target(
             schema: String::new(),
             path: Some(target.path_template().to_owned()),
             naming: target.naming,
+            compat: target.compat,
         });
     }
     let schema = source
@@ -335,6 +590,7 @@ pub(crate) fn source_target(
         schema,
         path: None,
         naming: target.naming,
+        compat: target.compat,
     })
 }
 
@@ -361,65 +617,13 @@ pub(crate) fn display_name(warehouse: Warehouse, table: &TableName) -> String {
 /// How a table's names load: its naming and its destination's name limit.
 pub(crate) type NameRule = (Naming, Option<usize>);
 
-/// `table` with each column it keeps named as it loads under `rule`, remembering how the source spells it, and its key and indexed columns renamed with them; an excluded column (`excluded`) keeps its name. The problems: two columns loading under one name, which `exclude_columns` on one of them resolves, and one renamed onto a column the load adds.
-pub(crate) fn loaded_table(
-    table: &SourceTable,
-    excluded: &[(String, String)],
-    rule: NameRule,
-) -> Result<SourceTable, Vec<String>> {
-    let mut loaded = table.clone();
-    let mut renamed: BTreeMap<String, String> = BTreeMap::new();
-    let mut taken: BTreeMap<String, String> = BTreeMap::new();
-    let mut problems: Vec<String> = Vec::new();
-    for column in &mut loaded.columns {
-        let kept = !excluded.iter().any(|(name, _)| *name == column.name);
-        let name = match kept {
-            true => loaded_name(rule.0, &column.name, rule.1),
-            false => column.name.clone(),
-        };
-        if name != column.name && is_load_column(rule.0, &name) {
-            problems.push(format!(
-                "column {:?} loads as {name}, a column the load adds; exclude it with exclude_columns",
-                column.name
-            ));
-        }
-        if let Some(other) = taken.insert(name.clone(), column.name.clone()) {
-            problems.push(format!(
-                "columns {other:?} and {:?} both load as {name} under naming = \"dlt\"; exclude one with exclude_columns",
-                column.name
-            ));
-        }
-        if name != column.name {
-            renamed.insert(column.name.clone(), name.clone());
-            column.source_spelling = Some(
-                column
-                    .source_spelling
-                    .take()
-                    .unwrap_or_else(|| column.name.clone()),
-            );
-            column.name = name;
-        }
-    }
-    let rename = |names: &mut Vec<String>| {
-        for name in names {
-            if let Some(loaded) = renamed.get(name) {
-                name.clone_from(loaded);
-            }
-        }
-    };
-    rename(&mut loaded.primary_key);
-    rename(&mut loaded.indexed_columns);
-    match problems.is_empty() {
-        true => Ok(loaded),
-        false => Err(problems),
-    }
-}
-
-/// `overrides` with every column it names as the column loads under `rule`, so a setting may name a column either way: its pins, masks, `unnest` paths (each part) and settings. `exclude_columns` and `allow_columns` match the source's names, and `flatten` the yielded objects', so they stay as written.
-pub(crate) fn loaded_overrides(overrides: &TableOverride, rule: NameRule) -> TableOverride {
-    let name = |column: &str| loaded_name(rule.0, column, rule.1);
+/// `overrides` with every column it names as the column loads (`name`), so a setting may name a column either way: its pins, masks, `unnest` paths (each part) and settings. `exclude_columns` and `allow_columns` match the source's names, and `flatten` the yielded objects', so they stay as written.
+pub(crate) fn loaded_overrides(
+    overrides: &TableOverride,
+    name: &dyn Fn(&str) -> String,
+) -> TableOverride {
     TableOverride {
-        settings: loaded_settings(&overrides.settings, rule),
+        settings: loaded_settings(&overrides.settings, name),
         columns: renamed_keys(&overrides.columns, &name),
         mask: renamed_keys(&overrides.mask, &name),
         unnest: overrides
@@ -430,9 +634,11 @@ pub(crate) fn loaded_overrides(overrides: &TableOverride, rule: NameRule) -> Tab
     }
 }
 
-/// `settings` with every column they name as the column loads under `rule`: the unique and replace keys, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
-pub(crate) fn loaded_settings(settings: &TableSettings, rule: NameRule) -> TableSettings {
-    let name = |column: &str| loaded_name(rule.0, column, rule.1);
+/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
+pub(crate) fn loaded_settings(
+    settings: &TableSettings,
+    name: &dyn Fn(&str) -> String,
+) -> TableSettings {
     let names = |columns: &Vec<String>| {
         columns
             .iter()
@@ -504,6 +710,59 @@ fn renamed_keys<T: Clone>(
 ) -> BTreeMap<String, T> {
     map.iter()
         .map(|(key, value)| (name(key), value.clone()))
+        .collect()
+}
+
+/// The names `function`, a `rename` function `@sl.rename` registered, gives `columns` of table `qualified` of source `source_name`, by position; or why it gives none: the function is unknown, failed or returned something else, or no Python host runs it.
+fn renamed_by(
+    project: &ProjectConfig,
+    (source_name, qualified): (&str, &str),
+    function: &str,
+    columns: &[RenameColumn],
+) -> Result<BTreeMap<usize, String>, String> {
+    let problem = |problem: String| format!("rename {}: {problem}", shown_rename(function));
+    if let Some(Err(reason)) = project.renames.get(function) {
+        return Err(problem(reason.clone()));
+    }
+    let Some(host) = &project.python_host else {
+        return Err(NO_RENAME_HOST.replace("{place}", &format!("table {qualified}")));
+    };
+    host_rename(host.as_ref(), function, (source_name, qualified), columns)
+}
+
+/// The name a `rename` function is shown by: one a Python table passed as itself goes by its registry key, `name#id`, shown without the id.
+fn shown_rename(function: &str) -> &str {
+    match function.rsplit_once('#') {
+        Some((shown, id)) if !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            shown
+        }
+        _ => function,
+    }
+}
+
+/// The names `host`'s `rename` function `function` gives `columns` of table `table` of source `source`, by position, or why it gives none.
+pub(crate) fn host_rename(
+    host: &dyn PythonHost,
+    function: &str,
+    (source, table): (&str, &str),
+    columns: &[RenameColumn],
+) -> Result<BTreeMap<usize, String>, String> {
+    let problem = |problem: String| format!("rename {}: {problem}", shown_rename(function));
+    let columns = serde_json::to_string(columns).map_err(|error| problem(error.to_string()))?;
+    let context = serde_json::json!({ "source": source, "table": table }).to_string();
+    let returned = host
+        .rename(function, Some(&columns), &context)
+        .map_err(problem)?;
+    let by_text: BTreeMap<String, String> =
+        serde_json::from_str(&returned).map_err(|error| problem(error.to_string()))?;
+    by_text
+        .into_iter()
+        .map(|(position, name)| match position.parse::<usize>() {
+            Ok(position) => Ok((position, name)),
+            Err(_) => Err(problem(format!(
+                "returned the key {position:?}, not a position"
+            ))),
+        })
         .collect()
 }
 
@@ -954,4 +1213,64 @@ fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
     Some(format!(
         "--reload rebuilds the table with only the rows {kept}: {dropped}{nulls}"
     ))
+}
+
+/// `plan`, planned again when the table's run log holds the names numbering gave its columns in earlier loads and this plan's numbering names them otherwise, so each keeps its number; a number whose source column has gone, which another column would take, blocks the table instead, as does a clash on a column the table has that no record says which source column holds. A Python table, whose columns are named as they arrive, takes the names and the table's columns for its load, which refuses such a clash then.
+pub(crate) async fn with_kept_names(
+    project: &ProjectConfig,
+    spec: TableSpec,
+    mut plan: TablePlan,
+    (destination, options): (&Destination, &PlanOptions),
+) -> Result<TablePlan, LoaderError> {
+    let existing: Vec<String> = match plan.exists && !options.reload {
+        true => plan
+            .live
+            .iter()
+            .flatten()
+            .map(|column| column.name.clone())
+            .collect(),
+        false => Vec::new(),
+    };
+    plan.spec.name_rules.existing.clone_from(&existing);
+    let clash = !existing.is_empty()
+        && plan.schema.blocked.is_none()
+        && !plan.spec.names.numbered.is_empty();
+    let kept = kept_numbered(&plan, destination, options.reload).await?;
+    let Some(kept) = kept.or_else(|| clash.then(Vec::new)) else {
+        return Ok(plan);
+    };
+    plan.spec.names.kept.clone_from(&kept);
+    plan.spec.name_rules.kept.clone_from(&kept);
+    let Some(listed) = spec.listed.as_deref() else {
+        return Ok(plan);
+    };
+    let known = KnownNames {
+        numbered: kept,
+        named: None,
+        existing,
+    };
+    let resolved = resolve_known(
+        project,
+        &spec.source_name,
+        std::slice::from_ref(listed),
+        &known,
+    );
+    let kept_spec = match (
+        resolved.problems.is_empty(),
+        resolved.specs.into_iter().next(),
+    ) {
+        (true, Some(kept_spec)) => kept_spec,
+        _ => return Ok(blocked_table(&spec, resolved.problems)),
+    };
+    if kept_spec.names.columns == spec.names.columns {
+        return Ok(plan);
+    }
+    let kept_spec = TableSpec {
+        shared_destination: spec.shared_destination,
+        source_end: spec.source_end.clone(),
+        files: spec.files.clone(),
+        python: spec.python.clone(),
+        ..kept_spec
+    };
+    Box::pin(plan_table(&kept_spec, destination, options)).await
 }

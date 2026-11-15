@@ -380,7 +380,7 @@ pub(crate) fn split_json(test_case: &SplitJsonTestCase) -> Result<Vec<u64>, Stri
     Ok(lines)
 }
 
-/// The case's object flattened as `naming = \"dlt\"` flattens it, shown as the case's `expected` describes.
+/// The case's object flattened as `compat = \"dlt\"` flattens it, shown as the case's `expected` describes.
 pub(crate) fn flatten_json(test_case: &FlattenJsonTestCase) -> Result<String, String> {
     let mut splitter = JsonSplitter::new(true, 1024);
     let mut records = splitter.push(test_case.text.as_bytes())?;

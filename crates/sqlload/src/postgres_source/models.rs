@@ -17,6 +17,8 @@ pub struct SourceColumn {
     pub nullable: bool,
     /// The name as the source's own SQL spells it, when it differs from `name` (a Snowflake upper-case name loads in lower case).
     pub source_spelling: Option<String>,
+    /// The header a file or sheet repeats, when this column is a repeat of it; its `name` is then numbered (`Qty_1`) so every column's is unique.
+    pub repeat_of: Option<String>,
 }
 
 /// One source table or view, as the catalog describes it.

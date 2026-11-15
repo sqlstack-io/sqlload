@@ -126,10 +126,9 @@ columns = { value = "decimal(12,2)" }
   the last one holding a value without a range), and each file's for CSV. Otherwise `plan` fails, or
   for a later file the load, naming both counts and the file, so a shifted layout fails rather than
   loading under the wrong names.
-- The names become columns like header names, under the target's `naming`. Two names equal ignoring
-  case fail `plan`.
-- Renaming the columns of data that has a header is modelling work for downstream; SQLLoad has no
-  general `rename`.
+- The names become columns like header names, under `naming`. Two names equal ignoring case fail
+  `plan`.
+- To rename the columns of data that has a header, use [`rename`](/docs/concepts/nested-data/#rename).
 
 **XML (`format = "xml"`).** Each element at `xml.record_path` is a row. Its attributes and child
 elements are its columns, by name without a namespace prefix. A child that appears more than once

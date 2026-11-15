@@ -1521,17 +1521,17 @@ def table_project(tmp_path: Path, api: ThreadingHTTPServer, job: str, settings: 
 	[
 		(
 			SHEET.format(extra=""),
-			[("id", "BIGINT"), ("rowNumber", "BIGINT"), ("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Price", "DOUBLE"), ("Done", "BOOLEAN")],
+			[("id", "BIGINT"), ("row_number", "BIGINT"), ("name", "VARCHAR"), ("qty", "BIGINT"), ("price", "DOUBLE"), ("done", "BOOLEAN")],
 			[(1, 1, "Bolt", 3, 0.25, True), (2, 2, "Nut", None, 1.5, None), (3, 3, "Washer", 12, None, False), (4, 4, None, None, None, None), (5, 5, "Gear", 4, 9.0, None)],
 		),
 		(
 			SHEET.format(extra="").replace("['$.value', '$.displayValue']", "'$.value'"),
-			[("id", "BIGINT"), ("rowNumber", "BIGINT"), ("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Price", "DOUBLE"), ("Done", "BOOLEAN")],
+			[("id", "BIGINT"), ("row_number", "BIGINT"), ("name", "VARCHAR"), ("qty", "BIGINT"), ("price", "DOUBLE"), ("done", "BOOLEAN")],
 			[(1, 1, "Bolt", 3, 0.25, True), (2, 2, "Nut", None, 1.5, None), (3, 3, "Washer", 12, None, False), (4, 4, None, None, None, None), (5, 5, "Gear", None, 9.0, None)],
 		),
 		(
 			GRID_JOB,
-			[("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Done", "BOOLEAN")],
+			[("name", "VARCHAR"), ("qty", "BIGINT"), ("done", "BOOLEAN")],
 			[("Bolt", 3, True), ("Nut", None, False), ("Washer", None, None), (None, None, None)],
 		),
 	],
@@ -1559,8 +1559,8 @@ def test_given_a_sheet_listing_its_columns_on_its_first_page_when_paging_then_la
 @pytest.mark.parametrize(
 	("settings", "expected_code", "expected_text", "expected_columns"),
 	[
-		("", 0, "", ["id", "rowNumber", "Name", "Qty", "Price", "Done", "Quantity"]),
-		(", on_schema_change='fail'", 1, "Quantity", ["id", "rowNumber", "Name", "Qty", "Price", "Done"]),
+		("", 0, "", ["id", "row_number", "name", "qty", "price", "done", "quantity"]),
+		(", on_schema_change='fail'", 1, "new field quantity is not in the table", ["id", "row_number", "name", "qty", "price", "done"]),
 	],
 	ids=["append-new-columns", "fail"],
 )

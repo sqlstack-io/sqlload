@@ -1407,7 +1407,7 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "1:9600:{q}",
         },
         CdcScenarioTestCase {
-            description: "naming = \"dlt\" renames quoted mixed-case columns, and the snapshot, an insert, an update and a delete all land under the loaded names",
+            description: "compat = \"dlt\" renames quoted mixed-case columns, and the snapshot, an insert, an update and a delete all land under the loaded names",
             tag: "17-alpine",
             spill_bytes: "",
             extra_config: DLT_CRM_SOURCE,

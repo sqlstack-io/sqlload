@@ -11,14 +11,18 @@ use crate::files_source::constants::{
     EXCEL_DAY, MAX_EXACT_FLOAT_INT, MAX_SHEET_CELLS, NORMAL_DATE, NORMAL_TIME, NORMAL_TIMESTAMP,
 };
 use crate::files_source::models::{Cell, CellRecord, XlsxOptions};
+use crate::load_naming::main::numbered_header::numbered_header;
 use crate::sheets_source::main::a1_range::a1_range;
 use crate::sheets_source::models::A1Range;
 
-/// The column names and rows of `options`' worksheet in `workbook`, each row numbered as in the sheet; empty rows are left out, and so is a column with an empty header and no values. Only the cells of `options.range` are read, when it is set. Cells are read one at a time, so a sheet's stated size is never allocated; a sheet over `MAX_SHEET_CELLS` values is an error.
+/// A header row's column names as a reader reads them, each with the header it repeats.
+type HeaderNames = Vec<(String, Option<String>)>;
+
+/// The column names (a repeated header numbered, with the header it repeats; see [`numbered_header`]) and rows of `options`' worksheet in `workbook`, each row numbered as in the sheet; empty rows are left out, and so is a column with an empty header and no values. Only the cells of `options.range` are read, when it is set. Cells are read one at a time, so a sheet's stated size is never allocated; a sheet over `MAX_SHEET_CELLS` values is an error.
 pub(crate) fn xlsx_records(
     workbook: Vec<u8>,
     options: &XlsxOptions,
-) -> Result<(Vec<String>, Vec<CellRecord>), String> {
+) -> Result<(HeaderNames, Vec<CellRecord>), String> {
     let range = options.range.as_deref().map(a1_range).transpose()?;
     let wanted = range
         .as_ref()
@@ -93,17 +97,19 @@ pub(crate) fn xlsx_records(
     }
     let mut rows = rows.into_iter();
     let mut headers: BTreeMap<u32, String> = BTreeMap::new();
+    let mut repeats: BTreeMap<u32, String> = BTreeMap::new();
     if options.header
-        && let Some((row, cells)) = rows.next()
+        && let Some((_, cells)) = rows.next()
     {
-        for (column, cell) in cells {
-            if headers.values().any(|name| *name == cell.text) {
-                return Err(format!(
-                    "row {row}: column {} appears twice in the header",
-                    cell.text
-                ));
+        let (places, texts): (Vec<u32>, Vec<String>) = cells
+            .into_iter()
+            .map(|(column, cell)| (column, cell.text))
+            .unzip();
+        for (column, (name, repeat)) in places.into_iter().zip(numbered_header(&texts)) {
+            headers.insert(column, name);
+            if let Some(repeat) = repeat {
+                repeats.insert(column, repeat);
             }
-            headers.insert(column, cell.text);
         }
     }
     let rows: Vec<(u64, Vec<(u32, Cell)>)> = rows.collect();
@@ -130,7 +136,11 @@ pub(crate) fn xlsx_records(
         }
         records.push(record);
     }
-    Ok((names.into_values().collect(), records))
+    let named: HeaderNames = names
+        .into_iter()
+        .map(|(column, name)| (name, repeats.remove(&column)))
+        .collect();
+    Ok((named, records))
 }
 
 /// `given` as the names of the columns read, by place: as many as the range spans, or without a range, as many as reach the rightmost value.

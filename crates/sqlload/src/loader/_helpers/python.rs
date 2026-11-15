@@ -1,4 +1,3 @@
-use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::models::TableName;
@@ -15,6 +14,7 @@ use crate::adapters::dispatch::main::session::table_names::table_names;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::window_at::window_at;
+use crate::batch_plan::main::window_rows::window_rows;
 use crate::batch_plan::models::CursorWindow;
 use crate::cdc::constants::DELETE_OP;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
@@ -26,14 +26,14 @@ use crate::http_source::main::literal_path_problems::literal_path_problems;
 use crate::http_source::models::LiteralPaths;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::child_table_name::child_table_name;
-use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::main::name_lines::name_lines;
+use crate::load_naming::main::named_batch::named_batch;
+use crate::load_naming::models::{Compat, LoadedNames, MetadataRole, NameMemo, RenameColumn};
 use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
-use crate::loader::_helpers::resolve::resolve_tables;
-use crate::loader::_helpers::run_log::log_empty_run;
-use crate::loader::_helpers::run_log::run_entry;
+use crate::loader::_helpers::resolve::{KnownNames, host_rename, resolve_known};
+use crate::loader::_helpers::run_log::{log_empty_run, record_numbered, run_entry};
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::null_cursor_problem;
 use crate::loader::_helpers::table_plan::append_problem;
@@ -46,7 +46,6 @@ use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::constants::NO_STATE;
 use crate::loader::constants::PYTHON_COLUMN_TYPE;
 use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
-use crate::loader::constants::UTC_OFFSET_SUFFIX;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_plan_files::plan_files_table;
 use crate::loader::models::ChildFeed;
@@ -101,19 +100,13 @@ use crate::similar_names::main::close_name::close_name;
 use arrow_array::Array;
 use arrow_array::ArrayRef;
 use arrow_array::BooleanArray;
-use arrow_array::Date32Array;
 use arrow_array::RecordBatch;
-use arrow_array::Scalar;
 use arrow_array::StringArray;
-use arrow_array::TimestampMicrosecondArray;
 use arrow_array::cast::AsArray;
 use arrow_cast::cast::CastOptions;
 use arrow_cast::cast::cast_with_options;
 use arrow_cast::display::ArrayFormatter;
 use arrow_cast::display::FormatOptions;
-use arrow_ord::cmp::gt;
-use arrow_ord::cmp::gt_eq;
-use arrow_ord::cmp::lt;
 use arrow_ord::sort::SortOptions;
 use arrow_ord::sort::sort_to_indices;
 use arrow_schema::DataType;
@@ -122,8 +115,6 @@ use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_schema::TimeUnit;
 use arrow_select::filter::filter_record_batch;
-use chrono::NaiveDate;
-use chrono::NaiveDateTime;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -221,7 +212,7 @@ fn is_child_of_any(table: &str, parents: &[&str]) -> bool {
     })
 }
 
-/// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`): the path of a `child_pinned` column whose table it is, or else the name's parts. Only the pins know a path whose field holds `__` (a list in an object `naming = "dlt"` flattened: `orders__items__dims__tags` holds `items.dims__tags`) or a name dlt shortened.
+/// The dotted path each of `spec`'s child tables among `tables` holds, by its name as the load writes it (`orders__items__parts` holds `items.parts`; Snowflake's `ORDERS__ITEMS` holds `items`; Postgres lists the children of `ORDERS` folded, as `orders__items`): the path of a `child_pinned` column whose table it is, or else the name's parts. Only the pins know a path whose field holds `__` (a list in an object `compat = "dlt"` flattened: `orders__items__dims__tags` holds `items.dims__tags`) or a name dlt shortened.
 pub(crate) fn child_paths(spec: &TableSpec, tables: Vec<String>) -> Vec<(String, String)> {
     let pinned = pinned_tables(spec, &tables);
     tables
@@ -357,7 +348,7 @@ pub(crate) fn with_live_columns(
             .any(|(constant, _, _)| constant.eq_ignore_ascii_case(name))
     };
     for column in live? {
-        if !is_metadata(spec.naming, &column.name)
+        if !is_metadata(spec.compat, &column.name)
             && !constant(&column.name)
             && !has_column(&spec.source_table, &column.name)
         {
@@ -371,36 +362,6 @@ pub(crate) fn with_live_columns(
     let mut augmented = spec.clone();
     augmented.source_table.columns.extend(added);
     Some(augmented)
-}
-
-/// A yielded batch with its fields named as they load under `spec`'s naming: as yielded under SQLLoad's, normalised under dlt's; two fields loading as one name fail, naming both.
-fn dlt_named(batch: RecordBatch, spec: &TableSpec) -> Result<RecordBatch, LoaderError> {
-    if spec.naming == Naming::Sqlload {
-        return Ok(batch);
-    }
-    let limit = sql_adapter(spec.warehouse).max_identifier_length();
-    let schema = batch.schema();
-    let mut fields: Vec<arrow_schema::FieldRef> = Vec::with_capacity(schema.fields().len());
-    for field in schema.fields() {
-        let name = loaded_name(spec.naming, field.name(), limit);
-        if let Some(other) = fields.iter().find(|taken| *taken.name() == name) {
-            let yielded = schema
-                .fields()
-                .iter()
-                .find(|yielded| loaded_name(spec.naming, yielded.name(), limit) == *other.name())
-                .map_or(name.clone(), |yielded| yielded.name().clone());
-            return Err(LoaderError::Invalid(format!(
-                "fields {yielded:?} and {:?} both load as {name} under naming = \"dlt\"; rename one in the table function",
-                field.name()
-            )));
-        }
-        fields.push(Arc::new(field.as_ref().clone().with_name(name)));
-    }
-    RecordBatch::try_new(
-        Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())),
-        batch.columns().to_vec(),
-    )
-    .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 /// The name a table function most likely yields for live column `stored`: its lower-case form when the warehouse stores that as `stored` (upper case on Snowflake), else `stored` itself.
@@ -421,14 +382,14 @@ pub(crate) struct YieldedData<'a> {
 
 /// A Python table as its yielded data shows it: every column of the data typed by inference (the live table's type when the inferred one fits it, or when the column only held NULL), plus declared columns no row had.
 pub(crate) fn inferred_table(
-    (planned, naming): (&SourceTable, Naming),
+    (planned, compat): (&SourceTable, Compat),
     declared: &[String],
     data: &YieldedData<'_>,
     live: Option<&[LiveColumn]>,
 ) -> SourceTable {
     let mut columns: Vec<SourceColumn> = Vec::new();
     for field in data.schema.fields() {
-        if !is_metadata(naming, field.name()) {
+        if !is_metadata(compat, field.name()) {
             let live_type = live_type(live, field.name());
             let column_type = match (data.null_columns.contains(field.name()), live_type) {
                 (true, Some(live_type)) => live_type,
@@ -459,7 +420,7 @@ pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec
         .fields()
         .iter()
         .map(|field| field.name().as_str())
-        .filter(|name| !is_metadata(spec.naming, name))
+        .filter(|name| !is_metadata(spec.compat, name))
         .collect();
     let keys = spec
         .pinned
@@ -638,18 +599,19 @@ fn python_column(name: &str, column_type: ColumnType) -> SourceColumn {
         column_type: Ok(column_type),
         nullable: true,
         source_spelling: None,
+        repeat_of: None,
     }
 }
 
-/// Whether `name` is a column the load adds under `naming`.
-fn is_metadata(naming: Naming, name: &str) -> bool {
+/// Whether `name` is a column the load adds under `compat`.
+fn is_metadata(compat: Compat, name: &str) -> bool {
     [
         MetadataRole::LoadId,
         MetadataRole::LoadedAt,
         MetadataRole::RowId,
     ]
     .into_iter()
-    .any(|role| name.eq_ignore_ascii_case(metadata_name(naming, role)))
+    .any(|role| name.eq_ignore_ascii_case(metadata_name(compat, role)))
 }
 
 /// Call the table function on a blocking thread; the host holds the GIL only to start it.
@@ -700,7 +662,7 @@ pub(crate) fn typed_batch(
         .as_ref()
         .is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
     let (kept, nulls) = match (window, &cursor_type) {
-        (Some(window), Some(cursor_type)) => in_window(&typed, window, (cursor_type, include))?,
+        (Some(window), Some(cursor_type)) => window_rows(&typed, window, (cursor_type, include))?,
         _ => (typed, 0),
     };
     let outside = batch.num_rows() - kept.num_rows();
@@ -753,96 +715,6 @@ pub(crate) fn read_types(
         .collect::<Result<_, LoaderError>>()?;
     let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
     RecordBatch::try_new_with_options(target.clone(), arrays, &options).map_err(invalid)
-}
-
-/// The rows of `batch` whose cursor is inside `window`, and how many rows its bounds skipped for a NULL cursor (none without bounds): a NULL cursor is outside, as a source filter would have it, unless `include` (`null_cursor = "include"`) keeps it.
-fn in_window(
-    batch: &RecordBatch,
-    window: &ReadWindow,
-    (cursor_type, include): (&ColumnType, bool),
-) -> Result<(RecordBatch, usize), LoaderError> {
-    let schema = batch.schema();
-    let Some((position, _)) = schema
-        .fields()
-        .iter()
-        .enumerate()
-        .find(|(_, field)| field.name().eq_ignore_ascii_case(&window.column))
-    else {
-        return Ok((batch.clone(), 0));
-    };
-    let bounded = window.from.is_some() || window.to.is_some();
-    let nulls = match bounded && !include {
-        true => batch.column(position).null_count(),
-        false => 0,
-    };
-    let with_nulls = |column: &ArrayRef, mask: BooleanArray| -> BooleanArray {
-        (0..mask.len())
-            .map(|row| {
-                Some((include && column.is_null(row)) || (mask.is_valid(row) && mask.value(row)))
-            })
-            .collect()
-    };
-    let mut kept = batch.clone();
-    if let Some(from) = &window.from {
-        let column = kept.column(position).clone();
-        let bound = Scalar::new(bound_array(from, cursor_type, column.data_type())?);
-        let mask = match window.inclusive {
-            true => gt_eq(&column, &bound),
-            false => gt(&column, &bound),
-        }
-        .map_err(invalid)?;
-        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
-    }
-    if let Some(to) = &window.to {
-        let column = kept.column(position).clone();
-        let bound = Scalar::new(bound_array(to, cursor_type, column.data_type())?);
-        let mask = lt(&column, &bound).map_err(invalid)?;
-        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
-    }
-    Ok((kept, nulls))
-}
-
-/// A cursor bound as a one-value array of the cursor column's Arrow type `data_type`, converted from the bound's text (timestamps and dates parsed, every other type cast).
-pub(crate) fn bound_array(
-    text: &str,
-    cursor_type: &ColumnType,
-    data_type: &DataType,
-) -> Result<ArrayRef, LoaderError> {
-    let normal = match text.strip_suffix(UTC_OFFSET_SUFFIX) {
-        Some(_) => text.to_owned(),
-        None => cursor_text(text, cursor_type).map_err(LoaderError::Invalid)?,
-    };
-    let unreadable = || {
-        LoaderError::Invalid(format!(
-            "cursor bound {text:?} does not fit the cursor's type {cursor_type}"
-        ))
-    };
-    let micros = || {
-        NaiveDateTime::parse_from_str(
-            normal.trim_end_matches(UTC_OFFSET_SUFFIX),
-            CURSOR_TIMESTAMP_FORMAT,
-        )
-        .map(|time| time.and_utc().timestamp_micros())
-        .map_err(|_| unreadable())
-    };
-    let parsed: ArrayRef = match cursor_type {
-        ColumnType::TimestampTz => {
-            Arc::new(TimestampMicrosecondArray::from(vec![micros()?]).with_timezone("UTC"))
-        }
-        ColumnType::TimestampNtz => Arc::new(TimestampMicrosecondArray::from(vec![micros()?])),
-        ColumnType::Date => {
-            let date = NaiveDate::parse_from_str(&normal, "%Y-%m-%d").map_err(|_| unreadable())?;
-            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or_default();
-            let days = i32::try_from((date - epoch).num_days()).map_err(|_| unreadable())?;
-            Arc::new(Date32Array::from(vec![days]))
-        }
-        _ => Arc::new(StringArray::from(vec![normal.clone()])),
-    };
-    let strict = CastOptions {
-        safe: false,
-        ..CastOptions::default()
-    };
-    cast_with_options(&parsed, data_type, &strict).map_err(|_| unreadable())
 }
 
 fn invalid(error: impl std::fmt::Display) -> LoaderError {
@@ -928,6 +800,7 @@ impl PythonFeed {
                 after_load: None,
                 replaced_keys: None,
                 transforms: Vec::new(),
+                names: Vec::new(),
             });
         }
         let unsettled = self.publisher.is_none()
@@ -945,6 +818,7 @@ impl PythonFeed {
         let children = publisher.child_changes();
         let replaced_keys = publisher.replaced.clone();
         self.changes.extend(children);
+        Box::pin(record_numbered(&self.table, load.destination)).await?;
         Ok(TableLoaded {
             rows,
             changes: std::mem::take(&mut self.changes),
@@ -952,6 +826,7 @@ impl PythonFeed {
             after_load: None,
             replaced_keys,
             transforms: Vec::new(),
+            names: name_lines(&self.names.columns),
         })
     }
 
@@ -1010,6 +885,34 @@ impl PythonFeed {
         Ok(())
     }
 
+    /// `batch` with its fields named as they load (see [`named_batch`]); a `rename` function runs on a blocking thread, only when the batch brings fields not seen before.
+    async fn named(
+        &mut self,
+        load: &PythonLoad<'_>,
+        batch: RecordBatch,
+    ) -> Result<RecordBatch, LoaderError> {
+        let spec = &self.table.spec;
+        let (host, memo, rules) = (
+            Arc::clone(&load.host),
+            std::mem::take(&mut self.names),
+            spec.name_rules.clone(),
+        );
+        let table = (spec.source_name.clone(), spec.source_table.name.clone());
+        let (named, memo) = tokio::task::spawn_blocking(move || {
+            let rename = |columns: &[RenameColumn]| match &rules.function {
+                Some(function) => {
+                    host_rename(host.as_ref(), function, (&table.0, &table.1), columns)
+                }
+                None => Ok(BTreeMap::new()),
+            };
+            named_batch(batch, memo, &rules, &rename)
+        })
+        .await
+        .map_err(|error| LoaderError::Invalid(format!("the rename's thread failed: {error}")))?;
+        self.names = memo;
+        named.map_err(LoaderError::Invalid)
+    }
+
     /// Stage one batch: when it changes the merged schema, plan the table for the data so far first (one read of the live columns, the schema changes applied once).
     async fn batch(
         &mut self,
@@ -1018,7 +921,7 @@ impl PythonFeed {
         window: Option<&CursorWindow>,
     ) -> Result<(), LoaderError> {
         self.check_flattened(&batch)?;
-        let batch = dlt_named(batch, &self.table.spec)?;
+        let batch = self.named(load, batch).await?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
         let chosen = match (&self.table.spec.unnest, &mut self.table.spec.python) {
@@ -1091,7 +994,7 @@ impl PythonFeed {
             .publisher
             .is_none()
             .then_some(self.table.live.as_deref());
-        let replanned = replan(load, &self.table, (&data, known), destination).await?;
+        let replanned = replan(load, &self.table, (&data, known, &self.names), destination).await?;
         let old = staged_columns(&self.table);
         let changes = bring_in_line(
             (load.destination, self.publisher.as_mut()),
@@ -1164,7 +1067,7 @@ fn empty_problem(table: &TablePlan) -> Result<(), LoaderError> {
 async fn replan(
     load: &PythonLoad<'_>,
     planned: &TablePlan,
-    (data, known): (&YieldedData<'_>, Option<Option<&[LiveColumn]>>),
+    (data, known, names): (&YieldedData<'_>, Option<Option<&[LiveColumn]>>, &NameMemo),
     destination: &Destination,
 ) -> Result<TablePlan, LoaderError> {
     let spec = &planned.spec;
@@ -1178,7 +1081,7 @@ async fn replan(
         .map(|python| python.declared.clone())
         .unwrap_or_default();
     let table = inferred_table(
-        (&load.table.spec.source_table, load.table.spec.naming),
+        (&load.table.spec.source_table, load.table.spec.compat),
         &declared,
         data,
         planned.live.as_deref(),
@@ -1187,7 +1090,12 @@ async fn replan(
     if let Some(source) = project.sources.get_mut(&spec.source_name) {
         source.tables.retain(|name, _| *name == table.name);
     }
-    let resolved = resolve_tables(&project, &spec.source_name, &[table]);
+    let named = KnownNames {
+        numbered: Vec::new(),
+        named: Some(names.loaded.clone()),
+        existing: Vec::new(),
+    };
+    let resolved = resolve_known(&project, &spec.source_name, &[table], &named);
     let problems: Vec<String> = resolved
         .problems
         .into_iter()
@@ -1199,6 +1107,12 @@ async fn replan(
     };
     inferred.python = spec.python.clone();
     inferred.approved = true;
+    inferred.name_rules = spec.name_rules.clone();
+    inferred.names = LoadedNames {
+        columns: names.columns.clone(),
+        numbered: names.numbered.clone(),
+        kept: spec.names.kept.clone(),
+    };
     let columns = replan_columns(
         &inferred,
         (destination, planned.live.as_deref()),
@@ -1422,8 +1336,8 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
 }
 
 /// The ids a child batch's rows were given, from its row id column.
-fn given_ids(batch: &RecordBatch, naming: Naming) -> Result<Vec<String>, LoaderError> {
-    let name = metadata_name(naming, MetadataRole::RowId);
+fn given_ids(batch: &RecordBatch, compat: Compat) -> Result<Vec<String>, LoaderError> {
+    let name = metadata_name(compat, MetadataRole::RowId);
     let ids = batch
         .column_by_name(name)
         .and_then(|column| column.as_any().downcast_ref::<StringArray>())
@@ -1500,7 +1414,7 @@ impl ChildTables {
                 let changes = feed.plan((&self.destination, &self.options), false).await?;
                 self.changes.extend(changes);
             }
-            let ids = given_ids(&child.batch, parent.spec.naming)?;
+            let ids = given_ids(&child.batch, parent.spec.compat)?;
             let schema: SchemaRef = Arc::new(settled_schema(&feed.merged));
             let (typed, _, _) = typed_batch(&child.batch, &feed.table, &schema, None)?;
             let publisher = match &mut feed.publisher {
@@ -1727,8 +1641,8 @@ impl ChildTables {
                 .collect();
             execute(&publisher.destination, deletes).await?;
         }
-        let root_name = metadata_name(spec.naming, MetadataRole::RootId);
-        let row_id_name = metadata_name(spec.naming, MetadataRole::RowId);
+        let root_name = metadata_name(spec.compat, MetadataRole::RootId);
+        let row_id_name = metadata_name(spec.compat, MetadataRole::RowId);
         let row_id = adapter.render_identifier(row_id_name);
         let root = adapter.render_identifier(root_name);
         let mut tables: Vec<String> = self.merged.clone();
@@ -1925,7 +1839,7 @@ fn changed_roots(
     match load_id {
         Some(load_id) => format!(
             "({replaced}) AND {} <> {}",
-            id(metadata_name(spec.naming, MetadataRole::LoadId)),
+            id(metadata_name(spec.compat, MetadataRole::LoadId)),
             text(load_id)
         ),
         None => replaced,
@@ -1964,7 +1878,7 @@ impl ChildFeed {
         };
         let spec = TableSpec {
             source_table: inferred_table(
-                (&self.table.spec.source_table, self.table.spec.naming),
+                (&self.table.spec.source_table, self.table.spec.compat),
                 &[],
                 &data,
                 live,

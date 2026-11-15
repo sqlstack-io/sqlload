@@ -53,6 +53,7 @@ fn source_column(field: &Field) -> SourceColumn {
         column_type: portable_type(field),
         nullable: field.is_nullable(),
         source_spelling: None,
+        repeat_of: None,
     }
 }
 

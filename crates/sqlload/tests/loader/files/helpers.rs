@@ -165,3 +165,23 @@ pub(crate) async fn run_source_row_upgrade(
     .await
     .map_err(|error| error.to_string())
 }
+
+/// An xlsx workbook of one sheet: a row per line of `text`, cells separated by `|`, each written as text.
+pub(crate) fn workbook(text: &str) -> Result<Vec<u8>, String> {
+    let failed = |error: rust_xlsxwriter::XlsxError| error.to_string();
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    for (row, line) in text.lines().enumerate() {
+        let row = u32::try_from(row).map_err(|error| error.to_string())?;
+        for (column, cell) in line.split('|').enumerate() {
+            let column = u16::try_from(column).map_err(|error| error.to_string())?;
+            sheet.write_string(row, column, cell).map_err(failed)?;
+        }
+    }
+    book.save_to_buffer().map_err(failed)
+}
+
+/// `text` as a file's bytes, unchanged.
+pub(crate) fn text_bytes(text: &str) -> Result<Vec<u8>, String> {
+    Ok(text.as_bytes().to_vec())
+}

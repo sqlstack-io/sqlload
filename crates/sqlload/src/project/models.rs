@@ -11,7 +11,7 @@ use crate::files_source::models::{
     XlsxOptions, XmlOptions,
 };
 use crate::http_source::models::LiteralPaths;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
@@ -62,6 +62,9 @@ pub struct ProjectConfig {
     /// Each `transform` named in the project: its version (a hash of the file it is defined in), or why it cannot run.
     #[serde(skip)]
     pub transforms: BTreeMap<String, Result<String, String>>,
+    /// Each `rename` function named in the project, or why it cannot run.
+    #[serde(skip)]
+    pub renames: BTreeMap<String, Result<(), String>>,
 }
 
 /// The lines of a project file's sources, tables and their `unique_key` (see [`crate::project::main::config_lines::config_lines`]).
@@ -354,9 +357,12 @@ pub struct TargetConfig {
     /// The most Parquet footers `plan` reads for one table's schema (files targets).
     #[serde(default)]
     pub max_footer_reads: Option<usize>,
-    /// How its tables name the columns a load adds and the child tables `unnest` makes; a source or table may override it.
+    /// How its tables and columns are named: snake_case (default) or as the source spells them; a source or table may override it.
     #[serde(default)]
     pub naming: Option<Naming>,
+    /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's; a source or table may override it.
+    #[serde(default)]
+    pub compat: Option<Compat>,
 }
 
 impl TargetConfig {
@@ -829,15 +835,32 @@ pub struct TableSettings {
     /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
     #[serde(default)]
     pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
-    /// How the columns the load adds, and the child tables `unnest` makes, are named: SQLLoad's own names (default) or dlt's; overrides the target's.
+    /// How the table and its columns are named: snake_case (default) or as the source spells them; overrides the target's.
     #[serde(default)]
     pub naming: Option<Naming>,
-    /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
+    /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's, with a row id on every row; overrides the target's.
+    #[serde(default)]
+    pub compat: Option<Compat>,
+    /// Names for columns the naming leaves unfit: a map from source name to loaded name, or the name `@sl.rename` registered a Python function under.
+    #[serde(default)]
+    pub rename: Option<RenameSetting>,
+    /// What the load does with columns that would load under one name: number them (default) or fail.
+    #[serde(default)]
+    pub on_duplicate_names: Option<OnDuplicateNames>,
+    /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
     /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
     #[serde(default)]
     pub transform: Option<String>,
+}
+
+/// `rename`: loaded names by source name, or a Python function's registered name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum RenameSetting {
+    Map(BTreeMap<String, String>),
+    Function(String),
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.

@@ -11,7 +11,7 @@ database = "warehouse.duckdb"
 [targets.warehouse]
 connection = "duckdb"
 loader_schema = "shop"
-naming = "dlt"
+compat = "dlt"
 
 [sources.orders]
 kind = "files"

@@ -1,11 +1,11 @@
-use crate::load_naming::models::Naming;
-use crate::loader::constants::{
-    FIX_LABEL, HOURS_OFFSET_LENGTH, REASON_LABEL, ROUTE_LABEL, SECOND_TIMESTAMP_LENGTH,
-    SOURCE_LABEL,
-};
+use crate::load_naming::main::name_lines::name_lines;
+use crate::load_naming::models::NameChange;
+use crate::loader::constants::{FIX_LABEL, REASON_LABEL, ROUTE_LABEL, SOURCE_LABEL};
 use crate::loader::models::UnreadSource;
 use crate::project::models::CheckName;
 use crate::run_log::models::RunEvent;
+use crate::time_text::main::clock_time::clock_time;
+use crate::time_text::main::trimmed_time::trimmed_time;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -131,6 +131,11 @@ fn aligned(left: &str, right: &str) -> String {
         true => left.to_owned(),
         false => format!("{left:<width$}{right}", width = PLAN_DETAIL_COLUMN),
     }
+}
+
+/// The `names` detail of a table: a line per column `rename` or numbering named, as [`name_lines`] gives them; `None` when there are none.
+fn names_details(lines: &[String]) -> Option<PlanDetail> {
+    (!lines.is_empty()).then(|| detail("names", lines.join("\n")))
 }
 
 /// `name` padded so `detail` starts in the plan's detail column (after a branch prefix), or two spaces after a name too long for it.
@@ -260,7 +265,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .schema
         .write_columns
         .iter()
-        .partition(|column| is_load_column(table.spec.naming, &column.name));
+        .partition(|column| is_load_column(table.spec.compat, &column.name));
     let name_width = data
         .iter()
         .map(|column| column.name.len())
@@ -1439,6 +1444,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.transforms.clone(),
             Err(_) => Vec::new(),
         },
+        names: match &outcome.loaded {
+            Ok(loaded) => loaded.names.clone(),
+            Err(_) => Vec::new(),
+        },
         peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
@@ -1528,6 +1537,7 @@ pub(crate) fn text_item(
     }
     if one {
         added.extend(columns_line(table).map(|text| detail("columns", text)));
+        added.extend(names_details(&name_lines(&table.spec.names.columns)));
         added.extend(checks_line(table).map(|text| detail("checks", text)));
     }
     details.splice(after_source..after_source, added);
@@ -1538,7 +1548,7 @@ pub(crate) fn text_item(
     }
 }
 
-/// How many columns the table loads from its source, and under dlt's naming the first names it changes: `6, named by naming = "dlt": company-no -> company_no, item-no -> item_no, ...`; `None` when they are only known at load.
+/// How many columns the table loads from its source, and how many of them `naming` alone changes, with the first few: `6, 4 named by snake_case: Company No -> company_no, ItemNo -> item_no, ...`; `None` when they are only known at load. The columns `rename` or numbering named have lines of their own (see [`names_details`]).
 fn columns_line(table: &TablePlan) -> Option<String> {
     let count = table
         .schema
@@ -1551,20 +1561,18 @@ fn columns_line(table: &TablePlan) -> Option<String> {
     }
     let renamed: Vec<String> = table
         .spec
-        .source_table
+        .names
         .columns
         .iter()
-        .filter(|_| table.spec.naming == Naming::Dlt)
-        .filter_map(|column| {
-            let spelled = column.source_spelling.as_deref()?;
-            (spelled != column.name).then(|| format!("{spelled} -> {}", column.name))
-        })
+        .filter(|column| column.change == Some(NameChange::Named))
+        .map(|column| format!("{} -> {}", column.source, column.loaded))
         .collect();
     Some(match renamed.as_slice() {
         [] => thousands(count as u64),
         shown => format!(
-            "{}, named by naming = \"dlt\": {}{}",
+            "{}, {} named by snake_case: {}{}",
             thousands(count as u64),
+            thousands(shown.len() as u64),
             shown
                 .iter()
                 .take(SHOWN_RENAMES)
@@ -1787,51 +1795,6 @@ fn window_length(step: std::time::Duration) -> String {
             || humantime::format_duration(step).to_string(),
             |(size, unit)| format!("{}-{unit}", seconds / size),
         )
-}
-
-/// `value` with a timestamp's fraction of a second cut to the second, or to the millisecond when `precise`, and an offset of whole hours shortened (`+00:00` to `+00`); anything else as it is.
-fn trimmed_time(value: &str, precise: bool) -> String {
-    let bytes = value.as_bytes();
-    let is_timestamp = bytes.len() >= SECOND_TIMESTAMP_LENGTH
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && matches!(bytes[10], b' ' | b'T')
-        && bytes[13] == b':'
-        && bytes[16] == b':'
-        && value.is_char_boundary(SECOND_TIMESTAMP_LENGTH);
-    if !is_timestamp {
-        return value.to_owned();
-    }
-    let (seconds, rest) = value.split_at(SECOND_TIMESTAMP_LENGTH);
-    let digits = match rest.strip_prefix('.') {
-        Some(fraction) => fraction.bytes().take_while(u8::is_ascii_digit).count(),
-        None => 0,
-    };
-    let (fraction, offset) = match digits {
-        0 => ("", rest),
-        _ => rest.split_at(digits + 1),
-    };
-    let fraction = match precise {
-        true => fraction.get(..4).unwrap_or(fraction),
-        false => "",
-    };
-    let offset = offset
-        .strip_suffix(":00")
-        .filter(|hours| hours.len() == HOURS_OFFSET_LENGTH)
-        .unwrap_or(offset);
-    format!("{seconds}{fraction}{offset}")
-}
-
-/// A recorded time's clock part: `2026-11-14T07:54:11.123456Z` as `07:54:11Z`.
-fn clock_time(recorded_at: &str) -> String {
-    let time = recorded_at
-        .split_once('T')
-        .map_or(recorded_at, |(_, time)| time);
-    let clock = time.get(..8).unwrap_or(time);
-    match time.ends_with('Z') {
-        true => format!("{clock}Z"),
-        false => clock.to_owned(),
-    }
 }
 
 /// `item`, an `Errors` item for `problem` (a project problem, or a blocked table's reason), as `plan` prints it: a source that could not be read named by the source, with a headline, its driver's message, a fix and what it holds up (`blocks`); a table's problem named as its table lands, with a headline when its reason has a known one, and a fix that changes a setting starting with where the table's settings are written (`at`, as `sqlload.toml:93`).

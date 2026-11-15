@@ -11,7 +11,7 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::{
-    admit_tables, destination_names, spec_names, unmatched_selectors,
+    admit_tables, destination_names, spec_names, unmatched_selectors, with_kept_names,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::sources::with_fetch_memory;
@@ -107,7 +107,8 @@ async fn planned_tables(
         let destination = destinations.get(&spec.target).ok_or_else(|| {
             LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
         })?;
-        planned.push(plan_table(&spec, destination, options).await?);
+        let plan = plan_table(&spec, destination, options).await?;
+        planned.push(Box::pin(with_kept_names(project, spec, plan, (destination, options))).await?);
     }
     if source.kind == SourceKind::Odbc {
         #[cfg(feature = "odbc")]

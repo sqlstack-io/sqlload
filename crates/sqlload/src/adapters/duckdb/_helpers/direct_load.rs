@@ -12,7 +12,7 @@ use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::models::{BatchFooters, DataFile};
 use crate::loader::errors::LoaderError;
-use crate::loader::models::FilesSource;
+use crate::loader::models::{FilesSource, TableSpec};
 use crate::store_paths::models::{Location, StoreKind};
 use parquet::arrow::arrow_reader::ArrowReaderMetadata;
 
@@ -34,14 +34,17 @@ impl DuckDbWriter {
         let files: Vec<PulledFile> = batch
             .files
             .iter()
-            .map(|data| pulled_file(source, data))
+            .map(|data| pulled_file(batch.spec, source, data))
             .collect();
-        let in_files: Vec<String> = batch
+        let in_files: Vec<(String, String)> = batch
             .read
             .columns
             .iter()
             .filter(|column| in_any_footer(batch.footers, &column.name))
-            .map(|column| column.name.clone())
+            .map(|column| {
+                let loaded = batch.spec.source_table.loaded_as(&column.name);
+                (loaded.to_owned(), column.name.clone())
+            })
             .collect();
         let target = &batch.target;
         let carried = match (target.staging, target.builds) {
@@ -52,7 +55,7 @@ impl DuckDbWriter {
             target.staging.unwrap_or(target.table),
             (carried, &in_files),
             &files,
-            (target.naming, target.load_id, batch.loaded_at),
+            (target.compat, target.load_id, batch.loaded_at),
         );
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {
@@ -88,15 +91,15 @@ fn file_url(location: &Location, key: &str) -> String {
     }
 }
 
-/// Where DuckDB reads `data`, and the values SQLLoad gives every row of it: its name and version as the files source records them, and its value of each declared partition column (`None` when its folders lack one).
-fn pulled_file(source: &FilesSource, data: &DataFile) -> PulledFile {
+/// Where DuckDB reads `data`, and the values SQLLoad gives every row of it: its name and version as the files source records them, and its value of each declared partition column (`None` when its folders lack one), under the column's name in the table.
+fn pulled_file(spec: &TableSpec, source: &FilesSource, data: &DataFile) -> PulledFile {
     let partition = |name: &String| {
         let value = data
             .partitions
             .iter()
             .find(|(partition, _)| partition == name)
             .map(|(_, value)| value.clone());
-        (name.clone(), value)
+        (spec.source_table.loaded_as(name).to_owned(), value)
     };
     let mut constants = vec![
         (

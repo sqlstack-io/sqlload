@@ -19,6 +19,7 @@ pub fn unnest_batch(
         unnest: request.unnest,
         max_depth: request.max_depth,
         naming: request.naming,
+        compat: request.compat,
         name_limit: request.name_limit,
         flatten_objects: request.flatten_objects,
         live: request.live,

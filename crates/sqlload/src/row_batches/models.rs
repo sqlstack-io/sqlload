@@ -4,7 +4,7 @@ use crate::row_batches::types::ListChoices;
 
 use arrow_array::RecordBatch;
 
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, Naming};
 
 /// One value of a yielded row, before its column's type is known.
 #[derive(Debug, Clone, PartialEq)]
@@ -176,7 +176,7 @@ pub struct ProjectionRules<'a> {
     /// Columns expanded into `<column>__<key>` after projection.
     pub flatten: &'a [String],
     pub masked: &'a [String],
-    /// How the table's columns load, and the destination's name limit: under dlt's naming a field loads the cursor when its loaded name is the cursor's.
+    /// How the table's columns load, and the destination's name limit: a field loads the cursor when its loaded name is the cursor's.
     pub naming: (Naming, Option<usize>),
 }
 
@@ -333,9 +333,11 @@ pub struct UnnestRequest<'a> {
     /// How many levels of child tables to make at most.
     pub max_depth: u32,
     pub naming: Naming,
-    /// The longest name dlt's naming gives on the destination.
+    /// Whose names the child rows' id, parent and position columns take.
+    pub compat: Compat,
+    /// The longest name the destination takes.
     pub name_limit: Option<usize>,
-    /// Whether an object inside an item flattens into `<key>__<inner>` fields, as dlt flattens it (files sources under `naming = "dlt"`).
+    /// Whether an object inside an item flattens into `<key>__<inner>` fields, as dlt flattens it (files sources under `compat = "dlt"`).
     pub flatten_objects: bool,
     /// Under `unnest = "all"`, the child tables the destination already has, as it stores their names (compared in any case): a field whose child table is among them is a list field, as an earlier load chose it.
     pub live: &'a [String],

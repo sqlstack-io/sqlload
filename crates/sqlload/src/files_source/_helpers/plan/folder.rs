@@ -102,6 +102,7 @@ fn record_column(name: &str) -> SampledColumn {
         direct_refusal: None,
         stored_read: StoredRead::Plain,
         lists: Some(false),
+        repeat_of: None,
     }
 }
 

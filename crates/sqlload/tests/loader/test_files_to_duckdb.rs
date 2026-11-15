@@ -520,6 +520,18 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
             check_query: "SELECT string_agg(id || ':' || extra, ',' ORDER BY id) FROM raw.scores",
             expected_result: "3:c,5:c",
         },
+        FilesScenarioTestCase {
+            description: "DuckDB reads the files itself and loads a renamed file column under its new name",
+            store: local_store,
+            settings: concat!(
+                "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\n",
+                "path_columns = \"{region}/{day:date}_*.parquet\"\nconstant_columns = { shop = \"main\", day_count = 1, as_of = 2026-11-08 }\n",
+                "[sources.scores.tables.scores]\nrename = { score = \"points\" }\n",
+            ),
+            runs: PATH_RUNS,
+            check_query: "SELECT string_agg(id || ':' || points || ':' || region || ':' || day || ':' || shop || ':' || day_count || ':' || as_of, ',' ORDER BY id) FROM raw.scores",
+            expected_result: PATH_RESULT,
+        },
     ];
     run_async(async {
         let server = start_seaweedfs().await?;
