@@ -234,6 +234,9 @@ pub struct LoaderArgs {
     /// `load`: draw the live block of running tables on stderr: on a terminal without --json or --log-format json (`auto`), always, or never.
     #[arg(long, value_enum, default_value_t = Progress::Auto)]
     pub progress: Progress,
+    /// `load`, Linux only: load one table at a time and report each table's peak memory (the run's peak is always reported).
+    #[arg(long, conflicts_with = "follow")]
+    pub memory_per_table: bool,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,

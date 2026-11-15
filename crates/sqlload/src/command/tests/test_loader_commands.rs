@@ -79,6 +79,14 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             expected_output: "Plan ready  0 selected",
             expected_exit: "exit 0",
         },
+        #[cfg(not(target_os = "linux"))]
+        PlanFailureTestCase {
+            description: "--memory-per-table resets Linux's high-water mark, so plan refuses it elsewhere",
+            project: TARGET,
+            argv: &["plan", "--memory-per-table"],
+            expected_output: "--memory-per-table needs Linux; the run's peak is in every report",
+            expected_exit: "exit 1",
+        },
     ];
     for test_case in test_cases {
         let output = run_without_host(test_case.project, test_case.argv);

@@ -160,11 +160,12 @@ copies every table under its snapshot:
 $ sqlload load
 ✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
 
-loaded  raw.app__customers     50 rows 0.2s
-loaded  raw.app__orders     1,000 rows 0.2s
+loaded  raw.app__customers     50 rows 0.4s
+loaded  raw.app__orders     1,000 rows 0.4s
 
-✓ Completed  2 loaded, 1,050 rows, 0.3s
-└── slowest      raw.app__customers 0.2s
+✓ Completed  2 loaded, 1,050 rows, 0.4s
+├── slowest      raw.app__customers 0.4s
+└── peak memory  78.4 MiB
 ```
 
 ### 4. Load the changes
@@ -187,7 +188,8 @@ loaded  raw.app__customers      0 rows 0.2s
 loaded  raw.app__orders         3 rows 0.2s
 
 ✓ Completed  2 loaded, 3 rows, 0.3s
-└── slowest      raw.app__customers 0.2s
+├── slowest      raw.app__customers 0.2s
+└── peak memory  84.6 MiB
 ```
 
 In `raw.app__orders`, the deleted order is kept and marked:
@@ -339,12 +341,13 @@ changes, here one update to an order:
 ```console
 $ sqlload load
 …
-loaded  raw.app__customers      0 rows 0.4s
-loaded  raw.app__orders         1 row  0.4s
-loaded  raw.app__refunds       20 rows 0.4s
+loaded  raw.app__customers      0 rows 0.2s
+loaded  raw.app__orders         1 row  0.2s
+loaded  raw.app__refunds       20 rows 0.2s
 
-✓ Completed  3 loaded, 21 rows, 0.5s
-└── slowest      raw.app__customers 0.4s
+✓ Completed  3 loaded, 21 rows, 0.3s
+├── slowest      raw.app__customers 0.2s
+└── peak memory  83.3 MiB
 ```
 
 A table leaving `include` still needs `--resnapshot`. If it joins again later while its destination
@@ -408,11 +411,12 @@ $ sqlload load --resnapshot --yes
 …
 ✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
 
-loaded  raw.app__customers     50 rows 0.2s
-loaded  raw.app__orders     1,000 rows 0.2s
+loaded  raw.app__customers     50 rows 0.3s
+loaded  raw.app__orders     1,000 rows 0.3s
 
-✓ Completed  2 loaded, 1,050 rows, 0.3s
-└── slowest      raw.app__customers 0.2s
+✓ Completed  2 loaded, 1,050 rows, 0.4s
+├── slowest      raw.app__customers 0.3s
+└── peak memory  77.5 MiB
 ```
 
 ### Reloading
@@ -434,7 +438,8 @@ created  raw.shop__products  4 columns
 loaded  raw.shop__products     30 rows 0.0s
 
 ✓ Completed  1 loaded, 30 rows, 0.1s
-└── slowest      raw.shop__products 0.0s
+├── slowest      raw.shop__products 0.0s
+└── peak memory  74.8 MiB
 ```
 
 To reload only the other tables, leave the source out:
@@ -446,5 +451,6 @@ $ sqlload load --reload --yes --exclude app
 loaded  raw.shop__products     30 rows 0.0s
 
 ✓ Completed  1 loaded, 30 rows, 0.1s
-└── slowest      raw.shop__products 0.0s
+├── slowest      raw.shop__products 0.0s
+└── peak memory  74.4 MiB
 ```

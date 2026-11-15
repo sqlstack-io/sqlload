@@ -42,6 +42,7 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
                     position: None,
                     changes: vec!["created  raw.a__items  6 columns".to_owned()],
                     transforms: Vec::new(),
+                    peak_memory_bytes: None,
                 },
             )],
             name_width: 7,
@@ -67,6 +68,54 @@ loaded  raw.a      1 row  0.3s
 loaded  raw.b        1 row  0.1s
 ✓ Completed  2 loaded, 123,457 rows, 2.2s
 └── slowest      raw.a 2.0s",
+        },
+        LoadOutputTestCase {
+            description: "under --memory-per-table each table notes its peak memory, after its position or under its failure, and the run's peak closes the summary",
+            events: vec![
+                (
+                    Some("raw.a"),
+                    EventKind::TableDone {
+                        rows: 1,
+                        elapsed_ms: 300,
+                        position: Some("id now 7".to_owned()),
+                        changes: Vec::new(),
+                        transforms: Vec::new(),
+                        peak_memory_bytes: Some(85 * 1024 * 1024),
+                    },
+                ),
+                (
+                    Some("raw.b"),
+                    EventKind::TableFailed {
+                        reason: "HTTP 404 not found".to_owned(),
+                        retryable: false,
+                        elapsed_ms: 100,
+                        peak_memory_bytes: Some(1_932_735_283),
+                    },
+                ),
+                (
+                    None,
+                    EventKind::RunFinished {
+                        loaded: 1,
+                        failed: 1,
+                        not_started: 0,
+                        rows: 1,
+                        elapsed_ms: 500,
+                        exit_code: 1,
+                        peak_memory_bytes: Some(2_000_000_000),
+                    },
+                ),
+            ],
+            name_width: 7,
+            rows_width: 5,
+            elapsed_ms: 500,
+            exit_code: 1,
+            expected_lines: "loaded  raw.a      1 row  0.3s  id now 7  peak memory 85 MiB
+failed  raw.b  HTTP 404 not found
+               peak memory 1.8 GiB
+✗ Completed with failures  1 loaded, 1 failed, 1 row, 0.5s
+├── slowest      raw.a 0.3s
+├── peak memory  1.9 GiB
+└── next         the 1 unchanged table loads; the 1 that committed carries on from its position",
         },
     ];
     for test_case in test_cases {
@@ -197,6 +246,7 @@ fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_
                         dicts: *dicts,
                     })
                     .collect(),
+                peak_memory_bytes: None,
             },
         };
         assert_eq!(

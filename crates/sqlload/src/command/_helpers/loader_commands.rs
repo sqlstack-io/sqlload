@@ -39,6 +39,8 @@ use crate::loader::models::{
     LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome, TablePlan,
 };
 use crate::number_text::main::thousands::thousands;
+use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
+use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
@@ -63,6 +65,9 @@ fn variable(variables: &BTreeMap<String, String>, name: &str) -> Option<String> 
 
 /// The plan options `args` give.
 pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
+    if args.memory_per_table && !cfg!(target_os = "linux") {
+        return Err(MEMORY_PER_TABLE_NEEDS_LINUX.to_owned());
+    }
     Ok(PlanOptions {
         select: [args.positional_select, args.select].concat(),
         exclude: args.exclude,
@@ -73,6 +78,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         concurrency: args.concurrency.map(usize::from),
         resnapshot: args.resnapshot,
         fail_fast: args.fail_fast,
+        memory_per_table: args.memory_per_table,
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
@@ -417,20 +423,21 @@ async fn run_command(
         if streamed.output.print {
             print_lines(std::mem::take(&mut lines), no_color);
         }
-        let (outcomes, kept, code) = Box::pin(streamed_load(streamed)).await;
+        let ended = Box::pin(streamed_load(streamed)).await;
         if json {
             let run = RunReport {
                 command: "load",
                 applied: &applied,
-                outcomes: &outcomes,
+                outcomes: &ended.outcomes,
                 started: started.0,
                 elapsed: started.1.elapsed(),
+                peak_memory_bytes: ended.peak_memory_bytes,
             };
             let (text, ok, retryable) = json_report(&plan, Some(&run));
             return Ok((vec![text], exit_code(ok, retryable)));
         }
-        lines.extend(kept);
-        return Ok((lines, code));
+        lines.extend(ended.lines);
+        return Ok((lines, ended.exit_code));
     }
     let stop = follow.map(follow_stop);
     let outcomes = match loads {
@@ -444,11 +451,17 @@ async fn run_command(
             outcomes: &outcomes,
             started: started.0,
             elapsed: started.1.elapsed(),
+            peak_memory_bytes: run_peak_bytes(&[]),
         };
         let (text, ok, retryable) = json_report(&plan, Some(&run));
         return Ok((vec![text], exit_code(ok, retryable)));
     }
-    let (tallied, completed) = render_tally(&applied, &outcomes, started.1.elapsed());
+    let (tallied, completed) = render_tally(
+        &applied,
+        &outcomes,
+        started.1.elapsed(),
+        loads.then(|| run_peak_bytes(&[])).flatten(),
+    );
     lines.extend(tallied);
     let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
     Ok((
@@ -467,8 +480,16 @@ struct StreamedLoad<'a> {
     planned: (bool, bool),
 }
 
-/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), and the exit code, the same as a load without events.
-async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String>, u8) {
+/// How a streamed load ended: each table's outcome, the lines not printed yet, the exit code, and the run's peak memory in bytes.
+struct StreamedEnd {
+    outcomes: Vec<TableOutcome>,
+    lines: Vec<String>,
+    exit_code: u8,
+    peak_memory_bytes: Option<u64>,
+}
+
+/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), the exit code, the same as a load without events, and the run's peak memory (the most of the process's before the tables loaded, after, and each table's under `--memory-per-table`, whose resets the process's own figure may miss).
+async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let width = load.output.name_width;
     let selected = load.plan.tables.len();
@@ -496,7 +517,12 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
     }
     let writer = tokio::spawn(write_events(load.output, receiver));
     emit(None, EventKind::RunStarted { selected, to_load });
+    let before = run_peak_bytes(&[]);
     let outcomes = load_tables(load.run, load.plan, None).await;
+    let measured: Vec<Option<u64>> = std::iter::once(before)
+        .chain(outcomes.iter().map(|outcome| outcome.peak_memory_bytes))
+        .collect();
+    let peak_memory_bytes = run_peak_bytes(&measured);
     let (mut loaded, mut failed, mut not_started, mut rows) = (0, 0, 0, 0);
     for outcome in &outcomes {
         match (&outcome.loaded, outcome.skipped) {
@@ -519,6 +545,7 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
             rows,
             elapsed_ms,
             exit_code: code,
+            peak_memory_bytes,
         },
     );
     close();
@@ -528,7 +555,12 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
         kept.push(String::new());
         kept.extend(summary_lines(&tally, elapsed_ms, code));
     }
-    (outcomes, kept, code)
+    StreamedEnd {
+        outcomes,
+        lines: kept,
+        exit_code: code,
+        peak_memory_bytes,
+    }
 }
 
 /// The width of the tally's name column: the widest name of a table the plan loads, or of an object `applied` changed, and two spaces.

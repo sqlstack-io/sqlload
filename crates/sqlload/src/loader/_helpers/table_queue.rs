@@ -10,10 +10,14 @@ use crate::load_events::models::EventKind;
 use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
+use crate::peak_memory::main::with_table_peak::with_table_peak;
 use crate::project::models::ProjectConfig;
 
 /// The most tables loading at once.
 pub(crate) fn thread_count(run: &LoadRun<'_>) -> usize {
+    if run.options.memory_per_table {
+        return 1;
+    }
     run.options
         .concurrency
         .or(run.project.concurrency)
@@ -40,7 +44,12 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
         options: &shared.options,
     };
     let started = std::time::Instant::now();
-    match load_one(&run, &table).await {
+    let (loaded, peak_memory_bytes) = with_table_peak(
+        shared.options.memory_per_table,
+        Box::pin(load_one(&run, &table)),
+    )
+    .await;
+    match loaded {
         Ok((name, loaded)) => TableOutcome {
             table: name,
             origin: Some(table.origin()),
@@ -48,6 +57,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             retryable: false,
             elapsed: started.elapsed(),
             skipped: false,
+            peak_memory_bytes,
         },
         Err(error) => TableOutcome {
             table: table.outcome_name(),
@@ -56,6 +66,7 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             loaded: Err(error.to_string()),
             elapsed: started.elapsed(),
             skipped: false,
+            peak_memory_bytes,
         },
     }
 }
@@ -82,6 +93,7 @@ pub(crate) fn emit_outcome(outcome: &TableOutcome) {
             position: loaded.note.clone(),
             changes: loaded.changes.clone(),
             transforms: loaded.transforms.clone(),
+            peak_memory_bytes: outcome.peak_memory_bytes,
         },
         Err(reason) if outcome.skipped => EventKind::TableNotStarted {
             reason: reason.clone(),
@@ -90,6 +102,7 @@ pub(crate) fn emit_outcome(outcome: &TableOutcome) {
             reason: reason.clone(),
             retryable: outcome.retryable,
             elapsed_ms,
+            peak_memory_bytes: outcome.peak_memory_bytes,
         },
     };
     emit(Some(&outcome.table), kind);
@@ -218,6 +231,7 @@ impl<'a> TableQueue<'a> {
             retryable: false,
             elapsed: std::time::Duration::ZERO,
             skipped: false,
+            peak_memory_bytes: None,
         });
         emit_outcome(&outcome);
         if self.fail_fast && self.stopped.is_none() && outcome.loaded.is_err() {

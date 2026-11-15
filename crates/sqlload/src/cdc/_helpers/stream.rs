@@ -1285,6 +1285,7 @@ pub(crate) fn source_outcomes(
             retryable: loaded.is_err() && retryable,
             elapsed,
             skipped: false,
+            peak_memory_bytes: None,
         });
     }
     outcomes
@@ -1461,6 +1462,7 @@ pub(crate) fn failed_outcomes(
             retryable: false,
             elapsed,
             skipped: false,
+            peak_memory_bytes: None,
         }],
         false => outcomes,
     }
