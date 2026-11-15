@@ -408,6 +408,7 @@ fn same_names(table: &SourceTable) -> LoadedNames {
             .collect(),
         numbered: Vec::new(),
         kept: Vec::new(),
+        replaces_record: false,
     }
 }
 
@@ -1250,7 +1251,7 @@ fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
     ))
 }
 
-/// `plan`, planned again when the table's run log holds the names numbering gave its columns in earlier loads and this plan's numbering names them otherwise, so each keeps its number; a number whose source column has gone, which another column would take, blocks the table instead, as does a clash on a column the table has that no record says which source column holds. A Python table, whose columns are named as they arrive, takes the names and the table's columns for its load, which refuses such a clash then.
+/// `plan`, planned again when the table's run log holds the names numbering gave its columns in earlier loads and this plan's numbering names them otherwise, so each keeps its number (except under `--reload`, whose load records its own numbering over theirs); a number whose source column has gone, which another column would take, blocks the table instead, as does a clash on a column the table has that no record says which source column holds. A Python table, whose columns are named as they arrive, takes the names and the table's columns for its load, which refuses such a clash then.
 pub(crate) async fn with_kept_names(
     project: &ProjectConfig,
     spec: TableSpec,
@@ -1270,7 +1271,10 @@ pub(crate) async fn with_kept_names(
     let clash = !existing.is_empty()
         && plan.schema.blocked.is_none()
         && !plan.spec.names.numbered.is_empty();
-    let kept = kept_numbered(&plan, destination, options.reload).await?;
+    let logged = kept_numbered(&plan, destination).await?;
+    plan.spec.names.replaces_record =
+        options.reload && logged.as_ref().is_some_and(|logged| !logged.is_empty());
+    let kept = logged.filter(|_| !options.reload);
     let Some(kept) = kept.or_else(|| clash.then(Vec::new)) else {
         return Ok(plan);
     };

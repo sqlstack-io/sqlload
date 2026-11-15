@@ -117,6 +117,8 @@ pub struct LoadedNames {
     pub numbered: Vec<NumberedName>,
     /// The names numbering gave in the table's earlier loads, as its run log recorded them, which these keep.
     pub kept: Vec<NumberedName>,
+    /// Whether the load rebuilds the table (`--reload`) whose run log holds numbering from before, which its own record must replace even when it gives no numbers.
+    pub replaces_record: bool,
 }
 
 /// The names a load has given the fields of a table whose columns arrive as it loads.

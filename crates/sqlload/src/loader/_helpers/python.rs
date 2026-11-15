@@ -1186,7 +1186,7 @@ async fn replan(
     inferred.names = LoadedNames {
         columns: names.columns.clone(),
         numbered: names.numbered.clone(),
-        kept: spec.names.kept.clone(),
+        ..spec.names.clone()
     };
     let columns = replan_columns(
         &inferred,

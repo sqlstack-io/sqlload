@@ -449,7 +449,7 @@ pub(crate) fn merged_record(
         recorded_at: now_utc_text(),
         batch: Some(batch),
         transform: None,
-        numbered: Vec::new(),
+        numbered: None,
     }
 }
 
@@ -611,8 +611,8 @@ pub(crate) fn transform_record(
     }
 }
 
-/// The names numbering gave `spec`'s columns and those its earlier loads gave that no column now loads as otherwise, for its run log; none when they are the ones the log holds already.
-pub(crate) fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
+/// The names numbering gave `spec`'s columns and those its earlier loads gave that no column now loads as otherwise, for its run log; `None` when they are the ones the log holds already, and never then when the load rebuilds the table over an older record.
+pub(crate) fn recorded_names(spec: &TableSpec) -> Option<Vec<NumberedName>> {
     let names = &spec.names;
     let taken = |column: &str| {
         names
@@ -635,10 +635,7 @@ pub(crate) fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
     recorded.sort();
     let mut kept = names.kept.clone();
     kept.sort();
-    match recorded == kept {
-        true => Vec::new(),
-        false => recorded,
-    }
+    (recorded != kept || names.replaces_record).then_some(recorded)
 }
 
 /// Once a load that is not logged succeeded, the names numbering gave its columns, when they are not the ones its run log holds already, so the next plan keeps them; a logged table's own run records carry them instead (see [`recorded_names`]), so its current state stays its newest run.
@@ -647,7 +644,7 @@ pub(crate) async fn record_numbered(
     destination: &Destination,
 ) -> Result<(), LoaderError> {
     let numbered = recorded_names(&table.spec);
-    if numbered.is_empty() || table.spec.logged {
+    if numbered.is_none() || table.spec.logged {
         return Ok(());
     }
     let record = event_record(
@@ -664,17 +661,16 @@ pub(crate) async fn record_numbered(
     append_run(table, destination, &RunRecord { numbered, ..record }).await
 }
 
-/// The names numbering gave the table's columns in its earlier loads, from the newest record of its run log holding any; `None` when the table doesn't exist, is rebuilt (`--reload`), or none of its live columns look numbered (`x` beside `x_1`), so the log is read only then.
+/// The names numbering gave the table's columns in its earlier loads, from the newest record of its run log holding a list (empty once a rebuild left none); `None` when the table doesn't exist or none of its live columns look numbered (`x` beside `x_1`), so the log is read only then.
 pub(crate) async fn kept_numbered(
     plan: &TablePlan,
     destination: &Destination,
-    reload: bool,
 ) -> Result<Option<Vec<NumberedName>>, LoaderError> {
     let live = plan.live.as_deref().unwrap_or_default();
     let numbered = live
         .iter()
         .any(|column| numbered_beside(&column.name, live));
-    if !plan.exists || reload || !numbered || plan.schema.blocked.is_some() {
+    if !plan.exists || !numbered || plan.schema.blocked.is_some() {
         return Ok(None);
     }
     let (log, _) = read_run_log(plan, destination).await?;
@@ -685,10 +681,10 @@ pub(crate) async fn kept_numbered(
         .filter(|record| {
             record.source == spec.source_name
                 && record.source_table == spec.source_table.name
-                && !record.numbered.is_empty()
+                && record.numbered.is_some()
         })
         .max_by(|left, right| left.recorded_at.cmp(&right.recorded_at))
-        .map(|record| record.numbered.clone()))
+        .and_then(|record| record.numbered.clone()))
 }
 
 /// Whether `name` is a numbered name (`x_1`) whose base (`x`) is a column of `live` too, ignoring case.

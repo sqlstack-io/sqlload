@@ -22,6 +22,6 @@ pub fn event_record(table: &RecordTable, event: StateEvent) -> RunRecord {
         recorded_at: event.recorded_at,
         batch: None,
         transform: None,
-        numbered: Vec::new(),
+        numbered: None,
     }
 }

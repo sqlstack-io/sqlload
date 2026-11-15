@@ -21,5 +21,6 @@ pub fn loaded_columns(
         columns,
         numbered,
         kept: rules.kept.clone(),
+        replaces_record: false,
     })
 }
