@@ -296,23 +296,23 @@ impl Split<'_> {
         Ok(())
     }
 
-    /// An item's `entries` with each key as it loads under the split's naming (snake_case normalises it); two keys of one item at `path` loading as one name is an error naming both.
+    /// An item's `entries` with each key as it loads under the split's naming (snake_case normalises it); two keys of one item at `path` loading as one name (under `source`, a key spelt as a flattened object's `<object>__<key>`) is an error naming both.
     fn loaded_keys(
         &self,
         entries: Vec<(String, Box<RawValue>)>,
         path: &str,
     ) -> Result<Vec<(String, Box<RawValue>)>, String> {
-        if self.naming == Naming::Source {
-            return Ok(entries);
-        }
         let mut loaded: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
         let mut spelled: Vec<String> = Vec::with_capacity(entries.len());
         for (key, value) in entries {
             let name = loaded_name(self.naming, &key, self.name_limit);
             if let Some(other) = loaded.iter().position(|(taken, _)| *taken == name) {
+                let keys = match spelled[other] == key {
+                    true => format!("two keys {key:?} (one may come from flattening an object)"),
+                    false => format!("keys {:?} and {key:?} both", spelled[other]),
+                };
                 return Err(format!(
-                    "{path}: keys {:?} and {key:?} both load as {name}; a list's items must not have keys that load under one name",
-                    spelled[other]
+                    "{path}: {keys} load as {name}; a list's items must not have keys that load under one name"
                 ));
             }
             loaded.push((name, value));

@@ -261,6 +261,12 @@ pub(crate) fn unnested(
         .roots
         .map(|roots| roots.iter().map(|id| (*id).to_owned()).collect());
     let unnest = (test_case.unnest)();
+    let flatten = crate::row_batches::models::Flatten {
+        objects: (test_case.flatten)(),
+        max_depth: test_case.max_depth,
+        naming: crate::load_naming::models::Naming::Source,
+        ..crate::row_batches::models::Flatten::default()
+    };
     let request = crate::row_batches::models::UnnestRequest {
         table: "orders",
         unnest: &unnest,
@@ -268,7 +274,7 @@ pub(crate) fn unnested(
         naming: crate::load_naming::models::Naming::Source,
         compat: crate::load_naming::models::Compat::Sqlload,
         name_limit: None,
-        flatten: &crate::row_batches::models::Flatten::default(),
+        flatten: &flatten,
         live: &[],
         ids: &ids,
         roots: roots.as_deref(),

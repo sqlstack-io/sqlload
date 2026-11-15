@@ -1,4 +1,7 @@
-use crate::row_batches::tests::helpers::{every_list, items_parts_tags, tags_only, unnested};
+use crate::row_batches::models::FlattenObjects;
+use crate::row_batches::tests::helpers::{
+    every_list, items_parts_tags, paths, tags_only, unnested,
+};
 use crate::row_batches::tests::test_types::UnnestBatchTestCase;
 
 // Child ids are base64(shake_128("<parent id>_<child table>_<position>").digest(10)) without padding, computed with Python's hashlib: dlt 1.32.0's get_nested_row_hash.
@@ -14,6 +17,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1", "P2"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64 / 1; 2",
                 "orders__items = sku:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / a|P1|0|kSG+OAUJsLWF8Q; b|P1|1|mPLBfITNXt50Yg",
@@ -29,6 +33,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: Some(&["P1"]),
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64 / 1",
                 "orders__items = sku:Utf8,_sqlload_root_id:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / a|P1|P1|0|kSG+OAUJsLWF8Q",
@@ -43,6 +48,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64,note:Utf8 / 1|n",
                 "orders__items = sku:Utf8,parts:Utf8(json),_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / a|[1,2]|P1|0|kSG+OAUJsLWF8Q",
@@ -57,6 +63,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64 / 1",
                 "orders__m = _sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / P1|0|v6Rwb1UkNtE0rA; P1|1|1/Eu6rJ09tjFuA",
@@ -72,6 +79,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1", "P2"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64 / 1; 2",
                 "orders__tags = k:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / x|P1|0|1+5nzIHNA4e8vg; z|P2|0|RLNQPupPJM5VLA",
@@ -85,6 +93,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Err(
                 "tags: its items have a field _sqlload_parent_id, the name of the column linking orders__tags to its parent; rename it before loading",
             ),
@@ -97,6 +106,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64,meta:Utf8(json) / 1|{\"k\":1}",
                 "orders__items = sku:Utf8,dims:Utf8(json),_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / a|{\"w\":2}|P1|0|kSG+OAUJsLWF8Q",
@@ -112,6 +122,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1", "P2", "P3", "P4"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64 / 1; 2; 3; 4",
                 "orders__tags = value:Utf8,_sqlload_parent_id:Utf8,_sqlload_list_idx:Int64,_sqlload_row_id:Utf8 / x|P1|0|1+5nzIHNA4e8vg",
@@ -126,6 +137,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1", "P2"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64,tags:Utf8(json) / 1|[]; 2|NULL",
                 "chosen: id=false",
@@ -139,10 +151,24 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[("meta", false)],
+            flatten: FlattenObjects::default,
             expected_batches: Ok(&[
                 "id:Int64,meta:Utf8(json) / 1|[1,2]",
                 "chosen: id=false,meta=false",
             ]),
+        },
+        UnnestBatchTestCase {
+            description: "under naming = \"source\", a key spelt as a flattened object's column fails rather than one value dropping the other",
+            rows: "{\"id\":1,\"items\":[{\"dims\":{\"w\":2},\"dims__w\":3}]}\n",
+            unnest: items_parts_tags,
+            max_depth: 1000,
+            ids: &["P1"],
+            roots: None,
+            chosen: &[],
+            flatten: || paths(&["items.dims"]),
+            expected_batches: Err(
+                "items: two keys \"dims__w\" (one may come from flattening an object) load as dims__w; a list's items must not have keys that load under one name",
+            ),
         },
         UnnestBatchTestCase {
             description: "all: an object where a list field was chosen fails, naming the column",
@@ -152,6 +178,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[("tags", true)],
+            flatten: FlattenObjects::default,
             expected_batches: Err(
                 "tags: unnest = \"all\" took tags as a list field from its values so far, and a row holds a value that is not a list there; list the paths to unnest without tags, so it stays a JSON column, or fix the row",
             ),
@@ -164,6 +191,7 @@ fn given_list_fields_when_unnesting_then_their_items_become_linked_child_rows_as
             ids: &["P1"],
             roots: None,
             chosen: &[],
+            flatten: FlattenObjects::default,
             expected_batches: Err(
                 "items.parts: unnest = \"all\" took items.parts as a list field from its values so far, and a row holds a value that is not a list there; list the paths to unnest without items.parts, so it stays a JSON column, or fix the row",
             ),

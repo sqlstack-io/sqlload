@@ -90,6 +90,8 @@ pub(crate) struct UnnestBatchTestCase {
     pub(crate) roots: Option<&'static [&'static str]>,
     /// Under `unnest = "all"`, the fields already chosen as list fields (`true`) or not, as `path`, `chosen`.
     pub(crate) chosen: &'static [(&'static str, bool)],
+    /// The objects to flatten, inside the list's items.
+    pub(crate) flatten: fn() -> crate::row_batches::models::FlattenObjects,
     /// The parent rendered as `schema / rows`, then each child as `table = schema / rows`, then the choices made (`chosen: path=true,...`) under `"all"`, or the error text.
     pub(crate) expected_batches: Result<&'static [&'static str], &'static str>,
 }
