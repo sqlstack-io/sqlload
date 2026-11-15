@@ -1372,6 +1372,33 @@ pub(crate) struct PeakMemoryReport {
     pub(crate) tables: Vec<bool>,
 }
 
+/// One run of a [`TypedCursorTestCase`]: the source change, then plan, apply and load of the selected tables with the typed cursor flags.
+#[derive(Clone, Copy)]
+pub(crate) struct TypedCursorRun {
+    /// SQL run in Postgres first.
+    pub(crate) source_change: &'static str,
+    /// `--start-cursor-ts`, `--end-cursor-ts`, `--start-cursor-int` and `--end-cursor-int`.
+    pub(crate) typed: [Option<&'static str>; 4],
+    /// `--select`: the tables this run plans; empty plans every table.
+    pub(crate) select: &'static [&'static str],
+    /// Text the rendered plan must contain, each in turn.
+    pub(crate) expected_plan: &'static [&'static str],
+}
+
+/// Postgres tables loaded into DuckDB over several runs with typed cursor flags or an integer lookback.
+pub(crate) struct TypedCursorTestCase {
+    pub(crate) description: &'static str,
+    /// SQL creating the source tables in a fresh `public` schema.
+    pub(crate) setup: &'static str,
+    /// Project TOML appended after `[sources.app]`.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [TypedCursorRun],
+    /// A query on DuckDB after each run, and its single text result; empty for none.
+    pub(crate) check_query: &'static str,
+    /// For each run: `ok` when the plan has no errors and the load succeeds, `refused` when the plan has errors; then ` => ` and the check query's result.
+    pub(crate) expected_outcomes: &'static [&'static str],
+}
+
 /// A Parquet files source into DuckDB loaded once from a file set: the load's error and the rows it left.
 pub(crate) struct FileSetTestCase {
     pub(crate) description: &'static str,

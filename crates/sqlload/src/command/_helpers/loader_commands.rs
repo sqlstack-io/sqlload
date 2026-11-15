@@ -3,8 +3,10 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
+use crate::column_types::models::ColumnType;
 use crate::command::_helpers::load_output::{
     EventsTarget, LiveState, LoadOutput, change_tally_line, planning, start_lines, summary_lines,
     write_events,
@@ -12,7 +14,9 @@ use crate::command::_helpers::load_output::{
 use crate::command::_helpers::output::{confirm_reload, print_lines};
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
-use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT};
+use crate::command::constants::{
+    CURSOR_FLAGS_MIXED, FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT,
+};
 use crate::command::errors::CommandError;
 use crate::command::models::{
     Command, ContractAction, EventsFormat, LoaderArgs, LoaderRequest, Progress, StateAction,
@@ -36,7 +40,8 @@ use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
 use crate::loader::models::{
-    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome, TablePlan,
+    LoadRun, PlanOptions, ProjectPlan, RangeFlags, RunReport, StateKind, StateRequest,
+    TableOutcome, TablePlan, TypedCursors,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
@@ -68,13 +73,54 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
     if args.memory_per_table && !cfg!(target_os = "linux") {
         return Err(MEMORY_PER_TABLE_NEEDS_LINUX.to_owned());
     }
+    let typed_cursors = TypedCursors {
+        start_ts: args.start_cursor_ts,
+        end_ts: args.end_cursor_ts,
+        start_int: args.start_cursor_int,
+        end_int: args.end_cursor_int,
+    };
+    let typed = [
+        (
+            "--start-cursor-ts",
+            &typed_cursors.start_ts,
+            ColumnType::TimestampTz,
+        ),
+        (
+            "--end-cursor-ts",
+            &typed_cursors.end_ts,
+            ColumnType::TimestampTz,
+        ),
+        (
+            "--start-cursor-int",
+            &typed_cursors.start_int,
+            ColumnType::Int,
+        ),
+        ("--end-cursor-int", &typed_cursors.end_int, ColumnType::Int),
+    ];
+    let untyped = args.start_cursor.is_some() || args.end_cursor.is_some();
+    if untyped && typed.iter().any(|(_, value, _)| value.is_some()) {
+        return Err(CURSOR_FLAGS_MIXED.to_owned());
+    }
+    for (flag, value, column_type) in &typed {
+        let Some(value) = value else {
+            continue;
+        };
+        if cursor_text(value, column_type).is_err() {
+            return Err(match column_type {
+                ColumnType::Int => format!("{flag} value '{value}' is not a whole number"),
+                _ => format!("{flag} value '{value}' is not an RFC 3339 timestamp or a date"),
+            });
+        }
+    }
     Ok(PlanOptions {
+        typed_cursors,
         select: [args.positional_select, args.select].concat(),
         exclude: args.exclude,
         rebuild_allowed: args.allow_type_change_rebuild,
         reload: args.reload,
         start_cursor: args.start_cursor,
         end_cursor: args.end_cursor,
+        range_flags: RangeFlags::default(),
         concurrency: args.concurrency.map(usize::from),
         resnapshot: args.resnapshot,
         fail_fast: args.fail_fast,

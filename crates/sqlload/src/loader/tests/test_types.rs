@@ -85,6 +85,14 @@ pub(crate) struct OlderFilesTestCase {
     pub(crate) expected_older: usize,
 }
 
+pub(crate) struct LookbackStartTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) maximum: &'static str,
+    pub(crate) units: i64,
+    pub(crate) cursor_type: crate::column_types::models::ColumnType,
+    pub(crate) expected_start: Result<&'static str, &'static str>,
+}
+
 /// A plan item: its name, its action, and each detail's label and text.
 pub(crate) type ItemSpec = (
     &'static str,

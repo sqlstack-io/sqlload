@@ -150,6 +150,8 @@ pub struct PartitionWindowRequest<'a> {
     pub lookback: Option<Duration>,
     /// `--start-cursor-*`, already normalised for the cursor type.
     pub start: Option<&'a str>,
+    /// The flag `start` came from, as `plan` names it: `--start-cursor`, `--start-cursor-ts` or `--start-cursor-int`.
+    pub start_flag: &'a str,
     /// `--end-cursor-*`, already normalised for the cursor type.
     pub end: Option<&'a str>,
     pub cursor_start: Option<&'a str>,

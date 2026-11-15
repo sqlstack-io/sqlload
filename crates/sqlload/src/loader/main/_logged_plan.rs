@@ -7,15 +7,15 @@ use crate::loader::_helpers::run_log::{
 };
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{LoggedPlan, PlanOptions, TablePlan};
+use crate::loader::models::{LoggedPlan, TablePlan};
 use crate::run_log::main::current_run::current_run;
 use crate::run_log::models::RunEvent;
 
-/// `plan` with its run log when the table is logged: after `sqlload logged-state reset`, the next run reads from the reset position (unless flags choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
+/// `plan` with its run log when the table is logged: after `sqlload logged-state reset`, the next run reads from the reset position (unless `flags`, `--reload` or a cursor range, choose the window); otherwise a logged cursor that disagrees with the data's maximum is noted, and the data wins. A record that cannot be read blocks the table until a reset follows it.
 pub(in crate::loader) async fn with_run_log(
     mut plan: TablePlan,
     destination: &Destination,
-    options: &PlanOptions,
+    flags: bool,
 ) -> Result<TablePlan, LoaderError> {
     if !plan.spec.logged || plan.schema.blocked.is_some() {
         return Ok(plan);
@@ -32,7 +32,6 @@ pub(in crate::loader) async fn with_run_log(
     });
     let records = log.records;
     let current = current_run(&records).cloned();
-    let flags = options.reload || options.start_cursor.is_some() || options.end_cursor.is_some();
     let reset = current
         .as_ref()
         .filter(|record| record.event == RunEvent::Reset && !flags);

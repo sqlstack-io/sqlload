@@ -231,6 +231,19 @@ def test_given_an_incremental_table_when_loading_then_ctx_carries_the_cursor_win
 	assert query(project, 'SELECT id FROM "RAW"."shop__rows" ORDER BY id') == [(1,), (2,), (3,)]
 
 
+def test_given_an_integer_cursor_with_lookback_when_loading_again_then_ctx_starts_that_many_units_back(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='fy', lookback=1)(rows)\n")
+	give(project, "rows", [{"fy": 2025, "amount": 120}, {"fy": 2026, "amount": 10}])
+	load(project)
+	give(project, "rows", [{"fy": 2025, "amount": 125}, {"fy": 2026, "amount": 10}])
+	done = load(project)
+	assert seen(project, "rows")["cursor_value"] == "2025"
+	assert "fy >= 2025 (warehouse maximum 2026 minus lookback 1)" in sqlload(project, "plan").stdout
+	assert query(project, 'SELECT fy, amount FROM "RAW"."shop__rows" ORDER BY fy') == [(2025, 125), (2026, 10)], done.stdout
+	load(project, "--start-cursor-int", "2024")
+	assert seen(project, "rows")["cursor_value"] == "2024"
+
+
 def test_given_rows_yielded_with_a_null_cursor_when_loading_again_then_the_table_fails_naming_them_unless_null_cursor_says(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', cursor_column='at')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a", "at": "2026-01-01T10:00:00Z"}, {"id": 2, "v": "b", "at": None}])

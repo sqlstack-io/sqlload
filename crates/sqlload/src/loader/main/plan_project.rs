@@ -79,7 +79,7 @@ pub async fn plan_project(
         .await?;
         PLANNED_SOURCES.fetch_add(1, Ordering::Relaxed);
     }
-    let ranged = options.start_cursor.is_some() || options.end_cursor.is_some();
+    let ranged = options.ranged();
     Ok(skip_up_to_date(
         block_conflicts(plan, (&claims, &configured, &drained), (project, options)),
         ranged,

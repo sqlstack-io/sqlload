@@ -16,7 +16,7 @@ pub fn partition_window(request: &PartitionWindowRequest<'_>) -> Result<Partitio
     let (from, note) = match (request.start, request.newest, request.cursor_start) {
         (Some(start), _, _) => (
             Some(align_down(start, by, cursor_type)?),
-            format!("{column} from {start} (--start-cursor)"),
+            format!("{column} from {start} ({})", request.start_flag),
         ),
         (None, Some(newest), _) => {
             let start = partition_start(newest, by, cursor_type);

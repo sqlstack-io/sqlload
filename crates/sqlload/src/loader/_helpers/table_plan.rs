@@ -48,6 +48,7 @@ use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::render::up_to_date;
 use crate::loader::_helpers::resolve::display_name;
+use crate::loader::_helpers::resolve::ranged_table;
 use crate::loader::_helpers::run_log::with_transform_version;
 use crate::loader::_helpers::sources::column_fix;
 use crate::loader::_helpers::sources::plan_files;
@@ -56,6 +57,7 @@ use crate::loader::_helpers::specs::files_read_columns;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
 use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
+use crate::loader::constants::RANGE_NEEDS_CURSOR;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -253,9 +255,8 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
-    plan.schema.warnings.extend(reload_range(spec, options));
     plan.schema.warnings.extend(split_ranking(&plan));
-    let plan = with_run_log(plan, destination, options).await?;
+    let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
     with_transform_version(plan, destination).await
 }
 
@@ -377,37 +378,6 @@ fn split_ranking(plan: &TablePlan) -> Option<String> {
     };
     Some(format!(
         "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
-    ))
-}
-
-/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped; rows with a NULL cursor are kept under `null_cursor = "include"`, which reads them with the first window, and dropped under `"ignore"` (under `"fail"`, the load fails on them).
-fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
-    let (start, end) = (
-        options.start_cursor.as_deref().filter(|_| options.reload),
-        options.end_cursor.as_deref().filter(|_| options.reload),
-    );
-    let (kept, dropped) = match (start, end) {
-        (Some(start), Some(end)) => (
-            format!("from {start} (--start-cursor), below {end} (--end-cursor)"),
-            format!("rows before {start} and from {end} on are dropped"),
-        ),
-        (Some(start), None) => (
-            format!("from {start} (--start-cursor)"),
-            format!("rows before {start} are dropped"),
-        ),
-        (None, Some(end)) => (
-            format!("below {end} (--end-cursor)"),
-            format!("rows from {end} on are dropped"),
-        ),
-        (None, None) => return None,
-    };
-    let nulls = match spec.cursor.as_ref().map(|cursor| cursor.null_cursor) {
-        Some(NullCursor::Include) => "; rows with a NULL cursor are kept",
-        Some(NullCursor::Ignore) => "; rows with a NULL cursor are dropped",
-        Some(NullCursor::Fail) | None => "",
-    };
-    Some(format!(
-        "--reload rebuilds the table with only the rows {kept}: {dropped}{nulls}"
     ))
 }
 
@@ -826,7 +796,13 @@ async fn plan_table_once(
         false => cursor_type,
     };
     let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
-    schema = checked_cursor(spec, schema, (&desired, unseen_python_cursor));
+    let (ranged, mut schema) = ranged_table(
+        options,
+        spec,
+        cursor_type.filter(|_| !unseen_python_cursor),
+        checked_cursor(spec, schema, (&desired, unseen_python_cursor)),
+    );
+    let options = &ranged;
     let cursor_in_table = has_cursor(spec, live.as_deref());
     let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
@@ -1455,6 +1431,24 @@ fn is_number(value: &str) -> bool {
         && digits(exponent)
 }
 
+/// Where an integer cursor's read starts under `lookback = units`: the destination's `maximum` minus `units`, but never below the smallest value `cursor_type` holds (`smallint` is 16-bit, `int` 64-bit), which the read's bound must fit.
+pub(crate) fn lookback_start(
+    maximum: &str,
+    units: i64,
+    cursor_type: &ColumnType,
+) -> Result<String, String> {
+    let lowest = match cursor_type {
+        ColumnType::SmallInt => i64::from(i16::MIN),
+        _ => i64::MIN,
+    };
+    match maximum.trim().parse::<i64>() {
+        Ok(value) => Ok(value.saturating_sub(units).max(lowest).to_string()),
+        Err(_) => Err(format!(
+            "cursor maximum {maximum:?} is not an integer, so lookback = {units} can't count back from it"
+        )),
+    }
+}
+
 /// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
@@ -1466,7 +1460,11 @@ async fn lower_bound(
     if let Some(start) = start_flag {
         return Ok(Ok((
             Some(start.to_owned()),
-            format!("{} from {start} (--start-cursor)", cursor.label()),
+            format!(
+                "{} from {start} ({})",
+                cursor.label(),
+                options.range_flags.start
+            ),
             None,
         )));
     }
@@ -1546,6 +1544,13 @@ async fn lower_bound(
         Some(Err(problem)) => return Ok(Err(problem)),
         None => (None, None),
     };
+    let (maximum, lookback) = match (maximum, cursor.lookback_units) {
+        (Some(maximum), Some(units)) => match lookback_start(&maximum, units, cursor_type) {
+            Ok(start) => (Some(start), format!(" {maximum} minus lookback {units}")),
+            Err(problem) => return Ok(Err(problem)),
+        },
+        (maximum, _) => (maximum, lookback),
+    };
     Ok(Ok(match (maximum, &cursor_start) {
         (Some(maximum), _) => {
             let bound = match request.spec.strategy == WriteStrategy::Append
@@ -1580,12 +1585,9 @@ pub(crate) async fn cursor_window(
 ) -> Result<Result<Window, String>, LoaderError> {
     let spec = request.spec;
     let options = request.options;
-    let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
     let (Some(cursor), Some(cursor_type)) = (&spec.cursor, request.cursor_type) else {
-        if backfill {
-            return Ok(Err(
-                "--start-cursor/--end-cursor need a cursor_column".to_owned()
-            ));
+        if options.ranged() {
+            return Ok(Err(RANGE_NEEDS_CURSOR.to_owned()));
         }
         return Ok(Ok(Window {
             filter: None,
@@ -1632,7 +1634,7 @@ pub(crate) async fn cursor_window(
     let (to, note) = match (to, ahead) {
         (Some(end), _) => (
             Some(end.clone()),
-            format!("{note}, below {end} (--end-cursor)"),
+            format!("{note}, below {end} ({})", options.range_flags.end),
         ),
         (None, Some((end, lookahead))) => (
             Some(end.clone()),

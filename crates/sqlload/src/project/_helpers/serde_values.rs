@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer};
 
 use crate::project::constants::{MAX_PERCENT, WHOLE_BATCH};
-use crate::project::models::BatchStep;
+use crate::project::models::{BatchStep, Lookback};
 
 /// Deserialize an optional duration written as text such as `1h` or `2d`.
 pub(crate) fn deserialize_optional_duration<'de, D: Deserializer<'de>>(
@@ -12,6 +12,26 @@ pub(crate) fn deserialize_optional_duration<'de, D: Deserializer<'de>>(
     Option::<String>::deserialize(deserializer)?
         .map(|text| humantime::parse_duration(&text).map_err(serde::de::Error::custom))
         .transpose()
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LookbackText {
+    Duration(String),
+    Units(i64),
+}
+
+/// Deserialize an optional `lookback`: a duration written as text (`"1d"`), or a whole number of cursor units (`1`), whose sign `plan` checks.
+pub(crate) fn deserialize_optional_lookback<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Lookback>, D::Error> {
+    match Option::<LookbackText>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(LookbackText::Units(units)) => Ok(Some(Lookback::Units(units))),
+        Some(LookbackText::Duration(text)) => humantime::parse_duration(&text)
+            .map(|duration| Some(Lookback::Duration(duration)))
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 #[derive(Deserialize)]
