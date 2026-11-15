@@ -1,14 +1,20 @@
 //! What the merge loader tests share: a Postgres table with repeated keys loaded into any target.
 
+use std::collections::BTreeMap;
+
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
+use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
-use crate::helpers::{described_project, load_selected};
-use crate::test_types::{DedupeRule, DedupeTargetTestCase};
+use crate::helpers::{described_project, load_selected, words};
+use crate::test_types::{
+    DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase, ReplaceKeyTargetTestCase,
+};
 
-/// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor.
+/// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
 pub(crate) const READINGS_SETUP: &str = "
 CREATE TABLE public.readings (reading_id int8 PRIMARY KEY, sensor text, amount int8, seen_at timestamptz, meta jsonb);
 CREATE TABLE public.visits (visit_id int8 PRIMARY KEY, sensor text);
@@ -26,10 +32,10 @@ INSERT INTO public.readings VALUES
 /// What a merge keeps of `public.readings` by each repeated-key rule, the same on every target.
 const RULES: [DedupeRule; 4] = [
     DedupeRule {
-        description: "by default the last row read of each repeated key wins, and rows without a key all stay",
+        description: "by default the last row read of each repeated key wins, rows without a sensor included, and plan says NULLs in the key match",
         settings: "",
         expected_error: "",
-        expected_plan: "merge (unique_key: sensor)",
+        expected_plan: "merge (unique_key: sensor; NULLs in keys match)",
     },
     DedupeRule {
         description: "dedup_sort desc keeps the latest seen_at, a NULL seen_at losing, and plan warns that a later commit still overwrites",
@@ -46,7 +52,7 @@ const RULES: [DedupeRule; 4] = [
     DedupeRule {
         description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
         settings: "on_duplicate_keys = \"fail\"",
-        expected_error: "the loaded rows repeat its unique_key: 2 values of (sensor) appear in more than one row",
+        expected_error: "the loaded rows repeat its unique_key: 3 values of (sensor) appear in more than one row",
         expected_plan: "",
     },
 ];
@@ -94,6 +100,190 @@ pub(crate) async fn run_dedupe_case(
     single_text(destination, check_query.to_owned())
         .await
         .map_err(|error| error.to_string())
+}
+
+/// `public.stock`, keyed by `(company, item, site)` with no constraint: one key whole, one without a site, one without an item or a site, and one whose item and site are empty, which must not match the NULLs.
+const STOCK_SETUP: &str = "
+CREATE TABLE public.stock (company text, item text, site text, qty int8);
+INSERT INTO public.stock VALUES ('acme', 'bolt', 's1', 1), ('acme', 'bolt', NULL, 2), ('acme', NULL, NULL, 3), ('acme', '', '', 4);
+";
+
+/// The change made to `public.stock` after each load: every row's `qty` grows by 10.
+const STOCK_CHANGE: &str = "UPDATE public.stock SET qty = qty + 10";
+
+/// Merge `public.stock` from Postgres on `postgres_port` (reached by `source`) into `target` on `(company, item, site)` three times, the source's rows changed after each load: the rows `target.check_query` returns after each load, or the first load's error.
+pub(crate) async fn run_null_key_loads(
+    target: &NullKeyTargetTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.stock\"]\n\n[sources.app.tables.\"public.stock\"]\nwrite_strategy = \"merge\"\nunique_key = [\"company\", \"item\", \"site\"]\n",
+        target.connection, target.schema
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(STOCK_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let rows = loaded_rows(&project, &destinations, (target.check_query, source)).await;
+    source
+        .batch_execute("DROP TABLE public.stock")
+        .await
+        .map_err(|error| error.to_string())?;
+    rows
+}
+
+/// Load `project` into its `dev` target three times, `public.stock` changed on `source` after each: what `check_query` returns after each load, or the first load's error.
+async fn loaded_rows(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    (check_query, source): (&str, &tokio_postgres::Client),
+) -> Result<Vec<String>, String> {
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let mut rows = Vec::new();
+    for _ in 0..3 {
+        load_selected(project, destinations, &[]).await?;
+        rows.push(
+            single_text(destination, check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+        );
+        source
+            .batch_execute(STOCK_CHANGE)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(rows)
+}
+
+/// `public.estimates`: version P00 read long ago, P01's lines A, B and C, a line without a version, then P02, the newest `updated_at`.
+const ESTIMATES_SETUP: &str = "
+CREATE TABLE public.estimates (le_version text, line text, amount int8, updated_at timestamptz NOT NULL);
+INSERT INTO public.estimates VALUES
+  ('LE-FY27-P00', 'Z', 0, '2026-01-01'),
+  ('LE-FY27-P01', 'A', 1, '2026-02-01'), ('LE-FY27-P01', 'B', 2, '2026-02-01'), ('LE-FY27-P01', 'C', 3, '2026-02-01'),
+  (NULL, 'N', 7, '2026-02-15'),
+  ('LE-FY27-P02', 'X', 10, '2026-03-01');
+";
+
+/// P01 sent again after the first load, without line C and with new amounts, and the line without a version replaced by another.
+const ESTIMATES_CHANGE: &str = "
+DELETE FROM public.estimates WHERE line IN ('C', 'N');
+UPDATE public.estimates SET amount = amount * 100, updated_at = '2026-04-01' WHERE le_version = 'LE-FY27-P01';
+INSERT INTO public.estimates VALUES (NULL, 'M', 9, '2026-04-01');
+";
+
+/// A project loading `public.estimates` from Postgres on `postgres_port` into the target `connection` (schema `schema`) by `delete_insert` with `replace_key = ["le_version"]` and `settings` added.
+pub(crate) fn estimates_project(
+    (connection, schema): (&str, &str),
+    postgres_port: u16,
+    settings: &str,
+) -> String {
+    format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{connection}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.estimates\"]\n\n[sources.app.tables.\"public.estimates\"]\nwrite_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\n{settings}\n"
+    )
+}
+
+/// Load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into `target` by `delete_insert` with `replace_key = ["le_version"]` and no cursor, so each load reads the whole table, then again after [`ESTIMATES_CHANGE`]: what `target.check_query` returns after each load, or the first error; each load's plan must show `target.expected_plan`.
+pub(crate) async fn run_replace_key_loads(
+    target: &ReplaceKeyTargetTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = estimates_project((&target.connection, target.schema), postgres_port, "");
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut rows = Vec::new();
+    for change in [ESTIMATES_CHANGE, ""] {
+        let plan = load_selected(&project, &destinations, &[]).await?;
+        assert!(
+            words(&plan).contains(target.expected_plan),
+            "{}: {plan}",
+            target.description
+        );
+        rows.push(
+            single_text(destination, target.check_query.to_owned())
+                .await
+                .map_err(|error| error.to_string())?
+                .unwrap_or_default(),
+        );
+        source
+            .batch_execute(change)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(rows)
+}
+
+/// Plan and load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into an in-memory DuckDB with `settings` added to its `delete_insert` by `replace_key`: the load's error, empty when it loads, and how many tables named `app__estimates` the target holds afterwards.
+pub(crate) async fn replace_key_outcome(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    settings: &str,
+) -> Result<(String, Option<String>), String> {
+    let text = estimates_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        settings,
+    );
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let error = load_selected(&project, &destinations, &[])
+        .await
+        .err()
+        .unwrap_or_default();
+    let tables = single_text(
+        destination,
+        "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__estimates'".to_owned(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((error, tables))
 }
 
 /// The rows `target.check_query` returns after each rule of `RULES`, loaded from Postgres on `postgres_port` into `target`, each from a fresh table; `""` where it returns none.

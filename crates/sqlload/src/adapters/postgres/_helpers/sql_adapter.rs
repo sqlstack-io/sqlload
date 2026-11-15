@@ -3,7 +3,7 @@
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT, STAGING_SUFFIX};
 use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::models::{
-    ChangeApply, CursorValue, TableName, WriteStatementsRequest,
+    ChangeApply, CursorValue, TableName, WriteMode, WriteStatementsRequest,
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::postgres::_helpers::type_names::{logical_type, portable_type, staging_type};
@@ -176,6 +176,14 @@ impl SqlAdapter for PostgresSql {
         format!("TRUNCATE {}", self.render_qualified_name(staging))
     }
 
+    /// A key column that may be NULL compared as `=` or both NULL: Postgres cannot hash, merge or index a join on `IS NOT DISTINCT FROM`, so it runs one as a nested loop over every row, while it can drive this form through an index on the key.
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("({left} = {right} OR ({left} IS NULL AND {right} IS NULL))"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     /// `INSERT ... ON CONFLICT (key) DO UPDATE`, which needs a unique index or constraint on exactly the key; the staged rows are first kept to one per key when the mode dedupes; otherwise a key repeated within them fails the statement, changing nothing.
     fn render_merge(
         &self,
@@ -231,15 +239,20 @@ impl SqlAdapter for PostgresSql {
         ]
     }
 
-    /// The unique index `merge`'s `ON CONFLICT` needs, on a table SQLLoad creates.
-    fn render_key_index(&self, table: &TableName, unique_key: &[String]) -> Option<String> {
-        let keys: Vec<String> = unique_key
+    /// The unique index `merge`'s `ON CONFLICT` needs, on a table SQLLoad creates: `NULLS NOT DISTINCT` (Postgres 15 and later, which `plan` requires then) when a key column may be NULL, so a NULL key conflicts with the row holding it, as the other warehouses match it.
+    fn render_key_index(&self, table: &TableName, mode: &WriteMode) -> Option<String> {
+        let matched = mode.matched_keys();
+        let keys: Vec<String> = matched
             .iter()
-            .map(|key| self.render_identifier(key))
+            .map(|(key, _)| self.render_identifier(key))
             .collect();
+        let nulls = match matched.iter().any(|(_, nullable)| *nullable) {
+            true => " NULLS NOT DISTINCT",
+            false => "",
+        };
         (!keys.is_empty()).then(|| {
             format!(
-                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})",
+                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({}){nulls}",
                 self.render_identifier(&format!("{}_sqlload_key", table.table)),
                 self.render_qualified_name(table),
                 keys.join(", ")

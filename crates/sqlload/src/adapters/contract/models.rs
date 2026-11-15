@@ -21,17 +21,22 @@ pub struct TableName {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WriteMode {
     Append,
-    /// Upsert: rows whose key matches a staged row are replaced; with `dedupe`, of the staged rows sharing a key only the one it ranks first is merged.
+    /// Upsert: rows whose key matches a staged row are replaced; with `dedupe`, of the staged rows sharing a key only the one it ranks first is merged. Keys match NULL-safely (a NULL matches a NULL), except the `not_null_keys` columns, whose staged values are never NULL, which compare with `=`.
     Merge {
         unique_key: Vec<String>,
         dedupe: Option<MergeDedupe>,
+        /// The key columns whose staged values are never NULL: the source declares them NOT NULL, or `null_keys = "fail"` refuses a commit holding a NULL in them.
+        not_null_keys: Vec<String>,
     },
-    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead.
+    /// Rows with `from <= cursor_column < to` (open-ended when `None`) are replaced by the staged rows; with `values`, the rows whose cursor is one of them (a files source's partitions) instead. With a `replace_key`, the rows holding a key value a staged row holds are replaced too (alone, without a cursor), matched as a merge matches keys: NULL-safely, except the `not_null_keys` columns, which compare with `=`.
     DeleteInsert {
-        cursor_column: String,
+        cursor_column: Option<String>,
         from: Option<String>,
         to: Option<String>,
         values: Vec<String>,
+        replace_key: Vec<String>,
+        /// The `replace_key` columns whose staged values are never NULL: the source declares them NOT NULL, or `null_keys = "fail"` refuses a commit holding a NULL in them.
+        not_null_keys: Vec<String>,
     },
     /// The staged rows become the whole table, atomically.
     Replace,
@@ -41,7 +46,42 @@ pub enum WriteMode {
     Changes(ChangeWrite),
 }
 
-/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. Rows with a NULL in the key are all kept, as they match nothing.
+impl WriteMode {
+    /// The key columns a commit by this mode matches its staged rows on, and the setting naming them: a merge's `unique_key`, a `delete_insert`'s `replace_key`; `None` for the other modes.
+    pub fn staged_key(&self) -> Option<(&[String], &'static str)> {
+        match self {
+            WriteMode::Merge { unique_key, .. } => Some((unique_key, "unique_key")),
+            WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
+                Some((replace_key, "replace_key"))
+            }
+            _ => None,
+        }
+    }
+
+    /// The key columns a merge, a change apply or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
+    pub fn matched_keys(&self) -> Vec<(&str, bool)> {
+        let (unique_key, not_null_keys) = match self {
+            WriteMode::Merge {
+                unique_key,
+                not_null_keys,
+                ..
+            } => (unique_key, not_null_keys),
+            WriteMode::Changes(change) => (&change.unique_key, &change.not_null_keys),
+            WriteMode::DeleteInsert {
+                replace_key,
+                not_null_keys,
+                ..
+            } => (replace_key, not_null_keys),
+            _ => return Vec::new(),
+        };
+        unique_key
+            .iter()
+            .map(|key| (key.as_str(), !not_null_keys.contains(key)))
+            .collect()
+    }
+}
+
+/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeDedupe {
     /// The staged column numbering rows in source order.
@@ -56,6 +96,8 @@ pub struct ChangeWrite {
     pub apply: ChangeApply,
     /// The source's key columns, which `merge` matches rows on.
     pub unique_key: Vec<String>,
+    /// The key columns the source declares NOT NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
     /// The newest truncate in the batch, applied before its rows (`merge` only; a changelog keeps it as a row).
     pub truncated: Option<Truncation>,
 }
@@ -106,6 +148,8 @@ pub struct TableShape {
 pub struct CursorQuery<'a> {
     pub table: &'a TableName,
     pub column: &'a str,
+    /// The further columns of a coalesced cursor: the maximum is then of the first non-NULL of `column` and these, as the source filter reads it.
+    pub coalesce: &'a [String],
     pub column_type: &'a ColumnType,
     pub lookback: Option<Duration>,
     /// The table's `constant_columns` (name, type and value as text): only the rows holding these values count, so tables sharing a destination each read from their own maximum.
@@ -226,4 +270,19 @@ pub enum CheckQuery<'a> {
     Duplicates(&'a [String]),
     /// Up to five of those values, in order, each as its columns' text joined by `, `.
     DuplicateExamples(&'a [String]),
+    /// How many values of these columns more than one row holds, a NULL equal to a NULL, as a merge matches keys.
+    KeyDuplicates(&'a [String]),
+    /// Up to five of those values, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    KeyDuplicateExamples(&'a [String]),
+    /// Up to five values of these columns, in order, of rows holding a NULL in any of them, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    NullKeyExamples(&'a [String]),
+    /// Up to this many distinct values of these columns, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
+    KeyValues(&'a [String], u64),
+    /// The distinct values of `file_column` among the relation's rows whose `key` values (as `KeyValues` gives them) a row of `staged` holds, other than `file`, in order: the files a commit's key values already come from.
+    KeySources {
+        key: &'a [String],
+        staged: &'a TableName,
+        file_column: &'a str,
+        file: &'a str,
+    },
 }

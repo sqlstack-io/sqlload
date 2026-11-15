@@ -33,6 +33,7 @@ use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::_helpers::run_log::log_empty_run;
 use crate::loader::_helpers::run_log::run_entry;
 use crate::loader::_helpers::specs::is_child_column;
+use crate::loader::_helpers::specs::null_cursor_problem;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
@@ -66,6 +67,7 @@ use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::CheckName;
+use crate::project::models::NullCursor;
 use crate::project::models::OnSchemaChange;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
@@ -654,13 +656,13 @@ pub(crate) async fn final_state(
         .map_err(LoaderError::Invalid)
 }
 
-/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given; returns the batch and the rows left outside.
+/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given, with those whose cursor is NULL under `null_cursor = "include"`; returns the batch, the rows left outside, and how many of those had a NULL cursor.
 pub(crate) fn typed_batch(
     batch: &RecordBatch,
     table: &TablePlan,
     merged: &SchemaRef,
     window: Option<&ReadWindow>,
-) -> Result<(RecordBatch, usize), LoaderError> {
+) -> Result<(RecordBatch, usize, usize), LoaderError> {
     let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
     let typed = read_types(&conformed, &read_schema(table))?;
     let cursor_type = window.and_then(|window| {
@@ -670,12 +672,17 @@ pub(crate) fn typed_batch(
             .find(|column| column.name.eq_ignore_ascii_case(&window.column))
             .map(|column| column.output.clone())
     });
-    let kept = match (window, &cursor_type) {
-        (Some(window), Some(cursor_type)) => in_window(&typed, window, cursor_type)?,
-        _ => typed,
+    let include = table
+        .spec
+        .cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
+    let (kept, nulls) = match (window, &cursor_type) {
+        (Some(window), Some(cursor_type)) => in_window(&typed, window, (cursor_type, include))?,
+        _ => (typed, 0),
     };
     let outside = batch.num_rows() - kept.num_rows();
-    Ok((kept, outside))
+    Ok((kept, outside, nulls))
 }
 
 /// The batches' target schema: each read column in its planned type.
@@ -723,12 +730,12 @@ fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, Lo
     RecordBatch::try_new_with_options(target.clone(), arrays, &options).map_err(invalid)
 }
 
-/// The rows of `batch` whose cursor is inside `window` (a NULL cursor is outside, as a source filter would have it).
+/// The rows of `batch` whose cursor is inside `window`, and how many rows its bounds skipped for a NULL cursor (none without bounds): a NULL cursor is outside, as a source filter would have it, unless `include` (`null_cursor = "include"`) keeps it.
 fn in_window(
     batch: &RecordBatch,
     window: &ReadWindow,
-    cursor_type: &ColumnType,
-) -> Result<RecordBatch, LoaderError> {
+    (cursor_type, include): (&ColumnType, bool),
+) -> Result<(RecordBatch, usize), LoaderError> {
     let schema = batch.schema();
     let Some((position, _)) = schema
         .fields()
@@ -736,7 +743,19 @@ fn in_window(
         .enumerate()
         .find(|(_, field)| field.name().eq_ignore_ascii_case(&window.column))
     else {
-        return Ok(batch.clone());
+        return Ok((batch.clone(), 0));
+    };
+    let bounded = window.from.is_some() || window.to.is_some();
+    let nulls = match bounded && !include {
+        true => batch.column(position).null_count(),
+        false => 0,
+    };
+    let with_nulls = |column: &ArrayRef, mask: BooleanArray| -> BooleanArray {
+        (0..mask.len())
+            .map(|row| {
+                Some((include && column.is_null(row)) || (mask.is_valid(row) && mask.value(row)))
+            })
+            .collect()
     };
     let mut kept = batch.clone();
     if let Some(from) = &window.from {
@@ -747,15 +766,15 @@ fn in_window(
             false => gt(&column, &bound),
         }
         .map_err(invalid)?;
-        kept = filter_record_batch(&kept, &mask).map_err(invalid)?;
+        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
     }
     if let Some(to) = &window.to {
         let column = kept.column(position).clone();
         let bound = Scalar::new(bound_array(to, cursor_type, column.data_type())?);
         let mask = lt(&column, &bound).map_err(invalid)?;
-        kept = filter_record_batch(&kept, &mask).map_err(invalid)?;
+        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
     }
-    Ok(kept)
+    Ok((kept, nulls))
 }
 
 /// A cursor bound as a one-value array of the cursor column's Arrow type `data_type`, converted from the bound's text (timestamps and dates parsed, every other type cast).
@@ -822,6 +841,18 @@ impl PythonFeed {
             let stream =
                 start_read(load.host.clone(), table_read(load, window.as_ref(), self)).await?;
             self.read(load, stream, window.as_ref()).await?;
+            let fails = load
+                .table
+                .spec
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.null_cursor == NullCursor::Fail);
+            if fails && self.null_cursors > 0 {
+                return Err(LoaderError::Invalid(null_cursor_problem(
+                    &load.table.spec,
+                    self.null_cursors,
+                )));
+            }
             if load.table.logged.is_some()
                 && let Some(state) = final_state(load.host.clone(), table.clone()).await?
             {
@@ -870,6 +901,7 @@ impl PythonFeed {
                 changes: Vec::new(),
                 note: Some(NO_DATA_NOTE.to_owned()),
                 after_load: None,
+                replaced_keys: None,
             });
         }
         let unsettled = self.publisher.is_none()
@@ -885,12 +917,14 @@ impl PythonFeed {
         let publisher = self.publisher(load).await?;
         let rows = publisher.finish(state).await?;
         let children = publisher.child_changes();
+        let replaced_keys = publisher.replaced.clone();
         self.changes.extend(children);
         Ok(TableLoaded {
             rows,
             changes: std::mem::take(&mut self.changes),
             note: None,
             after_load: None,
+            replaced_keys,
         })
     }
 
@@ -975,8 +1009,9 @@ impl PythonFeed {
             Some(window) => Some(self.read_window(window)),
             None => self.table.window.clone(),
         };
-        let (typed, outside) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
+        let (typed, outside, nulls) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
         self.outside += outside as u64;
+        self.null_cursors += nulls as u64;
         let sized = self.table.commits == CommitRule::Size && self.table.logged.is_none();
         let publisher = self.publisher(load).await?;
         publisher.stage(typed, None).await?;
@@ -1289,6 +1324,8 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
             spec.destination.table
         ),
         unique_key: Vec::new(),
+        not_null_keys: Vec::new(),
+        replace_key: Vec::new(),
         dedup_sort: None,
         cursor: None,
         batch: None,
@@ -1435,7 +1472,7 @@ impl ChildTables {
             }
             let ids = given_ids(&child.batch, parent.spec.naming)?;
             let schema: SchemaRef = Arc::new(settled_schema(&feed.merged));
-            let (typed, _) = typed_batch(&child.batch, &feed.table, &schema, None)?;
+            let (typed, _, _) = typed_batch(&child.batch, &feed.table, &schema, None)?;
             let publisher = match &mut feed.publisher {
                 Some(publisher) => publisher,
                 None => {

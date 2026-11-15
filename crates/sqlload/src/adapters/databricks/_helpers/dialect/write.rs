@@ -1,12 +1,13 @@
 //! Databricks' writes: each one statement, since the Statement Execution API runs every statement in its own transaction.
 
+use crate::adapters::contract::main::_keyed_merge::keyed_merge;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::constants::{TIMESTAMP_NTZ, TIMESTAMP_NTZ_FEATURE, TYPE_WIDENING};
 use crate::column_types::models::ColumnType;
 use crate::schema_plan::models::{ColumnChange, LiveColumn};
 
-/// The statements applying `request.mode` from `staging`, each atomic on its own: a `delete_insert` is one `MERGE` that inserts every staged row and deletes the table's rows in the range, so it keeps `DELETE` then `INSERT`'s meaning (rows with a NULL cursor included) in one commit.
+/// The statements applying `request.mode` from `staging`, each atomic on its own: a `delete_insert` is one `MERGE` that inserts every staged row and deletes the table's rows in the range, so it keeps `DELETE` then `INSERT`'s meaning (rows with a NULL cursor included) in one commit, and by a `replace_key` [one that also deletes the rows of the staged key values](keyed_merge).
 pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -52,6 +53,21 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             .into_iter()
             .filter(|statement| !matches!(statement.as_str(), "BEGIN" | "COMMIT"))
             .collect(),
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } if !replace_key.is_empty() => vec![keyed_merge(
+            adapter,
+            request,
+            (&source, &values),
+            (
+                replace_key,
+                cursor_column
+                    .as_ref()
+                    .map(|_| range_condition(adapter, request)),
+            ),
+        )],
         WriteMode::DeleteInsert { .. } => {
             let condition = range_condition(adapter, request);
             let selected: Vec<String> = values
@@ -79,16 +95,17 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     }
 }
 
-/// The table rows a `delete_insert` replaces, on `__target`; `None` for every row.
+/// The table rows a `delete_insert` replaces by its cursor, on `__target`; `None` for every row, and without a cursor.
 fn range_condition<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
 ) -> Option<String> {
     let WriteMode::DeleteInsert {
-        cursor_column,
+        cursor_column: Some(cursor_column),
         from,
         to,
         values,
+        ..
     } = request.mode
     else {
         return None;

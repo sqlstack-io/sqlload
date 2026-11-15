@@ -1,3 +1,4 @@
+pub mod count_rows;
 pub mod describe_source;
 pub mod odbc_reader;
 pub mod read_catalog;

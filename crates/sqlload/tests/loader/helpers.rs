@@ -26,9 +26,9 @@ use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
 use crate::test_types::{
-    BatchedScenarioTestCase, CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase,
-    FilesScenario, FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase,
-    LiveDatabricks, MetadataRoundTripTestCase, ParquetFile, RouteFiles, RouteOutcome,
+    CdcStep, CursorSource, DebugStageTestCase, FilesMergeTestCase, FilesScenario,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
+    MetadataRoundTripTestCase, ParquetFile, ReplacedKeysTestCase, RouteFiles, RouteOutcome,
     RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition, WrittenRow,
     WrittenRun,
 };
@@ -207,78 +207,6 @@ pub(crate) async fn load_with_options(
         .is_empty()
         .then_some(())
         .ok_or_else(|| failures.join("\n"))
-}
-
-/// Run a batched scenario on fresh source tables and a fresh DuckDB; returns each run's outcome as `<load error, or ok> => <check query result>`, the error cut to its first two parts (`table: what failed`), which stay the same from run to run.
-pub(crate) async fn run_batched(
-    client: &Client,
-    port: u16,
-    test_case: &BatchedScenarioTestCase,
-) -> Result<Vec<String>, String> {
-    client
-        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
-        .await
-        .map_err(|error| error.to_string())?;
-    client
-        .batch_execute(test_case.setup)
-        .await
-        .map_err(|error| error.to_string())?;
-    let text = duckdb_project(port, test_case.settings);
-    let project = described_project(&text).await?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let Some(duckdb @ Destination::DuckDb(_)) = destinations.get("dev") else {
-        return Err("no DuckDB destination".to_owned());
-    };
-    let mut outcomes: Vec<String> = Vec::new();
-    for run in test_case.runs {
-        client
-            .batch_execute(run.source_change)
-            .await
-            .map_err(|error| error.to_string())?;
-        let hand_edits: Vec<String> = run
-            .destination_change
-            .split_terminator(';')
-            .map(str::to_owned)
-            .collect();
-        execute(duckdb, hand_edits)
-            .await
-            .map_err(|error| error.to_string())?;
-        let options = PlanOptions {
-            end_cursor: run.end_cursor.map(str::to_owned),
-            batch_bytes: test_case.batch_bytes,
-            concurrency: test_case.concurrency,
-            ..PlanOptions::default()
-        };
-        let plan = plan_project(&project, &destinations, &options)
-            .await
-            .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
-        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
-        apply_project(&plan, &destinations)
-            .await
-            .map_err(|error| error.to_string())?;
-        let error = load_with_options(&project, &plan, &destinations, &options)
-            .await
-            .err()
-            .map_or_else(
-                || "ok".to_owned(),
-                |error| error.splitn(3, ": ").take(2).collect::<Vec<_>>().join(": "),
-            );
-        let result = single_text(duckdb, run.check_query.to_owned())
-            .await
-            .map_err(|error| error.to_string())?
-            .unwrap_or_default();
-        let shown = lines
-            .iter()
-            .filter(|_| !run.show.is_empty())
-            .filter_map(|line| line.split_once(run.show))
-            .map(|(_, rest)| format!(" | {}{rest}", run.show))
-            .collect::<String>();
-        outcomes.push(format!("{error} => {result}{shown}"));
-    }
-    Ok(outcomes)
 }
 
 /// The rendered plan, or the error that stopped it.
@@ -1884,8 +1812,14 @@ pub(crate) async fn run_merge_case(
         )
         .await
         .map_err(|error| error.to_string())?;
+        for key in step.removed {
+            std::fs::remove_file(directory.path().join("drop").join(key))
+                .map_err(|error| error.to_string())?;
+        }
         for file in step.files {
             let path = directory.path().join("drop").join(file.key);
+            std::fs::create_dir_all(path.parent().unwrap_or(directory.path()))
+                .map_err(|error| error.to_string())?;
             std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
             let modified =
                 std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
@@ -1949,4 +1883,44 @@ pub(crate) fn words(text: &str) -> String {
         .filter(|word| *word != "│")
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Load `test_case`'s steps from CSV files under `drop/` with `settings` into DuckDB through the `sqlload` executable (`load --json`), each after writing its files: each load's first table's `replaced_keys`, as compact JSON.
+pub(crate) fn run_replaced_keys(
+    test_case: &ReplacedKeysTestCase,
+    settings: &str,
+) -> Result<Vec<String>, String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let config = root.path().join("sqlload.toml");
+    let text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"csv\"\n{settings}",
+        root.path().join("out.duckdb").display(),
+        root.path().display()
+    );
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+    let mut reports = Vec::new();
+    for files in test_case.steps {
+        for file in *files {
+            let path = root.path().join("drop").join(file.key);
+            std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
+            let modified =
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|opened| opened.set_modified(modified))
+                .map_err(|error| error.to_string())?;
+        }
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+            .arg("--config")
+            .arg(&config)
+            .args(["load", "--json"])
+            .output()
+            .map_err(|error| error.to_string())?;
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("{error}: {}", String::from_utf8_lossy(&output.stdout)))?;
+        reports.push(report["tables"][0]["replaced_keys"].to_string());
+    }
+    Ok(reports)
 }

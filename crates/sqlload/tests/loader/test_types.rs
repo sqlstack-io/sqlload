@@ -340,8 +340,12 @@ pub(crate) struct BatchedRun {
     pub(crate) source_change: &'static str,
     /// SQL run in the DuckDB destination first (a hand edit, such as a unique index that makes a later batch fail).
     pub(crate) destination_change: &'static str,
+    /// `--start-cursor`.
+    pub(crate) start_cursor: Option<&'static str>,
     /// `--end-cursor-*`.
     pub(crate) end_cursor: Option<&'static str>,
+    /// `--reload`.
+    pub(crate) reload: bool,
     /// A query on DuckDB after the run, giving one text result.
     pub(crate) check_query: &'static str,
     /// Add the plan line holding this text to the run's outcome, from that text on; empty adds none.
@@ -1030,6 +1034,8 @@ pub(crate) struct MergeStep {
     /// SQL run on the target before the step, such as a `DROP TABLE`.
     pub(crate) before: &'static [&'static str],
     pub(crate) files: &'static [MergeFile],
+    /// Files removed from the folder before the step, by key below it.
+    pub(crate) removed: &'static [&'static str],
     /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
     pub(crate) loads: bool,
     /// Text the load's error must contain; empty when it must succeed.
@@ -1118,6 +1124,56 @@ pub(crate) struct DedupeTargetTestCase {
     pub(crate) check_query: &'static str,
     /// What `check_query` returns after each repeated-key rule, in their order: last row, highest, lowest, fail.
     pub(crate) expected_rows: [&'static str; 4],
+}
+
+/// A `delete_insert` by `replace_key` on a database source with `settings` added, and what plan says of it.
+pub(crate) struct ReplaceKeyRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Text the load's error must contain; empty when it must load.
+    pub(crate) expected_error: &'static str,
+    /// Text the error's fix must contain.
+    pub(crate) expected_fix: &'static str,
+    /// How many tables named `app__estimates` the target holds afterwards.
+    pub(crate) expected_tables: &'static str,
+}
+
+/// A target that `delete_insert` with a cursor and a `replace_key` loads Postgres rows into twice.
+pub(crate) struct ReplaceKeyTargetTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table.
+    pub(crate) reset: &'static [&'static str],
+    /// The table's rows as one text value, `le_version/line:amount` ordered by version (NULL last) and line.
+    pub(crate) check_query: &'static str,
+    /// Text each load's plan must show.
+    pub(crate) expected_plan: &'static str,
+    /// What `check_query` returns after each of the two loads.
+    pub(crate) expected_rows: [&'static str; 2],
+}
+
+/// Loads of CSV files by `delete_insert` with `replace_key = ["le_version"]` through `sqlload load --json`, one per step, each after writing its files.
+pub(crate) struct ReplacedKeysTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) steps: &'static [&'static [MergeFile]],
+    /// Each load's table `replaced_keys`, as compact JSON.
+    pub(crate) expected_reports: &'static [&'static str],
+}
+
+/// A target a merge on a key with NULL parts is loaded into three times.
+pub(crate) struct NullKeyTargetTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table (or from one made by hand).
+    pub(crate) reset: &'static [&'static str],
+    /// The table's rows as one text value, `item/site:qty` ordered by item and site (NULLs last).
+    pub(crate) check_query: &'static str,
+    /// What `check_query` returns after each of the three loads; or text of the first load's error.
+    pub(crate) expected_rows: Result<[&'static str; 3], &'static str>,
 }
 
 /// An NDJSON files source under `drop/` with `settings`, planned by the executable into a DuckDB target, or a filesystem files target when `files_target`.
@@ -1214,4 +1270,40 @@ pub(crate) struct PipedOutputTestCase {
     /// The arguments after `--config sqlload.toml`.
     pub(crate) args: &'static [&'static str],
     pub(crate) expected_table: &'static str,
+}
+
+/// A NULL cursor setting on `public.t` and what its first `plan` and load say.
+pub(crate) struct NullCursorPlanTestCase {
+    pub(crate) description: &'static str,
+    /// The table's settings in `[sources.app.tables."public.t"]`.
+    pub(crate) settings: &'static str,
+    /// Text the rendered plan (or the error that refused it) must contain, whitespace collapsed.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// One load of `erp.t` over ODBC with a NULL cursor rule, after a change at the source.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcNullCursorTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The table's cursor settings.
+    pub(crate) settings: &'static str,
+    /// Whether `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// The loaded rows, as `id:v`.
+    pub(crate) expected_result: &'static str,
+}
+
+/// Two loads of a BigQuery table whose first rows include one with a NULL cursor.
+pub(crate) struct BigQueryNullCursorTestCase {
+    pub(crate) description: &'static str,
+    /// Extra lines for the table entry.
+    pub(crate) settings: &'static str,
+    /// Whether the second `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// Whether the second load ran the NULL count as a query job.
+    pub(crate) expected_count_query: bool,
+    /// The loaded labels, NULL as `NULL`.
+    pub(crate) expected_values: &'static str,
 }

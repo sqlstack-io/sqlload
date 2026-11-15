@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -17,11 +18,15 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
-use crate::files_source::models::LoadedFile;
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+};
+use crate::files_source::models::{DataFile, LoadedFile};
 use crate::loader::_helpers::python::batch_cursor_max;
-use crate::loader::_helpers::sources::loaded_file;
+use crate::loader::_helpers::sources::{FilesPlanRequest, column_fix, live_has, loaded_file};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
+use crate::project::models::WriteStrategy;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -337,6 +342,16 @@ pub(crate) fn fold_maximum(
     Ok(run.later(maximum, batch_maximum))
 }
 
+/// Whether `spec`'s files source loads one file per commit, each recorded in the run log, which then picks the files it reads: a merge, or `delete_insert` by `replace_key`.
+pub(crate) fn logs_files(spec: &TableSpec) -> bool {
+    spec.files.is_some()
+        && match spec.strategy {
+            WriteStrategy::Merge => true,
+            WriteStrategy::DeleteInsert => !spec.replace_key.is_empty(),
+            WriteStrategy::Append | WriteStrategy::Replace => false,
+        }
+}
+
 /// The files (`name|version`) a files source's merge recorded merging into the table of `spec`, since the table's newest reset; why they cannot be known when a record after it cannot be read; none when the run log does not exist.
 pub(crate) async fn merged_files(
     spec: &TableSpec,
@@ -374,6 +389,25 @@ pub(crate) async fn merged_files(
     Ok(Ok(files))
 }
 
+/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
+pub(crate) fn unchanged_files(
+    merged: Vec<LoadedFile>,
+    listed: &HashMap<String, String>,
+) -> Vec<LoadedFile> {
+    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
+    for file in merged {
+        newest.insert(file.name.clone(), file);
+    }
+    newest
+        .into_values()
+        .filter(|file| {
+            listed
+                .get(&file.name)
+                .is_none_or(|version| *version == file.version)
+        })
+        .collect()
+}
+
 /// The record a files source's merge commits with `file` (`name|version`), its `batch`th commit of run `run_id`, which wrote `rows`.
 pub(crate) fn merged_record(
     spec: &TableSpec,
@@ -394,7 +428,13 @@ pub(crate) fn merged_record(
         state: None,
         row_count: rows,
         files: vec![file],
-        note: Some("files source merge".to_owned()),
+        note: Some(
+            match spec.strategy {
+                WriteStrategy::Merge => "files source merge",
+                _ => "files source delete_insert",
+            }
+            .to_owned(),
+        ),
         recorded_at: now_utc_text(),
         batch: Some(batch),
     }
@@ -473,4 +513,169 @@ fn newest_stamp(table: &TablePlan) -> Option<&str> {
 
 fn record_json(record: &RunRecord) -> Result<String, LoaderError> {
     serde_json::to_string(record).map_err(|error| LoaderError::Invalid(error.to_string()))
+}
+
+/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
+pub(crate) fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
+    let location = table
+        .spec
+        .files
+        .as_ref()
+        .map(|files| files.location.to_string())
+        .unwrap_or_default();
+    files
+        .iter()
+        .map(|data| {
+            format!(
+                "{location}{}{VERSION_SEPARATOR}{}",
+                data.file.relative_key,
+                data.file.version()
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(", ")
+}
+
+/// The name of the merged file `merged` (`name|version`).
+pub(crate) fn merged_name(merged: &str) -> &str {
+    merged
+        .rsplit_once(VERSION_SEPARATOR)
+        .map_or(merged, |(name, _)| name)
+}
+
+/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
+pub(crate) fn in_file(merged: &str, error: LoaderError) -> LoaderError {
+    let name = merged_name(merged);
+    let text = format!("{name}: {error}");
+    match error.is_retryable() {
+        true => LoaderError::Transient(text),
+        false => LoaderError::Invalid(text),
+    }
+}
+
+/// `earlier` (each `replace_key` value this run's commits of a files source's `delete_insert` into `table` inserted, with the file it came from, named below the source's location) with the key `values` of the commit of `file` (`name|version`) added; or why that commit cannot replace them: one of them came in an earlier commit of the same run, so this commit would delete that file's rows. A value must come whole in one file; [`listed_sources`] checks the files of earlier runs.
+pub(crate) fn with_file_keys(
+    table: &TablePlan,
+    (file, values): (&str, &[String]),
+    mut earlier: BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let location = table
+        .spec
+        .files
+        .as_ref()
+        .map(|files| files.location.to_string())
+        .unwrap_or_default();
+    let mut split: Vec<(&String, &String)> = Vec::new();
+    for value in values {
+        if let Some(first) = earlier.get(value) {
+            split.push((value, first));
+        }
+    }
+    let columns = table.spec.replace_key.join(", ");
+    if let Some((value, first)) = split.first() {
+        let more = match split.len() {
+            1 => String::new(),
+            count => format!(" (and {} more)", count - 1),
+        };
+        return Err(format!(
+            "it holds the replace_key ({columns}) value ({value}){more}, which {first} also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each ({columns}) value in one file, or remove whichever of the two files is outdated from the folder"
+        ));
+    }
+    let name = merged_name(file);
+    let name = name.strip_prefix(location.as_str()).unwrap_or(name);
+    earlier.extend(values.iter().map(|value| (value.clone(), name.to_owned())));
+    Ok(earlier)
+}
+
+/// Why a files table cannot load without the columns naming the file and version each row came from, by what its strategy uses them for: `append` skips the files loaded; `delete_insert` on a partition cursor (`guards_window`, not under `--reload` or `--start-cursor`) finds a file changed or added below its range; and `delete_insert` by `replace_key` finds the files a key value's rows come from (the file column alone). The table must write them, and an existing table hold them, except under `--reload`, which rebuilds it.
+pub(crate) fn file_column_problem(
+    request: &FilesPlanRequest<'_>,
+    guards_window: bool,
+) -> Option<String> {
+    let spec = request.spec;
+    let keyed = spec.strategy == WriteStrategy::DeleteInsert && !spec.replace_key.is_empty();
+    let uses: &[(&str, &str, &str)] = match (spec.strategy, guards_window, keyed) {
+        (WriteStrategy::Append, _, _) => &[
+            (
+                SOURCE_FILE_COLUMN,
+                "tell which files are loaded and would load them all again",
+                "skip files already loaded",
+            ),
+            (
+                SOURCE_VERSION_COLUMN,
+                "tell a file rewritten in place, or a new file under a loaded name, from one already loaded",
+                "tell a file rewritten in place, or a new file under a loaded name, from one already loaded; stop excluding it",
+            ),
+        ],
+        (_, true, _) => &[
+            (
+                SOURCE_FILE_COLUMN,
+                "find a file changed or added below this load's range, which it skips, keeping the partition's old rows",
+                "find a file changed or added below this load's range, which it would skip; stop excluding it",
+            ),
+            (
+                SOURCE_VERSION_COLUMN,
+                "find a file changed or added below this load's range, which it skips, keeping the partition's old rows",
+                "find a file changed or added below this load's range, which it would skip; stop excluding it",
+            ),
+        ],
+        (_, false, true) => &[(
+            SOURCE_FILE_COLUMN,
+            "find the files a replace_key value's rows come from, so a file holding a value another file of the folder holds would delete that file's rows",
+            "find the files a replace_key value's rows come from; stop excluding it",
+        )],
+        _ => &[],
+    };
+    for (column, missing, needed) in uses {
+        if !request.written.iter().any(|name| name == column) {
+            return Some(format!(
+                "{column} must be loaded: {} uses it to {needed}",
+                spec.strategy
+            ));
+        }
+        if request.live.is_some() && !live_has(request.live, column) && !request.options.reload {
+            return Some(format!(
+                "the table has no {column} column, so {} cannot {missing}; {}",
+                spec.strategy,
+                column_fix(spec.warehouse)
+            ));
+        }
+    }
+    None
+}
+
+/// Why the commit of `file` (`name|version`), a files source's `delete_insert` by `replace_key` into `table`, cannot replace the rows of its key values: some of them come from `sources` (other files the table's rows of those values came from, by name) that are still listed in the source's folder, so two files of the folder hold one value and which is current can't be told. A file that has left the folder (deleted, or moved by `after_load`) is replaced.
+pub(crate) fn listed_sources(
+    table: &TablePlan,
+    file: &str,
+    sources: &[String],
+) -> Result<(), String> {
+    let Some(source) = table.spec.files.as_ref() else {
+        return Ok(());
+    };
+    let location = source.location.to_string();
+    let listed: Vec<String> = source
+        .table
+        .files
+        .iter()
+        .map(|data| format!("{location}{}", data.file.relative_key))
+        .collect();
+    let held: Vec<&str> = sources
+        .iter()
+        .filter(|name| listed.contains(name))
+        .map(|name| name.strip_prefix(location.as_str()).unwrap_or(name))
+        .collect();
+    let Some(first) = held.first() else {
+        return Ok(());
+    };
+    let more = match held.len() {
+        1 => String::new(),
+        count => format!(" (and {} more)", count - 1),
+    };
+    let this = merged_name(file);
+    let this = this.strip_prefix(location.as_str()).unwrap_or(this);
+    let columns = table.spec.replace_key.join(", ");
+    Err(format!(
+        "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each ({columns}) value in one file, or remove the outdated file, {first} or {this}, from the folder"
+    ))
 }

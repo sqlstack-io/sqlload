@@ -25,12 +25,30 @@ pub const COPY_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 pub const NO_INTERNAL_STAGE_COPY: &str =
     "copy_to_internal_stage is for Snowflake targets; Postgres takes the rows by binary COPY";
 
-/// Whether a table has a unique index `ON CONFLICT` can use for a key: valid, checked immediately, not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order).
+/// The unique indexes `ON CONFLICT` can use for a key: valid, checked immediately, not partial, on plain columns, whose key columns are exactly `$3` (sorted by byte order). Their count, how many treat NULLs as equal (`NULLS NOT DISTINCT`, read through `to_jsonb` as the column is missing before Postgres 15), the names of the others, the statements dropping them (the constraint an index backs, or the index), and the key columns the table declares NOT NULL.
 pub const KEY_INDEX_SQL: &str = "
-SELECT count(*)
+SELECT count(i.indexrelid),
+       count(i.indexrelid) FILTER (WHERE x.nulls_equal),
+       COALESCE(string_agg(format('%I.%I', n.nspname, ic.relname), ', ' ORDER BY ic.relname)
+         FILTER (WHERE NOT x.nulls_equal), ''),
+       COALESCE(string_agg(CASE WHEN con.conname IS NULL THEN format('DROP INDEX %I.%I', n.nspname, ic.relname)
+                                ELSE format('ALTER TABLE %I.%I DROP CONSTRAINT %I', n.nspname, c.relname, con.conname) END,
+                           '; ' ORDER BY ic.relname)
+         FILTER (WHERE NOT x.nulls_equal), ''),
+       ARRAY(
+         SELECT a.attname::text FROM pg_catalog.pg_attribute a
+         JOIN pg_catalog.pg_class t ON t.oid = a.attrelid
+         JOIN pg_catalog.pg_namespace tn ON tn.oid = t.relnamespace
+         WHERE tn.nspname = $1 AND t.relname = $2 AND a.attnum > 0 AND NOT a.attisdropped
+           AND a.attnotnull AND a.attname = ANY ($3::text[])
+         ORDER BY a.attname COLLATE \"C\"
+       )
 FROM pg_catalog.pg_index i
 JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL (SELECT COALESCE((to_jsonb(i) ->> 'indnullsnotdistinct')::boolean, false) AS nulls_equal) x
+LEFT JOIN pg_catalog.pg_constraint con ON con.conindid = i.indexrelid AND con.conrelid = i.indrelid AND con.contype IN ('p', 'u')
 WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indisvalid AND i.indimmediate
   AND i.indpred IS NULL AND i.indexprs IS NULL
   AND ARRAY(
@@ -38,6 +56,13 @@ WHERE n.nspname = $1 AND c.relname = $2 AND i.indisunique AND i.indisvalid AND i
     WHERE a.attrelid = i.indrelid AND a.attnum = ANY ((i.indkey::int2[])[0:i.indnkeyatts - 1])
     ORDER BY a.attname COLLATE \"C\"
   ) = $3::text[]";
+
+/// The server's version as a number (`150004` for 15.4) and as Postgres prints it.
+pub const SERVER_VERSION_SQL: &str =
+    "SELECT current_setting('server_version_num')::int4, current_setting('server_version')";
+
+/// The first server version (as `server_version_num`) whose unique indexes can treat NULLs as equal (`NULLS NOT DISTINCT`), which `ON CONFLICT` needs to match a NULL key.
+pub const NULLS_NOT_DISTINCT_VERSION: i32 = 150_000;
 
 /// The foreign keys (of other tables, or the table itself) that reference a table: the referencing table, the constraint, what a delete does (`confdeltype`: `a` no action, `r` restrict, `c` cascade, `n` set null, `d` set default), and whether its check waits for the commit.
 pub const REFERENCES_SQL: &str = "

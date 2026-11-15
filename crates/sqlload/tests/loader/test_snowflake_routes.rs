@@ -446,6 +446,17 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
+            description: "a files merge hashing a column is refused by plan, as Snowflake does not merge files yet, so no direct load merges past the commit's key checks (null_keys = \"fail\" here): were it allowed, the hashed rows would go to the staging table the commit checks",
+            stage: MANAGED,
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnull_keys = \"fail\"\n[sources.orders.tables.orders]\nmask = { extra = \"hash\" }",
+            files: RouteFiles::Bucket,
+            file_set: with_text,
+            prepare: integration,
+            expected_error: "merge from a files source loads into DuckDB and Postgres targets so far, not Snowflake",
+            expected_unsent: &["SHA2(", "MERGE INTO"],
+            ..BASE
+        },
+        RouteTestCase {
             description: "replace on the direct route: each batch COPYs straight into the build table that is swapped in, rows written once",
             stage: MANAGED,
             settings: "write_strategy = \"replace\"",

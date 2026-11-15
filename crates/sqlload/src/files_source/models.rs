@@ -165,6 +165,8 @@ pub struct FileSelection<'a> {
     pub loaded: &'a [LoadedFile],
     /// Whether loaded files leave the folder once they load (`after_load`), so a loaded name at another version is a new file, not one rewritten in place.
     pub removed: bool,
+    /// Source files a `delete_insert` on a partition cursor holds, with their versions: a listed one at another version whose cursor value lies below `from` fails, rather than being skipped and keeping its old rows. Empty otherwise.
+    pub held: &'a [LoadedFile],
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
     pub from: Option<&'a str>,

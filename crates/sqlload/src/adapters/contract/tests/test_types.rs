@@ -162,5 +162,20 @@ pub(crate) struct MaxCursorTestCase {
     pub(crate) warehouse: Warehouse,
     /// The table's constant columns: name, type and value as text.
     pub(crate) scope: Vec<(String, ColumnType, String)>,
+    /// The further columns of a coalesced cursor.
+    pub(crate) coalesce: Vec<String>,
     pub(crate) expected_query: &'static str,
+}
+
+/// A merge or change apply on keys that may be NULL, and how the warehouse's statement matches them.
+pub(crate) struct KeyMatchTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) mode: WriteMode,
+    /// The text around the condition the write matches rows on, such as a `MERGE`'s ` AS __source ON ` and ` WHEN `.
+    pub(crate) markers: (&'static str, &'static str),
+    /// The condition the write matches rows on, between `markers`.
+    pub(crate) expected_merge: &'static str,
+    /// The condition the query of rekeyed row ids joins the table and the staged rows on.
+    pub(crate) expected_rekeyed: &'static str,
 }

@@ -25,8 +25,8 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy,
-    ProjectConfig, SortDirection, TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange,
+    OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -68,6 +68,34 @@ pub struct CursorSpec {
     pub inclusive: bool,
     /// `cursor_bounds = "literals"`: an ODBC source writes the bounds into the query as escapes instead of binding them.
     pub literals: bool,
+    /// The further columns of a coalesced cursor (`cursor_column = ["updated_at", "created_at"]`), whose value is the first non-NULL of `column` and these; empty for one column.
+    pub coalesce: Vec<String>,
+    /// What an incremental read does with source rows whose cursor is NULL.
+    pub null_cursor: NullCursor,
+}
+
+impl CursorSpec {
+    /// Every column of the cursor, `column` first.
+    pub fn columns(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.column.as_str()).chain(self.coalesce.iter().map(String::as_str))
+    }
+
+    /// Whether `name` is one of the cursor's columns, ignoring case.
+    pub fn names(&self, name: &str) -> bool {
+        self.columns()
+            .any(|column| column.eq_ignore_ascii_case(name))
+    }
+
+    /// The cursor as messages and `plan` name it: its column, or `coalesce(updated_at, created_at)`.
+    pub fn label(&self) -> String {
+        match self.coalesce.is_empty() {
+            true => self.column.clone(),
+            false => format!(
+                "coalesce({})",
+                self.columns().collect::<Vec<_>>().join(", ")
+            ),
+        }
+    }
 }
 
 /// How a source filter writes a cursor's text, date and timestamp bounds.
@@ -103,6 +131,12 @@ pub struct TableSpec {
     pub unique_key_at: Option<String>,
     /// What a merge does with rows of one commit sharing `unique_key`.
     pub on_duplicate_keys: OnDuplicateKeys,
+    /// What a merge does with a NULL in a `unique_key` column, and `delete_insert` in a `replace_key` column.
+    pub null_keys: NullKeys,
+    /// The key columns the table matches rows on (a merge's `unique_key`, a `delete_insert`'s `replace_key`) whose values are never NULL, which compare with `=`: those the source declares NOT NULL, or every one under `null_keys = "fail"`, which refuses a commit holding a NULL in them.
+    pub not_null_keys: Vec<String>,
+    /// Under `delete_insert`, the columns whose values each commit replaces whole: the rows holding a value of them that the commit's rows hold are deleted first. Empty otherwise.
+    pub replace_key: Vec<String>,
     /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
     pub dedup_sort: Option<(String, SortDirection)>,
     pub cursor: Option<CursorSpec>,
@@ -668,6 +702,35 @@ pub struct TableLoaded {
     pub note: Option<String>,
     /// What a files source's `after_load` did with the files it loaded; `None` when it keeps them.
     pub after_load: Option<AfterLoadReport>,
+    /// The `replace_key` values a `delete_insert` replaced; `None` without a `replace_key`.
+    pub replaced_keys: Option<ReplacedKeys>,
+}
+
+/// The `replace_key` values whose rows a table's `delete_insert` replaced, as `load --json` reports them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ReplacedKeys {
+    /// The `replace_key` columns.
+    pub columns: Vec<String>,
+    /// Each value its commits replaced, in order, as its columns' text (`NULL` for a NULL) joined by `, `; at most [`REPLACED_KEYS_SHOWN`](crate::loader::constants::REPLACED_KEYS_SHOWN).
+    pub values: std::collections::BTreeSet<String>,
+    /// Whether more values were replaced than `values` lists.
+    pub truncated: bool,
+}
+
+impl ReplacedKeys {
+    /// `kept` (none before the first commit) with one commit's replaced values of `columns` added, keeping the first [`REPLACED_KEYS_SHOWN`](crate::loader::constants::REPLACED_KEYS_SHOWN) in order and marking it truncated when there are more.
+    pub fn added(kept: Option<Self>, (columns, values): (Vec<String>, Vec<String>)) -> Self {
+        let mut kept = kept.unwrap_or(Self {
+            columns,
+            ..Self::default()
+        });
+        kept.values.extend(values);
+        while kept.values.len() > crate::loader::constants::REPLACED_KEYS_SHOWN {
+            kept.values.pop_last();
+            kept.truncated = true;
+        }
+        kept
+    }
 }
 
 /// A table's columns planned once more during its load, for rows showing new columns.
@@ -689,6 +752,8 @@ pub struct PythonFeed {
     pub rows: u64,
     /// Rows the function yielded outside the cursor window, which were skipped.
     pub outside: u64,
+    /// Of those, the rows whose cursor was NULL, which fail the table unless `null_cursor` says otherwise.
+    pub null_cursors: u64,
     /// Opened once the table exists for the data.
     pub publisher: Option<Publisher>,
     /// `created ...` and `altered ...` lines.
@@ -743,6 +808,8 @@ pub enum WholeReason {
     SingleFile,
     /// The table cannot load, so it has no commits.
     Blocked,
+    /// `delete_insert` by `replace_key`: a commit deletes every row of its key values, so a value's rows must commit together.
+    ReplaceKey,
 }
 
 /// What the rows of one commit replace under `delete_insert`.
@@ -807,8 +874,12 @@ pub struct Publisher {
     pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
     pub files: Option<FilesSink>,
-    /// A files source's merge: the file (`name|version`) the next commit merges, recorded in the run log with it.
+    /// A files source's merge, or `delete_insert` by `replace_key`: the file (`name|version`) the next commit loads, recorded in the run log with it.
     pub merged_file: Option<String>,
+    /// The `replace_key` values committed so far; `None` without a `replace_key`.
+    pub replaced: Option<ReplacedKeys>,
+    /// Every `replace_key` value a files source's commits inserted in this run, with the file it came from, which a later file of the run may not hold too.
+    pub run_keys: std::collections::BTreeMap<String, String>,
     /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).
     pub fed_files: Vec<StoredFile>,
     /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.
@@ -1079,6 +1150,9 @@ pub struct TableResult {
     /// What a files source's `after_load` did with the loaded files; left out when it keeps them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub after_load: Option<AfterLoadReport>,
+    /// The `replace_key` values its `delete_insert` replaced; left out without a `replace_key`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced_keys: Option<ReplacedKeys>,
 }
 
 /// Why a source's tables could not be listed, and whether a rerun may get past it.

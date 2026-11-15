@@ -2,6 +2,7 @@
 
 use crate::odbc_source::constants::{IDENTIFIER_QUOTE, QUERY_ALIAS};
 use crate::odbc_source::models::OdbcReadRequest;
+use crate::postgres_source::models::SourceTable;
 
 /// `name` in ANSI double quotes, each quote doubled.
 pub(crate) fn quote_identifier(name: &str) -> String {
@@ -39,4 +40,12 @@ pub(crate) fn select_query(request: &OdbcReadRequest<'_>) -> String {
         .map(|filter| format!(" WHERE {filter}"))
         .unwrap_or_default();
     format!("SELECT {} FROM {from}{filter}", items.join(", "))
+}
+
+/// `SELECT COUNT(*) FROM <table or (query)> WHERE <filter>`: how many of the table's rows `filter` selects.
+pub(crate) fn count_query(table: &SourceTable, sql: Option<&str>, filter: &str) -> String {
+    format!(
+        "SELECT COUNT(*) FROM {} WHERE {filter}",
+        from_item(&table.schema, &table.name, sql)
+    )
 }

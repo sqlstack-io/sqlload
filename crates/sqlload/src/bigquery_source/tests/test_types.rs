@@ -34,3 +34,11 @@ pub(crate) struct SelectQueryTestCase {
     pub(crate) sql: &'static str,
     pub(crate) expected_query: &'static str,
 }
+
+pub(crate) struct CountQueryTestCase {
+    pub(crate) description: &'static str,
+    /// The table's query; `None` counts the table itself.
+    pub(crate) sql: Option<&'static str>,
+    pub(crate) filter: &'static str,
+    pub(crate) expected_query: &'static str,
+}

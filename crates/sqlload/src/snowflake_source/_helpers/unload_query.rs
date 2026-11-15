@@ -1,5 +1,6 @@
 //! The `SELECT` an unload writes as Parquet.
 
+use crate::postgres_source::models::SourceTable;
 use crate::snowflake_source::_helpers::type_map::{quote_identifier, unload_expression};
 use crate::snowflake_source::models::UnloadRequest;
 
@@ -39,6 +40,19 @@ pub(crate) fn unload_query(request: &UnloadRequest<'_>) -> Result<String, String
         .map(|filter| format!(" WHERE {filter}"))
         .unwrap_or_default();
     Ok(format!("SELECT {} FROM {from}{filter}", items.join(", ")))
+}
+
+/// `SELECT COUNT(*) FROM <table or (query)> WHERE <filter>`, the table and query written as `unload_query` writes them: how many rows `filter` selects.
+pub(crate) fn count_query(table: &SourceTable, sql: Option<&str>, filter: &str) -> String {
+    let from = match sql {
+        Some(sql) => subquery(sql),
+        None => format!(
+            "{}.{}",
+            quote_identifier(&table.schema),
+            quote_identifier(&table.name)
+        ),
+    };
+    format!("SELECT COUNT(*) FROM {from} WHERE {filter}")
 }
 
 /// Query `sql` in parentheses, as a `FROM` item: without its final semicolons, and closed on a line of its own so a trailing `--` comment ends first.

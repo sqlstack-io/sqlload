@@ -173,3 +173,35 @@ cursor_column = "at"
         database = database.display(),
     )
 }
+
+/// A project merging `erp.t` over psqlODBC by its `updated_at` cursor, with `settings` added to its table entry, into DuckDB.
+pub(crate) fn null_cursor_project(port: u16, database: &std::path::Path, settings: &str) -> String {
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "Driver={{PostgreSQL Unicode}};Server=127.0.0.1;Port={port};Database=app;Uid=sqlload;Pwd=sqlload;"
+
+[connections.local]
+kind = "duckdb"
+database = "{database}"
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Rows of a generic ERP, some never edited."
+include = ["erp.t"]
+
+[sources.erp.tables."erp.t"]
+description = "Rows whose updated_at stays NULL until their first edit."
+write_strategy = "merge"
+unique_key = "{{primary_key}}"
+{settings}
+"#,
+        database = database.display(),
+    )
+}

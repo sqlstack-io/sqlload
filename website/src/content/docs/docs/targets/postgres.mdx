@@ -74,6 +74,36 @@ Readers see the old rows until the commit. `--reload` is refused on Postgres tar
 columns. SQLLoad creates one on tables it creates; on other tables `plan` fails until one exists. A
 key repeated within one commit fails that commit.
 
+### NULLs in keys
+
+From 0.51.0, `merge` matches a NULL in a key column with a NULL (see
+[NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys)). `ON CONFLICT` only does that
+through a unique index created `NULLS NOT DISTINCT`, which Postgres has from version 15. When a key
+column can be NULL (the source doesn't declare it `NOT NULL`, and an existing table doesn't
+either) and `null_keys` is `"match"`:
+
+- SQLLoad creates the index on a new table `NULLS NOT DISTINCT`.
+- On Postgres 14 or earlier, `plan` refuses the table, naming the server's version. Set
+  `null_keys = "fail"` to refuse NULL keys instead, make the key columns `NOT NULL` in the source,
+  or upgrade to Postgres 15.
+- On an existing table whose unique index on the key treats NULLs as distinct (any index SQLLoad
+  created before 0.51.0, and most made by hand), `plan` refuses the table, as `ON CONFLICT` would
+  insert a row with a NULL key again on every load. Create one that treats them as equal, then drop
+  the old one, with `ALTER TABLE ... DROP CONSTRAINT` when it backs a primary key or unique
+  constraint, which `DROP INDEX` can't drop. Creating it fails while the table holds copies of a
+  key, which
+  [Tables loaded before 0.51.0](/docs/concepts/write-strategies/#tables-loaded-before-0510)
+  shows how to remove. `plan` names both statements:
+
+```sql
+CREATE UNIQUE INDEX CONCURRENTLY stock_sqlload_key_nulls ON raw.stock (company, item, site) NULLS NOT DISTINCT;
+DROP INDEX raw.stock_sqlload_key;
+```
+
+A key column the existing table declares `NOT NULL`, such as a primary key's, never holds a NULL,
+so its index needs nothing more, whatever the source declares. A row with a NULL there fails the
+load on the column's `NOT NULL` constraint.
+
 ## Foreign keys
 
 `replace` and `delete_insert` delete rows, so `plan` checks the foreign keys that reference the
@@ -144,6 +174,8 @@ again under every write strategy: new tables with a unique index for `merge`, ar
 `replace` into a table SQLLoad didn't create, and `replace` keeping a dependent view, a grant and
 the primary key. They cover a value too long for its column failing the commit, no session or
 staging table left behind, and `plan` refusing `--reload`, `merge` without a unique index,
-`ON DELETE CASCADE` and a column that would round values. Against a TLS-only server, the target
+`ON DELETE CASCADE` and a column that would round values. Against Postgres 15, a `merge` on a key
+with NULLs loads three times and keeps one row per key, through the index SQLLoad creates
+`NULLS NOT DISTINCT`, and `plan` refuses a table whose own index treats NULLs as distinct. Against a TLS-only server, the target
 checks the certificate and host name with `verify-full`, and encrypts without checking with
 `require`, as a source does.

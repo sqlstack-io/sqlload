@@ -2,8 +2,8 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
 use crate::helpers::{duckdb_text, run_async, run_sqlload};
-use crate::odbc_helpers::{project, text_cursor_project};
-use crate::test_types::OdbcLoadTestCase;
+use crate::odbc_helpers::{null_cursor_project, project, text_cursor_project};
+use crate::test_types::{OdbcLoadTestCase, OdbcNullCursorTestCase};
 
 const SETUP: &str = r#"
 CREATE SCHEMA erp;
@@ -153,6 +153,90 @@ fn given_an_odbc_database_that_reads_backslash_escapes_when_a_text_cursor_maximu
             );
             assert_eq!(
                 duckdb_text(&database, test_case.check_query)?,
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_an_odbc_source_with_rows_whose_cursor_is_null_when_loading_incrementally_then_the_load_fails_unless_null_cursor_or_a_coalesced_cursor_reads_them()
+-> Result<(), String> {
+    let test_cases = [
+        OdbcNullCursorTestCase {
+            description: "the first load reads every row, a NULL cursor too",
+            source_change: "",
+            settings: "cursor_column = \"updated_at\"",
+            expected_output: (true, "1 loaded"),
+            expected_result: "1:a,2:b,3:c",
+        },
+        OdbcNullCursorTestCase {
+            description: "the next load counts the NULL-cursor rows its bounds would skip and fails, naming them, and merges nothing",
+            source_change: "UPDATE erp.t SET v = 'b2' WHERE id = 2; INSERT INTO erp.t VALUES (4, 'd', NULL, TIMESTAMP '2026-11-05 10:00:00'); UPDATE erp.t SET v = 'a2', updated_at = TIMESTAMP '2026-11-03 10:00:00' WHERE id = 1;",
+            settings: "cursor_column = \"updated_at\"",
+            expected_output: (false, "2 source rows have a NULL updated_at"),
+            expected_result: "1:a,2:b,3:c",
+        },
+        OdbcNullCursorTestCase {
+            description: "null_cursor = \"include\" with the bounds written as ODBC escapes reads them beside the changed rows",
+            source_change: "",
+            settings: "cursor_column = \"updated_at\"\nnull_cursor = \"include\"\ncursor_bounds = \"literals\"",
+            expected_output: (true, "1 loaded"),
+            expected_result: "1:a2,2:b2,3:c,4:d",
+        },
+        OdbcNullCursorTestCase {
+            description: "null_cursor = \"include\" with bound parameters reads a new NULL-cursor row too",
+            source_change: "INSERT INTO erp.t VALUES (5, 'e', NULL, TIMESTAMP '2026-11-06 10:00:00');",
+            settings: "cursor_column = \"updated_at\"\nnull_cursor = \"include\"",
+            expected_output: (true, "1 loaded"),
+            expected_result: "1:a2,2:b2,3:c,4:d,5:e",
+        },
+        OdbcNullCursorTestCase {
+            description: "a coalesced cursor with ODBC escapes reads a row by its created_at while its updated_at is NULL",
+            source_change: "INSERT INTO erp.t VALUES (6, 'f', NULL, TIMESTAMP '2026-11-07 10:00:00');",
+            settings: "cursor_column = [\"updated_at\", \"created_at\"]\ncursor_bounds = \"literals\"",
+            expected_output: (true, "1 loaded"),
+            expected_result: "1:a2,2:b2,3:c,4:d,5:e,6:f",
+        },
+    ];
+    run_async(async {
+        let postgres = start_postgres().await?;
+        let client = connect(&postgres).await?;
+        client
+            .batch_execute(
+                "CREATE SCHEMA erp; CREATE TABLE erp.t (id bigint PRIMARY KEY, v text, updated_at timestamp, created_at timestamp NOT NULL);
+                INSERT INTO erp.t VALUES (1, 'a', TIMESTAMP '2026-11-01 10:00:00', TIMESTAMP '2026-10-01 10:00:00'), (2, 'b', NULL, TIMESTAMP '2026-10-02 10:00:00'), (3, 'c', TIMESTAMP '2026-11-02 10:00:00', TIMESTAMP '2026-10-03 10:00:00');",
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        for test_case in test_cases {
+            client
+                .batch_execute(test_case.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            std::fs::write(
+                &config,
+                null_cursor_project(postgres.port, &database, test_case.settings),
+            )
+            .map_err(|error| error.to_string())?;
+            let (succeeded, output) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
+            let (expected_success, expected_text) = test_case.expected_output;
+            assert!(
+                succeeded == expected_success && output.contains(expected_text),
+                "{}:\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                duckdb_text(
+                    &database,
+                    "SELECT string_agg(id || ':' || v, ',' ORDER BY id) FROM raw.erp__t"
+                )?,
                 test_case.expected_result,
                 "{}",
                 test_case.description

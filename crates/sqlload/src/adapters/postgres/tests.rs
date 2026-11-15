@@ -4,5 +4,7 @@ mod copy_rows;
 mod dialect;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_null_keys.rs"]
+mod null_keys;
 #[path = "tests/test_types.rs"]
 mod test_types;

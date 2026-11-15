@@ -47,7 +47,10 @@ use crate::loader::_helpers::resolve::{
     NameRule, display_name, resolve_tables, source_target, spec_names, target_display_name,
     unread_source,
 };
-use crate::loader::_helpers::run_log::merged_files;
+use crate::loader::_helpers::run_log::{
+    file_column_problem, logs_files, merged_files, unchanged_files,
+};
+use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::{
     flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
@@ -1073,21 +1076,26 @@ async fn merge_ledger(
             return Ok(Err("merge is not supported for files targets".to_owned()));
         }
     };
+    let what = match spec.strategy {
+        WriteStrategy::Merge => "merge",
+        _ => "load",
+    };
     if !sql_adapter(spec.warehouse).merges_files() {
         return Ok(Err(format!(
-            "merge from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
-            spec.warehouse
+            "{} from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
+            spec.strategy, spec.warehouse
         )));
     }
     if request.options.reload {
-        return Ok(Err(
-            "--reload would merge every file in one commit and lose their order; drop the table and load again to merge every file anew".to_owned(),
-        ));
+        return Ok(Err(format!(
+            "--reload would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
+        )));
     }
     if spec.logged {
-        return Ok(Err(
-            "state = \"logged\" does not apply to a files source's merge, which records each file it merges".to_owned(),
-        ));
+        return Ok(Err(format!(
+            "state = \"logged\" does not apply to a files source's {}, which records each file it loads",
+            spec.strategy
+        )));
     }
     if let Some(cursor) = &spec.cursor {
         return Ok(Err(format!(
@@ -1115,22 +1123,6 @@ async fn merge_ledger(
     Ok(merged.map(|merged| unchanged_files(merged, &listed)))
 }
 
-/// The newest record of each `merged` file (records come oldest first), kept when the file is still listed at that version or no longer listed: a file changed since, even back to an earlier version, merges again.
-fn unchanged_files(merged: Vec<LoadedFile>, listed: &HashMap<String, String>) -> Vec<LoadedFile> {
-    let mut newest: HashMap<String, LoadedFile> = HashMap::new();
-    for file in merged {
-        newest.insert(file.name.clone(), file);
-    }
-    newest
-        .into_values()
-        .filter(|file| {
-            listed
-                .get(&file.name)
-                .is_none_or(|version| *version == file.version)
-        })
-        .collect()
-}
-
 /// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
 pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
     match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
@@ -1146,7 +1138,7 @@ pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
 }
 
 /// Whether the live table has `column`.
-fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
+pub(crate) fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
     match live {
         Some(live) => live
             .iter()
@@ -1241,8 +1233,15 @@ pub(crate) async fn plan_files(
         {
             Some((name, column_type)) => Some((name.as_str(), column_type)),
             None => {
+                let instead = match spec.strategy {
+                    WriteStrategy::DeleteInsert => format!(
+                        "; to replace every row of each {0} value the files hold, set replace_key = [\"{0}\"] and drop cursor_column",
+                        cursor.column
+                    ),
+                    _ => String::new(),
+                };
                 return Ok(Err(format!(
-                    "cursor_column {} must be one of the partition_columns or path_columns for a files source",
+                    "cursor_column {} must be one of the partition_columns or path_columns for a files source{instead}",
                     cursor.column
                 )));
             }
@@ -1269,7 +1268,7 @@ pub(crate) async fn plan_files(
             "--reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded".to_owned(),
         ));
     }
-    let merged = match spec.strategy == WriteStrategy::Merge {
+    let merged = match logs_files(spec) {
         true => match merge_ledger(request).await? {
             Ok(merged) => Some(merged),
             Err(problem) => return Ok(Err(problem)),
@@ -1277,52 +1276,40 @@ pub(crate) async fn plan_files(
         false => None,
     };
     let skips_loaded = spec.strategy == WriteStrategy::Append;
-    let append_columns = [
-        (
-            SOURCE_FILE_COLUMN,
-            "which files are loaded and would load them all again",
-            "skip files already loaded",
-        ),
-        (
-            SOURCE_VERSION_COLUMN,
-            "a file rewritten in place, or a new file under a loaded name, from one already loaded",
-            "tell a file rewritten in place, or a new file under a loaded name, from one already loaded; stop excluding it",
-        ),
-    ];
-    for (column, missing, needed) in append_columns.into_iter().filter(|_| skips_loaded) {
-        if request.live.is_some() && !live_has(request.live, column) && !request.options.reload {
-            return Ok(Err(format!(
-                "the table has no {column} column, so append cannot tell {missing}; {}",
-                column_fix(spec.warehouse)
-            )));
-        }
-        if !request.written.iter().any(|name| name == column) {
-            return Ok(Err(format!(
-                "{column} must be loaded: append uses it to {needed}"
-            )));
-        }
+    let guards_window = spec.strategy == WriteStrategy::DeleteInsert
+        && cursor.is_some()
+        && request.options.start_cursor.is_none()
+        && !request.options.reload;
+    if let Some(problem) = file_column_problem(request, guards_window) {
+        return Ok(Err(problem));
     }
     let live_has = |column: &str| live_has(request.live, column);
-    let loaded: Vec<LoadedFile> =
-        match skips_loaded && live_has(SOURCE_FILE_COLUMN) && !request.options.reload {
-            true => match request.loaded {
-                LoadedSource::Query(destination) => {
-                    let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
-                    let query = sql_adapter(spec.warehouse).render_loaded_files_query(
-                        &spec.destination,
-                        SOURCE_FILE_COLUMN,
-                        version,
-                    );
-                    text_values(destination, query)
-                        .await?
-                        .into_iter()
-                        .map(|text| loaded_file(text, version.is_some()))
-                        .collect()
-                }
-                LoadedSource::Recorded(recorded) => recorded.to_vec(),
-            },
-            false => Vec::new(),
-        };
+    let recorded: Vec<LoadedFile> = match (skips_loaded || guards_window)
+        && live_has(SOURCE_FILE_COLUMN)
+        && !request.options.reload
+    {
+        true => match request.loaded {
+            LoadedSource::Query(destination) => {
+                let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
+                let query = sql_adapter(spec.warehouse).render_loaded_files_query(
+                    &spec.destination,
+                    SOURCE_FILE_COLUMN,
+                    version,
+                );
+                text_values(destination, query)
+                    .await?
+                    .into_iter()
+                    .map(|text| loaded_file(text, version.is_some()))
+                    .collect()
+            }
+            LoadedSource::Recorded(recorded) => recorded.to_vec(),
+        },
+        false => Vec::new(),
+    };
+    let (loaded, held) = match skips_loaded {
+        true => (recorded, Vec::new()),
+        false => (Vec::new(), recorded),
+    };
     let loaded = merged.clone().unwrap_or(loaded);
     let location = request.files.location.to_string();
     let selection = FileSelection {
@@ -1330,6 +1317,7 @@ pub(crate) async fn plan_files(
         location: &location,
         loaded: &loaded,
         removed: spec.after_load != AfterLoad::Keep,
+        held: &held,
         cursor,
         from: request.bounds.0,
         to: request.bounds.1,
@@ -1541,27 +1529,10 @@ pub(crate) async fn source_ends(
     }
     let mut client: Option<Client> = None;
     for spec in &mut specs {
-        let integer_cursor = spec.cursor.as_ref().and_then(|cursor| {
-            spec.source_table
-                .columns
-                .iter()
-                .find(|column| column.name == cursor.column)
-                .filter(|column| {
-                    matches!(
-                        column.column_type,
-                        Ok(ColumnType::Int | ColumnType::SmallInt)
-                    )
-                })
-                .map(|column| {
-                    column
-                        .source_spelling
-                        .clone()
-                        .unwrap_or_else(|| column.name.clone())
-                })
-        });
+        let integer_cursor = integer_cursor(spec);
         let wanted = matches!(spec.batch, Some(BatchStep::Integer(_)))
             && selected(options, (source_name, &spec_names(spec)));
-        let Some(column) = integer_cursor.filter(|_| wanted) else {
+        let Some(columns) = integer_cursor.filter(|_| wanted) else {
             continue;
         };
         if client.is_none() {
@@ -1571,7 +1542,7 @@ pub(crate) async fn source_ends(
             continue;
         };
         spec.source_end = Some(
-            match cursor_end(connected, &spec.source_table, &column).await? {
+            match cursor_end(connected, &spec.source_table, &columns).await? {
                 Some((maximum, end)) => SourceEnd::Maximum { maximum, end },
                 None => SourceEnd::Empty,
             },

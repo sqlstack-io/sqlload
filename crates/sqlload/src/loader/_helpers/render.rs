@@ -19,14 +19,15 @@ use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::source_readers;
 use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
 use crate::loader::constants::{
-    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, PARALLEL_READERS, PLAN_DETAIL_COLUMN,
-    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS,
+    PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
@@ -36,6 +37,7 @@ use crate::loader::models::{
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
+use crate::project::models::NullCursor;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::models::Unnest;
@@ -336,7 +338,9 @@ pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
 pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let spec = &table.spec;
     let action = match &table.mode {
-        WriteMode::Merge { unique_key, dedupe } => {
+        WriteMode::Merge {
+            unique_key, dedupe, ..
+        } => {
             let repeats = match dedupe {
                 None => "; repeated keys fail".to_owned(),
                 Some(MergeDedupe {
@@ -353,16 +357,48 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 true => format!(" ← {PRIMARY_KEY_PLACEHOLDER}"),
                 false => String::new(),
             };
+            let nulls = match table
+                .mode
+                .matched_keys()
+                .iter()
+                .any(|(_, nullable)| *nullable)
+            {
+                true => NULL_KEYS_NOTE,
+                false => "",
+            };
             format!(
-                "merge (unique_key: {}{origin}{repeats})",
+                "merge (unique_key: {}{origin}{repeats}{nulls})",
                 unique_key.join(", ")
             )
         }
-        WriteMode::DeleteInsert { cursor_column, .. } => {
-            format!("delete_insert (cursor: {cursor_column})")
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } => {
+            let nulls = match table
+                .mode
+                .matched_keys()
+                .iter()
+                .any(|(_, nullable)| *nullable)
+            {
+                true => NULL_KEYS_NOTE,
+                false => "",
+            };
+            let parts: Vec<String> = [
+                cursor_column
+                    .as_ref()
+                    .map(|column| format!("cursor: {column}")),
+                (!replace_key.is_empty())
+                    .then(|| format!("replace_key: {}{nulls}", replace_key.join(", "))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            format!("delete_insert ({})", parts.join(", "))
         }
         WriteMode::Append => match &spec.cursor {
-            Some(cursor) => format!("append (cursor: {})", cursor.column),
+            Some(cursor) => format!("append (cursor: {})", cursor.label()),
             None => "append".to_owned(),
         },
         WriteMode::Replace => "replace".to_owned(),
@@ -599,12 +635,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
-    details.extend(
-        table
-            .cursor_note
-            .iter()
-            .map(|note| detail("cursor", note.as_str())),
-    );
+    details.extend(table.cursor_note.iter().map(|note| {
+        let text = match null_cursor_rule(table) {
+            Some(rule) => format!("{note} ({rule})"),
+            None => note.clone(),
+        };
+        detail("cursor", text)
+    }));
     details.extend(table.logged.as_ref().map(|logged| {
         detail(
             "state",
@@ -654,13 +691,14 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 1 => "1 window".to_owned(),
                 count => format!("{count} windows"),
             };
-            let commits = match publishes_once(table) {
-                true => "staged one after another and published in one commit",
-                false => "one commit each",
+            let commits = match (at_end, publishes_once(table)) {
+                (true, _) => "read one after another into a new table, swapped in once at the end",
+                (false, true) => "staged one after another and published in one commit",
+                (false, false) => "one commit each",
             };
             format!("{windows} of {step}, {commits}{end}")
         }
-        (CommitRule::FileGroups(groups), _) if matches!(table.mode, WriteMode::Merge { .. }) => {
+        (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(
                 "{}, one commit each, oldest modified first (ties by path), each recorded in the run log",
                 match groups.len() {
@@ -718,6 +756,9 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 }
                 WholeReason::Unordered | WholeReason::Blocked => {
                     "committing part of an unordered cursor read could skip rows"
+                }
+                WholeReason::ReplaceKey => {
+                    "delete_insert by replace_key: each commit replaces every row of its key values, so a value's rows commit together"
                 }
             };
             let once = matches!(table.mode, WriteMode::DeleteInsert { .. })
@@ -1299,6 +1340,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.after_load.clone(),
             Err(_) => None,
         },
+        replaced_keys: match &outcome.loaded {
+            Ok(loaded) => loaded.replaced_keys.clone(),
+            Err(_) => None,
+        },
     }
 }
 
@@ -1507,8 +1552,36 @@ fn key_line(table: &TablePlan) -> Option<String> {
     })
 }
 
-/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`.
+/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by what it does with rows whose cursor is NULL, when [`null_cursor_rule`] says.
 pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
+    let line = reads_text(table, precise)?;
+    Some(
+        match null_cursor_rule(table).filter(|_| table.logged.is_none()) {
+            Some(rule) => format!("{line} ({rule})"),
+            None => line,
+        },
+    )
+}
+
+/// What a cursor read does with source rows whose cursor is NULL, for `plan`: `NULL cursors: included` or `skipped` as `null_cursor` says, and by default `fail the load` when the source reports a cursor column nullable; `None` when it reports one NOT NULL or reports nothing (a Python table), and for a files source, whose cursor comes from each file's path.
+pub(crate) fn null_cursor_rule(table: &TablePlan) -> Option<&'static str> {
+    let spec = &table.spec;
+    let cursor = spec.cursor.as_ref().filter(|_| spec.files.is_none())?;
+    let nullable = cursor.columns().all(|name| {
+        spec.source_table
+            .column(name)
+            .is_some_and(|column| column.nullable)
+    });
+    match cursor.null_cursor {
+        NullCursor::Include => Some("NULL cursors: included"),
+        NullCursor::Ignore => Some("NULL cursors: skipped"),
+        NullCursor::Fail if nullable => Some("NULL cursors: fail the load"),
+        NullCursor::Fail => None,
+    }
+}
+
+/// [`reads_line`] without the NULL cursor rule.
+fn reads_text(table: &TablePlan, precise: bool) -> Option<String> {
     if let Some(logged) = &table.logged {
         return Some(match &logged.current {
             Some(record) => {

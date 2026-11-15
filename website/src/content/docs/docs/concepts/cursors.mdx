@@ -18,7 +18,8 @@ $ sqlload plan app__orders
 
 | Setting | Meaning |
 |---------|---------|
-| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. |
+| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. From 0.51.0, a list of columns of one type family, such as `["updated_at", "created_at"]`, reads the first non-NULL of them in each row. See [NULL cursor values](#null-cursor-values). |
+| `null_cursor` | From 0.51.0. `fail` (default), `include` or `ignore`: what a read does with source rows whose cursor is NULL. See [NULL cursor values](#null-cursor-values). |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
 | `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
 | `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
@@ -53,6 +54,83 @@ collation, could then read rows again on every run.
 - DuckDB, BigQuery and Databricks compare by code point unless a dataset, schema, table or
   column sets a collation, which SQLLoad doesn't override.
 
+## NULL cursor values
+
+A read from the destination's maximum compares each row's cursor with it, and a NULL compares with
+nothing. A row whose cursor is NULL loads on the first run, which reads everything, and is never read
+again while its cursor stays NULL: an edit to it, or a new row with a NULL cursor, never loads.
+Systems that set a modified date only after the first edit leave it NULL on every row never edited.
+
+From 0.51.0, a load that would skip such rows fails the table instead. Before the read, SQLLoad
+counts the source rows with a NULL cursor (`SELECT count(*) ... WHERE <cursor> IS NULL` on a
+database or warehouse source; a Python table counts the rows it yields). On a database or warehouse
+source, the table fails before its read when there are any, and nothing is written. A Python table
+counts while it reads, so it fails at the end of the window holding them: the windows before it are
+already committed, and that window and the ones after it aren't written:
+
+```console
+$ sqlload load
+…
+failed  raw.app__orders  2 source rows have a NULL updated_at, which an incremental read never selects, so they would never load; set null_cursor = "include" to read them on every run, list a column that is always set to coalesce with it (such as cursor_column = ["updated_at", "created_at"]), or set null_cursor = "ignore" to skip them
+…
+```
+
+Choose one fix per table:
+
+| Fix | Effect |
+|-----|--------|
+| `cursor_column = ["updated_at", "created_at"]` | The cursor is the first non-NULL of the columns in each row (`COALESCE`), for the read, the destination's maximum, `lookback` and `batch_size`. A row never edited is read by its `created_at`, and again once its `updated_at` is set. The columns must be of one type family: integers, text, dates, timestamps, or timestamps with a time zone. A row where every one is NULL follows `null_cursor`. |
+| `null_cursor = "include"` | Every run reads the rows whose cursor is NULL as well as its range: `cursor >= ? OR cursor IS NULL`. `merge` only, which merges them again on each run; `plan` refuses it on `append` and `delete_insert`, which would insert them again on every run. |
+| `null_cursor = "ignore"` | Skip them, for tables where a NULL cursor marks rows that should not load. |
+
+```toml
+[sources.app.tables."public.orders"]
+description = "Orders, one row per order."
+write_strategy = "merge"
+unique_key = "{primary_key}"
+cursor_column = ["updated_at", "created_at"]
+```
+
+`plan` names the rule on the table's `reads` line. `fail the load` shows when the source reports the
+cursor column nullable, and nothing when it reports it `NOT NULL`, which skips the count:
+
+```console
+$ sqlload plan app__orders
+…
+    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum) (NULL cursors: included)
+…
+```
+
+| `null_cursor` | `reads` line ends with |
+|---------------|------------------------|
+| `fail`, cursor nullable at the source | `(NULL cursors: fail the load)` |
+| `include` | `(NULL cursors: included)` |
+| `ignore` | `(NULL cursors: skipped)` |
+
+The count is one more query on the source before each read that has a lower or upper bound. It
+filters on the cursor alone, so its cost depends on the source:
+
+- On Postgres, a cursor column without an index makes it a sequential scan of the table.
+- On BigQuery, a table read through a read session gets a query job for it, which needs
+  `bigquery.jobs.create` (as in `bigquery.jobUser`) and bills a scan of the cursor column. See
+  [BigQuery permissions](/docs/sources/bigquery/#permissions).
+
+`null_cursor = "ignore"` and `null_cursor = "include"` skip the count, as does a cursor column the
+source declares `NOT NULL`.
+
+Sources differ in what they check:
+
+- Postgres, ODBC, Snowflake and BigQuery sources count with one query per load, and a table read
+  through `sql` counts that query's rows. ODBC counts the same way under either `cursor_bounds`.
+- A Python table counts the rows it yields with a NULL cursor. A function that filters by
+  `ctx.cursor_value` itself drops them before SQLLoad sees them, so yield them too, or under
+  `null_cursor = "include"`. A Python table takes one `cursor_column`: yield the first set value as
+  one field and name that field.
+- A files source's cursor is a partition or path column, set from each file's path, so it is never
+  NULL. Its `cursor_column` is one column.
+- A files target, and `delete_insert`, take one `cursor_column`: they partition and replace by one
+  column's values.
+
 ## Backfilling a range
 
 `--start-cursor` and `--end-cursor` read a range instead, from the start up to but not including the
@@ -85,7 +163,24 @@ which publishes once per run (last row below). `plan` of one table shows how it 
 | `delete_insert` into ClickHouse, in windows or cursor order | Once, at the end: everything read is staged and the whole range published together. A stopped run publishes nothing, so split a long backfill with `--end-cursor`. |
 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
-integer cursor without `--end-cursor` ends at its maximum when `plan` ran.
+integer cursor without `--end-cursor` ends at its maximum when `plan` ran. Other sources can't report
+their maximum, so an integer `batch_size` there needs `--end-cursor`. From 0.51.0 that includes
+`--reload`, which reads the windows from `cursor_start` (or `--start-cursor`) up to `--end-cursor`
+into a new table and swaps it in once at the end. The rebuilt table holds only that range; see
+[Reloading](/docs/cli/load/#reloading).
+
+```console
+$ sqlload plan --reload --end-cursor 200000 shop__orders
+…
+└── raw.shop__orders                                recreate from the whole source (--reload)
+…
+    ├── reads   order_id reload, from cursor_start 0, below 200000 (--end-cursor)
+…
+    └── commits 4 windows of 50000, read one after another into a new table, swapped in once at the end
+```
+
+Without `--end-cursor`, `plan` stops and asks for it: "an integer batch needs --end-cursor to know
+where the last window ends, with --reload too".
 
 ```toml
 [sources.app.tables."public.orders"]

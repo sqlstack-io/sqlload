@@ -237,6 +237,23 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "1=A-10:VARCHAR",
         },
         ScenarioTestCase {
+            description: "--reload of a merge refuses a NULL key under null_keys = \"fail\" as a merge does, and the table keeps its rows",
+            setup: "CREATE TABLE public.parts (id int8, v text);
+                    INSERT INTO public.parts VALUES (1, 'a'), (2, 'b');",
+            settings: "[sources.app.tables.\"public.parts\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\nnull_keys = \"fail\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    source_change: "INSERT INTO public.parts VALUES (NULL, 'c');",
+                    reload: true,
+                    expected_error: "the loaded rows hold a NULL in its unique_key: 1 row(s) have no id",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT string_agg(COALESCE(CAST(id AS VARCHAR), 'NULL') || ':' || v, ',' ORDER BY id NULLS LAST) FROM raw.app__parts",
+            expected_result: "1:a,2:b",
+        },
+        ScenarioTestCase {
             description: "a backfill window replaces only its own range with delete_insert",
             setup: "CREATE TABLE public.days (day date, total int4);
                     INSERT INTO public.days VALUES ('2026-11-01', 1), ('2026-11-02', 2), ('2026-11-03', 3);",

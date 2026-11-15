@@ -1,3 +1,4 @@
+use crate::adapters::contract::_helpers::promote::key_join;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, TableName, WriteStatementsRequest,
 };
@@ -101,10 +102,12 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
             adapter.render_source_expression_cast(CDC_UNCHANGED_COLUMN, &ColumnType::Text)
         )])
         .collect();
-    let join: Vec<String> = keys
-        .iter()
-        .map(|key| format!("__target.{key} = __source.{key}"))
-        .collect();
+    let join = key_join(
+        adapter,
+        request.mode,
+        &change.unique_key,
+        ("__target", "__source"),
+    );
     let newer = format!("__source.{lsn} > COALESCE(__target.{lsn}, -1)");
     let is_delete = format!("__source.{} = {}", id(CDC_OP_COLUMN), text(DELETE_OP));
     let metadata: Vec<String> = written
@@ -146,7 +149,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
     statements.push(format!(
         "MERGE INTO {target} AS __target USING (SELECT {} FROM {source}) AS __source ON {} WHEN MATCHED AND {newer} AND {is_delete} THEN {deleted} WHEN MATCHED AND {newer} THEN UPDATE SET {} WHEN NOT MATCHED AND NOT {is_delete} THEN INSERT ({}) VALUES ({}){truncate_clause}",
         selected.join(", "),
-        join.join(" AND "),
+        join,
         updates.join(", "),
         names.join(", "),
         inserted.join(", "),

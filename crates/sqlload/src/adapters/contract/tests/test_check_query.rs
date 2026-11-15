@@ -27,6 +27,24 @@ fn given_a_check_when_rendering_its_query_then_it_reads_text_in_each_dialect() {
             expected_query: "SELECT CAST(`id` AS STRING) || ', ' || CAST(`Region` AS STRING) AS example FROM `raw`.`app__accounts` WHERE `id` IS NOT NULL AND `Region` IS NOT NULL GROUP BY `id`, `Region` HAVING COUNT(*) > 1 ORDER BY 1 LIMIT 5",
         },
         CheckQueryTestCase {
+            description: "a merge's repeated keys count a NULL as equal to a NULL, as the merge matches it, so no row is skipped",
+            warehouse: Warehouse::DuckDb,
+            check: CheckQuery::KeyDuplicates(&key),
+            expected_query: "SELECT CAST(COUNT(*) AS VARCHAR) FROM (SELECT 1 AS repeated FROM \"raw\".\"app__accounts\" GROUP BY \"id\", \"Region\" HAVING COUNT(*) > 1) repeated_keys",
+        },
+        CheckQueryTestCase {
+            description: "a merge's repeated key examples show a NULL as NULL, in ClickHouse's quoting",
+            warehouse: Warehouse::ClickHouse,
+            check: CheckQuery::KeyDuplicateExamples(&key),
+            expected_query: "SELECT COALESCE(CAST(`id` AS VARCHAR), 'NULL') || ', ' || COALESCE(CAST(`Region` AS VARCHAR), 'NULL') AS example FROM `raw`.`app__accounts` GROUP BY `id`, `Region` HAVING COUNT(*) > 1 ORDER BY 1 LIMIT 5",
+        },
+        CheckQueryTestCase {
+            description: "the keys holding a NULL, for null_keys = \"fail\", are those of rows missing any key column",
+            warehouse: Warehouse::Postgres,
+            check: CheckQuery::NullKeyExamples(&key),
+            expected_query: "SELECT COALESCE(CAST(\"id\" AS VARCHAR), 'NULL') || ', ' || COALESCE(CAST(\"Region\" AS VARCHAR), 'NULL') AS example FROM \"raw\".\"app__accounts\" WHERE \"id\" IS NULL OR \"Region\" IS NULL ORDER BY 1 LIMIT 5",
+        },
+        CheckQueryTestCase {
             description: "the row count and each column's NULL count come from one scan, joined by commas, with Databricks' STRING cast",
             warehouse: Warehouse::Databricks,
             check: CheckQuery::Counts(&key),

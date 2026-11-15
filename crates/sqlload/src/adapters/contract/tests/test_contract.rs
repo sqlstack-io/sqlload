@@ -19,6 +19,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
             description: "merge copies the staged rows in",
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 dedupe: None,
             },
             built: false,
@@ -27,10 +28,12 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
         ContractTestCase {
             description: "delete_insert replaces its window from the staged rows",
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04T09:00:00Z".to_owned()),
                 to: Some("2026-11-05T09:00:00Z".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             built: false,
             expected_copies: 1,

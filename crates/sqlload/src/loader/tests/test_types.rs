@@ -168,3 +168,26 @@ pub(crate) struct RefusedBoundsTestCase {
     /// Each query the check ran: its filter and bound values.
     pub(crate) expected_runs: &'static [&'static str],
 }
+
+/// A Postgres table `erp.stock` of `columns` (each name and whether it may be NULL) whose source reports `primary_key`, loaded with `settings`.
+pub(crate) struct KeyNullsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: &'static [(&'static str, bool)],
+    pub(crate) primary_key: &'static [&'static str],
+    /// The table's settings, `write_strategy` included.
+    pub(crate) settings: &'static str,
+    /// The key columns compared with `=`, joined by `, `; or the problem `plan` reports.
+    pub(crate) expected_keys: Result<&'static str, &'static str>,
+}
+
+/// A coalesced or plain cursor's bounded filter under `null_cursor = "include"`, in one dialect.
+pub(crate) struct NullCursorFilterTestCase {
+    pub(crate) description: &'static str,
+    /// The cursor's source expression, as `source_cursor` writes it.
+    pub(crate) expression: &'static str,
+    pub(crate) dialect: Option<Warehouse>,
+    pub(crate) binding: CursorBinding,
+    pub(crate) expected_filter: Option<&'static str>,
+    /// How many values are bound to the filter's placeholders.
+    pub(crate) expected_parameters: usize,
+}

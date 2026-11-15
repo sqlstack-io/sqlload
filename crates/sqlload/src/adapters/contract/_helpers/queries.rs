@@ -15,12 +15,22 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::{MetadataRole, Naming};
 use crate::schema_plan::models::DesiredColumn;
 
-/// A query for `MAX(column)` over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column.
+/// A query for `MAX(column)` (of a coalesced cursor, `MAX(COALESCE(column, ...))`) over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column. `MAX` skips a row whose cursor is NULL, so such rows never move it.
 pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &CursorQuery<'_>,
 ) -> Option<CursorRead> {
-    let column = adapter.render_identifier(request.column);
+    let column = match request.coalesce.is_empty() {
+        true => adapter.render_identifier(request.column),
+        false => format!(
+            "COALESCE({})",
+            std::iter::once(request.column)
+                .chain(request.coalesce.iter().map(String::as_str))
+                .map(|name| adapter.render_identifier(name))
+                .collect::<Vec<String>>()
+                .join(", ")
+        ),
+    };
     let column = match request.column_type {
         ColumnType::Text | ColumnType::Varchar(_) => adapter.render_binary_text(&column),
         _ => column,
@@ -216,23 +226,39 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
 ) -> String {
     let from = adapter.render_qualified_name(relation);
     let count = adapter.render_text_cast("COUNT(*)");
-    let grouped = |columns: &[String]| {
-        let names: Vec<String> = columns
+    let names_of = |columns: &[String]| -> Vec<String> {
+        columns
             .iter()
             .map(|column| adapter.render_identifier(column))
-            .collect();
+            .collect()
+    };
+    let grouped = |columns: &[String], nulls: bool| {
+        let names = names_of(columns);
         let present: Vec<String> = names
             .iter()
             .map(|name| format!("{name} IS NOT NULL"))
             .collect();
+        let filter = match nulls {
+            true => String::new(),
+            false => format!(" WHERE {}", present.join(" AND ")),
+        };
         (
             names.clone(),
             format!(
-                "FROM {from} WHERE {} GROUP BY {} HAVING COUNT(*) > 1",
-                present.join(" AND "),
+                "FROM {from}{filter} GROUP BY {} HAVING COUNT(*) > 1",
                 names.join(", ")
             ),
         )
+    };
+    let examples = |names: &[String], nulls: bool| -> String {
+        let texts: Vec<String> = names
+            .iter()
+            .map(|name| match nulls {
+                true => format!("COALESCE({}, 'NULL')", adapter.render_text_cast(name)),
+                false => adapter.render_text_cast(name),
+            })
+            .collect();
+        texts.join(" || ', ' || ")
     };
     match check {
         CheckQuery::Counts(columns) => {
@@ -246,19 +272,43 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
                 .collect();
             format!("SELECT {} FROM {from}", counts.join(" || ',' || "))
         }
-        CheckQuery::Duplicates(columns) => format!(
+        CheckQuery::Duplicates(columns) | CheckQuery::KeyDuplicates(columns) => format!(
             "SELECT {count} FROM (SELECT 1 AS repeated {}) repeated_keys",
-            grouped(columns).1
+            grouped(columns, matches!(check, CheckQuery::KeyDuplicates(_))).1
         ),
-        CheckQuery::DuplicateExamples(columns) => {
-            let (names, rest) = grouped(columns);
-            let texts: Vec<String> = names
-                .iter()
-                .map(|name| adapter.render_text_cast(name))
-                .collect();
+        CheckQuery::DuplicateExamples(columns) | CheckQuery::KeyDuplicateExamples(columns) => {
+            let nulls = matches!(check, CheckQuery::KeyDuplicateExamples(_));
+            let (names, rest) = grouped(columns, nulls);
             format!(
                 "SELECT {} AS example {rest} ORDER BY 1 LIMIT 5",
-                texts.join(" || ', ' || ")
+                examples(&names, nulls)
+            )
+        }
+        CheckQuery::KeyValues(columns, limit) => format!(
+            "SELECT DISTINCT {} AS example FROM {from} ORDER BY 1 LIMIT {limit}",
+            examples(&names_of(columns), true)
+        ),
+        CheckQuery::KeySources {
+            key,
+            staged,
+            file_column,
+            file,
+        } => {
+            let values = examples(&names_of(key), true);
+            let column = adapter.render_identifier(file_column);
+            format!(
+                "SELECT DISTINCT {column} AS example FROM {from} WHERE {values} IN (SELECT {values} FROM {}) AND {column} <> {} ORDER BY 1",
+                adapter.render_qualified_name(staged),
+                adapter.render_loader_value_literal(file)
+            )
+        }
+        CheckQuery::NullKeyExamples(columns) => {
+            let names = names_of(columns);
+            let missing: Vec<String> = names.iter().map(|name| format!("{name} IS NULL")).collect();
+            format!(
+                "SELECT {} AS example FROM {from} WHERE {} ORDER BY 1 LIMIT 5",
+                examples(&names, true),
+                missing.join(" OR ")
             )
         }
     }

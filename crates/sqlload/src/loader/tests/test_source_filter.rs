@@ -1,7 +1,7 @@
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::loader::_helpers::table_plan::source_filter;
+use crate::loader::_helpers::table_plan::{source_filter, with_null_cursors};
 use crate::loader::models::CursorBinding;
-use crate::loader::tests::test_types::SourceFilterTestCase;
+use crate::loader::tests::test_types::{NullCursorFilterTestCase, SourceFilterTestCase};
 
 #[test]
 fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the_cursor_type_and_the_source_dialect()
@@ -313,4 +313,86 @@ fn given_cursor_bounds_when_rendering_the_source_filter_then_literals_follow_the
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_null_cursor_include_when_rendering_a_coalesced_cursor_filter_then_each_dialect_reads_the_bounded_rows_and_those_with_no_cursor()
+ {
+    let test_cases = [
+        NullCursorFilterTestCase {
+            description: "Postgres: the coalesced cursor's bounds as literals, or no cursor at all",
+            expression: "COALESCE(\"updated_at\", \"created_at\")",
+            dialect: None,
+            binding: CursorBinding::Literals,
+            expected_filter: Some(
+                "((COALESCE(\"updated_at\", \"created_at\") >= '2026-11-01 10:00:00' AND COALESCE(\"updated_at\", \"created_at\") < '2026-11-02 10:00:00') OR COALESCE(\"updated_at\", \"created_at\") IS NULL)",
+            ),
+            expected_parameters: 0,
+        },
+        NullCursorFilterTestCase {
+            description: "Snowflake: its quoting and literals",
+            expression: "COALESCE(\"UPDATED_AT\", \"CREATED_AT\")",
+            dialect: Some(Warehouse::Snowflake),
+            binding: CursorBinding::Literals,
+            expected_filter: Some(
+                "((COALESCE(\"UPDATED_AT\", \"CREATED_AT\") >= '2026-11-01 10:00:00' AND COALESCE(\"UPDATED_AT\", \"CREATED_AT\") < '2026-11-02 10:00:00') OR COALESCE(\"UPDATED_AT\", \"CREATED_AT\") IS NULL)",
+            ),
+            expected_parameters: 0,
+        },
+        NullCursorFilterTestCase {
+            description: "BigQuery: backticks, the NULL test outside the bounds so a row restriction reads both",
+            expression: "COALESCE(`updated_at`, `created_at`)",
+            dialect: Some(Warehouse::BigQuery),
+            binding: CursorBinding::Literals,
+            expected_filter: Some(
+                "((COALESCE(`updated_at`, `created_at`) >= '2026-11-01 10:00:00' AND COALESCE(`updated_at`, `created_at`) < '2026-11-02 10:00:00') OR COALESCE(`updated_at`, `created_at`) IS NULL)",
+            ),
+            expected_parameters: 0,
+        },
+        NullCursorFilterTestCase {
+            description: "ODBC: the bounds stay bound parameters, the NULL test needs none",
+            expression: "COALESCE(\"updated_at\", \"created_at\")",
+            dialect: None,
+            binding: CursorBinding::Parameters(None),
+            expected_filter: Some(
+                "((COALESCE(\"updated_at\", \"created_at\") >= ? AND COALESCE(\"updated_at\", \"created_at\") < ?) OR COALESCE(\"updated_at\", \"created_at\") IS NULL)",
+            ),
+            expected_parameters: 2,
+        },
+        NullCursorFilterTestCase {
+            description: "ODBC escapes under cursor_bounds = \"literals\"",
+            expression: "\"updated_at\"",
+            dialect: None,
+            binding: CursorBinding::Escapes(None),
+            expected_filter: Some(
+                "((\"updated_at\" >= {ts '2026-11-01 10:00:00'} AND \"updated_at\" < {ts '2026-11-02 10:00:00'}) OR \"updated_at\" IS NULL)",
+            ),
+            expected_parameters: 0,
+        },
+    ];
+    for test_case in test_cases {
+        let (filter, parameters) = source_filter(
+            test_case.expression,
+            (Some(&ColumnType::TimestampNtz), test_case.dialect),
+            (
+                Some((">=", "2026-11-01 10:00:00")),
+                Some("2026-11-02 10:00:00"),
+            ),
+            test_case.binding,
+        );
+        assert_eq!(
+            (
+                with_null_cursors(filter, test_case.expression).as_deref(),
+                parameters.len()
+            ),
+            (test_case.expected_filter, test_case.expected_parameters),
+            "{}",
+            test_case.description
+        );
+    }
+    assert_eq!(
+        with_null_cursors(None, "\"updated_at\""),
+        None,
+        "a read without bounds, a first run's, reads the NULL rows already"
+    );
 }

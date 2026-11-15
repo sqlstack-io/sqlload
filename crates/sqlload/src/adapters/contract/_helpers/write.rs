@@ -1,3 +1,4 @@
+use crate::adapters::contract::_helpers::promote::key_join;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
@@ -44,11 +45,27 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         }
         WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),
         WriteMode::Changes(change) => return adapter.render_changes(request, change, staging),
-        WriteMode::Append => None,
-        WriteMode::DeleteInsert { .. } => Some(match adapter.render_replaced_rows(request) {
-            Some(condition) => format!("DELETE FROM {target} WHERE {condition}"),
-            None => format!("DELETE FROM {target}"),
-        }),
+        WriteMode::Append => Vec::new(),
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } => {
+            let range = match (cursor_column, adapter.render_replaced_rows(request)) {
+                (None, _) => None,
+                (Some(_), Some(condition)) => {
+                    Some(format!("DELETE FROM {target} WHERE {condition}"))
+                }
+                (Some(_), None) => Some(format!("DELETE FROM {target}")),
+            };
+            let keyed = (!replace_key.is_empty()).then(|| {
+                let (keys, join) = replaced_keys(adapter, request, &values, replace_key);
+                format!(
+                    "DELETE FROM {target} AS __target USING (SELECT DISTINCT {keys} FROM {source}) AS __source WHERE {join}"
+                )
+            });
+            range.into_iter().chain(keyed).collect()
+        }
     };
     let mut statements = vec!["BEGIN".to_owned()];
     statements.extend(delete);
@@ -57,7 +74,39 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     statements
 }
 
-/// Under `delete_insert`, the condition choosing the rows of `request.table` its commit replaces: those whose cursor is one of its values, or within its window; `None` when that is every row (no bounds, or not a `delete_insert`).
+/// The staged values of the `replace_key` columns as a `SELECT` lists them (`value AS name`, from `values`, the insert's expressions in `request.columns`' order, so they convert and hash as it does; the bare column when the request doesn't list one), and the join matching them on `__source` to the table's rows on `__target`, NULL-safely where a column's staged values may be NULL.
+pub(crate) fn replaced_keys<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    values: &[String],
+    replace_key: &[String],
+) -> (String, String) {
+    let keys: Vec<String> = replace_key
+        .iter()
+        .map(|key| {
+            let name = adapter.render_identifier(key);
+            let value = staged_value(request, values, key).unwrap_or(&name);
+            format!("{value} AS {name}")
+        })
+        .collect();
+    let join = key_join(adapter, request.mode, replace_key, ("__target", "__source"));
+    (keys.join(", "), join)
+}
+
+/// The expression of `values` (in `request.columns`' order) for column `key`; `None` when the request doesn't list it.
+fn staged_value<'a>(
+    request: &WriteStatementsRequest<'_>,
+    values: &'a [String],
+    key: &str,
+) -> Option<&'a String> {
+    let index = request
+        .columns
+        .iter()
+        .position(|column| column.name == key)?;
+    values.get(index)
+}
+
+/// Under `delete_insert` with a cursor, the condition choosing the rows of `request.table` its commit replaces by it: those whose cursor is one of its values, or within its window; `None` when that is every row (no bounds), and without a cursor or a `delete_insert` (the rows a `replace_key` replaces are [`replaced_keys`]'s).
 pub(crate) fn replaced_rows<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -78,7 +127,7 @@ pub(crate) fn replaced_rows<A: SqlAdapter + ?Sized>(
     };
     match request.mode {
         WriteMode::DeleteInsert {
-            cursor_column,
+            cursor_column: Some(cursor_column),
             values,
             ..
         } if !values.is_empty() => {
@@ -101,7 +150,7 @@ pub(crate) fn replaced_rows<A: SqlAdapter + ?Sized>(
             ))
         }
         WriteMode::DeleteInsert {
-            cursor_column,
+            cursor_column: Some(cursor_column),
             from,
             to,
             ..

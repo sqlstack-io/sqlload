@@ -26,7 +26,7 @@ use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
-    WriteStatementsRequest, WriteTarget,
+    WriteMode, WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -182,6 +182,14 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         source_expression_cast(self, name, column_type)
     }
 
+    /// `left` and `right`, the two sides' values of one key column a merge matches rows on, compared: with `=` when the staged values are never NULL (`nullable` false), otherwise NULL-safely, a NULL matching a NULL (`IS NOT DISTINCT FROM`).
+    fn render_key_equality(&self, (left, right): (&str, &str), nullable: bool) -> String {
+        match nullable {
+            true => format!("{left} IS NOT DISTINCT FROM {right}"),
+            false => format!("{left} = {right}"),
+        }
+    }
+
     /// `value`, a merge key of `column_type`, as a window can be partitioned by it.
     fn render_partition_key(&self, value: &str, _column_type: &ColumnType) -> String {
         value.to_owned()
@@ -242,8 +250,8 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         })
     }
 
-    /// The statement creating the unique index a `merge` on `unique_key` needs, for a table SQLLoad creates; none where `merge` needs no index.
-    fn render_key_index(&self, _table: &TableName, _unique_key: &[String]) -> Option<String> {
+    /// The statement creating the unique index a `merge` in `mode` needs, for a table SQLLoad creates; none where `merge` needs no index.
+    fn render_key_index(&self, _table: &TableName, _mode: &WriteMode) -> Option<String> {
         None
     }
 

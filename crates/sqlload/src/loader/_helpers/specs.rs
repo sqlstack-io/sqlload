@@ -1,7 +1,8 @@
-use crate::adapters::contract::models::{ChangeApply, TableName};
+use crate::adapters::contract::models::{ChangeApply, TableName, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
+use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -15,19 +16,23 @@ use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
+use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
     DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE,
     UNNEST_ALL,
 };
+use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     CdcSpec, CursorSpec, SettingOrigin, TableLayout, TableSpec, WarehouseRoute, WarehouseSource,
 };
+use crate::loader::models::{SourceReader, TablePlan};
 use crate::masking::models::MaskRules;
+use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, OnDuplicateKeys, SortDirection,
-    SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage, UnnestSetting,
-    WriteStrategy,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    OnDuplicateKeys, SortDirection, SourceConfig, SourceKind, StateMode, TableOverride,
+    TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -36,6 +41,7 @@ use crate::row_batches::models::Unnest;
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
+use crate::snowflake_source::main::count_rows::count_rows as count_snowflake_rows;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -179,6 +185,15 @@ pub(crate) fn build_spec(
         }
     };
     let merges = strategy == WriteStrategy::Merge && cdc.is_none();
+    let replace_key: Vec<String> = layered(&settings.replace_key, &defaults.replace_key)
+        .filter(|(_, origin)| {
+            *origin == SettingOrigin::Table
+                || strategy == WriteStrategy::DeleteInsert
+                || strategy_origin != SettingOrigin::Table
+        })
+        .map(|(key, _)| key)
+        .unwrap_or_default();
+    let keyed = strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty();
     let (unique_key, key_from_primary_key) =
         match table_key(context, table, (settings, defaults), merges) {
             Ok(key) => key,
@@ -198,10 +213,17 @@ pub(crate) fn build_spec(
         Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),
         None => (
             strategy,
-            strategy_problems(strategy, &unique_key, cursor.as_ref()),
+            strategy_problems(strategy, (&unique_key, &replace_key), cursor.as_ref()),
         ),
     };
+    problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
     problems.extend(column_reference_problems(table, overrides));
+    problems.extend(cursor_problems(
+        context,
+        (settings, defaults),
+        strategy,
+        cursor.as_ref(),
+    ));
     let constants = match table_constants(context, table, (settings, defaults), &columns.excluded) {
         Ok(constants) => constants,
         Err(found) => {
@@ -214,9 +236,7 @@ pub(crate) fn build_spec(
             .iter()
             .filter(|(name, _, _)| {
                 context.source.kind != SourceKind::Files
-                    && cursor
-                        .as_ref()
-                        .is_some_and(|cursor| cursor.column.eq_ignore_ascii_case(name))
+                    && cursor.as_ref().is_some_and(|cursor| cursor.names(name))
             })
             .map(|(name, _, _)| {
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
@@ -239,6 +259,18 @@ pub(crate) fn build_spec(
         overrides,
     );
     problems.extend(found);
+    let matched_key = match keyed {
+        true => &replace_key,
+        false => &unique_key,
+    };
+    let (null_keys, not_null_keys, found) = key_nulls(
+        (table, &constants),
+        (strategy, matched_key, keyed),
+        layered(&settings.null_keys, &defaults.null_keys)
+            .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || keyed)
+            .map(|(value, _)| value),
+    );
+    problems.extend(found);
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
     problems.extend(
         checks
@@ -248,10 +280,10 @@ pub(crate) fn build_spec(
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
-        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.column == *masked);
-        let is_key = uses_key && unique_key.contains(masked);
+        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.names(masked));
+        let is_key = (uses_key && unique_key.contains(masked)) || replace_key.contains(masked);
         (is_cursor || is_key).then(|| {
-            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key")
+            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key or replace_key")
         })
     }));
     if context.source.mask_key.is_none()
@@ -284,7 +316,10 @@ pub(crate) fn build_spec(
         .unwrap_or_default();
     let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
-    problems.extend(after_load_problems(context, strategy));
+    if keyed && !matches!(nesting.unnest, Unnest::None) {
+        problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
+    }
+    problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     if !problems.is_empty() {
@@ -322,6 +357,9 @@ pub(crate) fn build_spec(
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        null_keys,
+        not_null_keys,
+        replace_key,
         dedup_sort,
         cursor,
         batch,
@@ -752,9 +790,14 @@ pub(crate) fn layered<T: Clone>(
 
 /// The cursor a table's settings describe, if any.
 pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<CursorSpec> {
-    let (column, _) = layered(&table.cursor_column, &source.cursor_column)?;
+    let (columns, _) = layered(&table.cursor_column, &source.cursor_column)?;
+    let (column, coalesce) = columns.split_first()?;
     Some(CursorSpec {
-        column,
+        column: column.clone(),
+        coalesce: coalesce.to_vec(),
+        null_cursor: layered(&table.null_cursor, &source.null_cursor)
+            .map(|(value, _)| value)
+            .unwrap_or_default(),
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
         lookback: layered(&table.lookback, &source.lookback).map(|(value, _)| value),
         lookahead: layered(&table.lookahead, &source.lookahead).map(|(value, _)| value),
@@ -804,7 +847,10 @@ fn table_key(
             ))
         }
         Some(_) if table.primary_key.is_empty() => Err(no_primary_key_problem(context, table)),
-        Some(_) => Ok((table.primary_key.clone(), true)),
+        Some(_) => match nullable_key_problem(context, table) {
+            Some(problem) => Err(problem),
+            None => Ok((table.primary_key.clone(), true)),
+        },
     }
 }
 
@@ -855,6 +901,34 @@ fn missing_strategy_problem(
         "{qualified} (kind = \"{}\"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one. Fix: {fix}",
         context.source.kind.name()
     )
+}
+
+/// Whether `table`'s column `key` can hold NULL: the source does not declare it NOT NULL, or doesn't list it.
+fn can_be_null(table: &SourceTable, key: &str) -> bool {
+    table
+        .columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(key))
+        .is_none_or(|column| column.nullable)
+}
+
+/// Why a table set to `unique_key = "{primary_key}"` cannot merge on the key its source reports: a column of it can be NULL (a unique index on a nullable column, which MySQL Connector/ODBC reports as the primary key), so the source can hold several different rows with a NULL there, which a merge matching NULLs would merge into one.
+fn nullable_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> Option<String> {
+    let nullable: Vec<&str> = table
+        .primary_key
+        .iter()
+        .filter(|key| can_be_null(table, key))
+        .map(String::as_str)
+        .collect();
+    (!nullable.is_empty()).then(|| {
+        format!(
+            "{} (kind = \"{}\"): unique_key = {PRIMARY_KEY_PLACEHOLDER:?} takes the key the source reports, ({}), and {} can be NULL there, so the source can hold different rows with a NULL in it, which a merge matching NULLs would merge into one. Fix: name the unique_key columns, ones that identify a row and are never NULL, such as unique_key = [\"id\"]",
+            table.qualified_name(),
+            context.source.kind.name(),
+            table.primary_key.join(", "),
+            nullable.join(", ")
+        )
+    })
 }
 
 /// Why a table set to `unique_key = "{primary_key}"` has no key: its source reports no primary key. It names the keys the database lists (a listed primary key means the driver's key lookup is wrong) and suggests the first whose columns are never NULL, as a merge inserts rows with a NULL key again.
@@ -954,10 +1028,64 @@ fn dedupe_settings(
     (Some((column, direction)), problems)
 }
 
+/// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when `keyed`) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that matches no key.
+fn key_nulls(
+    (table, constants): (&SourceTable, &[(String, ColumnType, String)]),
+    (strategy, unique_key, keyed): (WriteStrategy, &[String], bool),
+    null_keys: Option<NullKeys>,
+) -> (NullKeys, Vec<String>, Vec<String>) {
+    let problems: Vec<String> = null_keys
+        .filter(|_| strategy != WriteStrategy::Merge && !keyed)
+        .map(|_| format!("null_keys is for write_strategy = \"merge\", which matches rows on unique_key, and \"delete_insert\" with a replace_key; {strategy} keeps every row"))
+        .into_iter()
+        .collect();
+    let null_keys = null_keys.unwrap_or_default();
+    let never_null = |key: &String| {
+        null_keys == NullKeys::Fail
+            || constants
+                .iter()
+                .any(|(name, _, _)| name.eq_ignore_ascii_case(key))
+            || !can_be_null(table, key)
+    };
+    let not_null: Vec<String> = unique_key
+        .iter()
+        .filter(|key| never_null(key))
+        .cloned()
+        .collect();
+    (null_keys, not_null, problems)
+}
+
+/// Why a `delete_insert` by `replace_key` (`keyed`) cannot load where `context` puts it: a files target replaces whole partition folders; a files source picks its files from the run log, not by a cursor; and on any other source a cursor would read part of a key value's rows while the commit deletes all of them, losing those the read never returned.
+fn replace_key_problems(
+    context: &SourceContext<'_>,
+    cursor: Option<&CursorSpec>,
+    keyed: bool,
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    if !keyed {
+        return problems;
+    }
+    if context.target.path.is_some() {
+        problems.push("replace_key deletes rows by key in a database table, and a files target replaces whole partition folders. Fix: load into a database target, or drop replace_key and use a partition cursor_column".to_owned());
+    }
+    match (cursor, context.source.kind) {
+        (Some(cursor), SourceKind::Files) => problems.push(format!(
+            "cursor_column {} does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log. Fix: remove cursor_column, or drop replace_key to replace partitions by the cursor",
+            cursor.column
+        )),
+        (Some(cursor), _) => problems.push(format!(
+            "cursor_column {} does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost. Fix: drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
+            cursor.column
+        )),
+        (None, _) => {}
+    }
+    problems
+}
+
 /// Problems with a strategy and the keys and cursor it is given.
 pub(crate) fn strategy_problems(
     strategy: WriteStrategy,
-    unique_key: &[String],
+    (unique_key, replace_key): (&[String], &[String]),
     cursor: Option<&CursorSpec>,
 ) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
@@ -972,29 +1100,211 @@ pub(crate) fn strategy_problems(
         (WriteStrategy::Replace, Some(_)) => problems.push(
             "write_strategy = \"replace\" reloads the whole table, so it takes no cursor_column".to_owned(),
         ),
-        (WriteStrategy::DeleteInsert, None) => problems.push(
-            "write_strategy = \"delete_insert\" replaces a cursor range, so it needs a cursor_column".to_owned(),
+        (WriteStrategy::DeleteInsert, None) if replace_key.is_empty() => problems.push(
+            "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key. Fix: set cursor_column, or replace_key = [\"version\"] to replace every row of each version a load reads".to_owned(),
         ),
         _ => {}
+    }
+    if !replace_key.is_empty() && strategy != WriteStrategy::DeleteInsert {
+        let merge = match strategy {
+            WriteStrategy::Merge => " (merge matches rows one by one on unique_key)",
+            _ => "",
+        };
+        problems.push(format!(
+            "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; {strategy} does not delete by it. Fix: set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key{merge}"
+        ));
     }
     if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback.is_none()) {
         problems.push(format!(
             "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
-            cursor.column
+            cursor.label()
         ));
     }
     problems
 }
 
-/// Why a files source's `after_load` cannot apply to its table: only `append` and `merge` never read a loaded file again, and a files target commits its own way.
-fn after_load_problems(context: &SourceContext<'_>, strategy: WriteStrategy) -> Vec<String> {
+/// Why the table's cursor columns and `null_cursor` cannot apply: an empty or repeating `cursor_column` list; a coalesced cursor where its value is one column's (a files source's partition or path column, a Python table's field, a files target's partitions, `delete_insert`'s replaced range); `null_cursor` on a table entry without a cursor; and `null_cursor = "include"`, which reads the NULL-cursor rows on every run, on anything but `merge`.
+fn cursor_problems(
+    context: &SourceContext<'_>,
+    (settings, defaults): (&TableSettings, &TableSettings),
+    strategy: WriteStrategy,
+    cursor: Option<&CursorSpec>,
+) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let listed = layered(&settings.cursor_column, &defaults.cursor_column).map(|(value, _)| value);
+    if listed.as_ref().is_some_and(Vec::is_empty) {
+        problems.push("cursor_column = [] names no column; name one, or list the columns to coalesce, such as [\"updated_at\", \"created_at\"]".to_owned());
+    }
+    let listed = listed.unwrap_or_default();
+    for (index, column) in listed.iter().enumerate() {
+        if listed[..index]
+            .iter()
+            .any(|earlier| earlier.eq_ignore_ascii_case(column))
+        {
+            problems.push(format!(
+                "cursor_column lists {column} twice; list each column once"
+            ));
+            break;
+        }
+    }
+    if layered(&settings.null_cursor, &defaults.null_cursor)
+        .is_some_and(|(_, origin)| origin == SettingOrigin::Table)
+        && cursor.is_none()
+    {
+        problems.push("null_cursor says what a cursor read does with rows whose cursor is NULL, but the table has no cursor_column; remove it".to_owned());
+    }
+    let Some(cursor) = cursor else {
+        return problems;
+    };
+    let label = cursor.label();
+    let coalesced = !cursor.coalesce.is_empty();
+    let one_column = match context.source.kind {
+        SourceKind::Files => Some(
+            "a files source's cursor is one partition or path column, the same in every row of a file",
+        ),
+        SourceKind::Python => Some(
+            "a Python table's cursor is one field of the rows it yields; yield the first set value as one field (such as row[\"updated_at\"] or row[\"created_at\"]) and name that field",
+        ),
+        _ if context.target.path.is_some() => {
+            Some("a files target partitions and reads its maximum by one cursor column")
+        }
+        _ if strategy == WriteStrategy::DeleteInsert => Some(
+            "delete_insert replaces the destination rows in a range of one cursor column; use merge, or name one column",
+        ),
+        _ => None,
+    };
+    if let Some(reason) = one_column.filter(|_| coalesced) {
+        problems.push(format!(
+            "cursor_column lists several columns to coalesce ({label}), but {reason}"
+        ));
+    }
+    if cursor.null_cursor == NullCursor::Include {
+        let refusal = match strategy {
+            WriteStrategy::Append => Some((
+                "append would append them again on every run, duplicating them",
+                format!(
+                    "use write_strategy = \"merge\" with a unique_key, or coalesce a column that is always set (such as cursor_column = [\"{}\", \"created_at\"]), or set null_cursor = \"ignore\" to skip them",
+                    cursor.column
+                ),
+            )),
+            WriteStrategy::DeleteInsert => Some((
+                "they sit outside every cursor range delete_insert replaces, so it would insert them again on every run, duplicating them",
+                "use write_strategy = \"merge\" with a unique_key, or set null_cursor = \"ignore\" to skip them".to_owned(),
+            )),
+            WriteStrategy::Merge | WriteStrategy::Replace => None,
+        };
+        if let Some((duplicates, fix)) = refusal {
+            problems.push(format!(
+                "null_cursor = \"include\" reads the rows whose {label} is NULL on every run, and {duplicates}; {fix}"
+            ));
+        }
+    }
+    problems
+}
+
+/// How many of `table`'s source rows have a NULL cursor, which its read's bounds never select, when the table fails on them (`null_cursor` unset), counted by the database: `SELECT count(*) ... WHERE <cursor> IS NULL`. `None` when nothing is counted: the read has no bounds (a first run reads those rows too), `null_cursor` includes or skips them, the source reports a cursor column NOT NULL, or the source is not a database: a Python table's rows are counted as they arrive, and a files source's cursor is each file's path value, never NULL.
+pub(crate) async fn null_cursor_rows(
+    reader: &SourceReader,
+    table: &TablePlan,
+) -> Result<Option<u64>, LoaderError> {
+    let spec = &table.spec;
+    let (Some(cursor), Some(window)) = (&spec.cursor, &table.window) else {
+        return Ok(None);
+    };
+    let bounded = window.from.is_some() || window.to.is_some();
+    let not_null = cursor.columns().any(|name| {
+        spec.source_table
+            .column(name)
+            .is_some_and(|column| !column.nullable)
+    });
+    if !bounded || not_null || cursor.null_cursor != NullCursor::Fail {
+        return Ok(None);
+    }
+    let cursor_type = table
+        .read_columns
+        .iter()
+        .find(|column| column.name.eq_ignore_ascii_case(&cursor.column))
+        .map(|column| &column.output);
+    let Some(expression) = source_cursor(spec, &table.read_columns, cursor_type) else {
+        return Ok(None);
+    };
+    let filter = format!("{expression} IS NULL");
+    let sql = spec
+        .warehouse_source
+        .as_ref()
+        .and_then(|source| source.sql.as_deref());
+    let counted = match reader {
+        SourceReader::Postgres(client, _) => {
+            count_postgres_rows(client, &spec.source_table, &filter).await?
+        }
+        SourceReader::Snowflake(snowflake) => {
+            count_snowflake_rows(snowflake, (&spec.source_table, sql), &filter).await?
+        }
+        SourceReader::BigQuery(bigquery) => {
+            count_bigquery_rows(bigquery, (&spec.source_table, sql), &filter).await?
+        }
+        #[cfg(feature = "odbc")]
+        SourceReader::Odbc(odbc) => {
+            crate::odbc_source::main::count_rows::count_rows(
+                odbc,
+                (&spec.source_table, sql),
+                &filter,
+            )
+            .await?
+        }
+        SourceReader::Files(_) | SourceReader::Sheets(..) => return Ok(None),
+    };
+    Ok(Some(counted))
+}
+
+/// Why `spec`'s load fails: `rows` source rows have a NULL cursor, which its incremental read never selects, so they would never load; with the fixes `plan` accepts for the table: `null_cursor = "include"` on `merge`, a coalesced cursor where one may be listed (not a Python table, `delete_insert` or a files target), and `null_cursor = "ignore"`.
+pub(crate) fn null_cursor_problem(spec: &TableSpec, rows: u64) -> String {
+    let (cursor, label) = match &spec.cursor {
+        Some(cursor) => (cursor.column.as_str(), cursor.label()),
+        None => ("", String::new()),
+    };
+    let (have, they) = match rows {
+        1 => ("row has", "it"),
+        _ => ("rows have", "they"),
+    };
+    let coalesces = spec.python.is_none()
+        && spec.strategy != WriteStrategy::DeleteInsert
+        && spec.destination_path.is_none();
+    let fixes: Vec<String> = [
+        (spec.strategy == WriteStrategy::Merge)
+            .then(|| "set null_cursor = \"include\" to read them on every run".to_owned()),
+        coalesces.then(|| {
+            format!(
+                "list a column that is always set to coalesce with it (such as cursor_column = [\"{cursor}\", \"created_at\"])"
+            )
+        }),
+        Some("set null_cursor = \"ignore\" to skip them".to_owned()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let fixes = match fixes.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{}, or {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    format!(
+        "{rows} source {have} a NULL {label}, which an incremental read never selects, so {they} would never load; {fixes}"
+    )
+}
+
+/// Why a files source's `after_load` cannot apply to its table: only `append`, `merge` and `delete_insert` by a `replace_key` (`keyed`) never read a loaded file again, and a files target commits its own way.
+fn after_load_problems(
+    context: &SourceContext<'_>,
+    (strategy, keyed): (WriteStrategy, bool),
+) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     if context.source.after_load == AfterLoad::Keep {
         return problems;
     }
-    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) {
+    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) && !keyed {
         problems.push(format!(
-            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\"; {strategy} reads loaded files again"
+            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\", or \"delete_insert\" with a replace_key; {strategy} reads loaded files again"
         ));
     }
     if context.target.path.is_some() {
@@ -1280,4 +1590,43 @@ pub(crate) fn flattened_object_problems(
         }
     }
     Ok(problems)
+}
+
+/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
+pub(crate) fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
+    let mut columns: Vec<String> = Vec::new();
+    for name in spec.cursor.as_ref()?.columns() {
+        let column = spec
+            .source_table
+            .columns
+            .iter()
+            .find(|column| column.name == name)?;
+        if !matches!(
+            column.column_type,
+            Ok(ColumnType::Int | ColumnType::SmallInt)
+        ) {
+            return None;
+        }
+        columns.push(
+            column
+                .source_spelling
+                .clone()
+                .unwrap_or_else(|| column.name.clone()),
+        );
+    }
+    Some(columns)
+}
+
+/// The key a commit by `mode` refuses a NULL in under `null_keys = "fail"`, and the setting naming it: the key the mode matches rows on, or, under `--reload` (which builds the table anew and matches nothing), the key `spec`'s strategy matches on, so a reload never lets in a row its loads refuse.
+pub(crate) fn checked_key<'a>(
+    spec: &'a TableSpec,
+    mode: &'a WriteMode,
+) -> Option<(&'a [String], &'static str)> {
+    match (mode, spec.strategy) {
+        (WriteMode::Recreate, WriteStrategy::Merge) => Some((&spec.unique_key, "unique_key")),
+        (WriteMode::Recreate, WriteStrategy::DeleteInsert) if !spec.replace_key.is_empty() => {
+            Some((&spec.replace_key, "replace_key"))
+        }
+        _ => mode.staged_key(),
+    }
 }

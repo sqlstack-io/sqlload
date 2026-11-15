@@ -1,5 +1,6 @@
 pub mod connect_postgres;
 pub mod copy_table;
+pub mod count_rows;
 pub mod cursor_end;
 pub mod decode_copy;
 pub mod plan_read;

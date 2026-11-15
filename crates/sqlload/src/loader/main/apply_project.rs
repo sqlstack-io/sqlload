@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::adapters::dispatch::main::session::execute::execute;
 use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::models::Destination;
-use crate::loader::_helpers::publish::merges_files;
+use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::run_log::reset_merge_log;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::errors::LoaderError;
@@ -49,7 +49,7 @@ pub async fn apply_project(
         let destination = destinations.get(&spec.target).ok_or_else(|| {
             LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
         })?;
-        if !table.exists && merges_files(table) {
+        if !table.exists && records_files(table) {
             reset_merge_log(table, destination).await?;
         }
         execute(destination, statements).await?;

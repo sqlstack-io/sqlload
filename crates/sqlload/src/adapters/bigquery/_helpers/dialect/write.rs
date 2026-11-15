@@ -1,10 +1,11 @@
 //! BigQuery's writes: each one statement, which commits on its own.
 
+use crate::adapters::contract::main::_keyed_merge::keyed_merge;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 
-/// The statements applying `request.mode` from `staging`, each atomic on its own. A `delete_insert` is one `MERGE` that inserts every staged row and deletes the table's rows in the range, so it keeps `DELETE` then `INSERT`'s meaning (rows with a NULL cursor included) in one commit; a `replace` is the same `MERGE` over every row, since BigQuery has no `INSERT OVERWRITE`.
+/// The statements applying `request.mode` from `staging`, each atomic on its own. A `delete_insert` is one `MERGE` that inserts every staged row and deletes the table's rows in the range, so it keeps `DELETE` then `INSERT`'s meaning (rows with a NULL cursor included) in one commit, and by a `replace_key` [one that also deletes the rows of the staged key values](keyed_merge); a `replace` is the same `MERGE` over every row, since BigQuery has no `INSERT OVERWRITE`.
 pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -53,6 +54,21 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             (&names, &values),
             None,
         )],
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            ..
+        } if !replace_key.is_empty() => vec![keyed_merge(
+            adapter,
+            request,
+            (&source, &values),
+            (
+                replace_key,
+                cursor_column
+                    .as_ref()
+                    .map(|_| range_condition(adapter, request)),
+            ),
+        )],
         WriteMode::DeleteInsert { .. } => vec![insert_and_delete(
             (&target, &source),
             (&names, &values),
@@ -88,16 +104,17 @@ fn insert_and_delete(
     )
 }
 
-/// The table rows a `delete_insert` replaces, on `__target`; `None` for every row.
+/// The table rows a `delete_insert` replaces by its cursor, on `__target`; `None` for every row, and without a cursor.
 fn range_condition<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
 ) -> Option<String> {
     let WriteMode::DeleteInsert {
-        cursor_column,
+        cursor_column: Some(cursor_column),
         from,
         to,
         values,
+        ..
     } = request.mode
     else {
         return None;

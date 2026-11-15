@@ -129,6 +129,12 @@ pub const RESULT_SCHEMA_VERSION: u32 = 1;
 /// The plan's note on a `constant_columns` column.
 pub const CONSTANT_NOTE: &str = "  (constant)";
 
+/// The end of a merge's plan line when a key column may hold NULL, which the merge matches with a NULL.
+pub const NULL_KEYS_NOTE: &str = "; NULLs in keys match";
+
+/// The most `replace_key` values `load --json` lists for a table; it says when there were more.
+pub const REPLACED_KEYS_SHOWN: usize = 1000;
+
 /// The SQLSTATEs of Postgres errors worth retrying unchanged: a connection that failed or dropped (not 08P01, which PgBouncer also sends for a database it does not know), out of memory, too many connections, a server shutting down or starting, a serialization failure, a deadlock and a lock not available.
 pub const TRANSIENT_SQLSTATES: [&str; 11] = [
     "08000", "08003", "08006", "53200", "53300", "57P01", "57P02", "57P03", "40001", "40P01",

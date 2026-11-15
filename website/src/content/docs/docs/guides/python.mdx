@@ -96,7 +96,7 @@ def orders(ctx: sl.Context):
 ```console
 $ sqlload plan
 …
-└── raw.shop__orders                                merge (unique_key: order_id)
+└── raw.shop__orders                                merge (unique_key: order_id; NULLs in keys match)
     ├── source  python  sources/shop.py (shop)
 …
     ├── schema  columns inferred on first load

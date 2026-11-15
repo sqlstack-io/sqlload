@@ -71,6 +71,13 @@ impl SourceTable {
         }
     }
 
+    /// The column named `name`, ignoring case.
+    pub fn column(&self, name: &str) -> Option<&SourceColumn> {
+        self.columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(name))
+    }
+
     /// How the source spells column `name`: its source spelling when the load renames it, else `name`.
     pub fn spelling<'a>(&'a self, name: &'a str) -> &'a str {
         self.columns

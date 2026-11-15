@@ -3,7 +3,7 @@
 use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 
-/// With `dedupe` on `request.mode`, `(source, values)` as a subquery over `source` that keeps, of the rows sharing a non-NULL `unique_key`, the one ranked first, and the column names it selects; `values` are `request.columns`' expressions, in order. Keys and the sort column are ranked as converted to the table's types, as the merge compares them. `None` without `dedupe`.
+/// With `dedupe` on `request.mode`, `(source, values)` as a subquery over `source` that keeps, of the rows sharing a `unique_key` (NULLs included, which the window groups together as the merge matches them), the one ranked first, and the column names it selects; `values` are `request.columns`' expressions, in order. Keys and the sort column are ranked as converted to the table's types, as the merge compares them. `None` without `dedupe`.
 pub(in crate::adapters) fn ranked_source<A: SqlAdapter + ?Sized>(
     adapter: &A,
     request: &WriteStatementsRequest<'_>,
@@ -12,6 +12,7 @@ pub(in crate::adapters) fn ranked_source<A: SqlAdapter + ?Sized>(
     let WriteMode::Merge {
         unique_key,
         dedupe: Some(dedupe),
+        ..
     } = request.mode
     else {
         return None;
@@ -53,21 +54,13 @@ pub(in crate::adapters) fn ranked_source<A: SqlAdapter + ?Sized>(
         .zip(&names)
         .map(|(value, name)| format!("{value} AS {name}"))
         .collect();
-    let kept: Vec<String> = std::iter::once("__sqlload_rank = 1".to_owned())
-        .chain(
-            unique_key
-                .iter()
-                .map(|key| format!("{} IS NULL", adapter.render_identifier(key))),
-        )
-        .collect();
     Some((
         format!(
-            "(SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER (PARTITION BY {} ORDER BY {}) AS __sqlload_rank FROM {source}) AS __sqlload_ranked WHERE {}) AS __sqlload_kept",
+            "(SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER (PARTITION BY {} ORDER BY {}) AS __sqlload_rank FROM {source}) AS __sqlload_ranked WHERE __sqlload_rank = 1) AS __sqlload_kept",
             names.join(", "),
             selected.join(", "),
             partition.join(", "),
-            order.join(", "),
-            kept.join(" OR ")
+            order.join(", ")
         ),
         names,
     ))

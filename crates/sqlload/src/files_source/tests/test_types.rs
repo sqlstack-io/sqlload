@@ -15,6 +15,8 @@ pub(crate) struct SelectFilesTestCase {
     pub(crate) description: &'static str,
     /// Loaded files and their versions.
     pub(crate) loaded: &'static [(&'static str, &'static str)],
+    /// Files a `delete_insert` on the cursor holds, and their versions.
+    pub(crate) held: &'static [(&'static str, &'static str)],
     /// Whether loaded files leave the folder (`after_load`).
     pub(crate) removed: bool,
     pub(crate) cursor_type: Option<ColumnType>,

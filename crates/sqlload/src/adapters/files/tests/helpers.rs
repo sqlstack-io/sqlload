@@ -147,10 +147,12 @@ pub(crate) fn directory(root: &str) -> StoreKind {
 /// `delete_insert` on `day` over `from <= day < to`.
 pub(crate) fn delete_insert(from: Option<&str>, to: Option<&str>) -> WriteMode {
     WriteMode::DeleteInsert {
-        cursor_column: "day".to_owned(),
+        cursor_column: Some("day".to_owned()),
         from: from.map(str::to_owned),
         to: to.map(str::to_owned),
         values: Vec::new(),
+        replace_key: Vec::new(),
+        not_null_keys: Vec::new(),
     }
 }
 

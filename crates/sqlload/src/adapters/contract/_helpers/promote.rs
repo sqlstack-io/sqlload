@@ -3,8 +3,38 @@
 use crate::adapters::contract::_helpers::identifiers::with_suffix;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::main::_ranked_source::ranked_source;
-use crate::adapters::contract::models::{TableName, WriteStatementsRequest};
+use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
+
+/// `unique_key`'s columns of the relations `left` and `right` compared as `mode` matches them, a NULL matching a NULL in a column whose staged values may be NULL, joined by `AND`.
+pub(crate) fn key_join<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    mode: &WriteMode,
+    unique_key: &[String],
+    (left, right): (&str, &str),
+) -> String {
+    let matched = mode.matched_keys();
+    let compared: Vec<String> = unique_key
+        .iter()
+        .map(|key| {
+            let nullable = may_be_null(&matched, key);
+            let name = adapter.render_identifier(key);
+            adapter.render_key_equality(
+                (&format!("{left}.{name}"), &format!("{right}.{name}")),
+                nullable,
+            )
+        })
+        .collect();
+    compared.join(" AND ")
+}
+
+/// Whether key column `key` may hold NULL among the `matched` keys; a column not listed may.
+fn may_be_null(matched: &[(&str, bool)], key: &str) -> bool {
+    matched
+        .iter()
+        .find(|(name, _)| *name == key)
+        .is_none_or(|(_, nullable)| *nullable)
+}
 
 /// One `MERGE`: key matches update every other column, the rest are inserted (sqlbuild `render_merge`); the staged rows are first kept to one per key when the mode dedupes.
 pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
@@ -32,10 +62,7 @@ pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
         .zip(&names)
         .map(|(value, name)| format!("{value} AS {name}"))
         .collect();
-    let join: Vec<String> = keys
-        .iter()
-        .map(|key| format!("__target.{key} = __source.{key}"))
-        .collect();
+    let join = key_join(adapter, request.mode, unique_key, ("__target", "__source"));
     let updates: Vec<String> = names
         .iter()
         .filter(|name| !keys.contains(name))
@@ -52,7 +79,7 @@ pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
     format!(
         "MERGE INTO {target} AS __target USING (SELECT {} FROM {source}) AS __source ON {} {matched}WHEN NOT MATCHED THEN INSERT ({}) VALUES ({})",
         selected.join(", "),
-        join.join(" AND "),
+        join,
         names.join(", "),
         inserted.join(", ")
     )

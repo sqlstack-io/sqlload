@@ -41,3 +41,15 @@ pub(crate) struct ArrayTextTestCase {
     /// The columns staged and read back as text, or the error up to its first `: `.
     pub(crate) expected_text: Result<String, String>,
 }
+
+/// A merge's key, its columns that may be NULL, the server it runs on and the unique indexes the table has on the key, and what `plan` says of them.
+pub(crate) struct NullKeysProblemTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) nullable: &'static [&'static str],
+    /// `server_version_num` and the version as Postgres prints it.
+    pub(crate) version: (i32, &'static str),
+    /// The table's unique indexes on the key: how many, how many treat NULLs as equal, the names of the others and the statements dropping them; `None` for a table not created yet.
+    pub(crate) indexes: Option<(i64, i64, &'static str, &'static str)>,
+    /// Text the problem holds; `None` when the merge can run.
+    pub(crate) expected_problem: Option<&'static str>,
+}

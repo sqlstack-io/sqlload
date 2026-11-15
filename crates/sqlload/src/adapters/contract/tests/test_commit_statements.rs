@@ -26,10 +26,12 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             description: "a window's delete_insert deletes the window, inserts, records the run and empties the staging table",
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04 00:00:00.000000+00".to_owned()),
                 to: Some("2026-11-05 00:00:00.000000+00".to_owned()),
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             run_insert: Some(RUN),
             keep_staging: false,
@@ -47,6 +49,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             warehouse: Warehouse::Snowflake,
             mode: WriteMode::Merge {
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 dedupe: None,
             },
             run_insert: None,
@@ -76,10 +79,12 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             description: "DuckDB's lone delete_insert by partition values empties the staging table in its transaction",
             warehouse: Warehouse::DuckDb,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: None,
                 to: None,
                 values: vec!["2026-11-04".to_owned()],
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             run_insert: None,
             keep_staging: false,
@@ -95,10 +100,12 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             description: "Databricks' delete_insert commits alone, then the run record and the staging table's emptying follow it",
             warehouse: Warehouse::Databricks,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04".to_owned()),
                 to: None,
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             run_insert: Some(RUN),
             keep_staging: false,
@@ -112,10 +119,12 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             description: "BigQuery's delete_insert commits alone, then the run record, then a DELETE with the WHERE BigQuery requires",
             warehouse: Warehouse::BigQuery,
             mode: WriteMode::DeleteInsert {
-                cursor_column: "updated_at".to_owned(),
+                cursor_column: Some("updated_at".to_owned()),
                 from: Some("2026-11-04".to_owned()),
                 to: None,
                 values: Vec::new(),
+                replace_key: Vec::new(),
+                not_null_keys: Vec::new(),
             },
             run_insert: Some(RUN),
             keep_staging: false,
@@ -131,6 +140,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             mode: WriteMode::Changes(ChangeWrite {
                 apply: ChangeApply::SoftDeletes,
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 truncated: Some(Truncation {
                     lsn: 42,
                     committed_at: "2026-11-07T10:00:00Z".to_owned(),
@@ -149,6 +159,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             mode: WriteMode::Changes(ChangeWrite {
                 apply: ChangeApply::HardDeletes,
                 unique_key: vec!["id".to_owned()],
+                not_null_keys: vec!["id".to_owned()],
                 truncated: Some(Truncation {
                     lsn: 42,
                     committed_at: "2026-11-07T10:00:00Z".to_owned(),
