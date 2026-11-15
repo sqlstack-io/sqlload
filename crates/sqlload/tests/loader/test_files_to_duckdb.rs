@@ -3,15 +3,16 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::after_load_helpers::run_after_load_case;
 use crate::files_helpers::run_source_row_upgrade;
+use crate::helpers::{MEGABYTE, run_peak_memory};
 use crate::helpers::{
     local_store, run_async, run_files_scenario, run_large_partition, run_replaced_keys,
     seaweedfs_store,
 };
 use crate::merge_helpers::run_merge_case;
-use crate::test_types::SourceRowUpgradeTestCase;
 use crate::test_types::{AfterLoadStep, AfterLoadTestCase};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep, ReplacedKeysTestCase};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
+use crate::test_types::{PeakMemoryTestCase, SourceRowUpgradeTestCase};
 
 /// Every row as `id:v`, then how many merged files the run log records.
 pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
@@ -1731,4 +1732,53 @@ fn given_a_partition_cursor_without_the_source_file_column_when_reloading_then_o
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_a_load_when_it_reports_then_the_json_and_the_run_finished_event_carry_the_run_peak_memory()
+-> Result<(), String> {
+    let test_cases = [PeakMemoryTestCase {
+        description: "a load of two tables reports its peak, and no table's without --memory-per-table",
+        flags: &[],
+        expected_tables: &[false, false],
+    }];
+    for test_case in &test_cases {
+        let report = run_peak_memory(test_case)?;
+        assert!(
+            report.run >= MEGABYTE && report.finished >= MEGABYTE,
+            "{}: {report:?}",
+            test_case.description
+        );
+        assert_eq!(
+            report.tables, test_case.expected_tables,
+            "{}: {report:?}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn given_memory_per_table_when_loading_then_each_table_reports_its_peak_in_the_json_and_its_table_done_event()
+-> Result<(), String> {
+    let test_cases = [PeakMemoryTestCase {
+        description: "each table's peak, at most the run's, in the report and in table_done",
+        flags: &["--memory-per-table"],
+        expected_tables: &[true, true],
+    }];
+    for test_case in &test_cases {
+        let report = run_peak_memory(test_case)?;
+        assert!(
+            report.run >= MEGABYTE && report.finished >= MEGABYTE,
+            "{}: {report:?}",
+            test_case.description
+        );
+        assert_eq!(
+            report.tables, test_case.expected_tables,
+            "{}: {report:?}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

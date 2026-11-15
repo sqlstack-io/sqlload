@@ -1,6 +1,6 @@
-//! SQLLoad: the Kafka to Snowflake exporter and the loader engine.
+//! SQLLoad: the Kafka to Snowflake exporter and the loader engine. It denies `unsafe` rather than forbidding it so that one Windows-only helper may allow it: reading the process's peak memory needs an FFI call no maintained crate wraps safely.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod adapters;
 pub mod auth;
@@ -36,6 +36,7 @@ pub mod number_text;
 #[cfg(feature = "odbc")]
 pub mod odbc_source;
 pub mod parquet_parts;
+pub mod peak_memory;
 pub mod planning;
 pub mod postgres_source;
 pub mod project;

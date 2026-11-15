@@ -1352,3 +1352,22 @@ pub(crate) struct OdbcLargeValuesTestCase {
     /// The table's row count, longest body and count of 2 MB bodies, as loaded.
     pub(crate) expected_values: &'static str,
 }
+
+/// A load of two small CSV tables into DuckDB through `sqlload load --json --events-file`, with `flags`.
+pub(crate) struct PeakMemoryTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) flags: &'static [&'static str],
+    /// For each table: whether the report and its `table_done` event both give its peak, at least 1 MB and at most the run's.
+    pub(crate) expected_tables: &'static [bool],
+}
+
+/// What a load reported about memory.
+#[derive(Debug)]
+pub(crate) struct PeakMemoryReport {
+    /// The report's `summary.peak_memory_bytes`, or 0.
+    pub(crate) run: u64,
+    /// The `run_finished` event's `peak_memory_bytes`, or 0.
+    pub(crate) finished: u64,
+    /// For each table: whether the report and its `table_done` event both give its peak, at least 1 MB and at most the run's.
+    pub(crate) tables: Vec<bool>,
+}

@@ -14,6 +14,7 @@ use crate::loader::constants::{
     BOLD, CYAN, DICT_HINT_MILLISECONDS, DICT_HINT_ROWS, DIM, INVERSE, RED, RESET, YELLOW,
 };
 use crate::loader::models::ProjectPlan;
+use crate::number_text::main::memory_text::memory_text;
 use crate::number_text::main::thousands::thousands;
 use crate::python_sources::models::TransformTime;
 
@@ -97,6 +98,8 @@ pub(crate) struct Tally {
     pub(crate) rows: u64,
     /// The table that took longest to load, and how long.
     pub(crate) slowest: Option<(String, u64)>,
+    /// The most memory the whole process held at once, in bytes, as the run's end reported it.
+    pub(crate) peak_memory_bytes: Option<u64>,
 }
 
 impl Tally {
@@ -119,6 +122,9 @@ impl Tally {
             }
             EventKind::TableFailed { .. } => self.failed += 1,
             EventKind::TableNotStarted { .. } => self.not_started.push(table),
+            EventKind::RunFinished {
+                peak_memory_bytes, ..
+            } => self.peak_memory_bytes = *peak_memory_bytes,
             _ => {}
         }
     }
@@ -235,18 +241,24 @@ pub(crate) fn event_lines(
             position,
             changes,
             transforms,
+            peak_memory_bytes,
         } => {
             let word = match rows {
                 1 => "row",
                 _ => "rows",
             };
             let seconds = format!("{:.1}s", *elapsed_ms as f64 / 1000.0);
+            let note: Vec<String> = position
+                .iter()
+                .cloned()
+                .chain(peak_memory_bytes.map(peak_note))
+                .collect();
             let detail = format!(
                 "{}{}",
                 format!(
                     "{:>rows_width$} {word:<5}{seconds:<6}{}",
                     thousands(*rows),
-                    position.as_deref().unwrap_or_default()
+                    note.join("  ")
                 )
                 .trim_end(),
                 transform_lines(transforms)
@@ -258,10 +270,25 @@ pub(crate) fn event_lines(
             lines.push(tally_line(("loaded", name), &detail, name_width));
             return lines;
         }
-        EventKind::TableFailed { reason, .. } => ("failed", reason.clone()),
+        EventKind::TableFailed {
+            reason,
+            peak_memory_bytes,
+            ..
+        } => (
+            "failed",
+            match peak_memory_bytes {
+                Some(bytes) => format!("{reason}\n{}", peak_note(*bytes)),
+                None => reason.clone(),
+            },
+        ),
         _ => return Vec::new(),
     };
     vec![tally_line((verb, name), &detail, name_width)]
+}
+
+/// A table's peak memory under `--memory-per-table`, as its tally line notes it: `peak memory 85 MiB`.
+fn peak_note(bytes: u64) -> String {
+    format!("peak memory {}", memory_text(bytes))
 }
 
 /// A line per file or range a `transform` ran on, with its time, each after a line break; then, when it returned dicts for a large one and took a while, one hint naming the slowest such that Arrow or a DataFrame is faster.
@@ -393,7 +420,7 @@ fn live_bar() -> indicatif::ProgressBar {
     bar
 }
 
-/// The line a load ends with, and the branches under it: what never started, the slowest table, and after failures whether running it again helps and what it would do.
+/// The line a load ends with, and the branches under it: what never started, the slowest table, the run's peak memory, and after failures whether running it again helps and what it would do.
 pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Vec<String> {
     let mut clauses: Vec<String> = Vec::new();
     clauses.extend((tally.loaded > 0).then(|| format!("{} loaded", tally.loaded)));
@@ -429,6 +456,9 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
             "slowest",
             format!("{table} {:.1}s", *elapsed_ms as f64 / 1000.0),
         ));
+    }
+    if let Some(bytes) = tally.peak_memory_bytes {
+        branches.push(("peak memory", memory_text(bytes)));
     }
     if failures && exit_code == crate::command::constants::RETRYABLE_EXIT {
         branches.push((

@@ -28,8 +28,9 @@ use crate::files_target_helpers::file_batches;
 use crate::test_types::{
     CdcStep, CursorSource, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
     FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks, MetadataRoundTripTestCase,
-    ParquetFile, ReplacedKeysTestCase, RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase,
-    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
+    ParquetFile, PeakMemoryReport, PeakMemoryTestCase, ReplacedKeysTestCase, RouteFiles,
+    RouteOutcome, RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition,
+    WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -1835,4 +1836,70 @@ pub(crate) fn run_replaced_keys(
         reports.push(report["tables"][0]["replaced_keys"].to_string());
     }
     Ok(reports)
+}
+
+/// A megabyte, the least a process's peak memory is.
+pub(crate) const MEGABYTE: u64 = 1_000_000;
+
+/// Load two small CSV tables into DuckDB through `sqlload load --json --events-file` with `test_case.flags`: what the report and the events said about memory.
+pub(crate) fn run_peak_memory(test_case: &PeakMemoryTestCase) -> Result<PeakMemoryReport, String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let config = root.path().join("sqlload.toml");
+    let mut text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n",
+        root.path().join("out.duckdb").display(),
+        root.path().display()
+    );
+    for source in ["orders", "refunds"] {
+        std::fs::create_dir_all(root.path().join(source)).map_err(|error| error.to_string())?;
+        std::fs::write(root.path().join(source).join("a.csv"), "id,v\n1,x\n2,y\n")
+            .map_err(|error| error.to_string())?;
+        text.push_str(&format!("\n[sources.{source}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{source}/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\n"));
+    }
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    let events = root.path().join("events.jsonl");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(&config)
+        .args(["load", "--json", "--events-file"])
+        .arg(&events)
+        .args(test_case.flags)
+        .output()
+        .map_err(|error| error.to_string())?;
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|error| {
+        format!(
+            "{error}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })?;
+    let lines = std::fs::read_to_string(&events).map_err(|error| error.to_string())?;
+    let events = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).map_err(|error| format!("{error}: {line}")))
+        .collect::<Result<Vec<serde_json::Value>, String>>()?;
+    let of = |event: &'static str| events.iter().filter(move |line| line["event"] == event);
+    let run = report["summary"]["peak_memory_bytes"].as_u64().unwrap_or(0);
+    let measured = |value: &serde_json::Value| {
+        value["peak_memory_bytes"]
+            .as_u64()
+            .is_some_and(|bytes| (MEGABYTE..=run).contains(&bytes))
+    };
+    let tables = report["tables"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .map(|table| {
+            measured(table)
+                && of("table_done").any(|event| event["table"] == table["table"] && measured(event))
+        })
+        .collect();
+    Ok(PeakMemoryReport {
+        run,
+        finished: of("run_finished")
+            .find_map(|event| event["peak_memory_bytes"].as_u64())
+            .unwrap_or(0),
+        tables,
+    })
 }

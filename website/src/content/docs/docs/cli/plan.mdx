@@ -42,6 +42,7 @@ selects a table by name, since that table could be one of its own.
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
+| `--memory-per-table` | From 0.52.0, Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |
 | `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
 
 ## Reading a plan

@@ -5689,6 +5689,7 @@ dependencies = [
  "humantime",
  "indicatif",
  "jsonwebtoken",
+ "nix",
  "object_store",
  "parquet",
  "pgwire-replication",
@@ -5727,6 +5728,7 @@ dependencies = [
  "unicode-properties",
  "uuid",
  "webpki-roots",
+ "windows-sys 0.61.2",
  "zip",
  "zstd",
 ]

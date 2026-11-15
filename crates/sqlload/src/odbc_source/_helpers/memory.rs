@@ -2,11 +2,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::number_text::constants::BINARY_UNIT;
+use crate::number_text::main::memory_text::memory_text;
 use crate::odbc_source::constants::{
-    BINARY_UNIT, CGROUP_V1_LIMIT, CGROUP_V1_ROOT, CGROUP_V2_LIMIT, CGROUP_V2_PREFIX,
-    CGROUP_V2_ROOT, DEFAULT_BATCH_MEMORY, FETCH_SHARE_OF_LIMIT, MEMINFO_TOTAL, MEMINFO_UNIT,
-    MEMORY_CONTROLLER, MEMORY_UNITS, NAMED_LONG_COLUMNS, PROC_CGROUP, PROC_MEMINFO, TENTHS,
-    UNLIMITED, WHOLE_FROM_TENTHS,
+    CGROUP_V1_LIMIT, CGROUP_V1_ROOT, CGROUP_V2_LIMIT, CGROUP_V2_PREFIX, CGROUP_V2_ROOT,
+    DEFAULT_BATCH_MEMORY, FETCH_SHARE_OF_LIMIT, MEMINFO_TOTAL, MEMINFO_UNIT, MEMORY_CONTROLLER,
+    NAMED_LONG_COLUMNS, PROC_CGROUP, PROC_MEMINFO, UNLIMITED,
 };
 use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize, MemoryBudget, MemoryLimit};
 
@@ -78,34 +79,6 @@ pub(crate) fn cgroup_limit(groups: &str, root: &Path) -> Result<Option<u64>, Str
         if folder.as_path() == root || !folder.pop() || !folder.starts_with(root) {
             return Ok(lowest);
         }
-    }
-}
-
-/// `bytes` in binary units to a tenth, as `512 MiB`, `1.9 GiB` or `40 KiB`; from 100 of a unit up, whole.
-pub(crate) fn memory_text(bytes: u64) -> String {
-    let mut unit = 0;
-    let mut size: u64 = 1;
-    while unit + 1 < MEMORY_UNITS.len() && bytes >= size.saturating_mul(BINARY_UNIT) {
-        size *= BINARY_UNIT;
-        unit += 1;
-    }
-    if unit == 0 {
-        return format!("{bytes} bytes");
-    }
-    let (size, tenths_per_unit) = (u128::from(size), u128::from(TENTHS));
-    let tenths = (u128::from(bytes) * tenths_per_unit + size / 2) / size;
-    match tenths.is_multiple_of(tenths_per_unit) || tenths >= u128::from(WHOLE_FROM_TENTHS) {
-        true => format!(
-            "{} {}",
-            (tenths + tenths_per_unit / 2) / tenths_per_unit,
-            MEMORY_UNITS[unit]
-        ),
-        false => format!(
-            "{}.{} {}",
-            tenths / tenths_per_unit,
-            tenths % tenths_per_unit,
-            MEMORY_UNITS[unit]
-        ),
     }
 }
 

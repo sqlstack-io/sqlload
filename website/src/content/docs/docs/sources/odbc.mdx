@@ -307,7 +307,10 @@ max_batch_memory = "2GB"
 ```
 
 The fetch buffer bounds the source's fetches only, not the load's whole memory: the batches made
-from them, the destination and the commits take memory besides.
+from them, the destination and the commits take memory besides. To measure what a load really
+takes, read `peak_memory_bytes` in the [JSON report](/docs/cli/load/#results-as-json), or run once
+with [`--memory-per-table`](/docs/cli/load/#peak-memory) on Linux; see
+[Finding a source that uses too much memory](/docs/troubleshooting/#finding-a-source-that-uses-too-much-memory).
 
 `plan` shows how each ODBC table fetches (`fetch`) and its fetch buffer, and why (`buffer`):
 

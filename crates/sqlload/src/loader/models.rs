@@ -663,6 +663,8 @@ pub struct PlanOptions {
     pub resnapshot: bool,
     /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
     pub fail_fast: bool,
+    /// `--memory-per-table` (Linux): one table at a time, each table's peak memory measured.
+    pub memory_per_table: bool,
 }
 
 /// What one Python table's load needs.
@@ -706,6 +708,8 @@ pub struct TableOutcome {
     pub elapsed: std::time::Duration,
     /// Never started, because `--fail-fast` stopped the load after another table failed; `loaded` holds why.
     pub skipped: bool,
+    /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+    pub peak_memory_bytes: Option<u64>,
 }
 
 impl TableOutcome {
@@ -720,6 +724,7 @@ impl TableOutcome {
             retryable: true,
             elapsed: std::time::Duration::ZERO,
             skipped: true,
+            peak_memory_bytes: None,
         }
     }
 
@@ -1164,6 +1169,8 @@ pub struct RunReport<'a> {
     pub outcomes: &'a [TableOutcome],
     pub started: chrono::DateTime<chrono::Utc>,
     pub elapsed: std::time::Duration,
+    /// The run's peak memory, in bytes, when the OS gives it.
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// What `apply --json` and `load --json` print, in this field order.
@@ -1197,6 +1204,9 @@ pub struct RunSummary {
     /// Tables `--fail-fast` never started.
     pub skipped: usize,
     pub rows: u64,
+    /// The most memory the whole process held at once during the run, in bytes; left out where the OS gives no figure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// An object a run created, altered or recreated.
@@ -1231,6 +1241,9 @@ pub struct TableResult {
     /// How long the table's `transform` took on each file or range; left out without one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// Why a source's tables could not be listed, and whether a rerun may get past it.
