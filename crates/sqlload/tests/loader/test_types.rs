@@ -1197,6 +1197,8 @@ pub(crate) struct UnnestFailTestCase {
     /// Each run's new file before the failing one, as `name`, `contents`.
     pub(crate) runs: &'static [(&'static str, &'static str)],
     pub(crate) failing: (&'static str, &'static str),
+    /// A file written with the failing one, which the same load reads first.
+    pub(crate) alongside: Option<(&'static str, &'static str)>,
     /// Text the failed load's output holds.
     pub(crate) expected_error: &'static str,
     /// A query of the database after the failed load and what it returns: what the failure left.

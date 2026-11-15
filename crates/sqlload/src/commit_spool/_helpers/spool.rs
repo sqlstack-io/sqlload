@@ -53,11 +53,18 @@ impl Spool {
             .write(rows)
             .and_then(|()| writer.finish())
             .map_err(|error| failed(error.to_string()))?;
+        let bytes = std::fs::metadata(&path)
+            .map(|metadata| usize::try_from(metadata.len()).unwrap_or(usize::MAX))
+            .map_err(|error| failed(error.to_string()))?;
         match self.held.last_mut().filter(|held| held.batch == batch) {
-            Some(held) => held.files.push(path),
+            Some(held) => {
+                held.files.push(path);
+                held.bytes += bytes;
+            }
             None => self.held.push(HeldBatch {
                 batch,
                 files: vec![path],
+                bytes,
             }),
         }
         Ok(())
@@ -66,5 +73,34 @@ impl Spool {
     /// Every batch held so far, to send; the spool holds none after.
     pub(crate) fn take(&mut self) -> Vec<HeldBatch> {
         std::mem::take(&mut self.held)
+    }
+
+    /// The batches held before batch `batch`, which have ended, to send; the spool keeps the rest.
+    pub(crate) fn take_ended(&mut self, batch: u64) -> Vec<HeldBatch> {
+        let (ended, open) = std::mem::take(&mut self.held)
+            .into_iter()
+            .partition(|held| held.batch < batch);
+        self.held = open;
+        ended
+    }
+
+    /// The files held so far of batch `batch`, still open, to write without ending it; the spool keeps the batch, empty, so the rows it holds next join it and its end still loads it.
+    pub(crate) fn take_open_files(&mut self, batch: u64) -> Vec<std::path::PathBuf> {
+        match self.held.last_mut().filter(|held| held.batch == batch) {
+            Some(held) => {
+                held.bytes = 0;
+                std::mem::take(&mut held.files)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// The bytes held of batch `batch`.
+    pub(crate) fn held_bytes(&self, batch: u64) -> usize {
+        self.held
+            .iter()
+            .filter(|held| held.batch == batch)
+            .map(|held| held.bytes)
+            .sum()
     }
 }

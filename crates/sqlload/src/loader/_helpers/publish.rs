@@ -795,11 +795,12 @@ impl Publisher {
             .unwrap_or_default()
     }
 
-    /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, Arrow elsewhere), where a size-cut table may end it.
+    /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, with the files `send = "at_commit"` holds for it, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
-        let bytes = match self.spool {
-            Some(_) => self.arrow_bytes,
-            None => self.writer.staged_bytes().unwrap_or(self.arrow_bytes),
+        let bytes = match (self.writer.staged_bytes(), &self.spool) {
+            (Some(staged), Some(spool)) => staged + spool.held_bytes(self.batch),
+            (Some(staged), None) => staged,
+            (None, _) => self.arrow_bytes,
         };
         bytes >= self.batch_bytes
     }
@@ -933,11 +934,15 @@ impl Publisher {
         })
     }
 
-    /// Wait until every row sent without files is in the staging table; under `send = "at_commit"`, the held rows are sent first, before a schema change makes them unlike the rows after it.
+    /// Wait until every row sent without files is in the staging table; under `send = "at_commit"`, the held rows are sent first, before a schema change makes them unlike the rows after it: the batches that ended are loaded, and the open batch's rows written, leaving it open for its end to load or commit as it would have.
     pub(crate) async fn settle_rows(&mut self) -> Result<(), LoaderError> {
-        if self.spool.is_some() {
-            self.flush_batch().await?;
-            Box::pin(self.send_held()).await?;
+        if let Some(spool) = self.spool.as_mut() {
+            let ended = spool.take_ended(self.batch);
+            let open = spool.take_open_files(self.batch);
+            for held in ended {
+                Box::pin(self.send_files((held.batch, &held.files), true)).await?;
+            }
+            Box::pin(self.send_files((self.batch, &open), false)).await?;
         }
         self.writer.settle_rows().await
     }
@@ -1076,31 +1081,70 @@ impl Publisher {
     }
 
     /// Send what `send = "at_commit"` held, in one burst: each held batch written and loaded where it would have gone as it was read, its files removed as they go.
-    async fn send_held(&mut self) -> Result<(), LoaderError> {
-        let Some(spool) = self.spool.as_mut() else {
-            return Ok(());
+    pub(crate) async fn send_held(&mut self) -> Result<(), LoaderError> {
+        let held = match self.spool.as_mut() {
+            Some(spool) => spool.take(),
+            None => return Ok(()),
         };
+        for held in held {
+            Box::pin(self.send_files((held.batch, &held.files), true)).await?;
+        }
+        Ok(())
+    }
+
+    /// Write the rows held in `files` to batch `batch`, removing each file once written, and when `loads` load the batch and start the next; a batch that fails has its staged files removed.
+    async fn send_files(
+        &mut self,
+        (batch, files): (u64, &[std::path::PathBuf]),
+        loads: bool,
+    ) -> Result<(), LoaderError> {
         let columns = staged_columns(&self.table);
-        for held in spool.take() {
-            let target = write_target(
-                &self.table,
-                self.staging.as_ref(),
-                &columns,
-                ((&self.load_id, held.batch), (self.direct, self.builds)),
-            );
-            for file in &held.files {
-                for rows in held_rows(file).map_err(LoaderError::Invalid)? {
-                    let rows = rows.map_err(|error| LoaderError::Invalid(error.to_string()))?;
-                    self.writer.write_batch(&target, rows).await?;
+        let target = write_target(
+            &self.table,
+            self.staging.as_ref(),
+            &columns,
+            ((&self.load_id, batch), (self.direct, self.builds)),
+        );
+        let sent = 'send: {
+            for file in files {
+                let reader = match held_rows(file) {
+                    Ok(reader) => reader,
+                    Err(error) => break 'send Err(LoaderError::Invalid(error)),
+                };
+                for rows in reader {
+                    let rows = match rows {
+                        Ok(rows) => rows,
+                        Err(error) => break 'send Err(LoaderError::Invalid(error.to_string())),
+                    };
+                    if let Err(error) = self.writer.write_batch(&target, rows).await {
+                        break 'send Err(error);
+                    }
                 }
                 let _ = std::fs::remove_file(file);
             }
-            self.writer.finish_files(&target).await?;
-            self.writer.settle_rows().await?;
-            self.writer.load_batch(&target).await?;
-            self.writer.next_batch();
+            if !loads {
+                break 'send Ok(());
+            }
+            if let Err(error) = self.writer.finish_files(&target).await {
+                break 'send Err(error);
+            }
+            if let Err(error) = self.writer.settle_rows().await {
+                break 'send Err(error);
+            }
+            self.writer.load_batch(&target).await
+        };
+        match sent {
+            Ok(()) => {
+                if loads {
+                    self.writer.next_batch();
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.writer.remove_batch_files(&target).await;
+                Err(error)
+            }
         }
-        Ok(())
     }
 
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.

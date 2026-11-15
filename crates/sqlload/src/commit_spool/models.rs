@@ -16,4 +16,6 @@ pub struct Spool {
 pub struct HeldBatch {
     pub batch: u64,
     pub files: Vec<PathBuf>,
+    /// The bytes its files take.
+    pub bytes: usize,
 }

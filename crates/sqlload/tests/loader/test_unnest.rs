@@ -666,6 +666,14 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "2/1/1/1:d:5",
         },
         RowIdTestCase {
+            description: "unnest on a merge under send = \"at_commit\": a repeated key's dropped row leaves none of its items, though they were held until the commit",
+            settings: "send = \"at_commit\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n",
+            runs: MERGE_RUNS,
+            expected_columns: UNNESTED_COLUMNS,
+            check_query: MERGE_CHECK,
+            expected_result: "2/1/1/1:d:5",
+        },
+        RowIdTestCase {
             description: "unnest on a delete_insert: a rewritten partition's orders lose their old items and parts at every level, and another partition's keep theirs",
             settings: DELETE_INSERT_SETTINGS,
             runs: DELETE_INSERT_RUNS,
@@ -1174,6 +1182,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             settings: ALL_SETTINGS,
             runs: &[("a.ndjson", "{\"id\": 1, \"tags\": [\"x\"]}\n")],
             failing: ("b.ndjson", "{\"id\": 2, \"tags\": {\"k\": \"y\"}}\n"),
+            alongside: None,
             expected_error: "b.ndjson: tags: unnest = \"all\" took tags as a list field from its values so far, and a row holds a value that is not a list there",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1182,6 +1191,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             settings: ALL_SETTINGS,
             runs: &[("a.ndjson", "{\"id\": 1, \"items\": [{\"parts\": [1]}]}\n")],
             failing: ("b.ndjson", "{\"id\": 2, \"items\": [{\"parts\": \"x\"}]}\n"),
+            alongside: None,
             expected_error: "items.parts: unnest = \"all\" took items.parts as a list field from its values so far",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1196,6 +1206,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "b.ndjson",
                 "{\"id\": 2, \"items\": [{\"dims\": {\"tags\": \"x\"}}]}\n",
             ),
+            alongside: None,
             expected_error: "items.dims__tags: unnest = \"all\" took items.dims__tags as a list field from its values so far",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1207,6 +1218,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "b.ndjson",
                 "{\"id\": 2, \"items\": [{\"sku\": \"b\"}], \"tags\": [\"t\"]}\n",
             ),
+            alongside: None,
             expected_error: "new list field tags would make the child table orders__tags and on_schema_change = \"fail\"",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1215,6 +1227,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             settings: "write_strategy = \"append\"\n",
             runs: &[("a.ndjson", "{\"OrderID\": 1}\n")],
             failing: ("b.ndjson", "{\"OrderID\": 2, \"Order ID\": 3}\n"),
+            alongside: None,
             expected_error: "columns \"Order ID\" and \"OrderID\" now both load as order_id, which the table already has, and no earlier load recorded which of them it holds",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1226,6 +1239,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "b.ndjson",
                 "{\"id\": 2, \"items\": [{\"UnitPrice\": 1, \"unit price\": 2}]}\n",
             ),
+            alongside: None,
             expected_error: "items: keys \"UnitPrice\" and \"unit price\" both load as unit_price",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
@@ -1240,10 +1254,26 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "b.ndjson",
                 "{\"id\": 1, \"v\": null, \"items\": [{\"sku\": \"y\"}, {\"sku\": \"z\"}]}\n",
             ),
+            alongside: None,
             expected_error: "not_null",
             expected_after: (
                 "SELECT string_agg(sku, ',' ORDER BY sku) FROM raw.orders__items",
                 "x",
+            ),
+        },
+        UnnestFailTestCase {
+            description: "an append whose child table gains a column part-way through a commit under send = \"at_commit\", which its parent's checks then refuse, leaves no child row",
+            settings: "send = \"at_commit\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\"]\nchecks = { unique = [\"id\"] }\n",
+            runs: &[],
+            failing: (
+                "b.ndjson",
+                "{\"id\": 1, \"items\": [{\"sku\": \"b\", \"qty\": 2}]}\n",
+            ),
+            alongside: Some(("a.ndjson", "{\"id\": 1, \"items\": [{\"sku\": \"a\"}]}\n")),
+            expected_error: "nothing was published",
+            expected_after: (
+                "SELECT CAST(count(*) AS VARCHAR) FROM raw.orders__items",
+                "0",
             ),
         },
         UnnestFailTestCase {
@@ -1254,6 +1284,7 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
                 "{\"id\": 1, \"items\": [{\"sku\": \"x\"}]}\n{\"id\": 2, \"items\": []}\n",
             )],
             failing: ("a.ndjson", "{\"id\": 3, \"items\": [{\"sku\": \"y\"}]}\n"),
+            alongside: None,
             expected_error: "min_rows",
             expected_after: (
                 "SELECT string_agg(sku, ',' ORDER BY sku) FROM raw.orders__items",
@@ -1272,9 +1303,10 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             &connection,
             (test_case.settings, test_case.runs),
         )?;
-        let (name, contents) = test_case.failing;
-        std::fs::write(root.path().join("drop").join(name), contents)
-            .map_err(|error| error.to_string())?;
+        for (name, contents) in test_case.alongside.into_iter().chain([test_case.failing]) {
+            std::fs::write(root.path().join("drop").join(name), contents)
+                .map_err(|error| error.to_string())?;
+        }
         let (ok, output) = run_sqlload(&config, &["load"], ("", ""))?;
         assert_eq!(
             (ok, output.contains(test_case.expected_error)),

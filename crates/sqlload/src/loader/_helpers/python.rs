@@ -1685,6 +1685,7 @@ impl ChildTables {
             .filter_map(|feed| feed.publisher.as_mut())
         {
             publisher.flush_batch().await?;
+            Box::pin(publisher.send_held()).await?;
         }
         let request = WriteStatementsRequest {
             table: &spec.destination,
