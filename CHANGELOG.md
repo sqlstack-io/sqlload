@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.52.0](https://github.com/sqlstack-io/sqlload/compare/v0.51.0...v0.52.0) (2026-11-15)
+
+
+### Features
+
+* **cursor:** typed --start-cursor-ts/-int and --end-cursor-ts/-int flags as in SQLBuild, and an integer lookback on integer cursors ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+* **load:** load --follow prints the same plan line, table lines and live block as load ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+* **load:** report peak memory per run, and per table on Linux with --memory-per-table ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+* **odbc:** read long columns value by value under a per-table fetch buffer, and show it in plan ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+* **python:** plan checks sl.http field paths written as literals, so a bad path fails plan instead of load ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+* **python:** transform files, Sheets ranges and HTTP pages with a named [@sl](https://github.com/sl).transform function before they load, and --reload merge and move_to files tables ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+
+
+### Bug Fixes
+
+* **cli:** write log lines without colour codes when stderr is not a terminal or NO_COLOR is set ([e88a049](https://github.com/sqlstack-io/sqlload/commit/e88a049cc7d37e74cb5524bff3cb4e6f7d1feb79))
+
 ## [0.51.0](https://github.com/sqlstack-io/sqlload/compare/v0.50.0...v0.51.0) (2026-11-15)
 
 
