@@ -198,6 +198,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `max_footer_reads` | files | The most Parquet footers `plan` reads for one table's schema. Default 100. |
 | `naming` | warehouses | `snake_case` (default) or `source`: the case of table and column names. A source or table may override it. See [Naming](/docs/concepts/nested-data/#naming). |
 | `compat` | warehouses | From 0.53.0. `sqlload` (default) or `dlt`: the names of the columns a load adds and of the child tables `unnest` makes. A source or table may override it. See [compat](/docs/concepts/nested-data/#compat). |
+| `send` | warehouses | From 0.53.0. `at_commit` or `per_batch`: whether each commit's rows wait locally and reach the target in one burst at the commit, or each batch goes as it's read. Default `at_commit` on Snowflake, Databricks and MotherDuck, `per_batch` elsewhere. A source or table may override it. See [Sending rows at commit](/docs/targets/#sending-rows-at-commit). |
+| `staging_dir` | warehouses | From 0.53.0. The folder `send = "at_commit"` holds rows in until their commit. Default: the system's temporary folder. |
 
 ## Sources
 
@@ -292,6 +294,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `rename` | none | From 0.53.0. A map of source names to loaded names, such as `{ "Order ID" = "order_ref" }`, or the name a Python function was registered under with `@sl.rename`. See [rename](/docs/concepts/nested-data/#rename). |
 | `on_duplicate_names` | `number` | From 0.53.0. `number` or `fail`: what happens when columns load under one name, ignoring case. See [on_duplicate_names](/docs/concepts/nested-data/#on_duplicate_names). |
 | `compat` | the target's | From 0.53.0. `sqlload` or `dlt`. See [compat](/docs/concepts/nested-data/#compat). |
+| `send` | the target's | From 0.53.0. `at_commit` or `per_batch`. See [Sending rows at commit](/docs/targets/#sending-rows-at-commit). |
 | `row_id` | `false` | From 0.40.0. Give every row a unique id, in `_sqlload_row_id`. Always on with `unnest` and under `compat = "dlt"`, where it is `_dlt_id`. |
 | `transform` | none | From 0.52.0, files and `google_sheets` sources. The name a Python function was registered under with `@sl.transform` (its own name, or the one given as `@sl.transform("kpis")`) in a module under `python_paths`, run on each file's or range's rows before they load. `plan` fails on a name no function has, or two do. Needs `python_paths` and the `sqlload` Python package. An `sl.http` job takes [`transform=`](/docs/sources/python/#transforming-each-page) instead. See [Transforming each file](/docs/sources/files/#transforming-each-file) and [Transforming each range](/docs/sources/google-sheets/#transforming-each-range). |
 | `column_names` | none | From 0.49.0. The columns' names, in order, for data without a header row: CSV and Excel files with `header = false`, and `google_sheets` ranges with `header = false`. The count must match the data's columns. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns). |

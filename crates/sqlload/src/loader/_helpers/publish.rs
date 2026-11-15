@@ -33,6 +33,10 @@ use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::CursorWindow;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
+use crate::commit_spool::main::free_bytes::free_bytes;
+use crate::commit_spool::main::held_estimate::held_estimate;
+use crate::commit_spool::main::held_rows::held_rows;
+use crate::commit_spool::models::Spool;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
@@ -47,6 +51,8 @@ use crate::files_source::main::key_columns::key_columns;
 use crate::files_source::models::AfterLoad;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
+use crate::number_text::main::memory_text::memory_text;
+use crate::project::models::SendMode;
 
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
@@ -607,6 +613,9 @@ impl Publisher {
             true => merge_rebuild(&table, &destination).await?,
             false => None,
         };
+        let spool = holds_commits(&table)
+            .then(|| room_to_hold(&table, options.batch_bytes.unwrap_or(BATCH_BYTES)))
+            .transpose()?;
         Ok(Self {
             children,
             writer,
@@ -642,6 +651,7 @@ impl Publisher {
             settled_files: Vec::new(),
             rebuild,
             transform: None,
+            spool,
         })
     }
 
@@ -744,6 +754,9 @@ impl Publisher {
         if self.files.is_some() {
             return self.stage_files(batch).await;
         }
+        if let Some(spool) = self.spool.as_mut() {
+            return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
+        }
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
@@ -784,7 +797,10 @@ impl Publisher {
 
     /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
-        let bytes = self.writer.staged_bytes().unwrap_or(self.arrow_bytes);
+        let bytes = match self.spool {
+            Some(_) => self.arrow_bytes,
+            None => self.writer.staged_bytes().unwrap_or(self.arrow_bytes),
+        };
         bytes >= self.batch_bytes
     }
 
@@ -863,6 +879,7 @@ impl Publisher {
 
     /// Drop the staging table and its swap table, and the staged files of a batch that did not load; best effort, after success or failure.
     pub(crate) async fn close(&mut self) {
+        self.spool = None;
         if let Some(children) = &mut self.children {
             Box::pin(children.close()).await;
         }
@@ -916,8 +933,12 @@ impl Publisher {
         })
     }
 
-    /// Wait until every row sent without files is in the staging table.
+    /// Wait until every row sent without files is in the staging table; under `send = "at_commit"`, the held rows are sent first, before a schema change makes them unlike the rows after it.
     pub(crate) async fn settle_rows(&mut self) -> Result<(), LoaderError> {
+        if self.spool.is_some() {
+            self.flush_batch().await?;
+            Box::pin(self.send_held()).await?;
+        }
         self.writer.settle_rows().await
     }
 
@@ -928,19 +949,27 @@ impl Publisher {
 
     /// Load the batch where it goes: `COPY` its staged files (straight into the table, committing, or into the staging table) and remove them; DuckDB commits a straight batch's transaction. Then start the next batch.
     pub(crate) async fn flush_batch(&mut self) -> Result<(), LoaderError> {
-        let columns = staged_columns(&self.table);
-        let target = write_target(
-            &self.table,
-            self.staging.as_ref(),
-            &columns,
-            ((&self.load_id, self.batch), (self.direct, self.builds)),
-        );
-        self.writer.finish_files(&target).await?;
-        if self.batch_rows == 0 {
-            return Ok(());
+        match self.spool.is_some() {
+            true if self.batch_rows == 0 => return Ok(()),
+            true if self.direct => Box::pin(self.send_held()).await?,
+            true => {}
+            false => {
+                let columns = staged_columns(&self.table);
+                let target = write_target(
+                    &self.table,
+                    self.staging.as_ref(),
+                    &columns,
+                    ((&self.load_id, self.batch), (self.direct, self.builds)),
+                );
+                self.writer.finish_files(&target).await?;
+                if self.batch_rows == 0 {
+                    return Ok(());
+                }
+                self.writer.settle_rows().await?;
+                self.writer.load_batch(&target).await?;
+                self.writer.next_batch();
+            }
         }
-        self.writer.settle_rows().await?;
-        self.writer.load_batch(&target).await?;
         match self.direct {
             true => {
                 self.committed_rows += self.batch_rows;
@@ -951,7 +980,6 @@ impl Publisher {
         self.batch += 1;
         self.batch_rows = 0;
         self.arrow_bytes = 0;
-        self.writer.next_batch();
         self.progressed_at = std::time::Instant::now();
         self.report(EventKind::TableProgress {
             unit: "batch".to_owned(),
@@ -1047,6 +1075,34 @@ impl Publisher {
         Ok(())
     }
 
+    /// Send what `send = "at_commit"` held, in one burst: each held batch written and loaded where it would have gone as it was read, its files removed as they go.
+    async fn send_held(&mut self) -> Result<(), LoaderError> {
+        let Some(spool) = self.spool.as_mut() else {
+            return Ok(());
+        };
+        let columns = staged_columns(&self.table);
+        for held in spool.take() {
+            let target = write_target(
+                &self.table,
+                self.staging.as_ref(),
+                &columns,
+                ((&self.load_id, held.batch), (self.direct, self.builds)),
+            );
+            for file in &held.files {
+                for rows in held_rows(file).map_err(LoaderError::Invalid)? {
+                    let rows = rows.map_err(|error| LoaderError::Invalid(error.to_string()))?;
+                    self.writer.write_batch(&target, rows).await?;
+                }
+                let _ = std::fs::remove_file(file);
+            }
+            self.writer.finish_files(&target).await?;
+            self.writer.settle_rows().await?;
+            self.writer.load_batch(&target).await?;
+            self.writer.next_batch();
+        }
+        Ok(())
+    }
+
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
     pub(crate) fn note_direct(&mut self, loaded: &DirectLoaded) {
         match loaded {
@@ -1077,6 +1133,7 @@ impl Publisher {
             }
             return self.commit_files(last).await;
         }
+        Box::pin(self.send_held()).await?;
         let Some(staging) = self.staging.clone() else {
             return Ok(());
         };
@@ -1730,5 +1787,73 @@ fn window_filter(
     match cursor.null_cursor == NullCursor::Include && first {
         true => (with_null_cursors(filter, &expression), parameters),
         false => (filter, parameters),
+    }
+}
+
+/// Whether the table's rows wait in local files until their commit sends them: `send = "at_commit"` on a database target, where SQLLoad sends the rows itself rather than the target reading the source's files.
+pub(crate) fn holds_commits(table: &TablePlan) -> bool {
+    table.spec.send == SendMode::AtCommit
+        && sql_adapter(table.spec.warehouse).runs_sql()
+        && !reads_files_itself(table)
+}
+
+/// Whether the target loads the table's files itself: a files source's, or a warehouse source's unload.
+pub(crate) fn reads_files_itself(table: &TablePlan) -> bool {
+    is_direct(table.route.as_ref()) || pulls_unloaded(table.route.as_ref())
+}
+
+/// The table's spool, in its `staging_dir` or the system's temporary folder, once that has room for about what a commit holds (see [`held_estimate`]), where the source and the file system say; commits are cut at `commit_bytes`.
+fn room_to_hold(table: &TablePlan, commit_bytes: usize) -> Result<Spool, LoaderError> {
+    let spec = &table.spec;
+    let parent = spec.staging_dir.clone().unwrap_or_else(std::env::temp_dir);
+    let estimated = estimated_bytes(spec.source_table.estimated_bytes);
+    let once = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let needed = held_estimate(estimated, once, commit_bytes as u64);
+    if let (Some(needed), Some(free)) = (needed, free_bytes(&parent))
+        && needed > free
+    {
+        return Err(LoaderError::Invalid(format!(
+            "{}: send = \"at_commit\" holds about {} of rows in {} until each commit, and it has {} free; set staging_dir on the target to a folder with room, or send = \"per_batch\"",
+            spec.destination.table,
+            memory_text(needed),
+            parent.display(),
+            memory_text(free)
+        )));
+    }
+    Spool::new(&parent).map_err(LoaderError::Invalid)
+}
+
+/// The plan's `send` line for a table under `send = "at_commit"`: about how much each commit holds locally before its burst, or why the setting doesn't apply; `None` when each batch is sent as it is read.
+pub(crate) fn send_line(table: &TablePlan) -> Option<String> {
+    let spec = &table.spec;
+    if spec.send == SendMode::PerBatch || !sql_adapter(spec.warehouse).runs_sql() {
+        return None;
+    }
+    if reads_files_itself(table) {
+        return Some(format!("n/a: {} reads the files itself", spec.warehouse));
+    }
+    let estimated = estimated_bytes(spec.source_table.estimated_bytes);
+    let once = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    Some(
+        match (held_estimate(estimated, once, BATCH_BYTES as u64), once) {
+            (Some(bytes), true) => format!(
+                "at commit: about {} staged locally, then one burst",
+                memory_text(bytes)
+            ),
+            (Some(bytes), false) => format!(
+                "at commit: up to about {} staged locally per commit, then one burst each",
+                memory_text(bytes)
+            ),
+            (None, true) => "at commit: staged locally, then one burst".to_owned(),
+            (None, false) => "at commit: staged locally, then one burst per commit".to_owned(),
+        },
+    )
+}
+
+/// The source's estimate of a table's size in bytes, which it gives as a negative number or zero when it has none.
+fn estimated_bytes(estimate: i64) -> Option<u64> {
+    match u64::try_from(estimate) {
+        Ok(0) | Err(_) => None,
+        Ok(bytes) => Some(bytes),
     }
 }

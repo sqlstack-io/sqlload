@@ -43,7 +43,7 @@ use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, PathsSetting,
-    ProjectConfig, RenameSetting, SourceConfig, SourceKind, TableOverride, TableSettings,
+    ProjectConfig, RenameSetting, SendMode, SourceConfig, SourceKind, TableOverride, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
 use crate::schema_plan::models::SchemaPlan;
@@ -549,6 +549,10 @@ pub(crate) struct ResolvedTarget {
     pub(crate) naming: Option<Naming>,
     /// Whose names the columns a load adds take, unless a source or table says.
     pub(crate) compat: Option<Compat>,
+    /// When its tables' rows reach it, unless a source or table says: as set, else at each commit on a warehouse billed while it runs queries (MotherDuck, Snowflake, Databricks), else each batch as it is read.
+    pub(crate) send: SendMode,
+    /// Where `send = "at_commit"` holds a commit's rows.
+    pub(crate) staging_dir: Option<std::path::PathBuf>,
 }
 
 /// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
@@ -623,6 +627,8 @@ pub(crate) fn source_target(
             path: Some(target.path_template().to_owned()),
             naming: target.naming,
             compat: target.compat,
+            send: target.send.unwrap_or(SendMode::PerBatch),
+            staging_dir: target.staging_dir.clone(),
         });
     }
     let schema = source
@@ -646,6 +652,15 @@ pub(crate) fn source_target(
         path: None,
         naming: target.naming,
         compat: target.compat,
+        send: target.send.unwrap_or(
+            match matches!(connection, ConnectionConfig::MotherDuck { .. })
+                || sql_adapter(warehouse).bills_while_running()
+            {
+                true => SendMode::AtCommit,
+                false => SendMode::PerBatch,
+            },
+        ),
+        staging_dir: target.staging_dir.clone(),
     })
 }
 

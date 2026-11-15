@@ -40,6 +40,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"rename",
 		"replace_key",
 		"row_id",
+		"send",
 		"state",
 		"timezone",
 		"type_change_rebuild",

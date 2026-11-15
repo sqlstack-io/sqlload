@@ -22,6 +22,7 @@ use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
+use crate::loader::_helpers::publish::send_line;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
@@ -716,6 +717,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
+    details.extend(send_line(table).map(|text| detail("send", text)));
     details.extend(
         spec.python
             .iter()

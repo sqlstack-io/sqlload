@@ -364,6 +364,22 @@ pub struct TargetConfig {
     /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's; a source or table may override it.
     #[serde(default)]
     pub compat: Option<Compat>,
+    /// When a table's rows reach the target: all of a commit's at once (`at_commit`, the default on targets billed while they run queries) or each batch as it is read; a source or table may override it.
+    #[serde(default)]
+    pub send: Option<SendMode>,
+    /// The folder `send = "at_commit"` holds a commit's rows in until it is sent; the system's temporary folder when unset.
+    #[serde(default)]
+    pub staging_dir: Option<std::path::PathBuf>,
+}
+
+/// When a table's rows reach its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    /// Each commit's batches wait in local files, then reach the target in one burst just before the commit, so a warehouse billed while it runs queries runs none during the read.
+    AtCommit,
+    /// Each batch reaches the target as it is read.
+    PerBatch,
 }
 
 impl TargetConfig {
@@ -845,6 +861,9 @@ pub struct TableSettings {
     /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's, with a row id on every row; overrides the target's.
     #[serde(default)]
     pub compat: Option<Compat>,
+    /// When the table's rows reach the target: at each commit, or each batch as it is read; overrides the target's.
+    #[serde(default)]
+    pub send: Option<SendMode>,
     /// Names for columns the naming leaves unfit: a map from source name to loaded name, or the name `@sl.rename` registered a Python function under.
     #[serde(default)]
     pub rename: Option<RenameSetting>,

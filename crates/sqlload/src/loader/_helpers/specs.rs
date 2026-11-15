@@ -412,6 +412,8 @@ pub(crate) fn build_spec(
         unique_key_at: None,
         naming: nesting.naming,
         compat: nesting.compat,
+        send: layered(&settings.send, &defaults.send).map_or(context.target.send, |(send, _)| send),
+        staging_dir: context.target.staging_dir.clone(),
         names: LoadedNames::default(),
         name_rules: NameRules::default(),
         listed: None,

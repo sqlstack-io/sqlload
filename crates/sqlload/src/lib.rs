@@ -14,6 +14,7 @@ pub mod column_types;
 /// The `sqlload` command line; behind the default `cli` feature.
 #[cfg(feature = "cli")]
 pub mod command;
+pub mod commit_spool;
 pub mod config;
 pub mod contract;
 pub mod copy;

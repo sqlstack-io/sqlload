@@ -28,7 +28,7 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     BatchStep, Contract, NewTables, NullCursor, NullKeys, OnCursorOutOfRange, OnDuplicateKeys,
-    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks,
+    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, SortDirection, TableChecks,
     WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -211,6 +211,10 @@ pub struct TableSpec {
     pub naming: Naming,
     /// Whose names the columns the load adds take.
     pub compat: Compat,
+    /// When its rows reach the target: at each commit, held in local files until then, or each batch as it is read.
+    pub send: SendMode,
+    /// Where `send = "at_commit"` holds a commit's rows; the system's temporary folder when `None`.
+    pub staging_dir: Option<std::path::PathBuf>,
     /// Each source column's name through the name pipeline (none for a Python table, whose columns are named as they arrive), and the names numbering gave.
     pub names: LoadedNames,
     /// What the name pipeline ran under.
@@ -1057,6 +1061,8 @@ pub struct Publisher {
     pub rebuild: Option<MergeRebuild>,
     /// The `transform`'s calls so far, and how many the commits recorded: each commit records the version with the files or ranges since.
     pub transform: Option<(TransformRun, usize)>,
+    /// Under `send = "at_commit"`, the batches held locally until their commit sends them; `None` when each batch is sent as it is read.
+    pub spool: Option<crate::commit_spool::models::Spool>,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.

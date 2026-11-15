@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import pyarrow
+import pyarrow.parquet as pyarrow_parquet
 import pytest
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the stand-in Python is a shell script")
@@ -355,3 +357,97 @@ def test_given_no_python_is_named_when_debugging_then_motherduck_runs_on_this_pa
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert "MotherDuck shop, DuckDB v" in done.stdout
 	assert f"python: {sys.executable}" in log.read_text().splitlines()
+
+
+#: Tables that note in the stand-in's statement log (`-- read ...`) when they have read their rows, so the log shows what reached
+#: MotherDuck while they were read: `windowed` reads two parts per cursor window, `failing` one part before it fails.
+MARKED = """
+import os
+import time
+
+import pyarrow as pa
+
+
+def mark(text):
+    with open(os.environ["MD_LOG"], "a") as out:
+        out.write(f"-- {text}\\n")
+
+
+def windowed(ctx):
+    start = int(ctx.cursor_value)
+    for part in range(2):
+        yield pa.table({"n": [start] * 100000, "part": [part] * 100000})
+        time.sleep(0.2)
+    mark(f"read window {start}")
+
+
+def failing(ctx):
+    yield pa.table({"n": list(range(100000))})
+    time.sleep(0.2)
+    mark("read part 0")
+    raise RuntimeError("the API went away")
+
+
+cloud.table(description="Rows.", name="windowed", write_strategy="append", cursor_column="n", batch_size=1{send})(windowed)
+cloud.table(description="Rows.", name="failing", write_strategy="replace"{send})(failing)
+"""
+
+
+def inserts_between_reads(log: Path) -> list[int]:
+	"""How many INSERTs reached MotherDuck before the first `-- read` note, then after each."""
+	counts = [0]
+	for line in log.read_text().splitlines():
+		if line.startswith("-- read"):
+			counts.append(0)
+		elif line.startswith("INSERT"):
+			counts[-1] += 1
+	return counts
+
+
+@pytest.mark.parametrize(
+	("send", "expected_before_first_read", "expected_after_each_read"),
+	[("", 0, [2, 2, 2]), (", send='per_batch'", None, None)],
+	ids=["at_commit-by-default", "per_batch"],
+)
+def test_given_send_when_a_table_loads_in_windows_then_at_commit_sends_each_window_in_one_burst_after_its_read(
+	tmp_path: Path, send: str, expected_before_first_read: int | None, expected_after_each_read: list[int] | None
+) -> None:
+	project = make_project(tmp_path, MARKED.replace("{send}", send))
+	log = tmp_path / "statements.log"
+	load(project, "windowed", "--start-cursor", "0", "--end-cursor", "3", MD_LOG=str(log))
+	counts = inserts_between_reads(log)
+	if expected_before_first_read is None:
+		assert counts[0] >= 1, log.read_text()
+	else:
+		assert (counts[0], counts[1:]) == (expected_before_first_read, expected_after_each_read), log.read_text()
+	assert cloud(project, "SELECT n, part, count(*) FROM raw.cloud__windowed GROUP BY ALL ORDER BY ALL") == [
+		(n, part, 100000) for n in range(3) for part in range(2)
+	]
+
+
+def test_given_send_at_commit_when_a_read_fails_part_way_then_nothing_reaches_motherduck_and_no_held_file_stays(tmp_path: Path) -> None:
+	project = make_project(tmp_path, MARKED.replace("{send}", ""))
+	(project / "sqlload.toml").write_text(
+		(project / "sqlload.toml").read_text().replace('[targets.cloud]\nconnection = "md"\n', '[targets.cloud]\nconnection = "md"\nstaging_dir = "held"\n')
+	)
+	(project / "held").mkdir()
+	log = tmp_path / "statements.log"
+	done = sqlload(project, "load", "failing", MD_LOG=str(log))
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "the API went away" in done.stdout
+	assert inserts_between_reads(log) == [0, 0], log.read_text()
+	assert list((project / "held").iterdir()) == []
+
+
+def test_given_send_when_planning_then_each_table_says_how_its_rows_are_sent(tmp_path: Path) -> None:
+	project = make_project(tmp_path, MARKED.replace("{send}", ""))
+	(project / "drop").mkdir()
+	pyarrow_parquet.write_table(pyarrow.table({"id": [1, 2]}), project / "drop" / "a.parquet")
+	(project / "sqlload.toml").write_text(
+		(project / "sqlload.toml").read_text().replace('[targets.local]\nconnection = "wh"\n', '[targets.local]\nconnection = "wh"\nsend = "at_commit"\n')
+		+ '\n[connections.files]\nkind = "filesystem"\nroot = "."\n\n[sources.drop]\nkind = "files"\ndescription = "Dropped files."\nconnection = "files"\npath = "drop/"\nformat = "parquet"\nwrite_strategy = "append"\ndestination = "local"\n'
+	)
+	done = sqlload(project, "plan", "failing", "drop")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert "send    at commit: staged locally, then one burst" in done.stdout, done.stdout
+	assert "send    n/a: DuckDB reads the files itself" in done.stdout, done.stdout

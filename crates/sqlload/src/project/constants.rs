@@ -32,6 +32,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "dedup_sort",
     "naming",
     "compat",
+    "send",
     "rename",
     "on_duplicate_names",
     "timezone",
