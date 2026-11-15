@@ -1413,6 +1413,24 @@ fn is_number(value: &str) -> bool {
         && digits(exponent)
 }
 
+/// Where an integer cursor's read starts under `lookback = units`: the destination's `maximum` minus `units`, but never below the smallest value `cursor_type` holds (`smallint` is 16-bit, `int` 64-bit), which the read's bound must fit.
+pub(crate) fn lookback_start(
+    maximum: &str,
+    units: i64,
+    cursor_type: &ColumnType,
+) -> Result<String, String> {
+    let lowest = match cursor_type {
+        ColumnType::SmallInt => i64::from(i16::MIN),
+        _ => i64::MIN,
+    };
+    match maximum.trim().parse::<i64>() {
+        Ok(value) => Ok(value.saturating_sub(units).max(lowest).to_string()),
+        Err(_) => Err(format!(
+            "cursor maximum {maximum:?} is not an integer, so lookback = {units} can't count back from it"
+        )),
+    }
+}
+
 /// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
@@ -1509,16 +1527,9 @@ async fn lower_bound(
         None => (None, None),
     };
     let (maximum, lookback) = match (maximum, cursor.lookback_units) {
-        (Some(maximum), Some(units)) => match maximum.trim().parse::<i64>() {
-            Ok(value) => (
-                Some(value.saturating_sub(units).to_string()),
-                format!(" {maximum} minus lookback {units}"),
-            ),
-            Err(_) => {
-                return Ok(Err(format!(
-                    "cursor maximum {maximum:?} is not an integer, so lookback = {units} can't count back from it"
-                )));
-            }
+        (Some(maximum), Some(units)) => match lookback_start(&maximum, units, cursor_type) {
+            Ok(start) => (Some(start), format!(" {maximum} minus lookback {units}")),
+            Err(problem) => return Ok(Err(problem)),
         },
         (maximum, _) => (maximum, lookback),
     };

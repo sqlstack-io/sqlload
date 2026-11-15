@@ -4,6 +4,8 @@ mod constant_batches;
 mod helpers;
 #[path = "tests/test_key_nulls.rs"]
 mod key_nulls;
+#[path = "tests/test_lookback_start.rs"]
+mod lookback_start;
 #[path = "tests/test_merged_files.rs"]
 mod merged_files;
 #[path = "tests/test_python_columns.rs"]
