@@ -70,6 +70,37 @@ loaded  raw.b        1 row  0.1s
 └── slowest      raw.a 2.0s",
         },
         LoadOutputTestCase {
+            description: "under --follow each table prints a line per batch written, with how far behind it is, then its total when following stops",
+            events: vec![
+                (
+                    Some("raw.a"),
+                    EventKind::TableBatchWritten {
+                        rows: 2,
+                        behind_secs: Some(6),
+                    },
+                ),
+                (
+                    Some("raw.b"),
+                    EventKind::TableBatchWritten {
+                        rows: 1,
+                        behind_secs: None,
+                    },
+                ),
+                (Some("raw.a"), done(2, 18_000, None)),
+                (Some("raw.b"), done(1, 18_000, None)),
+            ],
+            name_width: 7,
+            rows_width: 5,
+            elapsed_ms: 18_100,
+            exit_code: 0,
+            expected_lines: "written  raw.a      2 rows 6s behind
+written  raw.b      1 row
+loaded  raw.a      2 rows 18.0s
+loaded  raw.b      1 row  18.0s
+✓ Completed  2 loaded, 3 rows, 18.1s
+└── slowest      raw.a 18.0s",
+        },
+        LoadOutputTestCase {
             description: "under --memory-per-table each table notes its peak memory, after its position or under its failure, and the run's peak closes the summary",
             events: vec![
                 (

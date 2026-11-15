@@ -38,6 +38,8 @@ use crate::column_types::models::ColumnType;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::StoredFile;
 use crate::files_source::main::read_footers::read_footers;
+use crate::load_events::main::emit::emit;
+use crate::load_events::models::EventKind;
 use crate::loader::constants::SOURCE_BATCH_ROWS;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::apply_project::apply_project;
@@ -983,8 +985,24 @@ impl CdcSource<'_> {
                 behind_secs,
                 "batch written"
             );
+            self.report_batch(&written.rows, behind_secs);
         }
         Ok((buffer, written))
+    }
+
+    /// A `table_batch_written` event for each table the followed batch wrote `rows` to (by destination table name), named as `plan` names it, with how long ago the batch's newest change committed (0 for a commit time ahead of this clock, which is skew).
+    fn report_batch(&self, rows: &BTreeMap<String, u64>, behind_secs: Option<i64>) {
+        for table in &self.tables {
+            if let Some(rows) = rows.get(&table.spec.destination.table) {
+                emit(
+                    Some(&table.outcome_name()),
+                    EventKind::TableBatchWritten {
+                        rows: *rows,
+                        behind_secs: behind_secs.map(|secs| secs.max(0).unsigned_abs()),
+                    },
+                );
+            }
+        }
     }
 
     /// Each loaded table's floor by its source `(schema, table)`: the stream drops its changes committed before it. That is its copy point, from its snapshot record; in a files target, past its newest committed change too, which files cannot skip on a replay as a warehouse's changelog insert does.
