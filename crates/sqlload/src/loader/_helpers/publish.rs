@@ -78,8 +78,8 @@ use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::transformed;
 use crate::loader::_helpers::run_log::{
-    in_file, listed_sources, merge_rebuild, merged_file_text, merged_name, merged_record,
-    swap_rebuild, with_file_keys,
+    commit_transform, in_file, listed_sources, merge_rebuild, merged_file_text, merged_name,
+    merged_record, swap_rebuild, with_file_keys, with_transform,
 };
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
@@ -654,6 +654,7 @@ impl Publisher {
             fed_files: Vec::new(),
             settled_files: Vec::new(),
             rebuild,
+            transform: None,
         })
     }
 
@@ -1100,24 +1101,26 @@ impl Publisher {
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
         let file = self.merged_file.clone();
+        let ran = commit_transform(&self.table, self.transform.as_mut());
         let mut merged = self.merged_file.take().map(|file| {
-            merged_record(
-                spec,
-                (&self.load_id, self.commits + 1),
-                (file, self.waiting_rows),
+            let record = (file, self.waiting_rows);
+            with_transform(
+                &self.table,
+                merged_record(spec, (&self.load_id, self.commits + 1), record),
             )
         });
         let held = self.rebuild.as_ref().and_then(|_| merged.take());
-        let run_insert = match (&self.run, merged) {
+        let record = match (&self.run, merged) {
             (Some(_), _) => {
                 let record = self.record(self.waiting_rows)?;
-                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
+                Some(with_transform(&self.table, record))
             }
-            (None, Some(record)) => {
-                Some(insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid)?)
-            }
-            (None, None) => None,
+            (None, Some(record)) => Some(record),
+            (None, None) => ran.filter(|_| held.is_none()),
         };
+        let run_insert = record
+            .map(|record| insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid))
+            .transpose()?;
         let spec = &self.table.spec;
         let target = self
             .rebuild
@@ -1477,13 +1480,18 @@ pub(crate) async fn publish_table(
     {
         return Err(LoaderError::Invalid(null_cursor_problem(&table.spec, rows)));
     }
-    let publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
+    let mut publisher = Publisher::open(table.clone(), (destination, run.options), None).await?;
     let transform = run.host.clone().map(TransformRun::new);
+    publisher.transform = transform.clone().map(|transform| (transform, 0));
     let published = feed(reader, table, publisher, (run, transform.as_ref())).await;
     let (mut publisher, result) = published;
     publisher.close().await;
     let rows = result?;
-    let transforms = transformed(table, (destination, transform)).await?;
+    let recorded = publisher
+        .transform
+        .as_ref()
+        .map_or(0, |(_, recorded)| *recorded);
+    let transforms = transformed(table, (destination, transform, recorded)).await;
     let report = match reader {
         SourceReader::Files(folder) => {
             after_load(folder, &table.spec.after_load, &publisher.settled_files).await

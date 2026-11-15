@@ -184,8 +184,11 @@ def kpi_sheet(rows: pa.Table, ctx: sl.TransformContext):
   shows, `90.0%`. A formula error still fails the load, naming the cell.
 - A function that raises, or returns or yields something else, fails the table, naming the function
   and the range; the table stays as it was. The load report gives each range's transform time.
-- With `merge` or `append`, `plan` shows `transform  changed since the last load` when the file the
-  function is defined in changed; `replace` tables load every row again each run.
+- With `merge` or `append`, `plan` shows `transform  changed: 1 range loaded under an earlier
+  version (--reload transforms every range again)` while the table holds rows a range loaded before the file
+  the function is defined in changed; `replace` tables load every row again each run. The version
+  is recorded in `_sqlload_runs`, which `apply` creates, as for
+  [files](/docs/sources/files/#changing-a-transform).
 
 ## Writing
 

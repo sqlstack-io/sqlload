@@ -320,20 +320,31 @@ def test_the_load_report_gives_each_files_transform_time(tmp_path: Path) -> None
 	assert [(item["file"], item["rows"], item["dicts"]) for item in transforms] == [("./drop/c.csv", 1, False)]
 
 
-def test_plan_says_when_the_transform_changed_since_the_last_load(tmp_path: Path) -> None:
+def test_plan_says_while_the_table_holds_files_an_earlier_transform_loaded(tmp_path: Path) -> None:
 	project = make_project(tmp_path, RETURNS["dicts"])
 	give(project, "a.csv", "id,v\n1,x\n")
-	changed = "transform  changed since the last load"
-	assert changed not in sqlload(project, "plan").stdout
+	give(project, "b.csv", "id,v\n2,x\n")
+	planned = sqlload(project, "plan").stdout
+	assert "transform  changed" not in planned, planned
+	assert "RAW._sqlload_runs create table (run log)" in " ".join(planned.split()), planned
+	applied = sqlload(project, "apply")
+	assert "RAW._sqlload_runs" in applied.stdout, applied.stdout
+	assert "_sqlload_runs" not in sqlload(project, "plan").stdout
 	load(project)
-	assert changed not in sqlload(project, "plan").stdout
+	assert "transform  changed" not in sqlload(project, "plan").stdout
 	module = project / "transforms" / "metrics.py"
 	module.write_text(module.read_text() + "\n# rows now keep their file\n")
-	planned = sqlload(project, "plan")
-	assert changed in planned.stdout, planned.stdout
+	changed = "transform  changed: 2 files loaded under an earlier version (--reload transforms every file again)"
+	planned = sqlload(project, "plan").stdout
+	assert changed in planned, planned
+	give(project, "c.csv", "id,v\n3,x\n")
+	load(project)
+	planned = sqlload(project, "plan").stdout
+	assert changed in planned, planned
 	reloading = sqlload(project, "plan", "--reload")
-	assert changed not in reloading.stdout, reloading.stdout
-
+	assert "transform  changed" not in reloading.stdout, reloading.stdout
+	load(project, "--reload", "--yes")
+	assert "transform  changed" not in sqlload(project, "plan").stdout
 
 
 def test_a_changed_transform_reloads_a_merge_table_with_moved_files_into_one_row_per_key(tmp_path: Path) -> None:
@@ -346,7 +357,7 @@ def test_a_changed_transform_reloads_a_merge_table_with_moved_files_into_one_row
 	module = project / "transforms" / "metrics.py"
 	module.write_text(module.read_text().replace('"v": row["v"]', '"v": row["v"].upper()'))
 	give(project, "c.csv", "id,v\n3,c\n", modified=now)
-	assert "transform  changed since the last load" in sqlload(project, "plan").stdout
+	assert "transform  changed: 2 files loaded under an earlier version" in sqlload(project, "plan").stdout
 	planned = sqlload(project, "plan", "--reload")
 	assert "files   3 to read of 3 listed: 1 in ./drop/, 2 in ./done/" in planned.stdout, planned.stdout
 	load(project, "--reload", "--yes")
@@ -355,7 +366,7 @@ def test_a_changed_transform_reloads_a_merge_table_with_moved_files_into_one_row
 	assert sorted(path.name for path in (project / "done").iterdir()) == ["a.csv", "b.csv", "c.csv"]
 	give(project, "d.csv", "id,v\n4,d\n")
 	after = sqlload(project, "plan").stdout
-	assert "1 new of 1 listed" in after and "transform  changed since the last load" not in after, after
+	assert "1 new of 1 listed" in after and "transform  changed" not in after, after
 
 #: The `KPIs` tab, as the Sheets API writes it: a merged title row, a header row, label-only rows, KPI blocks with measures below each, a note and an `IFERROR` "" here and there.
 def text(value: str) -> dict[str, Any]:

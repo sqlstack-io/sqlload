@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -27,9 +27,10 @@ use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, column_fix, live_has};
+use crate::loader::constants::TRANSFORM_REWROTE_NOTE;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    MergeRebuild, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
+    MergeRebuild, ProjectPlan, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
 };
 use crate::project::models::WriteStrategy;
 use crate::row_batches::models::Unnest;
@@ -449,43 +450,80 @@ pub(crate) fn merged_record(
     }
 }
 
-/// The time a load's `transform` took on each file or range, once the load succeeded; having run it at all, the load records its version (a logged table's run log holds its runs only).
+/// The time a load's `transform` took on each file or range, once the load succeeded. The calls no commit recorded (`recorded` are), as when batches commit straight into the table or into a files target, are recorded now: an insert into the run log `apply` made, never creating it, and only warned about when it fails, since the rows committed (a logged table's run log holds its runs only).
 pub(crate) async fn transformed(
     table: &TablePlan,
-    (destination, run): (&Destination, Option<TransformRun>),
-) -> Result<Vec<crate::python_sources::models::TransformTime>, LoaderError> {
-    let times: Vec<crate::python_sources::models::TransformTime> = match run {
-        Some(run) => std::mem::take(
-            &mut *run
-                .times
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        ),
-        None => Vec::new(),
+    (destination, run, recorded): (&Destination, Option<TransformRun>, usize),
+) -> Vec<crate::python_sources::models::TransformTime> {
+    let Some(run) = run else {
+        return Vec::new();
     };
-    if let Some(transform) = table
-        .spec
+    let times = std::mem::take(
+        &mut *run
+            .times
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let spec = &table.spec;
+    let record = spec
         .transform
         .as_ref()
-        .filter(|_| !times.is_empty() && !table.spec.logged)
-    {
-        append_run(
-            table,
-            destination,
-            &transform_record(&table.spec, &transform.version),
-        )
-        .await?;
+        .filter(|_| times.len() > recorded && !spec.logged)
+        .map(|transform| transform_record(table, &transform.version, &times[recorded..]));
+    let written = match (record, sql_adapter(spec.warehouse).runs_sql()) {
+        (None, _) => Ok(()),
+        (Some(record), false) => append_run(table, destination, &record).await,
+        (Some(record), true) => {
+            match insert_run(&runs_table(&spec.destination), &record, spec.warehouse) {
+                Ok(insert) => execute(destination, vec![insert]).await,
+                Err(error) => Err(LoaderError::Invalid(error)),
+            }
+        }
+    };
+    if let Err(error) = written {
+        tracing::warn!(table = %spec.destination.table, %error, "the rows loaded, but the run log did not record the transform's version, so plan cannot tell which files an earlier version loaded");
     }
-    Ok(times)
+    times
 }
 
-/// `plan` with its `transform` marked changed when the version the table's newest load recorded differs from the one imported now; a table that does not exist yet, one rewritten whole (`replace`, `--reload`), a logged one and one never loaded with a transform are left as they are.
+/// The record a commit writes with its rows for the `transform` calls since the last commit, which it counts as recorded; `None` without calls or a `transform`.
+pub(crate) fn commit_transform(
+    table: &TablePlan,
+    transform: Option<&mut (TransformRun, usize)>,
+) -> Option<RunRecord> {
+    let (run, recorded) = transform?;
+    let version = &table.spec.transform.as_ref()?.version;
+    let times = run
+        .times
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let since = times.get(*recorded..).filter(|since| !since.is_empty())?;
+    let record = transform_record(table, version, since);
+    *recorded = times.len();
+    Some(record)
+}
+
+/// `record` (a logged table's, or a merged file's) carrying the version of the table's `transform`, if it has one.
+pub(crate) fn with_transform(table: &TablePlan, record: RunRecord) -> RunRecord {
+    RunRecord {
+        transform: table
+            .spec
+            .transform
+            .as_ref()
+            .map(|transform| transform.version.clone()),
+        ..record
+    }
+}
+
+/// `plan` with what its `transform` needs from the run log: whether `apply` must create `_sqlload_runs`, and how many of the files or ranges the table holds loaded under another version; a table rewritten whole (`replace`, `--reload`) or a logged one is left as it is, and one blocked.
 pub(crate) async fn with_transform_version(
     mut plan: TablePlan,
     destination: &Destination,
 ) -> Result<TablePlan, LoaderError> {
     let rewritten = matches!(plan.mode, WriteMode::Replace | WriteMode::Recreate)
         || plan.schema.action == TableAction::Recreate;
+    let runs_sql = sql_adapter(plan.spec.warehouse).runs_sql();
+    let compares = plan.exists && !rewritten;
     let Some(current) = plan
         .spec
         .transform
@@ -494,40 +532,77 @@ pub(crate) async fn with_transform_version(
     else {
         return Ok(plan);
     };
-    if !plan.exists || rewritten || plan.spec.logged || plan.schema.blocked.is_some() {
+    if plan.spec.logged || plan.schema.blocked.is_some() || !(compares || runs_sql) {
         return Ok(plan);
     }
-    let (log, _) = read_run_log(&plan, destination).await?;
-    let spec = &plan.spec;
-    let newest = log
-        .records
-        .iter()
-        .filter(|record| {
-            record.source == spec.source_name && record.source_table == spec.source_table.name
-        })
-        .filter_map(|record| Some((&record.recorded_at, record.transform.as_ref()?)))
-        .max()
-        .map(|(_, version)| version.clone());
+    let (log, exists) = read_run_log(&plan, destination).await?;
+    let older = match compares {
+        true => older_files(&log.records, &plan.spec, &current),
+        false => 0,
+    };
     if let Some(transform) = plan.spec.transform.as_mut() {
-        transform.changed = newest.is_some_and(|version| version != current);
+        transform.older = older;
+        transform.creates_log = runs_sql && !exists;
     }
     Ok(plan)
 }
 
-/// The record a load of a table with a `transform` writes once it ran the function at `version`, which the next `plan` compares with.
-pub(crate) fn transform_record(spec: &TableSpec, version: &str) -> RunRecord {
+/// How many of the files or ranges the table of `spec` holds loaded under a `transform` version other than `current`: the version of each one's newest record (a merged file's by its name, whatever its version) since the last reset or load that rewrote the table whole.
+pub(crate) fn older_files(records: &[RunRecord], spec: &TableSpec, current: &str) -> usize {
+    let mut ordered: Vec<&RunRecord> = records
+        .iter()
+        .filter(|record| {
+            record.source == spec.source_name && record.source_table == spec.source_table.name
+        })
+        .collect();
+    ordered.sort_by(|left, right| left.recorded_at.cmp(&right.recorded_at));
+    let mut versions: BTreeMap<&str, &str> = BTreeMap::new();
+    for record in ordered {
+        if record.event == RunEvent::Reset || record.note.as_deref() == Some(TRANSFORM_REWROTE_NOTE)
+        {
+            versions.clear();
+        }
+        let merged = !record
+            .note
+            .as_deref()
+            .is_some_and(|note| note.starts_with("transform"));
+        if let Some(version) = &record.transform {
+            versions.extend(record.files.iter().map(|file| match merged {
+                true => (merged_name(file), version.as_str()),
+                false => (file.as_str(), version.as_str()),
+            }));
+        }
+    }
+    versions
+        .values()
+        .filter(|version| **version != current)
+        .count()
+}
+
+/// The record of a load of a table with a `transform`: the version it ran, and the files or ranges it ran on (`times`), which the next `plan` compares with.
+pub(crate) fn transform_record(
+    table: &TablePlan,
+    version: &str,
+    times: &[crate::python_sources::models::TransformTime],
+) -> RunRecord {
+    let rewrote = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
     let record = event_record(
-        &record_table(spec),
+        &record_table(&table.spec),
         StateEvent {
             event: RunEvent::Run,
             cursor_before: None,
             cursor_after: None,
             state: None,
-            note: "transform".to_owned(),
+            note: match rewrote {
+                true => TRANSFORM_REWROTE_NOTE,
+                false => "transform",
+            }
+            .to_owned(),
             recorded_at: now_utc_text(),
         },
     );
     RunRecord {
+        files: times.iter().map(|time| time.file.clone()).collect(),
         transform: Some(version.to_owned()),
         ..record
     }
@@ -546,6 +621,31 @@ pub(crate) fn merge_reset_record(spec: &TableSpec) -> RunRecord {
             recorded_at: now_utc_text(),
         },
     )
+}
+
+/// Create the `_sqlload_runs` of each unblocked table with a `transform` whose plan found none, once per schema, before any load commits a record there; one `created` line each.
+pub(crate) async fn create_run_logs(
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+) -> Result<Vec<String>, LoaderError> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut created: BTreeSet<String> = BTreeSet::new();
+    for table in plan.tables.iter().filter(|table| {
+        let transform = table.spec.transform.as_ref();
+        table.schema.blocked.is_none() && transform.is_some_and(|transform| transform.creates_log)
+    }) {
+        let spec = &table.spec;
+        let name = sql_adapter(spec.warehouse).render_display_name(&runs_table(&spec.destination));
+        if !created.insert(name.clone()) {
+            continue;
+        }
+        let destination = destinations.get(&spec.target).ok_or_else(|| {
+            LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
+        })?;
+        ensure_runs_table(table, destination).await?;
+        lines.push(format!("created  {name}  run log"));
+    }
+    Ok(lines)
 }
 
 /// Before a files source's merge creates its table: `_sqlload_runs` when it does not exist yet, and a reset, so records left from an earlier table of the name stop counting; written before the `CREATE TABLE`, so no table exists without it.

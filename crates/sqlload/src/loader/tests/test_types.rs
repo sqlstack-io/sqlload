@@ -70,6 +70,21 @@ pub(crate) struct TransformReaderTestCase {
     pub(crate) expected_reason: Option<&'static str>,
 }
 
+/// A table's run log records, oldest first, as event, note, files and `transform` version.
+pub(crate) type TransformRecord = (
+    crate::run_log::models::RunEvent,
+    &'static str,
+    &'static [&'static str],
+    Option<&'static str>,
+);
+
+pub(crate) struct OlderFilesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: &'static [TransformRecord],
+    /// How many files the table holds from a version other than `f@2`.
+    pub(crate) expected_older: usize,
+}
+
 /// A plan item: its name, its action, and each detail's label and text.
 pub(crate) type ItemSpec = (
     &'static str,

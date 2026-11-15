@@ -168,7 +168,8 @@ fn table_transform(
         Some(Ok(version)) => Ok(Some(TableTransform {
             function,
             version: version.clone(),
-            changed: false,
+            older: 0,
+            creates_log: false,
         })),
         Some(Err(reason)) => Err(format!("transform {function}: {reason}")),
         None => Err(NO_TRANSFORM_HOST.replace("{place}", &format!("table {qualified}"))),

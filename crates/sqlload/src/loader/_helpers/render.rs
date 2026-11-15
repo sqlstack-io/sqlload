@@ -42,6 +42,7 @@ use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
+use crate::run_log::main::runs_table::runs_table;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, TableAction};
 use crate::store_paths::models::StoreKind;
 
@@ -324,6 +325,28 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         details.push(detail("", format!("+ {}", names.join(", "))));
     }
     details
+}
+
+/// The `_sqlload_runs` tables `apply` creates, one per schema, where the commits of tables with a `transform` record its version.
+fn run_log_items(tables: &[&TablePlan]) -> Vec<PlanItem> {
+    let mut items: Vec<PlanItem> = Vec::new();
+    for table in tables {
+        let spec = &table.spec;
+        let name = display_name(spec.warehouse, &runs_table(&spec.destination));
+        if spec
+            .transform
+            .as_ref()
+            .is_some_and(|transform| transform.creates_log)
+            && !items.iter().any(|item| item.name == name)
+        {
+            items.push(PlanItem {
+                name,
+                action: "create table (run log)".to_owned(),
+                details: Vec::new(),
+            });
+        }
+    }
+    items
 }
 
 pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
@@ -686,8 +709,16 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     details.extend(
         spec.transform
             .iter()
-            .filter(|transform| transform.changed)
-            .map(|_| detail("", "transform  changed since the last load")),
+            .filter(|transform| transform.older > 0)
+            .map(|transform| {
+                let unit = match spec.files.is_some() {
+                    true => ("file", "files"),
+                    false => ("range", "ranges"),
+                };
+                let older = counted(transform.older, unit);
+                let every = unit.0;
+                detail("", format!("transform  changed: {older} loaded under an earlier version (--reload transforms every {every} again)"))
+            }),
     );
     details.extend(
         table
@@ -1071,7 +1102,7 @@ pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
         .spec
         .transform
         .as_ref()
-        .is_some_and(|transform| transform.changed);
+        .is_some_and(|transform| transform.older > 0);
     if !settled
         || transform_changed
         || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. })
@@ -1110,7 +1141,9 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         .iter()
         .filter(|table| table.schema.action != TableAction::Unchanged && table.output.is_none())
         .collect();
+    let logs = run_log_items(&ready);
     let creates = stages.len()
+        + logs.len()
         + changed
             .iter()
             .filter(|table| {
@@ -1120,7 +1153,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
                 )
             })
             .count();
-    let alters = stages.len() + changed.len() - creates;
+    let alters = stages.len() + logs.len() + changed.len() - creates;
     let mut errors: Vec<PlanItem> = plan
         .tables
         .iter()
@@ -1185,6 +1218,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
             .iter()
             .map(|stage| stage_item(stage))
             .chain(changed.iter().map(|table| object_item(table)))
+            .chain(logs)
             .collect(),
         loads: match text {
             false => ready.iter().map(|table| load_item(table)).collect(),

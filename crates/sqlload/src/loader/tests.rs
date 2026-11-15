@@ -21,5 +21,7 @@ mod source_filter;
 mod test_types;
 #[path = "tests/test_transform_reader.rs"]
 mod transform_reader;
+#[path = "tests/test_transform_versions.rs"]
+mod transform_versions;
 #[path = "tests/test_view_lines.rs"]
 mod view_lines;

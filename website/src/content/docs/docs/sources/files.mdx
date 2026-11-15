@@ -302,12 +302,37 @@ no index is left over.
 
 ### Changing a transform
 
-Each load records a version of the transform (a hash of the file the function is defined in). Files
-already loaded aren't read again, so after a change, `plan` shows `transform  changed since the last
-load` on the table. The version covers the file the function is in; a change in another module it
-imports isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
-([Reloading a files table](#reloading-a-files-table)). A table whose `after_load` deletes its files
-can't be reloaded: drop it and load the files still in `path`.
+Each commit records the version of the transform it ran (a hash of the file the function is defined
+in) and the files it ran on, in the same transaction as their rows. The record goes to the table's
+run log, `_sqlload_runs` in its schema (objects under the table's folder on a files target), which
+`plan` lists under Objects as `create table (run log)` until `apply` (or the first load) creates it. A load only
+inserts into it, so a role without CREATE on the schema can load once `apply` has run under one
+that has it.
+
+Files already loaded aren't read again, so after a change, `plan` warns on the table for as long as
+it holds files an earlier version loaded, here after a load of one new file:
+
+```console
+$ sqlload plan
+Plan ready  1 selected, 1 to load
+
+Loads (1)                                           sqlload load
+└── raw.metrics                                     append
+    ├── source  files  ./drop/metrics/  csv, compression by file name  transform metric_rows
+    ├── route   read csv into Arrow -> DuckDB takes Arrow
+    ├── columns 3
+    ├── files   0 new of 3 listed
+    ├── batch   0 batches, up to 1,000 files or about 1 GB per commit
+    └── transform  changed: 2 files loaded under an earlier version (--reload transforms every file again)
+
+✓ Plan complete  1 selected, 1 to load
+```
+
+The version covers the file the function is in; a change in another module it imports isn't
+noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
+([Reloading a files table](#reloading-a-files-table)), after which the warning is gone. A table
+whose `after_load` deletes its files can't be reloaded: drop it and load the files still in
+`path`.
 
 ## Reloading a files table
 

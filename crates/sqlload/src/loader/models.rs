@@ -215,8 +215,10 @@ pub struct TableTransform {
     pub function: String,
     /// Its name, `@` and a hash of the file it is defined in.
     pub version: String,
-    /// Whether the version differs from the one the table's last load recorded.
-    pub changed: bool,
+    /// How many of the files (or Sheets ranges) the table holds loaded under another version, since it was last rewritten.
+    pub older: usize,
+    /// `_sqlload_runs`, where each commit records the version, does not exist yet, so `apply` creates it (a load never does, once rows committed).
+    pub creates_log: bool,
 }
 
 /// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.
@@ -1017,6 +1019,8 @@ pub struct Publisher {
     pub children: Option<ChildTables>,
     /// A files source's merge under `--reload`, which merges each file into a new table swapped in at the end.
     pub rebuild: Option<MergeRebuild>,
+    /// The `transform`'s calls so far, and how many the commits recorded: each commit records the version with the files or ranges since.
+    pub transform: Option<(TransformRun, usize)>,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.
