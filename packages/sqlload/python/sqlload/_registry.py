@@ -26,8 +26,10 @@ class Registry:
 	def __init__(self, decorator: str) -> None:
 		self.decorator = decorator
 		self._named: dict[str, list[Registered]] = {}
-		#: Functions passed as themselves (`transform=page`) rather than by a registered name, by the key they go by.
-		self._passed: dict[str, Callable[..., Any]] = {}
+		#: Functions passed as themselves (`transform=page`) rather than by a registered name, by the key they go by, with
+		#: the name they are shown by. Held until the run finishes (`release`): a job keeps only the key, so an inline lambda
+		#: would otherwise be gone before its pages are called.
+		self._passed: dict[str, tuple[Callable[..., Any], str]] = {}
 
 	def register(self, name: str, function: Callable[..., Any]) -> None:
 		"""Register `function` under `name`; the same function registered again (its module imported again) replaces itself."""
@@ -40,24 +42,28 @@ class Registry:
 		self._named[name] = [*kept, Registered(function, file)]
 
 	def key(self, function: Callable[..., Any] | str) -> tuple[str, str]:
-		"""The key a function goes by, and the name it is shown by: a registered name as it is; a function registered under
-		a name, that name; any other function, a key of its own, shown by its qualified name."""
+		"""The key a function goes by, and the name it is shown by: a registered name as it is; a function itself, a key
+		of its own that resolves to that very function (even when another function is registered under its name), shown
+		by the name it is registered under, else its qualified name."""
 		if isinstance(function, str):
 			return function, function
 		if not callable(function):
 			raise TypeError(f"expected a function or the name {self.decorator} registered one under, not {type(function).__name__}")
-		for name, entries in self._named.items():
-			if any(entry.function is function for entry in entries):
-				return name, name
-		key = f"{function.__qualname__}#{id(function):x}"
-		self._passed[key] = function
-		return key, function.__qualname__
+		registered = (name for name, entries in self._named.items() if any(entry.function is function for entry in entries))
+		shown = next(registered, getattr(function, "__qualname__", type(function).__name__))
+		key = f"{shown}#{id(function):x}"
+		self._passed[key] = (function, shown)
+		return key, shown
+
+	def release(self) -> None:
+		"""Let go of the functions passed as themselves, once the run that passed them finished."""
+		self._passed.clear()
 
 	def lookup(self, key: str, root: Path | None = None) -> tuple[Callable[..., Any] | None, str | None]:
 		"""The function registered under `key` (or passed as itself), or why there is none: no function has the name (the
 		registered ones listed), or two have it (their files named, relative to `root`)."""
 		if key in self._passed:
-			return self._passed[key], None
+			return self._passed[key][0], None
 		entries = self._named.get(key, [])
 		if len(entries) == 1:
 			return entries[0].function, None
@@ -70,9 +76,9 @@ class Registry:
 		return None, f"no function is registered as {key} with {self.decorator}; the registered ones are {names}"
 
 	def shown(self, key: str) -> str:
-		"""The name `key` is shown by in errors: a passed function's qualified name, else the key itself."""
+		"""The name `key` is shown by in errors: a passed function's, else the key itself."""
 		passed = self._passed.get(key)
-		return passed.__qualname__ if passed is not None else key
+		return passed[1] if passed is not None else key
 
 	def source_file(self, key: str) -> str | None:
 		"""The file the function `key` names is defined in."""

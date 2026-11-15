@@ -329,7 +329,8 @@ Loads (1)                                           sqlload load
 ```
 
 The version covers the file the function is in; a change in another module it imports isn't
-noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
+noticed. When that file can't be read, as for a function defined in a notebook, it covers the
+function's own code instead. To load every file again with the new transform, run `sqlload load <table> --reload`
 ([Reloading a files table](#reloading-a-files-table)), after which the warning is gone. A table
 whose `after_load` deletes its files can't be reloaded: drop it and load the files still in
 `path`.

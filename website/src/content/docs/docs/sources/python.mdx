@@ -417,7 +417,8 @@ with its paging, retries and read-ahead; the function only reshapes what a page 
 same kind of function a [files table's `transform`](/docs/sources/files/#transforming-each-file)
 runs: `f(rows, ctx)`, with the page's rows as a `pyarrow.Table`, returning or yielding dicts, lists of
 dicts, a `pyarrow.Table`, or a polars or pandas DataFrame. Pass the function itself, or the name
-`@sl.transform` registered it under:
+`@sl.transform` registered it under. A function passed itself is the one called, even when another
+file registers a function of the same name, and it needn't be registered at all:
 
 ```python title="sources/shop.py"
 import json

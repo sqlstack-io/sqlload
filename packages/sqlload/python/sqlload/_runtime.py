@@ -11,6 +11,7 @@ import logging
 import sys
 import threading
 import traceback
+import types
 from collections.abc import Iterator
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -157,7 +158,8 @@ def transform_version(name: str) -> tuple[str | None, str | None]:
 	"""Look up the transform registered as `name` and check it can run.
 
 	Returns its version, `name@` and a hash of the file it is defined in (an edit to the file, not only to the function,
-	changes it), or why it cannot run: no function or two are registered as `name`, or pyarrow is missing.
+	changes it; when the file can't be read, as for a function defined in a notebook, a hash of the function's code), or
+	why it cannot run: no function or two are registered as `name`, or pyarrow is missing.
 	"""
 	function, problem = TRANSFORMS.lookup(name, _root[0] if _root else None)
 	if function is None:
@@ -167,7 +169,7 @@ def transform_version(name: str) -> tuple[str | None, str | None]:
 	except ImportError:
 		return None, "transform needs pyarrow: pip install pyarrow"
 	source = TRANSFORMS.source_file(name) or ""
-	contents = Path(source).read_bytes() if source and Path(source).is_file() else name.encode()
+	contents = Path(source).read_bytes() if source and Path(source).is_file() else _code_bytes(function)
 	return f"{name}@{hashlib.sha256(contents).hexdigest()[:VERSION_DIGITS]}", None
 
 
@@ -188,6 +190,7 @@ def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None
 
 def finish_run() -> None:
 	"""Close every client the run built (their `close()`, when they have one)."""
+	TRANSFORMS.release()
 	clients = list(_clients.values())
 	_clients.clear()
 	for client in clients:
@@ -334,3 +337,24 @@ def _timestamp(text: str, *, aware: bool) -> datetime:
 	if not aware:
 		return value.replace(tzinfo=None)
 	return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _code_bytes(function: Any) -> bytes:
+	"""What a function does, for its version when its file can't be read: its bytecode, constants (nested functions' code
+	included) and the names it uses, without its file name or line numbers. A callable without code, by its type's name."""
+	code = getattr(function, "__code__", None)
+	return _code_parts(code) if isinstance(code, types.CodeType) else type(function).__qualname__.encode()
+
+
+def _code_parts(code: types.CodeType) -> bytes:
+	constants = [_code_parts(constant) if isinstance(constant, types.CodeType) else _constant_text(constant) for constant in code.co_consts]
+	return b"\0".join([code.co_code, repr(code.co_names).encode(), *constants])
+
+
+def _constant_text(constant: Any) -> bytes:
+	"""A code constant as text that is the same in every process: a frozenset's items sorted, as its order follows string hashing."""
+	if isinstance(constant, frozenset):
+		return repr(sorted(repr(item) for item in constant)).encode()
+	if isinstance(constant, tuple):
+		return b"(" + b",".join(_constant_text(item) for item in constant) + b")"
+	return repr(constant).encode()

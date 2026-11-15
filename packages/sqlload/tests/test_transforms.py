@@ -1,5 +1,7 @@
 """Transforms end to end: `transform` on files tables (each file or ZIP member) and on `google_sheets` tables (each range), into DuckDB."""
 
+import gc
+import importlib.util
 import json
 import os
 import subprocess
@@ -7,6 +9,7 @@ import sys
 import textwrap
 import threading
 import time
+import weakref
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -514,3 +517,57 @@ transform = "kpi_sheet"
 	]
 	assert len(expected) == 34
 	assert sorted(rows) == sorted(expected)
+
+
+def test_a_function_passed_as_transform_resolves_to_itself_when_two_files_register_its_name(tmp_path: Path) -> None:
+	from sqlload._registry import Registry
+
+	registry = Registry("@sl.transform")
+	modules = []
+	for name, body in (("a_clean", "return rows"), ("b_clean", "return rows.slice(1)")):
+		path = tmp_path / f"{name}.py"
+		path.write_text(f"def clean(rows, ctx):\n\t{body}\n")
+		spec = importlib.util.spec_from_file_location(f"transform_case_{name}", path)
+		assert spec is not None and spec.loader is not None
+		module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(module)
+		registry.register("clean", module.clean)
+		modules.append(module)
+	assert registry.lookup("clean")[0] is None, "the name alone is ambiguous"
+	key, shown = registry.key(modules[0].clean)
+	assert registry.lookup(key) == (modules[0].clean, None)
+	assert shown == "clean"
+
+
+def test_a_function_passed_as_transform_is_released_when_the_run_finishes() -> None:
+	from sqlload._runtime import finish_run
+	from sqlload._transform import TRANSFORMS
+
+	def page_transform() -> Any:
+		return lambda rows, ctx: rows
+
+	function = page_transform()
+	released = weakref.ref(function)
+	key, _ = TRANSFORMS.key(function)
+	assert TRANSFORMS.lookup(key)[0] is function
+	del function
+	finish_run()
+	gc.collect()
+	assert released() is None
+	assert TRANSFORMS.lookup(key)[0] is None
+
+
+def test_a_transform_whose_file_cant_be_read_is_versioned_by_its_code() -> None:
+	from sqlload._runtime import transform_version
+	from sqlload._transform import TRANSFORMS
+
+	def version_of(body: str) -> str | None:
+		namespace: dict[str, Any] = {}
+		exec(compile(f"def unread_file_transform(rows, ctx):\n\t{body}\n", "<notebook cell>", "exec"), namespace)
+		TRANSFORMS.register("unread_file_transform", namespace["unread_file_transform"])
+		return transform_version("unread_file_transform")[0]
+
+	first = version_of("return rows")
+	assert first is not None and first.startswith("unread_file_transform@")
+	assert version_of("return rows.slice(1)") != first
+	assert version_of("return rows") == first
