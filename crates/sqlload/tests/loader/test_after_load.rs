@@ -7,6 +7,97 @@ use crate::helpers::run_async;
 use crate::test_types::{AfterLoadStep, AfterLoadTestCase, S3AfterLoadTestCase};
 
 #[test]
+fn given_zip_archives_with_after_load_when_their_members_load_then_each_archive_moves_once_all_its_members_commit()
+-> Result<(), String> {
+    let test_cases = [
+        AfterLoadTestCase {
+            description: "move_to moves the archive once both its members commit, and the emptied folder is then skipped",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/batch.zip", "a.csv=id,v\n1,a\n;b.csv=id,v\n2,b\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":2,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in drop/: after_load deleted or moved the ones already loaded"],"status":null}"#,
+                },
+            ],
+            expected_files: &["done/batch.zip=zip"],
+        },
+        AfterLoadTestCase {
+            description: "delete removes each archive once, whatever its number of members",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[
+                    ("drop/one.zip", "a.csv=id,v\n1,a\n;b.csv=id,v\n2,b\n"),
+                    ("drop/two.zip", "c.csv=id,v\n3,c\n"),
+                ],
+                expected_exit: 0,
+                expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":2,"status":"done"},"problems":[],"rows":3,"skipped":[],"status":"loaded"}"#,
+            }],
+            expected_files: &[],
+        },
+        AfterLoadTestCase {
+            description: "a member holding only its header counts as committed, so its archive still moves",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[("drop/batch.zip", "a.csv=id,v\n1,a\n;empty.csv=id,v\n")],
+                expected_exit: 0,
+                expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+            }],
+            expected_files: &["done/batch.zip=zip"],
+        },
+        AfterLoadTestCase {
+            description: "a member that fails fails the load, so the archive stays where it is",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[("drop/batch.zip", "a.csv=id,v\n1,a\n;b.csv=id,v\n2,\"b\n")],
+                expected_exit: 1,
+                expected_report: r#"{"after_load":null,"problems":["batch.zip/b.csv: line 2: unterminated quoted field"],"rows":null,"skipped":[],"status":null}"#,
+            }],
+            expected_files: &["drop/batch.zip=zip"],
+        },
+        AfterLoadTestCase {
+            description: "plan refuses after_load while another source reads ZIP archives in a folder inside this one on the same connection, naming it",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = \"delete\"\n\n[sources.yearly]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"./drop/2026/\"\nformat = \"csv\"\ncompression = \"zip\"\nwrite_strategy = \"append\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[("drop/2026/batch.zip", "a.csv=id,v\n1,a\n")],
+                expected_exit: 1,
+                expected_report: r#"{"after_load":null,"problems":["[sources.scores] after_load moves or deletes each ZIP archive once its members load, and [sources.yearly] reads ZIP archives in \"./drop/2026/\" on the same connection, which may still need them; remove after_load, or give the sources folders apart"],"rows":null,"skipped":[],"status":null}"#,
+            }],
+            expected_files: &["drop/2026/batch.zip=zip"],
+        },
+    ];
+    run_async(async {
+        for test_case in &test_cases {
+            let files = run_after_load_case(test_case).await?;
+            assert_eq!(files, test_case.expected_files, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_moved_and_never_overwrite()
 -> Result<(), String> {
     let test_cases = [
