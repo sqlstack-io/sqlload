@@ -589,6 +589,9 @@ conversion differs. In Snowflake, where files under an external stage or copied 
 A JSON or NDJSON object loads as one `json` column unless the table's `flatten` loads its keys as
 `<object>__<key>` columns. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects).
 
+A table's `parse` reads text columns as times, in a list of formats such as ISO and `%m/%d/%Y`, and
+in a time zone. See [Parsing text into times](/docs/concepts/types/#parsing-text-into-times).
+
 From 0.27.0, pin a list column, or a JSON array in a CSV or JSON file, as
 [`array(T)`](/docs/concepts/types/#arrays) to load it as an array instead, such as
 `columns = { tags = "array(text)" }`.

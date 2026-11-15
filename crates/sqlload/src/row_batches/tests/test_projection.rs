@@ -1,9 +1,10 @@
+use crate::column_parse::models::BadValue;
 use crate::load_naming::models::Naming;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::main::projection_problem::projection_problem;
 use crate::row_batches::models::JsonLayout;
 use crate::row_batches::models::ProjectionRules;
-use crate::row_batches::models::{BadValue, FieldFrom, FieldSpec};
+use crate::row_batches::models::{FieldFrom, FieldSpec};
 use crate::row_batches::tests::helpers::read_projected;
 use crate::row_batches::tests::helpers::{flatten_rule, paths};
 use crate::row_batches::tests::test_types::{ProjectionProblemTestCase, ProjectionTestCase};
@@ -16,7 +17,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             layout: JsonLayout::Lines,
             batch_rows: 10,
             fields: Some(
-                r#"[{"name":"s","path":"$.s","parse":{"kind":"epoch_s"}},{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"}},{"name":"us","path":"$.us","parse":{"kind":"epoch_us"}}]"#,
+                r#"[{"name":"s","path":"$.s","parse":"epoch_s"},{"name":"ms","path":"$.ms","parse":"epoch_ms"},{"name":"us","path":"$.us","parse":"epoch_us"}]"#,
             ),
             keep_record: None,
             text: "{\"s\":1700000000,\"ms\":\"1700000000123\",\"us\":1700000000123456}\n{\"s\":null}\n",
@@ -25,25 +26,36 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             ]),
         },
         ProjectionTestCase {
-            description: "parse reads text with a format as a wall-clock timestamp, an instant when it has an offset, or a date",
+            description: "parse reads text with a format as an instant, a wall-clock time without tz or timezone in UTC, or a date",
             layout: JsonLayout::Lines,
             batch_rows: 10,
             fields: Some(
-                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%d/%m/%Y %H:%M"}},{"name":"inst","path":"$.at_z","parse":{"kind":"timestamp","format":"%d/%m/%Y %H:%M %z"}},{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%m/%Y"}}]"#,
+                r#"[{"name":"at","path":"$.at","parse":{"timestamp":"%d/%m/%Y %H:%M"}},{"name":"inst","path":"$.at_z","parse":{"timestamp":"%d/%m/%Y %H:%M %z"}},{"name":"day","path":"$.day","parse":{"date":"%d/%m/%Y"}}]"#,
             ),
             keep_record: None,
             text: "{\"at\":\"14/11/2026 08:05\",\"at_z\":\"14/11/2026 08:05 +0100\",\"day\":\"31/12/2026\"}\n",
             expected_batches: Ok(&[
-                "at:Timestamp(µs),inst:Timestamp(µs, \"UTC\"),day:Date32 / 2026-11-14T08:05:00|2026-11-14T07:05:00Z|2026-12-31",
+                "at:Timestamp(µs, \"UTC\"),inst:Timestamp(µs, \"UTC\"),day:Date32 / 2026-11-14T08:05:00Z|2026-11-14T07:05:00Z|2026-12-31",
+            ]),
+        },
+        ProjectionTestCase {
+            description: "parse takes a list of formats tried in turn and tz, as a table's parse setting does; tz is ignored for a value with an offset",
+            layout: JsonLayout::Lines,
+            batch_rows: 10,
+            fields: Some(
+                r#"[{"name":"at","path":"$.at","parse":{"timestamp":["iso","%m/%d/%Y %H:%M"],"tz":"Europe/Paris"}}]"#,
+            ),
+            keep_record: None,
+            text: "{\"at\":\"03/29/2026 03:30\"}\n{\"at\":\"2026-03-29T01:30:00\"}\n{\"at\":\"2026-03-29T01:30:00Z\"}\n",
+            expected_batches: Ok(&[
+                "at:Timestamp(µs, \"UTC\") / 2026-03-29T01:30:00Z; 2026-03-29T00:30:00Z; 2026-03-29T01:30:00Z",
             ]),
         },
         ProjectionTestCase {
             description: "a value parse can't read fails the read, naming the row, field, value and format",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%m/%Y"}}]"#,
-            ),
+            fields: Some(r#"[{"name":"day","path":"$.day","parse":{"date":"%d/%m/%Y"}}]"#),
             keep_record: None,
             text: "{\"day\":\"31/12/2026\"}\n{\"day\":\"2026-12-31\"}\n",
             expected_batches: Err(
@@ -54,9 +66,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "with on_error null, a value parse can't read loads NULL",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"},"on_error":"null"}]"#,
-            ),
+            fields: Some(r#"[{"name":"ms","path":"$.ms","parse":"epoch_ms","on_error":"null"}]"#),
             keep_record: None,
             text: "{\"ms\":\"soon\"}\n{\"ms\":0}\n",
             expected_batches: Ok(&["ms:Timestamp(µs, \"UTC\") / NULL; 1970-01-01T00:00:00Z"]),
@@ -65,9 +75,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "an epoch past the year 9999 doesn't convert, so it loads NULL rather than turning the column into text",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"ms","path":"$.ms","parse":{"kind":"epoch_ms"},"on_error":"null"}]"#,
-            ),
+            fields: Some(r#"[{"name":"ms","path":"$.ms","parse":"epoch_ms","on_error":"null"}]"#),
             keep_record: None,
             text: "{\"ms\":1700000000123456}\n{\"ms\":1700000000123}\n",
             expected_batches: Ok(&["ms:Timestamp(µs, \"UTC\") / NULL; 2023-11-14T22:13:20.123Z"]),
@@ -77,7 +85,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             layout: JsonLayout::Lines,
             batch_rows: 10,
             fields: Some(
-                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%Y-%m-%dT%H:%M:%S%.f%#z"}}]"#,
+                r#"[{"name":"at","path":"$.at","parse":{"timestamp":"%Y-%m-%dT%H:%M:%S%.f%#z"}}]"#,
             ),
             keep_record: None,
             text: "{\"at\":\"2026-11-14T08:05:00.123456Z\"}\n{\"at\":\"2026-11-14T08:05:00.5+01:00\"}\n",
@@ -89,9 +97,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "%f, which reads nanoseconds here, is refused before any row",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%H:%M:%S.%f"}}]"#,
-            ),
+            fields: Some(r#"[{"name":"at","path":"$.at","parse":{"timestamp":"%H:%M:%S.%f"}}]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(
@@ -102,9 +108,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a padded %-f reads nanoseconds too and is refused the same way",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"at","path":"$.at","parse":{"kind":"timestamp","format":"%H:%M:%S.%-f"}}]"#,
-            ),
+            fields: Some(r#"[{"name":"at","path":"$.at","parse":{"timestamp":"%H:%M:%S.%-f"}}]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(
@@ -115,9 +119,7 @@ fn given_fields_when_reading_json_rows_then_only_those_values_load_under_their_n
             description: "a format with an unknown directive is refused before any row",
             layout: JsonLayout::Lines,
             batch_rows: 10,
-            fields: Some(
-                r#"[{"name":"day","path":"$.day","parse":{"kind":"date","format":"%d/%Q"}}]"#,
-            ),
+            fields: Some(r#"[{"name":"day","path":"$.day","parse":{"date":"%d/%Q"}}]"#),
             keep_record: None,
             text: "{}\n",
             expected_batches: Err(

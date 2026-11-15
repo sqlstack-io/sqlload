@@ -17,6 +17,7 @@ use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
@@ -573,6 +574,16 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let lines = flatten_lines(&spec.flatten, objects.zip(sampled.as_deref()), &kept);
     if !lines.is_empty() {
         details.push(detail("flatten", lines.join("\n")));
+    }
+    let zone = spec
+        .timezone
+        .map(|(zone, at)| (zone, format!("the {at}'s timezone")));
+    let lines = parse_lines(
+        &spec.parses,
+        zone.as_ref().map(|(zone, from)| (*zone, from.as_str())),
+    );
+    if !lines.is_empty() {
+        details.push(detail("parse", lines.join("\n")));
     }
     details.extend(
         spec.files

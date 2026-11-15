@@ -54,6 +54,9 @@ EAM_RECORDS = [
 ]
 #: Records an EAM page holds.
 EAM_PAGE = 2
+#: With `times` in the query, the due dates as the EAM writes them in Paris: ISO or one of three US formats, around the change to summer time on
+#: 29 March 2026 (02:00 CET becomes 03:00 CEST), the last with its own offset; with `bad` too, the fourth is text no format reads.
+EAM_TIMES = {"1001": "2026-03-29T01:30:00", "1002": "03/29/2026 03:30:00", "1004": "03/29/2026 12:00", "1005": "2026-03-29T09:00:00+02:00"}
 
 
 class Api(BaseHTTPRequestHandler):
@@ -94,6 +97,13 @@ class Api(BaseHTTPRequestHandler):
 			records[1]["DATAFIELD"].insert(1, {"FIELDVALUE": "orphan"})
 		if start == EAM_PAGE and query.get("clash"):
 			records[0]["Description"] = "the record's own"
+		if query.get("times"):
+			for record in records:
+				fields = record["DATAFIELD"]
+				code = fields[0]["FIELDVALUE"]
+				for cell in fields:
+					if cell["FIELDNAME"] == "DueDate":
+						cell["FIELDVALUE"] = "soon" if query.get("bad") and code == "1004" else EAM_TIMES[code]
 		more = start + EAM_PAGE < len(EAM_RECORDS)
 		self.reply(200, {"Result": {"ResultData": {"NEXTCURSORPOSITION": start + EAM_PAGE if more else None, "DATARECORD": records}}})
 
@@ -238,6 +248,49 @@ def test_given_cells_that_name_themselves_paged_by_a_body_cursor_when_loading_th
 		{"GRID": {"NAME": "WSJOBS"}},
 		{"GRID": {"NAME": "WSJOBS"}, "CURSORPOSITION": 2},
 		{"GRID": {"NAME": "WSJOBS"}, "CURSORPOSITION": 4},
+	]
+
+
+def eam_parse(extra: str = "") -> str:
+	"""The table's `parse` of the EAM due dates: ISO or the three US formats, in Paris, and `extra` keys."""
+	return ", parse={'due_date': {'timestamp': ['iso', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%m/%d/%Y'], 'tz': 'Europe/Paris'" + extra + "}}"
+
+
+def test_given_cells_with_iso_and_us_times_in_paris_when_loading_with_parse_then_each_loads_as_its_utc_instant_across_the_dst_change(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	project = table_project(tmp_path, api, EAM.format(flags="?times=1"), settings=eam_parse())
+	loaded = sqlload(project, "load")
+	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
+	assert query(project, """SELECT wo_code, CAST(timezone('UTC', due_date) AS VARCHAR), typeof(due_date) FROM "RAW".shop__rows ORDER BY wo_code""") == [
+		("1001", "2026-03-29 00:30:00", "TIMESTAMP WITH TIME ZONE"),
+		("1002", "2026-03-29 01:30:00", "TIMESTAMP WITH TIME ZONE"),
+		("1003", None, "TIMESTAMP WITH TIME ZONE"),
+		("1004", "2026-03-29 10:00:00", "TIMESTAMP WITH TIME ZONE"),
+		("1005", "2026-03-29 07:00:00", "TIMESTAMP WITH TIME ZONE"),
+	]
+
+
+def test_given_a_cell_no_format_reads_when_loading_with_parse_then_the_load_fails_naming_the_row_column_and_value(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = table_project(tmp_path, api, EAM.format(flags="?times=1&bad=1"), settings=eam_parse())
+	loaded = sqlload(project, "load")
+	assert loaded.returncode == 1
+	assert (
+		'row 4: column due_date holds "soon", which is not a timestamp in any of the formats iso, "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y"; '
+		'fix the value, or set on_error = "null" in its parse to load NULL'
+	) in loaded.stdout + loaded.stderr
+
+
+def test_given_a_cell_no_format_reads_when_loading_with_on_error_null_then_it_loads_null(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = table_project(tmp_path, api, EAM.format(flags="?times=1&bad=1"), settings=eam_parse(", 'on_error': 'null'"))
+	loaded = sqlload(project, "load")
+	assert loaded.returncode == 0, loaded.stdout + loaded.stderr
+	assert query(project, 'SELECT wo_code, due_date IS NOT NULL FROM "RAW".shop__rows ORDER BY wo_code') == [
+		("1001", True),
+		("1002", True),
+		("1003", False),
+		("1004", False),
+		("1005", True),
 	]
 
 

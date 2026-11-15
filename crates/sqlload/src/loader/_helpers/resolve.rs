@@ -617,7 +617,7 @@ pub(crate) fn display_name(warehouse: Warehouse, table: &TableName) -> String {
 /// How a table's names load: its naming and its destination's name limit.
 pub(crate) type NameRule = (Naming, Option<usize>);
 
-/// `overrides` with every column it names as the column loads (`name`), so a setting may name a column either way: its pins, masks, `unnest` paths (each part) and settings. `exclude_columns` and `allow_columns` match the source's names, and `flatten` the yielded objects', so they stay as written.
+/// `overrides` with every column it names as the column loads (`name`), so a setting may name a column either way: its pins, masks, parses, `unnest` paths (each part) and settings. `exclude_columns` and `allow_columns` match the source's names, and `flatten` the yielded objects', so they stay as written.
 pub(crate) fn loaded_overrides(
     overrides: &TableOverride,
     name: &dyn Fn(&str) -> String,
@@ -626,6 +626,7 @@ pub(crate) fn loaded_overrides(
         settings: loaded_settings(&overrides.settings, name),
         columns: renamed_keys(&overrides.columns, &name),
         mask: renamed_keys(&overrides.mask, &name),
+        parse: renamed_keys(&overrides.parse, &name),
         unnest: overrides
             .unnest
             .as_ref()

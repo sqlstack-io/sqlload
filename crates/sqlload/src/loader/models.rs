@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
+use crate::column_parse::models::ColumnParse;
 use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
 use crate::row_batches::models::{Flatten, Unnest};
 use std::collections::BTreeMap;
@@ -214,6 +215,10 @@ pub struct TableSpec {
     pub listed: Option<Box<SourceTable>>,
     /// The Python function each file's (or Sheets range's) rows go through before they load; `None` without `transform`.
     pub transform: Option<TableTransform>,
+    /// The text columns read as times, by the name each loads as.
+    pub parses: BTreeMap<String, ColumnParse>,
+    /// The zone of the times without an offset that a parse without its own `tz` reads, and whose setting it is; `None` reads them as UTC.
+    pub timezone: Option<(chrono_tz::Tz, SettingOrigin)>,
 }
 
 /// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.

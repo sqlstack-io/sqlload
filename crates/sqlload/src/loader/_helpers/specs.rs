@@ -11,6 +11,9 @@ use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
+use crate::column_parse::main::column_parse::column_parse;
+use crate::column_parse::main::time_zone::time_zone;
+use crate::column_parse::models::ColumnParse;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
@@ -150,7 +153,7 @@ pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
     }
 }
 
-/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
+/// Problems with `columns`, `mask` and `parse` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
 fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
     let names: Vec<&str> = table
         .columns
@@ -162,9 +165,41 @@ fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> 
         .keys()
         .filter(|key| !is_child_column(key, overrides))
         .map(|key| ("columns", key))
-        .chain(overrides.mask.keys().map(|key| ("mask", key)));
+        .chain(overrides.mask.keys().map(|key| ("mask", key)))
+        .chain(overrides.parse.keys().map(|key| ("parse", key)));
     keys.filter(|(_, key)| !names.contains(&key.as_str()))
         .map(|(setting, key)| unknown_column(setting, key, &names))
+        .collect()
+}
+
+/// A problem for each `parse` key naming a column a database's catalog already types as a date or a time, which holds no text to parse; files, Sheets and Python columns are typed from their values, and read as text where they are parsed.
+fn typed_parse_problems(
+    kind: SourceKind,
+    table: &SourceTable,
+    overrides: &TableOverride,
+) -> Vec<String> {
+    if matches!(
+        kind,
+        SourceKind::Files | SourceKind::GoogleSheets | SourceKind::Python
+    ) {
+        return Vec::new();
+    }
+    table
+        .columns
+        .iter()
+        .filter(|column| overrides.parse.contains_key(&column.name))
+        .filter_map(|column| match &column.column_type {
+            Ok(
+                column_type @ (ColumnType::Date
+                | ColumnType::Time
+                | ColumnType::TimestampTz
+                | ColumnType::TimestampNtz),
+            ) => Some(format!(
+                "parse {}: the source already types the column as {column_type}, so it holds no text to parse; drop its parse",
+                column.name
+            )),
+            _ => None,
+        })
         .collect()
 }
 
@@ -237,6 +272,7 @@ pub(crate) fn build_spec(
     };
     problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
     problems.extend(column_reference_problems(table, overrides));
+    problems.extend(typed_parse_problems(context.source.kind, table, overrides));
     problems.extend(cursor_problems(
         context,
         (settings, defaults),
@@ -335,6 +371,14 @@ pub(crate) fn build_spec(
     problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
+    let parses = table_parses(overrides).unwrap_or_else(|found| {
+        problems.extend(found);
+        BTreeMap::new()
+    });
+    let timezone = table_timezone((settings, defaults)).unwrap_or_else(|problem| {
+        problems.push(problem);
+        None
+    });
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -456,7 +500,42 @@ pub(crate) fn build_spec(
         },
         layout,
         transform: None,
+        parses,
+        timezone,
     })
+}
+
+/// The table's `parse` entries read, or their problems; a column cannot be both pinned in `columns` and parsed, as `parse` gives its type.
+fn table_parses(overrides: &TableOverride) -> Result<BTreeMap<String, ColumnParse>, Vec<String>> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut parses: BTreeMap<String, ColumnParse> = BTreeMap::new();
+    for (column, setting) in &overrides.parse {
+        match column_parse(setting) {
+            Ok(_) if overrides.columns.contains_key(column) => problems.push(format!(
+                "parse {column}: the column is also pinned in columns, and parse gives its type; drop the pin"
+            )),
+            Ok(parse) => {
+                parses.insert(column.clone(), parse);
+            }
+            Err(problem) => problems.push(format!("parse {column}: {problem}")),
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(parses),
+        false => Err(problems),
+    }
+}
+
+/// The table's `timezone` (its own, else its source's) and where it is set, or why it is not an IANA zone.
+fn table_timezone(
+    (settings, defaults): (&TableSettings, &TableSettings),
+) -> Result<Option<(chrono_tz::Tz, SettingOrigin)>, String> {
+    match layered(&settings.timezone, &defaults.timezone) {
+        Some((name, origin)) => time_zone(&name)
+            .map(|zone| Some((zone, origin)))
+            .map_err(|problem| format!("timezone: {problem}")),
+        None => Ok(None),
+    }
 }
 
 /// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a name the source table already has among its loaded columns, ignoring case, a type with no Arrow type or one the target cannot load, or an array. A files source's are checked as before by its reader, which fills them and replaces a file column of the same name (`plan` notes it).
@@ -1761,7 +1840,7 @@ pub(crate) fn files_read_as(
     (columns, inferred)
 }
 
-/// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
+/// The read columns of a files source: the file's types, or the pinned ones (converted while reading); a parsed column reads as text, for `parse` to convert.
 pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
     let mut columns: Vec<ReadColumn> = Vec::new();
@@ -1772,6 +1851,7 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
             .any(|(excluded, _)| *excluded == column.name);
         let output = match (spec.pinned.get(&column.name), &column.column_type) {
             _ if excluded => continue,
+            _ if spec.parses.contains_key(&column.name) => ColumnType::Text,
             (Some(pinned), _) => pinned.clone(),
             (None, Ok(column_type)) => column_type.clone(),
             (None, Err(reason)) => {
