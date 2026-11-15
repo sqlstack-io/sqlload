@@ -26,11 +26,11 @@ use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
 use crate::test_types::{
-    CdcStep, CursorSource, DebugStageTestCase, FilesScenario, FilesScenarioTestCase,
-    FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks, MetadataRoundTripTestCase,
-    ParquetFile, PeakMemoryReport, PeakMemoryTestCase, ReplacedKeysTestCase, RouteFiles,
-    RouteOutcome, RouteTestCase, ScenarioTestCase, TextFilesScenarioTestCase, WrittenPartition,
-    WrittenRow, WrittenRun,
+    CdcStep, CursorSource, DebugStageTestCase, FileSetTestCase, FilesScenario,
+    FilesScenarioTestCase, FilesTargetScenarioTestCase, LargePartitionTestCase, LiveDatabricks,
+    MetadataRoundTripTestCase, ParquetFile, PeakMemoryReport, PeakMemoryTestCase,
+    ReplacedKeysTestCase, RouteFiles, RouteOutcome, RouteTestCase, ScenarioTestCase,
+    TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
 /// Run an async test body on a fresh multi-threaded runtime.
@@ -398,6 +398,29 @@ pub(crate) async fn run_files_scenario(
         check_query: test_case.check_query,
     };
     run_written_files(endpoint, directory, scenario).await
+}
+
+/// Load `test_case`'s file set once from a local folder into DuckDB, checking the load's error; the check query's result.
+pub(crate) async fn run_file_set(
+    directory: &std::path::Path,
+    test_case: &FileSetTestCase,
+) -> Result<Option<String>, String> {
+    let files = (test_case.file_set)()?;
+    let scenario = FilesScenario {
+        description: test_case.description,
+        store: local_store,
+        settings: test_case.settings,
+        runs: vec![WrittenRun {
+            files: files
+                .iter()
+                .map(|(key, contents)| (key.as_str(), contents.clone()))
+                .collect(),
+            expected_error: test_case.expected_error,
+            expected_plan: "",
+        }],
+        check_query: test_case.check_query,
+    };
+    run_written_files("", directory, scenario).await
 }
 
 /// Run a JSON or CSV files scenario like [`run_files_scenario`].

@@ -5,11 +5,11 @@ use crate::after_load_helpers::run_after_load_case;
 use crate::files_helpers::run_source_row_upgrade;
 use crate::helpers::{MEGABYTE, run_peak_memory};
 use crate::helpers::{
-    local_store, run_async, run_files_scenario, run_large_partition, run_replaced_keys,
-    seaweedfs_store,
+    int96_in_a_later_batch, local_store, run_async, run_file_set, run_files_scenario,
+    run_large_partition, run_replaced_keys, seaweedfs_store,
 };
 use crate::merge_helpers::run_merge_case;
-use crate::test_types::{AfterLoadStep, AfterLoadTestCase};
+use crate::test_types::{AfterLoadStep, AfterLoadTestCase, FileSetTestCase};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep, ReplacedKeysTestCase};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 use crate::test_types::{PeakMemoryTestCase, SourceRowUpgradeTestCase};
@@ -1815,4 +1815,29 @@ fn given_memory_per_table_when_loading_then_each_table_reports_its_peak_in_the_j
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_a_later_batch_holding_a_column_duckdb_cannot_read_exactly_when_duckdb_reads_the_files_itself_then_the_load_stops_there()
+-> Result<(), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let test_cases = [FileSetTestCase {
+        description: "a batch of INT96 under embedded microseconds, which plan's sample of the newest files never saw, is refused by its own footers; the batch before it stays loaded",
+        settings: "write_strategy = \"append\"\n",
+        file_set: int96_in_a_later_batch,
+        expected_error: "DuckDB cannot load this batch's files exactly by reading them itself, and they never go through SQLLoad instead: column at is held as",
+        check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
+        expected_result: "1000",
+    }];
+    run_async(async {
+        for test_case in &test_cases {
+            assert_eq!(
+                run_file_set(directory.path(), test_case).await?.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
 }

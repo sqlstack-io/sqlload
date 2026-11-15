@@ -1398,3 +1398,14 @@ pub(crate) struct TypedCursorTestCase {
     /// For each run: `ok` when the plan has no errors and the load succeeds, `refused` when the plan has errors; then ` => ` and the check query's result.
     pub(crate) expected_outcomes: &'static [&'static str],
 }
+
+/// A Parquet files source into DuckDB loaded once from a file set: the load's error and the rows it left.
+pub(crate) struct FileSetTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: SourceFiles,
+    /// Text the load's error must contain; empty when it must succeed.
+    pub(crate) expected_error: &'static str,
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}

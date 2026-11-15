@@ -146,7 +146,7 @@ fn pulled_file(
     (batch, columns): (&DirectBatch<'_>, &[DesiredColumn]),
 ) -> Result<PulledFile, LoaderError> {
     let mut in_file: Vec<String> = Vec::new();
-    if let Some(footer) = batch.footers.parquet.get(&data.file.relative_key) {
+    if let Some(footer) = batch.footers.parquet.get(&data.file.store_key()) {
         in_file.extend(
             footer
                 .schema()
