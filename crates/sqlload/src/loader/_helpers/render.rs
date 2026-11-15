@@ -31,9 +31,9 @@ use crate::loader::constants::{
     PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
-    CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
-    PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan, TableResult,
-    TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
+    CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
+    ProjectPlan, PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan,
+    TableResult, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
@@ -41,6 +41,7 @@ use crate::project::models::MaskMethod;
 use crate::project::models::NullCursor;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
+use crate::row_batches::main::flatten_lines::flatten_lines;
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, TableAction};
@@ -522,6 +523,32 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             ),
         };
         details.push(detail("unnest", text));
+    }
+    let sampled: Option<Vec<String>> = spec
+        .files
+        .as_ref()
+        .filter(|files| files.transform.is_none())
+        .map(file_column_names);
+    let kept: Vec<String> = table
+        .schema
+        .write_columns
+        .iter()
+        .filter(|column| sampled.is_some() && column.column_type == ColumnType::Json)
+        .filter(|column| {
+            matches!(
+                column.origin,
+                ColumnOrigin::Source | ColumnOrigin::Inferred | ColumnOrigin::Pinned
+            )
+        })
+        .map(|column| column.name.clone())
+        .collect();
+    let objects = spec
+        .files
+        .as_ref()
+        .map(|files| files.table.objects.as_slice());
+    let lines = flatten_lines(&spec.flatten, objects.zip(sampled.as_deref()), &kept);
+    if !lines.is_empty() {
+        details.push(detail("flatten", lines.join("\n")));
     }
     details.extend(
         spec.files
@@ -1027,21 +1054,25 @@ fn python_create(table: &TablePlan) -> String {
     }
 }
 
+/// The names of the columns a files table's sampled files hold, as they spell them.
+fn file_column_names(files: &FilesSource) -> Vec<String> {
+    files
+        .table
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect()
+}
+
 /// Where a Python table's columns come from.
 fn python_columns_line(table: &TablePlan, python: &PythonTable) -> String {
     let declared = match python.declared.len() {
         0 => String::new(),
         count => format!(", {count} declared"),
     };
-    let flattened = match table.spec.flatten.is_empty() {
-        true => String::new(),
-        false => format!(", {} flattened one level", table.spec.flatten.join(", ")),
-    };
     match table.exists {
-        true => format!(
-            "columns inferred at load and checked against the live table{declared}{flattened}"
-        ),
-        false => format!("columns inferred on first load{declared}{flattened}"),
+        true => format!("columns inferred at load and checked against the live table{declared}"),
+        false => format!("columns inferred on first load{declared}"),
     }
 }
 

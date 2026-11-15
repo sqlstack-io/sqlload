@@ -9,14 +9,16 @@ use arrow_schema::{DataType, Field, Schema};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::models::ColumnType;
+use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::models::Naming;
 use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::constants::{
-    FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY, FLATTENED_SEPARATOR,
+    DATA_KEYS_SHARE, FLATTEN_SEPARATOR, FLATTENED_METADATA_KEY, FLATTENED_SEPARATOR, MANY_KEYS,
 };
 use crate::row_batches::main::columns_batch::columns_batch;
 use crate::row_batches::main::json_rows::json_rows;
-use crate::row_batches::models::{JsonLayout, JsonRead};
-use crate::row_batches::types::NamedColumn;
+use crate::row_batches::models::{Flatten, FlattenObjects, JsonLayout, JsonRead};
+use crate::row_batches::types::FlattenedColumns;
 
 /// `columns` as a batch of `rows` rows whose schema lists `flattened`, the columns flattening made.
 pub(crate) fn rebuilt(
@@ -93,65 +95,113 @@ impl Names<'_> {
     }
 }
 
-/// `batch`'s columns with each listed one replaced by its key columns, and every column flattening has made in it (sorted).
+/// `batch`'s columns with each column holding objects `flatten` flattens replaced by its keys' columns, recursively, and every column flattening has made in it (sorted), or `None` when nothing flattened. A column an earlier flattening made sits at the path its name spells (`customer__address` below `customer`).
 pub(crate) fn expanded_columns(
     batch: &RecordBatch,
-    flatten: &[String],
-) -> Result<(Vec<NamedColumn>, Vec<String>), String> {
+    flatten: &Flatten,
+) -> Result<Option<FlattenedColumns>, String> {
     let schema = batch.schema();
+    let earlier = flattened_names(&schema);
     let mut names = Names {
         plain: &schema,
         made: HashMap::new(),
     };
     let mut columns: Vec<(Arc<Field>, ArrayRef)> = Vec::with_capacity(schema.fields().len());
+    let mut expanded = false;
     for (field, array) in schema.fields().iter().zip(batch.columns()) {
-        match flatten.contains(field.name()) {
-            false => columns.push((field.clone(), array.clone())),
-            true => columns.extend(key_columns(field, array, &mut names)?),
-        }
+        let path: Vec<&str> = match earlier.contains(field.name()) {
+            true => field.name().split(FLATTEN_SEPARATOR).collect(),
+            false => vec![field.name().as_str()],
+        };
+        expanded |= expand((field, array), &path, flatten, (&mut names, &mut columns))?;
     }
-    let mut flattened = flattened_names(&schema);
-    flattened.extend(names.made.into_keys());
+    if !expanded {
+        return Ok(None);
+    }
+    let made: Vec<&str> = columns
+        .iter()
+        .map(|(field, _)| field.name().as_str())
+        .filter(|name| names.made.contains_key(*name))
+        .collect();
+    let mut flattened: Vec<String> = earlier;
+    flattened.extend(made.into_iter().map(str::to_owned));
     flattened.sort();
-    Ok((columns, flattened))
+    flattened.dedup();
+    Ok(Some((columns, flattened)))
 }
 
-/// The listed column's objects as one column per key, named by `names`: a struct's children as they are, JSON objects typed by inference; nothing for a column of NULLs.
+/// Push the column at `path` onto `columns`, or, when it holds objects `flatten` flattens (a listed path, or under `"all"` a column of objects), its keys' columns in its place, each named by `names` and flattened in turn; whether it flattened.
+fn expand(
+    (field, array): (&Arc<Field>, &ArrayRef),
+    path: &[&str],
+    flatten: &Flatten,
+    (names, columns): (&mut Names<'_>, &mut Vec<(Arc<Field>, ArrayRef)>),
+) -> Result<bool, String> {
+    let object = flatten.lists(path)
+        || (flatten.objects == FlattenObjects::All && holds_objects(field, array));
+    if !(object && flatten.flattens(path)?) {
+        columns.push((field.clone(), array.clone()));
+        return Ok(false);
+    }
+    let parent = path.join(FLATTEN_SEPARATOR);
+    for (key, values) in key_columns(field, array)? {
+        let name = names.claim(&parent, key.name())?;
+        let below: Vec<&str> = path.iter().copied().chain([key.name().as_str()]).collect();
+        let named = Arc::new(key.as_ref().clone().with_name(name));
+        expand((&named, &values), &below, flatten, (names, columns))?;
+    }
+    Ok(true)
+}
+
+/// Whether every value of the column is an object (a struct, a map, or a JSON column of objects), and some is.
+fn holds_objects(field: &Field, array: &ArrayRef) -> bool {
+    if array.logical_null_count() == array.len() {
+        return false;
+    }
+    match array.data_type() {
+        DataType::Struct(_) | DataType::Map(..) => true,
+        DataType::Utf8 if is_json(field) => {
+            let texts = array.as_string::<i32>();
+            texts
+                .iter()
+                .flatten()
+                .all(|text| text.trim_start().starts_with('{'))
+        }
+        _ => false,
+    }
+}
+
+/// Whether the column holds JSON text.
+fn is_json(field: &Field) -> bool {
+    field
+        .metadata()
+        .get(ARROW_TYPE_METADATA_KEY)
+        .is_some_and(|kind| *kind == ColumnType::Json.to_string())
+}
+
+/// The column's objects as one column per key, each named by its key: a struct's children as they are, JSON objects typed by inference; nothing for a column of NULLs; an error naming the row of a value that is not an object.
 pub(crate) fn key_columns(
     field: &Field,
     array: &ArrayRef,
-    names: &mut Names<'_>,
 ) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
-    let is_json = field
-        .metadata()
-        .get(ARROW_TYPE_METADATA_KEY)
-        .is_some_and(|kind| *kind == ColumnType::Json.to_string());
-    let keys = match (array.data_type(), is_json) {
-        _ if array.logical_null_count() == array.len() => Vec::new(),
-        (DataType::Struct(_), _) => struct_children(array)?,
-        (DataType::Utf8, true) => json_keys(field, array)?,
+    match (array.data_type(), is_json(field)) {
+        _ if array.logical_null_count() == array.len() => Ok(Vec::new()),
+        (DataType::Struct(_), _) => struct_children(array),
+        (DataType::Utf8, true) => json_keys(field, array),
         (DataType::Map(..), _) => {
             let (json_field, json_array) = normalise_column(field.name(), array)?;
-            json_keys(&json_field, &json_array)?
+            json_keys(&json_field, &json_array)
         }
         (DataType::Utf8, false) => {
             let (row, shape) = text_shape(array);
-            return Err(shape_error(field.name(), row, shape));
+            Err(shape_error(field.name(), row, shape))
         }
-        (data_type, _) => {
-            return Err(shape_error(
-                field.name(),
-                first_value(array),
-                &shape(data_type),
-            ));
-        }
-    };
-    keys.into_iter()
-        .map(|(key, values)| {
-            let name = names.claim(field.name(), key.name())?;
-            Ok((Arc::new(key.as_ref().clone().with_name(name)), values))
-        })
-        .collect()
+        (data_type, _) => Err(shape_error(
+            field.name(),
+            first_value(array),
+            &shape(data_type),
+        )),
+    }
 }
 
 /// A struct column's children, NULL wherever the struct is.
@@ -266,4 +316,27 @@ pub(crate) fn shape_error(object: &str, row: usize, shape: &str) -> String {
         "flatten {object}: row {} of a batch holds {shape}, not an object; the shape changed, so leave {object} unflattened or fix the source",
         row + 1
     )
+}
+
+/// The keys below `object` that load as columns (not objects themselves), as the data spells them: the sampled `columns` named `<object>__…`.
+pub(crate) fn leaf_keys(object: &str, (objects, columns): (&[String], &[String])) -> Vec<String> {
+    let prefix = format!("{object}{FLATTEN_SEPARATOR}");
+    columns
+        .iter()
+        .filter_map(|column| column.strip_prefix(&prefix))
+        .filter(|key| !objects.contains(&format!("{prefix}{key}")))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether an object's keys look like data rather than field names: more than [`MANY_KEYS`] of them, or more than [`DATA_KEYS_SHARE`] percent of them holding a digit or not a plain name (snake_case changes more than its case).
+pub(crate) fn keys_are_data(keys: &[String]) -> bool {
+    let data = keys.iter().filter(|key| is_data_key(key)).count();
+    keys.len() > MANY_KEYS || (!keys.is_empty() && data * 100 > keys.len() * DATA_KEYS_SHARE)
+}
+
+/// Whether `key` looks like data rather than a field name: it holds a digit, or snake_case changes more than its case.
+pub(crate) fn is_data_key(key: &str) -> bool {
+    key.bytes().any(|byte| byte.is_ascii_digit())
+        || loaded_name(Naming::SnakeCase, key, None) != key.to_lowercase()
 }

@@ -245,7 +245,7 @@ impl Output {
         Ok(open)
     }
 
-    /// A yielded Arrow batch with its listed struct columns flattened, then in the loader's types.
+    /// A yielded Arrow batch with the struct columns its table flattens flattened, then in the loader's types.
     fn arrow(&self, batch: &RecordBatch) -> Result<RecordBatch, CrossError> {
         let flattened = flatten_batch(batch, &self.context.flatten).map_err(CrossError::Data)?;
         let (naming, limit) = self.context.naming;
@@ -351,6 +351,7 @@ impl Output {
             masked: self.context.masked.clone(),
             arrays: self.context.arrays.clone(),
             naming: self.context.naming,
+            flatten: self.context.flatten.clone(),
         };
         let options = CrossingOptions {
             parse_threads: 1,

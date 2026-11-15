@@ -21,7 +21,7 @@ pub fn unnest_batch(
         naming: request.naming,
         compat: request.compat,
         name_limit: request.name_limit,
-        flatten_objects: request.flatten_objects,
+        flatten: request.flatten,
         live: request.live,
         looked_up: std::collections::BTreeSet::new(),
         choices,

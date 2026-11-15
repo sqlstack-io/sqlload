@@ -283,7 +283,8 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `checks` | none | `{ unique, not_null, min_rows, max_row_drop, warn }`, run on the staged rows before they're published. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | none | The same value in every row, such as `{ tenant_id = "acme" }`, typed by its TOML value or `{ value, type }`. From 0.26.0 on files sources; from 0.37.0 on every source but `postgres_cdc`, and per table, where a table's map replaces its source's. A files source replaces a file column of the same name, and `plan` notes it; every other source fails at `plan` when it already has a column of the name, ignoring case, before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
 | `unnest` | none | From 0.40.0. In a table entry only: the dotted paths of the list fields whose items become rows of child tables, such as `["items", "items.parts"]`, or `"all"`. See [Nested data](/docs/concepts/nested-data/). |
-| `max_depth` | `1000` | From 0.40.0. In a table entry with `unnest`: how many levels of child tables it makes at most. |
+| `flatten` | none | In a table entry only: the dotted paths of the objects whose keys load as `<object>__<key>` columns, such as `["customer", "customer.address"]`, or `"all"`. JSON and NDJSON files default to `"all"` under `compat = "dlt"`. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects). |
+| `max_depth` | `1000` | From 0.40.0. In a table entry with `unnest` or `flatten`: how many levels of child tables it makes and objects it flattens at most. |
 | `naming` | the target's | `snake_case` or `source`. See [naming](/docs/concepts/nested-data/#naming-1). |
 | `rename` | none | From 0.53.0. A map of source names to loaded names, such as `{ "Order ID" = "order_ref" }`, or the name a Python function was registered under with `@sl.rename`. See [rename](/docs/concepts/nested-data/#rename). |
 | `on_duplicate_names` | `number` | From 0.53.0. `number` or `fail`: what happens when columns load under one name, ignoring case. See [on_duplicate_names](/docs/concepts/nested-data/#on_duplicate_names). |
@@ -315,5 +316,5 @@ Only in a table entry:
 | `exclude_columns`, `allow_columns`, `destination_path` | As on the source, for this table. |
 
 Python tables take the same settings as decorator arguments, except `lookahead` and
-`lookback_from`, which they refuse, plus `allow_empty`, `state` and `flatten`. See
+`lookback_from`, which they refuse, plus `allow_empty` and `state`. See
 [Python sources](/docs/sources/python/#settings).

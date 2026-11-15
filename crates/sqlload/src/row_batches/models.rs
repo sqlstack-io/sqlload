@@ -4,7 +4,9 @@ use crate::row_batches::types::ListChoices;
 
 use arrow_array::RecordBatch;
 
+use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
+use crate::row_batches::constants::FLATTEN_SEPARATOR;
 
 /// One value of a yielded row, before its column's type is known.
 #[derive(Debug, Clone, PartialEq)]
@@ -173,8 +175,8 @@ pub struct PathNode {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProjectionRules<'a> {
     pub cursor_column: Option<&'a str>,
-    /// Columns expanded into `<column>__<key>` after projection.
-    pub flatten: &'a [String],
+    /// The objects expanded into `<column>__<key>` columns after projection, when the table flattens any.
+    pub flatten: Option<&'a Flatten>,
     pub masked: &'a [String],
     /// How the table's columns load, and the destination's name limit: a field loads the cursor when its loaded name is the cursor's.
     pub naming: (Naming, Option<usize>),
@@ -324,6 +326,107 @@ impl Unnest {
     }
 }
 
+/// Which objects of a table's rows flatten into `<object>__<key>` columns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FlattenObjects {
+    /// None: objects stay JSON columns.
+    #[default]
+    None,
+    /// Every object, at every level down to `max_depth`.
+    All,
+    /// The objects at these dotted paths (`customer`, `customer.address`, `items.dimensions` inside an unnested list's items).
+    Paths(Vec<String>),
+}
+
+/// How a table flattens the objects of its rows: which, the ones kept whole, and how deep.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Flatten {
+    pub objects: FlattenObjects,
+    /// Objects kept whole as one column, by the name each would load as (`line_totals`, `customer__address`): those pinned `json`, and those masked, so the mask applies to the whole object.
+    pub keep: Vec<String>,
+    /// Columns pinned as another type than `json`, by name, with the type: flattening one of them fails rather than leave the pin unused.
+    pub pinned: Vec<(String, String)>,
+    /// How many levels down objects flatten at most (a field of the row is level 1); deeper ones stay JSON.
+    pub max_depth: u32,
+    /// How the table names its columns: under snake_case, a path or name matches a key as written or as both load (`LineTotals` is `line_totals`); under `source`, only as written.
+    pub naming: Naming,
+}
+
+impl Flatten {
+    /// Whether no object flattens.
+    pub fn is_none(&self) -> bool {
+        self.objects == FlattenObjects::None
+    }
+
+    /// Whether the object at `path` (keys from the row down, as the data spells them) flattens: listed, or any under `"all"`, no deeper than `max_depth`, and not kept whole; an error when a pin of another type than `json` names it.
+    pub fn flattens(&self, path: &[&str]) -> Result<bool, String> {
+        let chosen = match &self.objects {
+            FlattenObjects::None => false,
+            FlattenObjects::All => true,
+            FlattenObjects::Paths(_) => self.lists(path),
+        };
+        if !chosen || path.len() > self.max_depth as usize || self.keeps(path) {
+            return Ok(false);
+        }
+        let name = path.join(FLATTEN_SEPARATOR);
+        match self
+            .pinned
+            .iter()
+            .find(|(pinned, _)| self.same_parts(pinned.split(FLATTEN_SEPARATOR), path))
+        {
+            Some((pinned, column_type)) => Err(format!(
+                "columns {pinned} = {column_type:?}: flatten replaces {name} with its keys' columns; pin it \"json\" to keep it whole"
+            )),
+            None => Ok(true),
+        }
+    }
+
+    /// Whether `path` is one of the listed paths (never under `"all"`), whose values must be objects.
+    pub fn lists(&self, path: &[&str]) -> bool {
+        match &self.objects {
+            FlattenObjects::Paths(paths) => paths
+                .iter()
+                .any(|listed| self.same_parts(listed.split('.'), path)),
+            FlattenObjects::None | FlattenObjects::All => false,
+        }
+    }
+
+    /// Whether column `name` may be one flattening made: under `"all"` any holding `__`, else one below a listed path.
+    pub fn may_make(&self, name: &str) -> bool {
+        match &self.objects {
+            FlattenObjects::None => false,
+            FlattenObjects::All => name.contains(FLATTEN_SEPARATOR),
+            FlattenObjects::Paths(paths) => paths.iter().any(|listed| {
+                let prefix = format!(
+                    "{}{FLATTEN_SEPARATOR}",
+                    listed.replace('.', FLATTEN_SEPARATOR)
+                );
+                name.get(..prefix.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(&prefix))
+            }),
+        }
+    }
+
+    /// Whether the object at `path` is kept whole: `keep` names it, its parts joined by `__`.
+    pub fn keeps(&self, path: &[&str]) -> bool {
+        self.keep
+            .iter()
+            .any(|name| self.same_parts(name.split(FLATTEN_SEPARATOR), path))
+    }
+
+    /// Whether `parts` and `path` name the same keys, each as written or, under snake_case, as both load (`LineTotals` is `line_totals`).
+    fn same_parts<'a>(&self, parts: impl Iterator<Item = &'a str>, path: &[&str]) -> bool {
+        let parts: Vec<&str> = parts.collect();
+        parts.len() == path.len()
+            && parts.iter().zip(path).all(|(part, key)| {
+                part == key
+                    || (self.naming == Naming::SnakeCase
+                        && loaded_name(self.naming, part, None)
+                            == loaded_name(self.naming, key, None))
+            })
+    }
+}
+
 /// How [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) splits a batch's list fields into child tables.
 #[derive(Debug, Clone, Copy)]
 pub struct UnnestRequest<'a> {
@@ -337,8 +440,8 @@ pub struct UnnestRequest<'a> {
     pub compat: Compat,
     /// The longest name the destination takes.
     pub name_limit: Option<usize>,
-    /// Whether an object inside an item flattens into `<key>__<inner>` fields, as dlt flattens it (files sources under `compat = "dlt"`).
-    pub flatten_objects: bool,
+    /// Which objects inside an item flatten into `<key>__<inner>` fields, by their path from the table's row (`items.dimensions`).
+    pub flatten: &'a Flatten,
     /// Under `unnest = "all"`, the child tables the destination already has, as it stores their names (compared in any case): a field whose child table is among them is a list field, as an earlier load chose it.
     pub live: &'a [String],
     /// Each row's id, which its child rows name as their parent's.

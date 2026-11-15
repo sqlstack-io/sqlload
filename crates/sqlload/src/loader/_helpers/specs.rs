@@ -30,8 +30,7 @@ use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
-    DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE,
-    UNNEST_ALL,
+    ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE, UNNEST_ALL,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -43,17 +42,19 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::postgres_source::models::{ReadColumn, WireType};
+use crate::project::constants::DEFAULT_MAX_DEPTH;
+use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
     CdcDeletes, CdcMode, CursorBounds, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, ProjectConfig, SortDirection, SourceConfig, SourceKind, StateMode,
-    TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
+    OnDuplicateKeys, PathsSetting, ProjectConfig, SortDirection, SourceConfig, SourceKind,
+    StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::merge_schema::merge_schema;
-use crate::row_batches::models::Unnest;
+use crate::row_batches::models::{Flatten, Unnest};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
@@ -141,10 +142,10 @@ pub(crate) fn pinned_types(
 /// Whether `columns` key `key` declares a column of one of the table's child tables (`items.sku`): its path before the last dot is a listed `unnest` path, or under `unnest = "all"` it has one.
 pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
     match &overrides.unnest {
-        Some(UnnestSetting::Paths(paths)) => key
+        Some(PathsSetting::Paths(paths)) => key
             .rsplit_once('.')
             .is_some_and(|(path, _)| paths.iter().any(|listed| listed == path)),
-        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
+        Some(PathsSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
         _ => false,
     }
 }
@@ -323,12 +324,6 @@ pub(crate) fn build_spec(
         .or(table.comment.as_deref())
         .map(str::trim)
         .filter(|text| !text.is_empty());
-    if !overrides.flatten.is_empty() && context.source.kind != SourceKind::Python {
-        problems.push(
-            "flatten applies to Python tables; nested values from this source stay JSON".to_owned(),
-        );
-    }
-    problems.extend(flatten_problems(context, overrides));
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
@@ -418,7 +413,7 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
-        flatten: overrides.flatten.clone(),
+        flatten: nesting.flatten,
         row_id: nesting.row_id,
         root_rows: false,
         unnest: nesting.unnest,
@@ -684,48 +679,6 @@ pub(crate) struct ColumnRules {
     pub(crate) exclude: Vec<String>,
     pub(crate) allow: Vec<String>,
     pub(crate) skip_tables_with: Vec<String>,
-}
-
-/// Listed objects that are paths rather than top-level names, or that another column setting names: after flattening, no column carries the object's own name, so an exclusion, mask or pin on it would silently stop applying.
-fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> Vec<String> {
-    let exclude: Vec<String> = [
-        context.source.exclude_columns.clone(),
-        overrides.exclude_columns.clone(),
-    ]
-    .concat();
-    overrides
-        .flatten
-        .iter()
-        .filter_map(|object| {
-            let excluded = excluding_pattern(object, &exclude);
-            let setting = match (excluded, overrides.mask.contains_key(object), overrides.columns.contains_key(object)) {
-                _ if object.contains('.') => {
-                    return Some(format!(
-                        "flatten {object}: flatten names top-level objects, not paths; list {} instead (its nested values stay JSON)",
-                        object.split('.').next().unwrap_or_default()
-                    ));
-                }
-                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
-                (None, true, _) => "mask".to_owned(),
-                (None, false, true) => "columns".to_owned(),
-                (None, false, false) => return None,
-            };
-            Some(format!(
-                "flatten {object}: {setting} also names {object}, which flattening replaces with {object}__<key> columns; name those columns instead, or leave {object} unflattened"
-            ))
-        })
-        .collect()
-}
-
-/// The first `exclude_columns` pattern matching the object `name` but not its `name__<key>` columns, which would stop applying once it is flattened.
-fn excluding_pattern<'a>(name: &str, exclude: &'a [String]) -> Option<&'a String> {
-    let keys = format!("{name}__");
-    exclude.iter().find(|pattern| {
-        glob(pattern).is_ok_and(|glob| {
-            let matcher = glob.compile_matcher();
-            matcher.is_match(name) && !matcher.is_match(&keys)
-        })
-    })
 }
 
 /// What the column rules decide for one table.
@@ -1368,9 +1321,10 @@ struct Nesting {
     row_id: bool,
     unnest: Unnest,
     max_depth: u32,
+    flatten: Flatten,
 }
 
-/// The table's naming and compat (each its own, its source's, then its target's), whether its rows get an id (always under `compat = "dlt"`), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
+/// The table's naming and compat (each its own, its source's, then its target's), whether its rows get an id (always under `compat = "dlt"`), its `unnest` (under `compat = "dlt"`, `"all"` for JSON and NDJSON files on a warehouse), `max_depth` and `flatten` (see [`table_flatten`]), and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
 fn nesting(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
@@ -1388,25 +1342,38 @@ fn nesting(
             "row_id = false: compat = \"dlt\" gives every row its _dlt_id; drop row_id".to_owned(),
         );
     }
+    let json_files = context.source.kind == SourceKind::Files
+        && matches!(
+            context.source.format,
+            SourceFormat::Json | SourceFormat::Ndjson
+        );
     let unnest = match &overrides.unnest {
+        None if compat == Compat::Dlt && json_files && context.target.path.is_none() => Unnest::All,
         None => Unnest::None,
-        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
-        Some(UnnestSetting::Word(word)) => {
+        Some(PathsSetting::Paths(paths)) if paths.is_empty() => Unnest::None,
+        Some(PathsSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
+        Some(PathsSetting::Word(word)) => {
             problems.push(format!(
                 "unnest = {word:?}: list the dotted paths of the list fields to unnest, or write \"{UNNEST_ALL}\""
             ));
             Unnest::None
         }
-        Some(UnnestSetting::Paths(paths)) => {
+        Some(PathsSetting::Paths(paths)) => {
             problems.extend(path_problems(paths, max_depth));
             problems.extend(column_setting_problems(context, overrides, paths));
             Unnest::Paths(paths.clone())
         }
     };
+    let transform = settings.transform.is_some() || defaults.transform.is_some();
+    let (flatten, found) = table_flatten(
+        (context.source, Some(overrides)),
+        (compat, naming, transform),
+    );
+    problems.extend(found);
     match unnest {
-        Unnest::None if overrides.max_depth.is_some() => {
+        Unnest::None if overrides.max_depth.is_some() && flatten.is_none() => {
             problems.push(
-                "max_depth limits the child tables unnest makes, and this table sets no unnest"
+                "max_depth limits the child tables unnest makes and the objects flatten flattens, and this table sets neither"
                     .to_owned(),
             );
         }
@@ -1425,6 +1392,7 @@ fn nesting(
             row_id: row_id.unwrap_or(compat == Compat::Dlt || unnest != Unnest::None),
             unnest,
             max_depth,
+            flatten,
         },
         problems,
     )
@@ -1533,7 +1501,7 @@ fn refused_writes(
             .unwrap_or(target_path)
     });
     let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
-    let all = matches!(&overrides.unnest, Some(UnnestSetting::Word(word)) if word == UNNEST_ALL);
+    let all = matches!(&overrides.unnest, Some(PathsSetting::Word(word)) if word == UNNEST_ALL);
     let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
     let files_target = template.is_some();
     let template = template.map(String::as_str).unwrap_or_default();
@@ -1585,59 +1553,27 @@ pub(crate) fn referenced_columns(
         .collect()
 }
 
-/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them; an object NULL in some sampled rows is a column too, but its keys still escape a setting naming only it), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its sampled `columns`.
+/// Problems with `exclude_columns` and `allow_columns` patterns matching an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them) but none of its sampled `columns`, so they would silently stop applying (a setting naming the object itself keeps it whole; see [`table_flatten`]).
 pub(crate) fn flattened_object_problems(
     (source, overrides): (&SourceConfig, Option<&TableOverride>),
     (columns, objects): (&[FileColumn], &[String]),
-    rule: NameRule,
 ) -> Result<Vec<String>, String> {
     let sampled: BTreeSet<&str> = columns.iter().map(|column| column.name.as_str()).collect();
-    let mut names: Vec<(&str, &String)> = Vec::new();
-    let mut patterns: Vec<(&str, &String)> = Vec::new();
-    if let Some(overrides) = overrides {
-        names.extend(overrides.columns.keys().map(|key| ("columns", key)));
-        names.extend(overrides.mask.keys().map(|key| ("mask", key)));
-        patterns.extend(
-            overrides
-                .exclude_columns
-                .iter()
-                .map(|key| ("exclude_columns", key)),
-        );
-        patterns.extend(
-            overrides
-                .allow_columns
-                .iter()
-                .map(|key| ("allow_columns", key)),
-        );
-    }
-    patterns.extend(
-        source
-            .exclude_columns
-            .iter()
-            .map(|key| ("exclude_columns", key)),
-    );
-    patterns.extend(
-        source
-            .allow_columns
-            .iter()
-            .map(|key| ("allow_columns", key)),
-    );
-    let mut settings: Vec<(&str, &String, Option<GlobMatcher>)> = names
-        .into_iter()
-        .map(|(setting, name)| (setting, name, None))
-        .collect();
+    let own = |pick: fn(&TableOverride) -> &Vec<String>| overrides.map(pick).into_iter().flatten();
+    let patterns = own(|table| &table.exclude_columns)
+        .chain(&source.exclude_columns)
+        .map(|pattern| ("exclude_columns", pattern))
+        .chain(
+            own(|table| &table.allow_columns)
+                .chain(&source.allow_columns)
+                .map(|pattern| ("allow_columns", pattern)),
+        )
+        .filter(|(_, pattern)| pattern.contains(['*', '?', '[', '{']));
+    let mut problems: Vec<String> = Vec::new();
     for (setting, pattern) in patterns {
         let matcher = Glob::new(pattern)
             .map_err(|error| format!("invalid column pattern {pattern:?}: {error}"))?
             .compile_matcher();
-        settings.push((setting, pattern, Some(matcher)));
-    }
-    let mut problems: Vec<String> = Vec::new();
-    for (setting, pattern, matcher) in settings {
-        let matches = |name: &str| match &matcher {
-            Some(matcher) => matcher.is_match(name),
-            None => loaded_name(rule.0, name, rule.1) == loaded_name(rule.0, pattern, rule.1),
-        };
         for object in objects {
             let prefix = format!("{object}{FLATTEN_SEPARATOR}");
             let keys: Vec<&str> = sampled
@@ -1645,11 +1581,14 @@ pub(crate) fn flattened_object_problems(
                 .copied()
                 .filter(|name| name.starts_with(&prefix))
                 .collect();
-            if keys.is_empty() || !matches(object) || keys.iter().any(|key| matches(key)) {
+            if keys.is_empty()
+                || !matcher.is_match(object)
+                || keys.iter().any(|key| matcher.is_match(key))
+            {
                 continue;
             }
             problems.push(format!(
-                "{setting} {pattern} names {object}, which compat = \"dlt\" flattens into {}; name those columns instead",
+                "{setting} {pattern} names {object}, which flatten replaces with {}; name those columns instead, or keep {object} whole with columns = {{ {object} = \"json\" }}",
                 keys.join(", ")
             ));
         }

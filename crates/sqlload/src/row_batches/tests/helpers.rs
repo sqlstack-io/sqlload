@@ -178,12 +178,40 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
         Ok(())
     })?;
     let batch = batches.first().ok_or("no rows")?;
-    let flatten: Vec<String> = test_case
-        .flatten
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    flatten_batch(batch, &flatten).map(|batch| render(&batch))
+    let rule = flatten_rule(
+        (test_case.flatten)(),
+        (test_case.keep, test_case.pinned),
+        (
+            test_case.max_depth,
+            crate::load_naming::models::Naming::SnakeCase,
+        ),
+    );
+    flatten_batch(batch, &rule).map(|batch| render(&batch))
+}
+
+/// The flatten rule flattening `objects`, keeping `keep` whole and refusing to flatten `pinned`, down to `max_depth`, matching names as `naming` does.
+pub(crate) fn flatten_rule(
+    objects: crate::row_batches::models::FlattenObjects,
+    (keep, pinned): (&[&str], &[(&str, &str)]),
+    (max_depth, naming): (u32, crate::load_naming::models::Naming),
+) -> crate::row_batches::models::Flatten {
+    crate::row_batches::models::Flatten {
+        objects,
+        keep: keep.iter().map(|name| (*name).to_owned()).collect(),
+        pinned: pinned
+            .iter()
+            .map(|(name, column_type)| ((*name).to_owned(), (*column_type).to_owned()))
+            .collect(),
+        max_depth,
+        naming,
+    }
+}
+
+/// The objects at the dotted `paths`.
+pub(crate) fn paths(paths: &[&str]) -> crate::row_batches::models::FlattenObjects {
+    crate::row_batches::models::FlattenObjects::Paths(
+        paths.iter().map(|path| (*path).to_owned()).collect(),
+    )
 }
 
 /// `texts` converted by [`json_lists`](crate::row_batches::main::json_lists::json_lists) to lists of `element`, joined by `|` with NULL as `null`; an error up to its first `: `.
@@ -240,7 +268,7 @@ pub(crate) fn unnested(
         naming: crate::load_naming::models::Naming::Source,
         compat: crate::load_naming::models::Compat::Sqlload,
         name_limit: None,
-        flatten_objects: false,
+        flatten: &crate::row_batches::models::Flatten::default(),
         live: &[],
         ids: &ids,
         roots: roots.as_deref(),

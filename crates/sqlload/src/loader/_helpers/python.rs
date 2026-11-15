@@ -87,6 +87,7 @@ use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
+use crate::row_batches::models::Flatten;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::models::Unnested;
 use crate::row_batches::types::ListChoices;
@@ -1286,7 +1287,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         masked: MaskRules::default(),
         logged: false,
         files: None,
-        flatten: Vec::new(),
+        flatten: Flatten::default(),
         row_id: true,
         root_rows: matches!(parent.mode, WriteMode::Merge { .. }),
         unnest: Unnest::None,

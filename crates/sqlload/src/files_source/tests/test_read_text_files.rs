@@ -4,6 +4,7 @@ use crate::files_source::tests::helpers::{
     block_on, csv_encoding, decoded, encoding, read_rows, record_encoding,
 };
 use crate::files_source::tests::test_types::ReadTextFilesTestCase;
+use crate::row_batches::models::{Flatten, FlattenObjects};
 
 #[test]
 fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_name_the_line()
@@ -351,7 +352,11 @@ cost,west,4
         ReadTextFilesTestCase {
             description: "flattening objects: an object that is NULL outside the sample loads as NULLs in its columns",
             encoding: FilesEncoding {
-                flatten_objects: true,
+                flatten: Flatten {
+                    objects: FlattenObjects::All,
+                    max_depth: 1000,
+                    ..Flatten::default()
+                },
                 ..encoding(SourceFormat::Ndjson)
             },
             files: &[("b.ndjson", "{\"id\":1,\"c\":{\"n\":\"a\"}}\n")],
@@ -363,7 +368,11 @@ cost,west,4
         ReadTextFilesTestCase {
             description: "flattening objects: an object's key outside the sampled schema is an error naming its column",
             encoding: FilesEncoding {
-                flatten_objects: true,
+                flatten: Flatten {
+                    objects: FlattenObjects::All,
+                    max_depth: 1000,
+                    ..Flatten::default()
+                },
                 ..encoding(SourceFormat::Ndjson)
             },
             files: &[("b.ndjson", "{\"id\":1,\"c\":{\"n\":\"a\"}}\n")],

@@ -98,8 +98,11 @@ impl PythonHost for ExtensionHost {
         rows: Vec<RecordBatch>,
         schema: SchemaRef,
     ) -> Result<Box<dyn BatchStream>, String> {
-        let (batches, returned) =
-            returned_batches(call, (rows, schema), (crossing_options(), Vec::new()))?;
+        let (batches, returned) = returned_batches(
+            call,
+            (rows, schema),
+            (crossing_options(), call.flatten.clone()),
+        )?;
         Ok(Box::new(TransformBatches {
             batches: PythonBatches(batches),
             returned,

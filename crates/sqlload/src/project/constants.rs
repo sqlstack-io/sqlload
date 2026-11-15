@@ -182,3 +182,9 @@ pub const MOTHERDUCK_PREFIX: &str = "md:";
 
 /// The starts of a DuckDB path that opens MotherDuck: `md:` and its alias, matched in any case as DuckDB does.
 pub const MOTHERDUCK_PREFIXES: &[&str] = &["md:", "motherduck:"];
+
+/// The `flatten` word that flattens every object.
+pub const FLATTEN_ALL: &str = "all";
+
+/// How many levels down `unnest` makes child tables and `flatten` flattens objects when `max_depth` is not set: dlt's own default nesting limit (1.32.0).
+pub const DEFAULT_MAX_DEPTH: u32 = 1000;

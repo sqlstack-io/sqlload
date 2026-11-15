@@ -95,10 +95,7 @@ fn declarable(spec: &TableSpec, live_name: &str) -> Option<String> {
         true => lowered,
         false => live_name.to_owned(),
     };
-    let flattened = spec.flatten.iter().any(|object| {
-        name.to_ascii_lowercase()
-            .starts_with(&format!("{}__", object.to_ascii_lowercase()))
-    });
+    let flattened = spec.flatten.may_make(&name);
     (!flattened).then_some(name)
 }
 
