@@ -9,7 +9,7 @@ use crate::python_sources::main::_file_context::file_context;
 use crate::python_sources::main::_run_transform::run_transform;
 use crate::python_sources::models::{TransformCall, TransformFiles, TransformTime};
 
-/// For each of `request`'s files in order: its rows from `read`, the function run on them, and each batch it returned passed to `on_rows` with the file, its name as `_sqlload_source_file` has it, and the rows returned for it before. A file whose function fails stops there, naming the file; returns how long each file's call took.
+/// For each of `request`'s files in order: its rows from `read`, the function run on them, and each batch it returned or yielded passed to `on_rows` as it crosses, with the file, its name as `_sqlload_source_file` has it, and the rows returned for it before. A file whose function fails stops there, naming the file; returns how long each file's call took.
 pub async fn transform_files<E: From<ReadError>>(
     request: &TransformFiles<'_>,
     mut read: impl AsyncFnMut(&DataFile) -> Result<(Vec<RecordBatch>, SchemaRef), E>,
@@ -26,20 +26,25 @@ pub async fn transform_files<E: From<ReadError>>(
             ),
             ..request.call.clone()
         };
-        let ran = run_transform(request.host.clone(), call, read(data).await?)
-            .await
-            .map_err(|reason| {
-                ReadError::from(format!(
-                    "{file_name}: transform {} failed: {reason}",
-                    request.call.function
-                ))
-            })?;
         let mut rows_before: u64 = 0;
-        for batch in ran.batches {
-            let rows = batch.num_rows() as u64;
-            on_rows((data, &file_name, rows_before), batch).await?;
-            rows_before += rows;
-        }
+        let ran = run_transform(
+            request.host.clone(),
+            call,
+            read(data).await?,
+            async |batch: RecordBatch| {
+                let rows = batch.num_rows() as u64;
+                on_rows((data, &file_name, rows_before), batch).await?;
+                rows_before += rows;
+                Ok::<(), E>(())
+            },
+        )
+        .await?
+        .map_err(|reason| {
+            ReadError::from(format!(
+                "{file_name}: transform {} failed: {reason}",
+                request.call.function
+            ))
+        })?;
         times.push(TransformTime {
             file: file_name,
             milliseconds: (ran.seconds * 1000.0).round() as u64,

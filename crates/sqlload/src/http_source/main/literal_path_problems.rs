@@ -5,7 +5,7 @@ use crate::http_source::models::LiteralPaths;
 use crate::row_batches::main::projection::projection;
 use crate::row_batches::models::FieldSpec;
 
-/// Why load would refuse each of `paths`, in load's words: `fields["sku"]: field path "$.lines[*].sku" uses the wildcard [*], ...`, or `key_path ...`.
+/// Why load would refuse each of `paths`, in load's words: `fields["sku"]: field path "$.lines[*].sku" uses the wildcard [*], ...`, `key_path ...`, or `transform kpis: no function is registered as kpis ...`.
 pub fn literal_path_problems(paths: &LiteralPaths) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     for (name, path) in &paths.fields {
@@ -25,5 +25,6 @@ pub fn literal_path_problems(paths: &LiteralPaths) -> Vec<String> {
             .iter()
             .filter_map(|path| key_path_problem(path)),
     );
+    problems.extend(paths.transform_problems.iter().cloned());
     problems
 }

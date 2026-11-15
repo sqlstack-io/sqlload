@@ -2,19 +2,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
-use arrow_pyarrow::{IntoPyArrow, Table};
 use arrow_schema::SchemaRef;
-use pyo3::exceptions::PyValueError;
 use pyo3::types::PyAnyMethods;
-use pyo3::{Bound, PyAny, PyResult, Python};
+use pyo3::{Py, PyAny, PyResult, Python};
 use sqlload::python_sources::errors::ReadError;
-use sqlload::python_sources::models::{PythonSource, TableRead, TransformCall, Transformed};
+use sqlload::python_sources::models::{PythonSource, TableRead, TransformCall};
 use sqlload::python_sources::types::{BatchStream, PythonHost, Streamed};
 
 use crate::crossing::errors::CrossError;
+use crate::crossing::main::crossing_options::crossing_options;
+use crate::crossing::main::returned_batches::returned_batches;
 use crate::crossing::main::table_batches::table_batches;
 use crate::crossing::models::{Polled, ReadContext, TableBatches};
-use crate::host::_helpers::crossing::crossing_options;
 use crate::host::_helpers::python_errors::{error_text, read_error};
 use crate::host::constants::RUNTIME_MODULE;
 
@@ -57,6 +56,7 @@ impl PythonHost for ExtensionHost {
                 snapshot.as_ref(),
                 options,
                 ReadContext {
+                    table: request.table.clone(),
                     flatten: request.flatten.clone(),
                     connections: request.connections.clone(),
                     cursor_column: request.cursor.as_ref().map(|cursor| cursor.column.clone()),
@@ -79,16 +79,16 @@ impl PythonHost for ExtensionHost {
         .map_err(|error| error_text(&error))
     }
 
-    fn transform_version(&self, function: &str) -> Result<String, String> {
+    fn transform_version(&self, name: &str) -> Result<String, String> {
         let checked = Python::attach(|py| -> PyResult<(Option<String>, Option<String>)> {
             py.import(RUNTIME_MODULE)?
-                .call_method1("transform_version", (function,))?
+                .call_method1("transform_version", (name,))?
                 .extract()
         })
         .map_err(|error| error_text(&error))?;
         match checked {
             (Some(version), _) => Ok(version),
-            (None, problem) => Err(problem.unwrap_or_else(|| format!("{function} cannot run"))),
+            (None, problem) => Err(problem.unwrap_or_else(|| format!("{name} cannot run"))),
         }
     }
 
@@ -97,36 +97,13 @@ impl PythonHost for ExtensionHost {
         call: &TransformCall,
         rows: Vec<RecordBatch>,
         schema: SchemaRef,
-    ) -> Result<Transformed, String> {
-        let context = serde_json::to_string(&call.context).map_err(|error| error.to_string())?;
-        Python::attach(|py| -> PyResult<Result<Transformed, String>> {
-            let table = Table::try_new(rows, schema)
-                .map_err(|error| PyValueError::new_err(error.to_string()))?
-                .into_pyarrow(py)?;
-            let (returned, dicts, problem): (Bound<'_, PyAny>, bool, Option<String>) = py
-                .import(RUNTIME_MODULE)?
-                .call_method1("call_transform", (call.function.as_str(), table, context))?
-                .extract()?;
-            if let Some(problem) = problem {
-                return Ok(Err(problem));
-            }
-            let batches = table_batches(
-                &returned,
-                None,
-                crossing_options(),
-                ReadContext {
-                    masked: call.masked.clone(),
-                    arrays: call.arrays.clone(),
-                    naming: call.naming,
-                    ..ReadContext::default()
-                },
-            );
-            Ok(Ok(Transformed {
-                batches: Box::new(PythonBatches(batches)),
-                dicts,
-            }))
-        })
-        .map_err(|error| error_text(&error))?
+    ) -> Result<Box<dyn BatchStream>, String> {
+        let (batches, returned) =
+            returned_batches(call, (rows, schema), (crossing_options(), Vec::new()))?;
+        Ok(Box::new(TransformBatches {
+            batches: PythonBatches(batches),
+            returned,
+        }))
     }
 
     fn finish(&self) {
@@ -157,5 +134,28 @@ impl BatchStream for PythonBatches {
                 Polled::Finished => return None,
             }
         }
+    }
+}
+
+/// What a `transform` returned or yielded, as the engine reads it, and the Python object noting whether any of it was dicts.
+#[derive(Debug)]
+pub struct TransformBatches {
+    batches: PythonBatches,
+    returned: Py<PyAny>,
+}
+
+impl BatchStream for TransformBatches {
+    fn next_batch(&mut self) -> Option<Result<Streamed, ReadError>> {
+        self.batches.next_batch()
+    }
+
+    fn crossed_dicts(&self) -> bool {
+        Python::attach(|py| {
+            self.returned
+                .bind(py)
+                .getattr("dicts")
+                .and_then(|dicts| dicts.extract::<bool>())
+                .is_ok_and(|dicts| dicts)
+        })
     }
 }

@@ -85,7 +85,7 @@ use crate::project::models::{
 };
 use crate::python_sources::main::transform_files::transform_files;
 use crate::python_sources::main::transform_range::transform_range;
-use crate::python_sources::models::{FileContext, TransformCall, TransformFiles};
+use crate::python_sources::models::{TransformCall, TransformContext, TransformFiles};
 use crate::python_sources::types::PythonHost;
 use crate::row_batches::main::loaded_batch::loaded_batch;
 use crate::schema_plan::models::LiveColumn;
@@ -744,13 +744,14 @@ fn range_context(
     table: &str,
     spreadsheet_id: &str,
     (grid, range): (&Grid, Option<&String>),
-) -> FileContext {
-    FileContext {
+) -> TransformContext {
+    TransformContext {
+        unit: "range",
         table: table.to_owned(),
         sheet: Some(grid.title.clone()),
         range: range.cloned(),
         spreadsheet_id: Some(spreadsheet_id.to_owned()),
-        ..FileContext::default()
+        ..TransformContext::default()
     }
 }
 
@@ -949,9 +950,10 @@ pub(crate) async fn discover_files_table(
             let input = transform_input(&table, encoding.format, patterns)?;
             let call = TransformCall {
                 function,
-                context: FileContext {
+                context: TransformContext {
+                    unit: "file",
                     table: source_name.to_owned(),
-                    ..FileContext::default()
+                    ..TransformContext::default()
                 },
                 masked: Vec::new(),
                 arrays: Vec::new(),
@@ -1560,9 +1562,10 @@ fn transform_call<'a>(
     };
     let call = TransformCall {
         function: transform.function.clone(),
-        context: FileContext {
+        context: TransformContext {
+            unit: "file",
             table: spec.source_table.name.clone(),
-            ..FileContext::default()
+            ..TransformContext::default()
         },
         masked: spec.masked.columns.keys().cloned().collect(),
         arrays: spec

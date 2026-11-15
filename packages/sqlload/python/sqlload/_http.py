@@ -6,19 +6,20 @@ response once into the table's rows.
 """
 
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from sqlload._data import Field, Fields, field_list
 from sqlload._declare import Source
+from sqlload._transform import TRANSFORMS
 
 #: Default retries of a request that failed with a transport error, 429 or a 5xx.
 DEFAULT_RETRIES = 5
 
 ROW_LOOP_HINT = (
 	"rows of an sl.http job stay in Rust and are never handed to Python one at a time (rule python_row_loop); "
-	"return or yield the job itself, and filter the rows downstream"
+	"return or yield the job itself, and filter the rows downstream, or reshape each page with transform="
 )
 
 
@@ -253,6 +254,7 @@ class Http:
 		key: str | None = None,
 		cells: Cells | None = None,
 		select_missing: str = "fail",
+		transform: Callable[..., Any] | str | None = None,
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
 
@@ -262,9 +264,22 @@ class Http:
 		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
 		row's whole object as a JSON column. `method="POST"` sends `json_body` as JSON with every page, each page's copy
 		holding the paginator's values when its `location` is `"body"`. As a fan-out's `over`, `key` names the
-		placeholder the selected values fill when it is not the field's own name (`select="$.items[*].id", key="order_id"`)."""
+		placeholder the selected values fill when it is not the field's own name (`select="$.items[*].id", key="order_id"`).
+
+		`transform` (a function, or the name `@sl.transform` registered one under) is called once per page, in page
+		order, on the page's rows after `select`, `fields` and `cells`, as `f(rows, ctx)`; what it returns or yields loads."""
 		request = self._request(path, paginator, params, select, on_status, (method, json_body))
-		return Job({"kind": "paginate", **request, **_projection(fields, keep_record), **_key(key), **_cells(cells), **_select_missing(select_missing)})
+		return Job(
+			{
+				"kind": "paginate",
+				**request,
+				**_projection(fields, keep_record),
+				**_key(key),
+				**_cells(cells),
+				**_select_missing(select_missing),
+				**_transform(transform),
+			}
+		)
 
 	def fan_out(
 		self,
@@ -285,6 +300,7 @@ class Http:
 		batch: int | None = None,
 		select_missing: str = "fail",
 		key_path: str | Field | None = None,
+		transform: Callable[..., Any] | str | None = None,
 	) -> Job:
 		"""Every page of `path` once per key of `over`, up to `concurrency` at a time: `over` is a paginate whose
 		`select` picks the keys (`"$.items[*].id"` fills `{id}`), or values (`["uk", "fr"]` fill the one placeholder;
@@ -302,9 +318,14 @@ class Http:
 
 		`key_path="$.issueId"` (from each record, or `sl.parent("$.issueId")` from an object around it) fails the
 		table when a record's key is not among the keys its request sent (with `batch=`, the batch's), catching an
-		API that answers for other keys."""
+		API that answers for other keys.
+
+		`transform` is as for `paginate`, once per page of each key; its `ctx.key` holds the key's fields (`None` with
+		`batch=`)."""
 		if isinstance(over, (str, bytes)):
 			raise TypeError("fan_out over= takes a paginate or fan_out job or a list of values, not one string")
+		if isinstance(over, Job) and "transform" in over._definition:
+			raise TypeError("transform is for the job whose rows load, not for the job given as fan_out's over=")
 		over_spec = dict(over._definition) if isinstance(over, Job) else {"kind": "values", "values": list(over)}
 		request = self._request(path, paginator or single(), params, select, on_status, (method, json_body))
 		projected = _projection(fields, keep_record)
@@ -318,6 +339,7 @@ class Http:
 				**_cells(cells),
 				**_select_missing(select_missing),
 				**_key_path(key_path),
+				**_transform(transform),
 				"over": over_spec,
 				"concurrency": concurrency,
 				**batched,
@@ -374,6 +396,14 @@ def _key_path(key_path: str | Field | None) -> dict[str, Any]:
 	if isinstance(key_path, Field) and key_path.source is not None and key_path.source.get("kind") == "parent":
 		return {"key_path": {"path": key_path.path, "from": dict(key_path.source)}}
 	raise TypeError(f'key_path takes a path such as "$.issueId" or sl.parent(...), not {key_path!r}')
+
+
+def _transform(transform: Callable[..., Any] | str | None) -> dict[str, Any]:
+	"""`transform` as a job field: the key the crossing calls it by and the name errors show; left out when unset."""
+	if transform is None:
+		return {}
+	function, name = TRANSFORMS.key(transform)
+	return {"transform": {"function": function, "name": name}}
 
 
 def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any]:

@@ -17,9 +17,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlload._declare import Connection, Context, FileContext, Source, Table
+from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
 from sqlload._http_paths import literal_paths
+from sqlload._transform import TRANSFORMS, TransformContext, returned_items
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
@@ -31,8 +32,8 @@ STANDALONE_TABLE_NAME = "{table}"
 VERSION_DIGITS = 16
 
 _tables: dict[str, Table] = {}
-#: The folders `discover` imported modules from; a `transform` module must be in one.
-_module_folders: list[Path] = []
+#: The project folder `discover` imported from, which errors name files relative to.
+_root: list[Path] = []
 _contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
 #: Held while a client is built, since tables of one source load at the same time.
@@ -60,7 +61,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 				standalone.setdefault(id(value), (value, relative))
 			elif isinstance(value, Table) and value.source is not None:
 				sources.setdefault(id(value.source), (value.source, relative))
-	_module_folders[:] = [(root_path / entry).resolve() for entry in python_paths]
+	_root[:] = [root_path]
 	_tables.clear()
 	declared: list[dict[str, Any]] = []
 	for source, relative in sources.values():
@@ -152,55 +153,37 @@ def table_state(table: str) -> str | None:
 	return final if final != ctx.started_state else None
 
 
-def transform_version(function: str) -> tuple[str | None, str | None]:
-	"""Import a `transform` function (`module:function`, the module named as `discover` imports it) and check it can run.
+def transform_version(name: str) -> tuple[str | None, str | None]:
+	"""Look up the transform registered as `name` and check it can run.
 
-	Returns its version, `module:function@` and a hash of the module's source (an edit to the
-	module, not only to the function, changes it), or why it cannot run.
+	Returns its version, `name@` and a hash of the file it is defined in (an edit to the file, not only to the function,
+	changes it), or why it cannot run: no function or two are registered as `name`, or pyarrow is missing.
 	"""
-	module_name, _, name = function.partition(":")
-	folders = ", ".join(folder.name for folder in _module_folders)
-	try:
-		module = importlib.import_module(module_name)
-	except ModuleNotFoundError as error:
-		if error.name is None or not f"{module_name}.".startswith(f"{error.name}."):
-			raise
-		return None, f"no module {module_name} under python_paths ({folders})"
-	source = Path(getattr(module, "__file__", None) or "").resolve()
-	if not any(folder in source.parents for folder in _module_folders):
-		return None, f"module {module_name} is not under python_paths ({folders})"
-	if not hasattr(module, name):
-		return None, f"module {module_name} has no function {name}"
-	if not callable(getattr(module, name)):
-		return None, f"{module_name}.{name} is not callable"
+	function, problem = TRANSFORMS.lookup(name, _root[0] if _root else None)
+	if function is None:
+		return None, problem
 	try:
 		importlib.import_module("pyarrow")
 	except ImportError:
 		return None, "transform needs pyarrow: pip install pyarrow"
-	digest = hashlib.sha256(source.read_bytes()).hexdigest()[:VERSION_DIGITS]
-	return f"{function}@{digest}", None
+	source = TRANSFORMS.source_file(name) or ""
+	contents = Path(source).read_bytes() if source and Path(source).is_file() else name.encode()
+	return f"{name}@{hashlib.sha256(contents).hexdigest()[:VERSION_DIGITS]}", None
 
 
-def call_transform(function: str, table: Any, context: str) -> tuple[Any, bool, str | None]:
-	"""Call a `transform` function on one file's (or range's) rows, a pyarrow Table.
+def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None]:
+	"""Call the transform `name` on one unit's rows, a pyarrow Table, with its `ctx` (JSON).
 
-	Returns what crosses (an iterator of one yield), whether it is dicts, and why the returned
-	value cannot load when it is not a list of dicts, a pyarrow Table or a DataFrame.
+	Returns what crosses, item by item as a generator yields them (its `dicts` says whether any were dicts), or why the
+	returned value cannot load.
 	"""
-	module_name, _, name = function.partition(":")
+	function, problem = TRANSFORMS.lookup(name)
+	if function is None:
+		raise LookupError(problem)
 	fields: dict[str, Any] = json.loads(context)
 	modified_at = fields.get("modified_at")
-	ctx = FileContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
-	returned = getattr(importlib.import_module(module_name), name)(table, ctx)
-	if isinstance(returned, list) and all(isinstance(row, dict) for row in returned):
-		return iter([returned] if returned else []), True, None
-	if hasattr(returned, "__arrow_c_stream__") or hasattr(returned, "__arrow_c_array__"):
-		return iter([returned]), False, None
-	return (
-		iter([]),
-		False,
-		f"it returned {type(returned).__name__}; return a list of dicts, a pyarrow Table, or a polars or pandas DataFrame",
-	)
+	ctx = TransformContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
+	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
 
 
 def finish_run() -> None:

@@ -56,9 +56,10 @@ pub struct CursorRead {
     pub inclusive: bool,
 }
 
-/// What a `transform` function gets as `ctx`: where the rows came from. A files table sets `path`, `modified_at` and, for its format, `sheet`, `range` and `skip_rows`; a `google_sheets` table sets `spreadsheet_id`, `sheet` (the tab) and `range`.
+/// What a `transform` gets as `ctx`: the unit its rows came from, `"file"`, `"range"` or `"page"`. A file sets `path`, `modified_at` and, for its format, `sheet`, `range` and `skip_rows`; a Google Sheets range sets `spreadsheet_id`, `sheet` (the tab) and `range`; an `sl.http` page sets `page` and, in a fan-out, `key`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct FileContext {
+pub struct TransformContext {
+    pub unit: &'static str,
     /// The table's name in its source.
     pub table: String,
     /// The file as `_sqlload_source_file` names it.
@@ -69,14 +70,18 @@ pub struct FileContext {
     pub range: Option<String>,
     pub skip_rows: Option<u32>,
     pub spreadsheet_id: Option<String>,
+    /// The page's number within its request, from 1.
+    pub page: Option<u64>,
+    /// The fields of the fan-out key the page was requested for.
+    pub key: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-/// One call of a `transform` function, and how its returned columns cross.
+/// One call of a `transform`, and how what it returned crosses.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TransformCall {
-    /// `module:function`.
+    /// The name `@sl.transform` registered it under.
     pub function: String,
-    pub context: FileContext,
+    pub context: TransformContext,
     /// Columns loaded masked.
     pub masked: Vec<String>,
     /// Columns pinned as `array(...)`: their Arrow lists cross as lists.
@@ -86,21 +91,14 @@ pub struct TransformCall {
     pub naming: (crate::load_naming::models::Naming, Option<usize>),
 }
 
-/// What a `transform` function returned, crossing into Arrow: the batches, and whether it returned dicts (which cross slower than Arrow or a DataFrame).
-#[derive(Debug)]
-pub struct Transformed {
-    pub batches: Box<dyn crate::python_sources::types::BatchStream>,
-    pub dicts: bool,
-}
-
-/// What a `transform` function returned for one file or range, crossed into Arrow, and how long the call and its crossing took.
+/// How a `transform`'s call on one file or range went, once every batch it returned or yielded has crossed into Arrow and been passed on.
 #[derive(Debug, Clone)]
 pub struct TransformRan {
-    pub batches: Vec<arrow_array::RecordBatch>,
     /// Whether it returned dicts, which cross slower than Arrow or a DataFrame.
     pub dicts: bool,
     /// The rows it was given.
     pub rows_in: u64,
+    /// How long the call and its crossing took, not counting the waits for its batches to be taken.
     pub seconds: f64,
 }
 

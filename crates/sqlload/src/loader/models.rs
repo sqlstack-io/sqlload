@@ -211,9 +211,9 @@ pub struct TableSpec {
 /// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableTransform {
-    /// `module:function`.
+    /// The name `@sl.transform` registered it under.
     pub function: String,
-    /// `module:function@` and a hash of the module's source.
+    /// Its name, `@` and a hash of the file it is defined in.
     pub version: String,
     /// Whether the version differs from the one the table's last load recorded.
     pub changed: bool,

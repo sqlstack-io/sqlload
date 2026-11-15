@@ -179,3 +179,26 @@ orders = shop.table(description="Orders, one row per order.")(built["orders"])
 	assert done.returncode == 0, shown
 	assert "paths checked at load, as the table function's source can't be read" in shown, shown
 	assert api.requests == []  # type: ignore[attr-defined]
+
+
+def test_given_a_page_transform_named_by_a_name_nothing_registered_when_planning_then_plan_fails_listing_the_registered_ones(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	module = (
+		HEADER
+		+ """
+@sl.transform
+def tidy_page(rows, ctx):
+    return rows
+
+
+@shop.table(description="Orders, one row per order.")
+def orders(ctx):
+    return api.paginate("/orders", paginator=sl.single(), select="$.orders[*]", transform="tidy_pages")
+"""
+	)
+	done = sqlload(make_project(tmp_path, api, module), "plan")
+	shown = words(done.stdout + done.stderr)
+	assert done.returncode == 1, shown
+	assert "RAW.shop__orders reason transform tidy_pages: no function is registered as tidy_pages with @sl.transform; the registered ones are tidy_page" in shown, shown
+	assert api.requests == []  # type: ignore[attr-defined]

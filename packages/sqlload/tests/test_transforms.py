@@ -40,28 +40,50 @@ format = "{format}"
 description = "Metrics, one file a month."
 {settings}
 [sources.metrics.tables.metrics]
-transform = "transforms.metrics:transform"
+transform = "metric_rows"
 {table}
 """
 
-#: A transform returning each row of a CSV with `id` and `v` as dicts, a pyarrow Table or a polars DataFrame, with the file it came from.
+#: A transform, `metric_rows`, returning each row of a CSV with `id` and `v` as dicts, a pyarrow Table or a polars DataFrame,
+#: or yielding them row by row and as Arrow, with the file it came from.
 RETURNS = {
 	"dicts": """
-def transform(table, ctx):
-    return [{"id": int(row["id"]), "v": row["v"], "file": ctx.path} for row in table.to_pylist()]
+import sqlload as sl
+
+@sl.transform
+def metric_rows(rows, ctx):
+    return [{"id": int(row["id"]), "v": row["v"], "file": ctx.path} for row in rows.to_pylist()]
 """,
 	"arrow": """
 import pyarrow as pa
 import pyarrow.compute as pc
+import sqlload as sl
 
-def transform(table, ctx):
-    return pa.table({"id": pc.cast(table["id"], pa.int64()), "v": table["v"], "file": [ctx.path] * table.num_rows})
+@sl.transform
+def metric_rows(rows, ctx):
+    return pa.table({"id": pc.cast(rows["id"], pa.int64()), "v": rows["v"], "file": [ctx.path] * rows.num_rows})
 """,
 	"polars": """
 import polars as pl
+import sqlload as sl
 
-def transform(table, ctx):
-    return pl.from_arrow(table).select(pl.col("id").cast(pl.Int64), pl.col("v"), pl.lit(ctx.path).alias("file"))
+@sl.transform
+def metric_rows(rows, ctx):
+    return pl.from_arrow(rows).select(pl.col("id").cast(pl.Int64), pl.col("v"), pl.lit(ctx.path).alias("file"))
+""",
+	"generator": """
+import pyarrow as pa
+import sqlload as sl
+
+@sl.transform
+def metric_rows(rows, ctx):
+    assert ctx.unit == "file", ctx.unit
+    listed = rows.to_pylist()
+    for row in listed[:1]:
+        yield {"id": int(row["id"]), "v": row["v"], "file": ctx.path}
+    rest = listed[1:]
+    if rest:
+        yield pa.table({"id": [int(row["id"]) for row in rest], "v": [row["v"] for row in rest], "file": [ctx.path] * len(rest)})
 """,
 }
 
@@ -105,8 +127,8 @@ def query(project: Path, sql: str) -> list[tuple[Any, ...]]:
 		return connection.execute(sql).fetchall()
 
 
-@pytest.mark.parametrize("returned", ["dicts", "arrow", "polars"])
-def test_a_transform_returning_dicts_arrow_or_a_dataframe_loads_the_same_rows(tmp_path: Path, returned: str) -> None:
+@pytest.mark.parametrize("returned", ["dicts", "arrow", "polars", "generator"])
+def test_a_transform_returning_or_yielding_dicts_arrow_or_a_dataframe_loads_the_same_rows(tmp_path: Path, returned: str) -> None:
 	project = make_project(tmp_path, RETURNS[returned], table='columns = { v = "decimal(6,2)" }')
 	give(project, "a.csv", "id,v\n1,1.50\n2,2.25\n")
 	give(project, "b.csv", "id,v\n3,3.75\n")
@@ -134,21 +156,22 @@ def test_each_zip_member_gets_its_own_call(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
 	("body", "error"),
 	[
-		('    if ctx.path.endswith("b.csv"):\n        raise ValueError("bad sheet")\n    return table\n', "ValueError: bad sheet"),
-		('    if ctx.path.endswith("b.csv"):\n        return None\n    return table\n', "it returned NoneType"),
+		('    if ctx.path.endswith("b.csv"):\n        raise ValueError("bad sheet")\n    return rows\n', "ValueError: bad sheet"),
+		('    if ctx.path.endswith("b.csv"):\n        return None\n    return rows\n', "it returned NoneType; return or yield dicts, lists of dicts"),
+		('    if ctx.path.endswith("b.csv"):\n        yield "text"\n    yield rows\n', "transform metric_rows yielded str; yield dicts, lists of dicts"),
 	],
-	ids=["raises", "returns-none"],
+	ids=["raises", "returns-none", "yields-text"],
 )
 def test_a_failing_transform_fails_its_file_which_neither_commits_nor_moves(tmp_path: Path, body: str, error: str) -> None:
 	settings = 'write_strategy = "append"\nafter_load = { move_to = "done" }\n'
-	project = make_project(tmp_path, "def transform(table, ctx):\n" + body, settings=settings)
+	project = make_project(tmp_path, "import sqlload as sl\n\n@sl.transform\ndef metric_rows(rows, ctx):\n" + body, settings=settings)
 	give(project, "a.csv", "id,v\n1,x\n")
 	load(project)
 	give(project, "b.csv", "id,v\n2,y\n")
 	failed = sqlload(project, "load")
 	assert failed.returncode == 1, failed.stdout + failed.stderr
 	output = failed.stdout + failed.stderr
-	assert "./drop/b.csv: transform transforms.metrics:transform failed" in output, output
+	assert "./drop/b.csv: transform metric_rows failed" in output, output
 	assert error in output, output
 	assert sorted(path.name for path in (project / "drop").iterdir()) == ["b.csv"]
 	assert query(project, "SELECT id FROM RAW.metrics ORDER BY id") == [("1",)]
@@ -167,20 +190,43 @@ def test_a_merge_still_merges_files_oldest_first_with_a_record_each(tmp_path: Pa
 	assert merged == [(3,)]
 
 
+#: A second module registering a transform as `metric_rows` too, and one as `tidy`.
+OTHER = """
+import sqlload as sl
+
+@sl.transform("metric_rows")
+def other_rows(rows, ctx):
+    return rows
+
+@sl.transform
+def tidy(rows, ctx):
+    return rows
+"""
+
+
 @pytest.mark.parametrize(
-	("transform", "problem"),
+	("transform", "other", "problem"),
 	[
-		("transforms.missing:transform", "transform transforms.missing:transform: no module transforms.missing under python_paths (transforms)"),
-		("transforms.metrics:nothing", "transform transforms.metrics:nothing: module transforms.metrics has no function nothing"),
-		("transforms.metrics:LIMIT", "transform transforms.metrics:LIMIT: transforms.metrics.LIMIT is not callable"),
+		(
+			"missing_rows",
+			"",
+			"transform missing_rows: no function is registered as missing_rows with @sl.transform; the registered ones are metric_rows",
+		),
+		(
+			"metric_rows",
+			OTHER,
+			'transform metric_rows: 2 functions are registered as metric_rows, in transforms/metrics.py (metric_rows) and transforms/other.py (other_rows); give one another name with @sl.transform("...")',
+		),
 	],
-	ids=["no-module", "no-function", "not-callable"],
+	ids=["unknown-name", "two-under-one-name"],
 )
-def test_plan_refuses_a_transform_it_cannot_run_and_plans_other_tables(tmp_path: Path, transform: str, problem: str) -> None:
-	project = make_project(tmp_path, "LIMIT = 3\n" + RETURNS["dicts"])
+def test_plan_refuses_a_transform_it_cannot_look_up_and_plans_other_tables(tmp_path: Path, transform: str, other: str, problem: str) -> None:
+	project = make_project(tmp_path, RETURNS["dicts"])
+	if other:
+		(project / "transforms" / "other.py").write_text(other)
 	config = project / "sqlload.toml"
 	config.write_text(
-		config.read_text().replace("transforms.metrics:transform", transform)
+		config.read_text().replace('transform = "metric_rows"', f'transform = "{transform}"')
 		+ '\n[sources.plain]\nkind = "files"\nconnection = "files"\npath = "plain/"\nformat = "csv"\ndescription = "Plain."\nwrite_strategy = "append"\n'
 	)
 	give(project, "a.csv", "id,v\n1,x\n")
@@ -192,10 +238,33 @@ def test_plan_refuses_a_transform_it_cannot_run_and_plans_other_tables(tmp_path:
 	assert "└── RAW.plain " in planned.stdout, planned.stdout
 
 
+def test_a_transform_registered_under_a_name_of_its_own_is_found_by_that_name(tmp_path: Path) -> None:
+	module = """
+import sqlload as sl
+
+@sl.transform("kpis")
+def reshape_metrics(rows, ctx):
+    return [{"id": int(row["id"]), "unit": ctx.unit, "table": ctx.table} for row in rows.to_pylist()]
+"""
+	project = make_project(tmp_path, module)
+	config = project / "sqlload.toml"
+	config.write_text(config.read_text().replace('transform = "metric_rows"', 'transform = "kpis"'))
+	give(project, "a.csv", "id,v\n1,x\n")
+	load(project)
+	assert query(project, "SELECT id, unit, \"table\" FROM RAW.metrics") == [(1, "file", "metrics")]
+	config.with_name("by_function.toml").write_text(config.read_text().replace('transform = "kpis"', 'transform = "reshape_metrics"'))
+	wrong = sqlload(project, "plan", "-c", str(config.with_name("by_function.toml")))
+	assert wrong.returncode == 1, wrong.stdout + wrong.stderr
+	assert "transform reshape_metrics: no function is registered as reshape_metrics with @sl.transform; the registered ones are kpis" in wrong.stdout, wrong.stdout
+
+
 def test_plan_shows_the_transformed_columns_and_reads_the_files_itself(tmp_path: Path) -> None:
 	module = """
-def transform(table, ctx):
-    return [{"metric": row["name"], "month": month, "value": value} for row in table.to_pylist() for month, value in row.items() if month != "name"]
+import sqlload as sl
+
+@sl.transform
+def metric_rows(rows, ctx):
+    return [{"metric": row["name"], "month": month, "value": value} for row in rows.to_pylist() for month, value in row.items() if month != "name"]
 """
 	project = make_project(tmp_path, module, format="parquet")
 	pq.write_table(pa.table({"name": ["sales"], "jan": [1.5], "feb": [2.5]}), project / "drop" / "a.parquet")
@@ -204,9 +273,9 @@ def transform(table, ctx):
 	lines = [line.strip("│├└─ ") for line in planned.stdout.splitlines()]
 	assert [line.split()[0] for line in lines if line.split()[:1] in (["metric"], ["month"], ["value"])] == ["metric", "month", "value"], planned.stdout
 	assert any(line.startswith("value") and "float" in line for line in lines), planned.stdout
-	assert any(line.startswith("source") and line.endswith("transform transforms.metrics:transform") for line in lines), planned.stdout
+	assert any(line.startswith("source") and line.endswith("transform metric_rows") for line in lines), planned.stdout
 	plain = project / "plain.toml"
-	plain.write_text((project / "sqlload.toml").read_text().replace('transform = "transforms.metrics:transform"', ""))
+	plain.write_text((project / "sqlload.toml").read_text().replace('transform = "metric_rows"', ""))
 	direct = sqlload(project, "plan", "-c", str(plain))
 	route = [line for line in lines if line.startswith("route")]
 	assert route != [line.strip("│├└─ ") for line in direct.stdout.splitlines() if line.strip("│├└─ ").startswith("route")], direct.stdout
@@ -215,7 +284,10 @@ def transform(table, ctx):
 
 def test_a_column_the_plan_did_not_see_fails_the_file_and_a_missing_one_loads_null(tmp_path: Path) -> None:
 	module = """
-def transform(table, ctx):
+import sqlload as sl
+
+@sl.transform
+def metric_rows(table, ctx):
     rows = table.to_pylist()
     if ctx.path.endswith("a.csv"):
         return [{"id": int(row["id"])} for row in rows]
@@ -323,11 +395,14 @@ KPI_ROWS: list[list[dict[str, Any]]] = [
 
 TIDY_MODULE = """
 import pandas as pd
+import sqlload as sl
 
 MONTHS = ["Period 1", "Period 2", "Jan", "Feb", "Mar"]
 
-def transform(table, ctx):
-    df = table.to_pandas()
+@sl.transform
+def kpi_sheet(rows, ctx):
+    assert (ctx.unit, ctx.sheet) == ("range", "KPIs"), ctx
+    df = rows.to_pandas()
     kpi = df["ID"].notna()
     df["metric_id"] = df["ID"].ffill()
     df["metric"] = df["KPI"].where(kpi).ffill()
@@ -413,7 +488,7 @@ ranges = {{ metrics = "KPIs" }}
 header_row = 2
 description = "Service KPIs, tidied."
 write_strategy = "replace"
-transform = "transforms.kpis:transform"
+transform = "kpi_sheet"
 """
 		)
 		done = load(tmp_path)

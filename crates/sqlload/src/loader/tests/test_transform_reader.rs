@@ -7,8 +7,8 @@ fn given_a_files_table_with_a_transform_when_routing_then_sqlload_reads_the_file
     let test_cases = [
         TransformReaderTestCase {
             description: "a transform runs on each file, so no destination reads the files itself",
-            transform: Some("transforms.metrics:transform"),
-            expected_reason: Some("transform transforms.metrics:transform runs on each file"),
+            transform: Some("metrics"),
+            expected_reason: Some("transform metrics runs on each file"),
         },
         TransformReaderTestCase {
             description: "without one, Parquet files on a local folder need no reader of SQLLoad's",

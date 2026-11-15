@@ -187,12 +187,14 @@ or an archive naming two members alike, fails.
 
 ## Transforming each file
 
-From 0.52.0. `transform` names a Python function that makes a file loadable: it fixes headers,
-drops title and totals rows, or unpivots a sheet. Keep business logic downstream, in SQL, where it
-can change without reloading files. The function is `module:function`, the module named as
-[`python_paths`](/docs/configuration/#top-level) discovery imports it: by its path from the project
-folder, so `transforms/metrics.py` is `transforms.metrics`. It needs the `sqlload` Python package
-and pyarrow; the standalone `sqlload-cli` executable refuses a table with a `transform`.
+From 0.52.0. A transform is a Python function that makes a file loadable: it fixes headers, drops
+title and totals rows, or unpivots a sheet. Keep business logic downstream, in SQL, where it can
+change without reloading files. Decorate the function with `@sl.transform` in a module under
+[`python_paths`](/docs/configuration/#top-level), and name it in `transform`: `@sl.transform`
+registers it under its own name, and `@sl.transform("kpis")` under another. It needs the `sqlload`
+Python package and pyarrow; the standalone `sqlload-cli` executable refuses a table with a
+`transform`. The same kind of function also reshapes each [Google Sheets](/docs/sources/google-sheets/#transforming-each-range)
+range and each [`sl.http` page](/docs/sources/python/#transforming-each-page).
 
 ```toml
 python_paths = ["transforms"]
@@ -201,35 +203,49 @@ python_paths = ["transforms"]
 kind = "files"
 connection = "lake"
 path = "drop/metrics/"
-format = "xlsx"
-xlsx = { range = "A3:Z" }
-description = "Monthly metrics, one workbook a month."
+format = "csv"
+description = "Monthly metrics, one file a month."
 write_strategy = "append"
-transform = "transforms.metrics:transform"
+transform = "metric_rows"
 ```
 
 It runs once for each file, and for each member of a ZIP archive, after SQLLoad reads it and before
-its rows are typed against the table. It gets the file's rows as a `pyarrow.Table` and a
-`sl.FileContext`, and returns what a [Python table](/docs/guides/python/) may yield: a list of
-dicts, a `pyarrow.Table`, or a polars or pandas DataFrame. Dicts are the simplest:
+its rows are typed against the table. It's called as `f(rows, ctx)`: `rows` is the file's rows as a
+`pyarrow.Table`, and `ctx` an `sl.TransformContext`. It returns or yields, in any mix, what a
+[Python table](/docs/guides/python/) may yield: dicts, lists of dicts, a `pyarrow.Table`, or a polars
+or pandas DataFrame. Dicts are the simplest:
 
 ```python title="transforms/metrics.py"
 import pyarrow as pa
 import sqlload as sl
 
-def transform(table: pa.Table, ctx: sl.FileContext):
-    rows = []
-    for row in table.to_pylist():
+
+@sl.transform
+def metric_rows(rows: pa.Table, ctx: sl.TransformContext):
+    for row in rows.to_pylist():
         if row["metric"] in (None, "Total"):
             continue
         for month, value in row.items():
             if month != "metric" and value is not None:
-                rows.append({"metric": row["metric"], "month": month, "value": value})
-    return rows
+                yield {"metric": row["metric"], "month": month, "value": float(value)}
 ```
 
-`ctx` has `path` (as in `_sqlload_source_file`), `modified_at`, `sheet`, `range`, `skip_rows` and
-`table`; `spreadsheet_id` is set only for [Google Sheets](/docs/sources/google-sheets/) tables.
+```console
+$ sqlload load
+✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+
+created  raw.metrics  8 columns
+loaded  raw.metrics      5 rows 0.0s
+                     transform  ./drop/metrics/2026-10.csv  0.00s
+                     transform  ./drop/metrics/2026-11.csv  0.01s
+
+✓ Completed  1 loaded, 5 rows, 0.1s
+├── slowest      raw.metrics 0.0s
+└── peak memory  134 MiB
+```
+
+`ctx.unit` is `"file"`. `ctx` also has `path` (as in `_sqlload_source_file`), `modified_at`,
+`sheet`, `range`, `skip_rows` and `table`.
 
 The rows it gets are typed so that no value fails the read before the function sees it: CSV and
 XML values as text, Parquet columns as stored, Excel cells as the workbook stores each column, and
@@ -246,36 +262,50 @@ import polars as pl
 import pyarrow as pa
 import sqlload as sl
 
-def transform(table: pa.Table, ctx: sl.FileContext):
-    frame = pl.from_arrow(table).filter(pl.col("metric").is_not_null() & (pl.col("metric") != "Total"))
+
+@sl.transform
+def metric_rows(rows: pa.Table, ctx: sl.TransformContext):
+    frame = pl.from_arrow(rows).filter(pl.col("metric").is_not_null() & (pl.col("metric") != "Total"))
     return frame.unpivot(index="metric", variable_name="month", value_name="value").drop_nulls("value")
 ```
 
 A pandas DataFrame crosses with its columns only; after filtering, call `reset_index(drop=True)` so
 no index is left over.
 
-- `plan` imports the function and fails when its module or the function is missing, or isn't
-  callable. It then runs the function on the newest file (by name), and the table's columns are
-  what it returned, typed as a Python table's rows are. So the function runs at `plan` and again
-  at load: keep it free of side effects.
+- `plan` looks the name up among the functions `@sl.transform` registered on `python_paths`, and
+  fails when none has it, listing those that do, or when two do, naming both files:
+
+  ```console
+  $ sqlload plan
+  Errors (1)
+  └── raw.metrics
+      └── reason  transform metrics_rows: no function is registered as metrics_rows with @sl.transform; the registered ones are metric_rows
+
+  ✗ Plan failed with errors
+  ```
+
+  It then runs the function on the newest file (by name), and the table's columns are what it
+  returned, typed as a Python table's rows are. So the function runs at `plan` and again at load:
+  keep it free of side effects.
 - Every file must return the columns the planned file did, or fewer (a missing one loads NULL). A
   file returning a new column fails, naming it; pin it in `columns` to add it.
-- A transform that raises, or returns something else, fails that file and names the function and
-  the file. Its rows don't commit, and `after_load` leaves it where it is. The table stops there,
-  as for a file that doesn't read; files committed before it stay committed.
+- A transform that raises, or returns or yields something else, fails that file and names the
+  function and the file. Its rows don't commit, and `after_load` leaves it where it is. The table
+  stops there, as for a file that doesn't read; files committed before it stay committed.
 - The file order, `merge`, `after_load` and the `_sqlload_source_*` columns work as without a
   transform; `_sqlload_source_row` numbers the rows the function returned. SQLLoad always reads the
   files itself, so a destination never reads them directly.
-- Each file is read whole and held in memory with what the function returns, so a file streams no
-  longer.
+- Each file is read whole and held in memory while the function runs. What it returns or yields
+  loads batch by batch as it comes, so a generator needs memory for one file and one batch of its
+  output.
 - The load report gives each file's transform time, and a hint when dicts made a large file slow.
 
 ### Changing a transform
 
-Each load records a version of the transform (a hash of its module's source). Files already loaded
-aren't read again, so after a change, `plan` shows `transform  changed since the last load` on
-the table. The version covers the module the function is in; a change in another module it imports
-isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
+Each load records a version of the transform (a hash of the file the function is defined in). Files
+already loaded aren't read again, so after a change, `plan` shows `transform  changed since the last
+load` on the table. The version covers the file the function is in; a change in another module it
+imports isn't noticed. To load every file again with the new transform, run `sqlload load <table> --reload`
 ([Reloading a files table](#reloading-a-files-table)). A table whose `after_load` deletes its files
 can't be reloaded: drop it and load the files still in `path`.
 

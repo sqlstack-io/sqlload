@@ -2,8 +2,9 @@
 
 `plan` checks them with load's own path checker, so a bad literal path fails `plan` instead of the load. Only calls whose
 names resolve to sqlload count: `paginate` and `fan_out` on an `sl.http(...)` client, and `sl.field`, `sl.parent` and
-`sl.key` in their `fields=`. A path `plan` can't read as a literal (a variable, an f-string, a dict built elsewhere), or a
-function whose source can't be read, is left to load, which checks every job before its first request.
+`sl.key` in their `fields=`. A `transform=` given as a name must be one `@sl.transform` registered. A path `plan` can't
+read as a literal (a variable, an f-string, a dict built elsewhere), or a function whose source can't be read, is left to
+load, which checks every job before its first request.
 """
 
 import ast
@@ -16,6 +17,7 @@ from collections.abc import Callable, Iterator, Mapping
 from typing import Any
 
 from sqlload import _data, _http
+from sqlload._transform import TRANSFORMS
 
 #: The methods of an `sl.http` client that build a job.
 JOB_METHODS: frozenset[str] = frozenset({"paginate", "fan_out"})
@@ -32,7 +34,8 @@ _LOCAL_CLIENT: Any = object()
 
 def literal_paths(function: Callable[..., Any]) -> dict[str, Any] | None:
 	"""The literal paths of the jobs `function` builds that load rows: each `fields=` entry's `[name, path]` and each
-	`key_path`; what `plan` can't read as a literal; and whether the source can't be read at all. A job passed as another
+	`key_path`; why a `transform=` name can't be looked up; what `plan` can't read as a literal; and whether the source
+	can't be read at all. A job passed as another
 	job's `over=` is left out: load refuses its `fields` and `key_path` whatever their paths. `None` when the function builds
 	no job `plan` can see."""
 	try:
@@ -46,7 +49,7 @@ def literal_paths(function: Callable[..., Any]) -> dict[str, Any] | None:
 	jobs = [call for call in ast.walk(definition) if isinstance(call, ast.Call) and _job_method(call, names)]
 	if not jobs:
 		return None
-	found: dict[str, Any] = {"fields": [], "key_paths": [], "computed": [], "no_source": False}
+	found: dict[str, Any] = {"fields": [], "key_paths": [], "computed": [], "no_source": False, "transform_problems": []}
 	over = _over_jobs(definition, jobs)
 	for call in jobs:
 		if id(call) not in over:
@@ -140,6 +143,10 @@ def _read_call(call: ast.Call, names: _Names, found: dict[str, Any]) -> None:
 			found["computed"].append(f"{_job_method(call, names)}(**...)")
 		elif keyword.arg == "fields":
 			_read_fields(keyword.value, names, found)
+		elif keyword.arg == "transform" and isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
+			_, problem = TRANSFORMS.lookup(keyword.value.value)
+			if problem is not None:
+				found["transform_problems"].append(f"transform {keyword.value.value}: {problem}")
 		elif keyword.arg == "key_path":
 			path = _literal_path(keyword.value, names, (_data.parent,))
 			_record(found, "key_path", path, lambda text: found["key_paths"].append(text))

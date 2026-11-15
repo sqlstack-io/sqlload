@@ -7,7 +7,7 @@ use crate::crossing::main::default_parse_threads::default_parse_threads;
 use crate::crossing::models::CrossingOptions;
 
 /// How a table function's yields, or what a `transform` returned, cross into Arrow.
-pub(crate) fn crossing_options() -> CrossingOptions {
+pub fn crossing_options() -> CrossingOptions {
     CrossingOptions {
         batch_rows: DEFAULT_BATCH_ROWS,
         max_queued: DEFAULT_MAX_QUEUED,
