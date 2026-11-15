@@ -180,7 +180,7 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             expected_warnings: &[],
         },
         SheetTableTestCase {
-            description: "a blank header cell between named ones and a name used twice ignoring case are refused by cell, the tab's title quoted",
+            description: "a blank header cell between named ones is refused by cell, the tab's title quoted",
             sheet: sheet(
                 "Blank Header",
                 (0, 0),
@@ -191,8 +191,27 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             ),
             rule: header.clone(),
             expected: Err(
-                "'Blank Header'!B1: the header cell is blank; name the column, or narrow the range; 'Blank Header'!C1: the header \"ID\" names an earlier column too (ignoring case); rename one",
+                "'Blank Header'!B1: the header cell is blank; name the column, or narrow the range",
             ),
+            expected_warnings: &[],
+        },
+        SheetTableTestCase {
+            description: "a header repeated exactly or in another case is numbered past every name the header has, so each column reads by a name of its own",
+            sheet: sheet(
+                "Repeats",
+                (0, 0),
+                vec![
+                    vec![text("Qty"), text("Qty_1"), text("Qty"), text("QTY")],
+                    vec![
+                        number(1.0, "1", ""),
+                        number(2.0, "2", ""),
+                        number(3.0, "3", ""),
+                        number(4.0, "4", ""),
+                    ],
+                ],
+            ),
+            rule: header.clone(),
+            expected: Ok(("Qty:int,Qty_1:int,Qty_2:int,QTY_3:int", 1)),
             expected_warnings: &[],
         },
         SheetTableTestCase {

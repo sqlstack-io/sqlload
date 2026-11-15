@@ -57,6 +57,8 @@ Unknown settings raise `TypeError` when the module is imported.
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
 | `flatten` | table | Top-level objects to expand one level into `<object>__<key>` columns. |
+| `naming`, `compat`, `on_duplicate_names` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). A field yielded as `rowNumber` loads as `row_number`; `naming="source"` keeps it. See [Naming](/docs/concepts/nested-data/#naming). |
+| `rename` | source or table | From 0.53.0. A map such as `{"orderId": "order_ref"}`, the name an `@sl.rename` function was registered under, or the function itself (`rename=erp_names`). See [rename](/docs/concepts/nested-data/#rename). |
 | `unnest`, `max_depth` | table | As in [`sqlload.toml`](/docs/configuration/#table-settings): the list fields whose items become child tables, such as `unnest=["items"]` or `"all"`, and how many levels deep. See [Nested data](/docs/concepts/nested-data/). |
 | `mask`, `exclude_columns`, `allow_columns` | table (the last two also source) | As for other sources. |
 | `table_name`, `destination_path` | source or table | Destination name template, and folder in a files target. |
@@ -694,4 +696,5 @@ To inspect or correct a logged position, see [`sqlload logged-state`](/docs/cli/
 | `sl.__version__` | The package version. |
 | `sl.executable()` | The path of the `sqlload` command installed with the package, else the one on `PATH`. |
 | `@sl.transform`, `@sl.transform("name")` | From 0.52.0. Registers a function under its own name, or the one given, as a transform for a [files](/docs/sources/files/#transforming-each-file) or [Google Sheets](/docs/sources/google-sheets/#transforming-each-range) table's `transform = "name"`, or an `sl.http` job's [`transform=`](#transforming-each-page). Returns the function unchanged. |
+| `@sl.rename`, `@sl.rename("name")` | From 0.53.0. Registers a function under its own name, or the one given, for a table's `rename`. It gets the columns as `sl.Column`s (`position`, `source`, `default`) and an `sl.RenameContext` (`source`, `table`), and returns the names it changes by position. See [rename](/docs/concepts/nested-data/#rename). |
 | `sl.TransformContext` | From 0.52.0. The `ctx` a transform gets: `unit` (`"file"`, `"range"` or `"page"`), `table`, and the unit's details. |

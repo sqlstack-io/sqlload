@@ -275,7 +275,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
         TextFilesScenarioTestCase {
             description: "a pinned name differing from a sampled key only in case fails the plan",
             store: local_store,
-            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { Email = \"text\" }\n",
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\nnaming = \"source\"\n[sources.scores.tables.scores]\ncolumns = { Email = \"text\" }\n",
             runs: &[TextFilesRun {
                 files: &[EMAIL],
                 expected_error: "pinned column Email was not seen in the sampled files; did you mean \"email\"?",

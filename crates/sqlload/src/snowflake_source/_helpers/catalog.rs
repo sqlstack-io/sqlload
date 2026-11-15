@@ -147,6 +147,7 @@ pub(crate) fn source_column(name: &str, type_text: &str, nullable: bool) -> Sour
     let loaded = loaded_name(name);
     SourceColumn {
         source_spelling: (loaded != name).then(|| name.to_owned()),
+        repeat_of: None,
         name: loaded,
         postgres_type: type_text.to_owned(),
         pg_type: PgType::Other,

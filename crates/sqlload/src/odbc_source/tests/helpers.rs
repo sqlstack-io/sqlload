@@ -15,6 +15,7 @@ pub(crate) fn table(schema: &str, name: &str, columns: &[&str]) -> SourceTable {
                 column_type: Ok(ColumnType::Text),
                 nullable: true,
                 source_spelling: None,
+                repeat_of: None,
             })
             .collect(),
         primary_key: Vec::new(),

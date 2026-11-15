@@ -1,3 +1,5 @@
+#[path = "tests/test_bound_array.rs"]
+mod bound_array;
 #[path = "tests/test_cut_index.rs"]
 mod cut_index;
 #[path = "tests/test_file_groups.rs"]

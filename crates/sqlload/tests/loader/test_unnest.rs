@@ -123,7 +123,7 @@ const REKEY_SQL: &str = "UPDATE raw.orders SET _sqlload_row_id = 'old-' || _sqll
 const REKEYED_CHECK: &str = "SELECT (SELECT count(*) FROM raw.orders) || '/' || (SELECT count(*) FROM raw.orders__items) || '/' || (SELECT count(*) FROM raw.orders__items__parts) || '/' || (SELECT string_agg(o.id || ':' || i.sku || ':' || p.value, ',' ORDER BY o.id) FROM raw.orders o JOIN raw.orders__items i ON i._sqlload_parent_id = o._sqlload_row_id JOIN raw.orders__items__parts p ON p._sqlload_parent_id = i._sqlload_row_id)";
 
 /// [`MERGE_SETTINGS`] under dlt's naming.
-const DLT_MERGE_SETTINGS: &str = "naming = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
+const DLT_MERGE_SETTINGS: &str = "compat = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\"]\n";
 
 /// [`REKEY_SQL`] under dlt's naming.
 const DLT_REKEY_SQL: &str = "UPDATE raw.orders SET _dlt_id = 'old-' || _dlt_id WHERE id <> 2; UPDATE raw.orders__items SET _dlt_parent_id = 'old-' || _dlt_parent_id, _dlt_root_id = 'old-' || _dlt_root_id WHERE 'old-' || _dlt_root_id IN (SELECT _dlt_id FROM raw.orders); UPDATE raw.orders__items__parts SET _dlt_root_id = 'old-' || _dlt_root_id WHERE 'old-' || _dlt_root_id IN (SELECT _dlt_id FROM raw.orders)";
@@ -228,8 +228,8 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
 -> Result<(), String> {
     let test_cases = [
         UnnestPlanTestCase {
-            description: "parent and child paths, dlt naming and its row id plan",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nrow_id = true\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n",
+            description: "parent and child paths, compat = \"dlt\" and its row id plan",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nrow_id = true\n[sources.orders.tables.orders]\nunnest = [\"items\", \"items.parts\", \"tags\"]\n",
             files_target: false,
             file: ORDERS,
             expected_ok: true,
@@ -340,80 +340,80 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             expected_problem: "├── unnest  orders__tags  child tables, columns inferred at load",
         },
         UnnestPlanTestCase {
-            description: "row ids turned off under dlt naming",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nrow_id = false\n",
+            description: "row ids turned off under compat = \"dlt\"",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nrow_id = false\n",
             files_target: false,
             file: ORDERS,
             expected_ok: false,
-            expected_problem: "row_id = false: naming = \"dlt\" gives every row its _dlt_id",
+            expected_problem: "row_id = false: compat = \"dlt\" gives every row its _dlt_id",
         },
         UnnestPlanTestCase {
-            description: "two columns loading as one name under dlt naming, both named",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n",
+            description: "two columns loading as one name are numbered in source-name order",
+            settings: "write_strategy = \"replace\"\n",
             files_target: false,
             file: "{\"OrderID\": 1, \"Order ID\": 2}\n",
-            expected_ok: false,
-            expected_problem: "columns \"OrderID\" and \"Order ID\" both load as order_id under naming = \"dlt\"; exclude one with exclude_columns",
+            expected_ok: true,
+            expected_problem: "├── names   OrderID -> order_id_1 (numbered)",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming a pin may name a sampled column by its loaded name",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            description: "under compat = \"dlt\" a pin may name a sampled column by its loaded name",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
             files_target: false,
             file: "{\"OrderID\": 1}\n",
             expected_ok: true,
             expected_problem: "├── order_id text   -> VARCHAR",
         },
         UnnestPlanTestCase {
-            description: "under SQLLoad's naming the same pin is a typo of the file's name",
-            settings: "write_strategy = \"replace\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
+            description: "under naming = \"source\" the same pin is a typo of the file's name",
+            settings: "write_strategy = \"replace\"\nnaming = \"source\"\n[sources.orders.tables.orders]\ncolumns = { order_id = \"text\" }\n",
             files_target: false,
             file: "{\"OrderID\": 1}\n",
             expected_ok: false,
             expected_problem: "did you mean \"OrderID\"?",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming an exclusion naming a flattened object is refused, naming its columns",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Customer\"]\n",
+            description: "under compat = \"dlt\" an exclusion naming a flattened object is refused, naming its columns",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nexclude_columns = [\"Customer\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\", \"Name\": \"n\"}}\n",
             expected_ok: false,
-            expected_problem: "exclude_columns Customer names Customer, which naming = \"dlt\" flattens into Customer__Email, Customer__Name; name those columns instead",
+            expected_problem: "exclude_columns Customer names Customer, which compat = \"dlt\" flattens into Customer__Email, Customer__Name; name those columns instead",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming a pin naming a flattened object by its loaded name is refused",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { customer = \"json\" }\n",
+            description: "under compat = \"dlt\" a pin naming a flattened object by its loaded name is refused",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\n[sources.orders.tables.orders]\ncolumns = { customer = \"json\" }\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\"}}\n",
             expected_ok: false,
-            expected_problem: "columns customer names Customer, which naming = \"dlt\" flattens into Customer__Email; name those columns instead",
+            expected_problem: "columns customer names Customer, which compat = \"dlt\" flattens into Customer__Email; name those columns instead",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming a mask naming an object NULL in some sampled rows is refused, as its keys would load unmasked",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\nmask = { c = \"hash\" }\n",
+            description: "under compat = \"dlt\" a mask naming an object NULL in some sampled rows is refused, as its keys would load unmasked",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\n[sources.orders.tables.orders]\nmask = { c = \"hash\" }\n",
             files_target: false,
             file: "{\"id\": 1, \"c\": null}\n{\"id\": 2, \"c\": {\"n\": \"s\"}}\n",
             expected_ok: false,
-            expected_problem: "mask c names c, which naming = \"dlt\" flattens into c__n; name those columns instead",
+            expected_problem: "mask c names c, which compat = \"dlt\" flattens into c__n; name those columns instead",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming a key holding __ inside an object is no object of its own, so an exclusion naming it is no flattened object",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            description: "under compat = \"dlt\" a key holding __ inside an object is no object of its own, so an exclusion naming it is no flattened object",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"a\": {\"b__c\": 1}}\n",
             expected_ok: true,
             expected_problem: "├── id",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming the same exclusion naming an object nested in an object is refused",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
+            description: "under compat = \"dlt\" the same exclusion naming an object nested in an object is refused",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nexclude_columns = [\"a__b\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"a\": {\"b\": {\"c\": 1}}}\n",
             expected_ok: false,
-            expected_problem: "exclude_columns a__b names a__b, which naming = \"dlt\" flattens into a__b__c; name those columns instead",
+            expected_problem: "exclude_columns a__b names a__b, which compat = \"dlt\" flattens into a__b__c; name those columns instead",
         },
         UnnestPlanTestCase {
-            description: "under dlt naming an exclusion matching a flattened object's columns applies to them",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
+            description: "under compat = \"dlt\" an exclusion matching a flattened object's columns applies to them",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nexclude_columns = [\"Customer*\"]\n",
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\"}}\n",
             expected_ok: true,
@@ -421,7 +421,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
         },
         UnnestPlanTestCase {
             description: "excluding one of two colliding columns resolves it",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\nexclude_columns = [\"Order ID\"]\n",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\nexclude_columns = [\"Order ID\"]\n",
             files_target: false,
             file: "{\"OrderID\": 1, \"Order ID\": 2}\n",
             expected_ok: true,
@@ -560,8 +560,8 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "3/3/14/14",
         },
         RowIdTestCase {
-            description: "naming = \"dlt\" on a merge: _dlt_load_id and _dlt_id, the id dlt's key hash of {\"id\":n}, kept when a later load changes the row",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n",
+            description: "compat = \"dlt\" on a merge: _dlt_load_id and _dlt_id, the id dlt's key hash of {\"id\":n}, kept when a later load changes the row",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n",
             runs: &[
                 (
                     "a.ndjson",
@@ -574,8 +574,8 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "1:c:z5jIxXIbUnmbKw,2:b:M6/KlLzJ2FeV/w",
         },
         RowIdTestCase {
-            description: "naming = \"dlt\" names a file's columns as dlt does, merges by a key named as the file spells it, and unnests a list under its snake-cased name",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"OrderID\"]\n[sources.orders.tables.orders]\nunnest = [\"LineItems\"]\n",
+            description: "compat = \"dlt\" names a file's columns as dlt does, merges by a key named as the file spells it, and unnests a list under its snake-cased name",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"merge\"\nunique_key = [\"OrderID\"]\n[sources.orders.tables.orders]\nunnest = [\"LineItems\"]\n",
             runs: &[
                 (
                     "a.ndjson",
@@ -591,8 +591,8 @@ fn given_row_id_or_unnest_settings_when_loading_then_rows_get_ids_and_lists_beco
             expected_result: "1:c:3,2:b:2/1:7",
         },
         RowIdTestCase {
-            description: "naming = \"dlt\" with a cursor on a partition column the naming renames: the second run reads only the new partition",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\ncursor_column = \"Day\"\npartition_columns = { Day = \"date\" }\n",
+            description: "compat = \"dlt\" with a cursor on a partition column the naming renames: the second run reads only the new partition",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"append\"\ncursor_column = \"Day\"\npartition_columns = { Day = \"date\" }\n",
             runs: &[
                 ("Day=2026-11-03/a.ndjson", "{\"ID\": 1}\n"),
                 ("Day=2026-11-04/b.ndjson", "{\"ID\": 2}\n"),
@@ -697,7 +697,7 @@ fn given_roots_whose_ids_their_keys_did_not_give_when_merging_then_their_old_ite
             expected_result: "3/2/2/1:d:5,3:e:6",
         },
         RekeyedTestCase {
-            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
+            description: "compat = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
             settings: DLT_MERGE_SETTINGS,
             loaded: &REKEYED_RUNS[..1],
             merged: &REKEYED_RUNS[1..],
@@ -745,7 +745,7 @@ fn given_roots_whose_ids_their_keys_did_not_give_when_merging_into_postgres_then
             expected_result: "3/2/2/1:d:5,3:e:6",
         },
         RekeyedTestCase {
-            description: "naming = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
+            description: "compat = \"dlt\" over tables dlt merged with delete-insert, whose _dlt_id is random: the merged orders' old items and parts go, the unmerged order's stay",
             settings: DLT_MERGE_SETTINGS,
             loaded: &REKEYED_RUNS[..1],
             merged: &REKEYED_RUNS[1..],
@@ -915,8 +915,8 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
             expected_result: "2:t/1:a:1@0,1:a:2@1",
         },
         RowIdTestCase {
-            description: "naming = \"dlt\" on an append: the child table and its links take dlt's names (ClickHouse)",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"LineItems\"]\n",
+            description: "compat = \"dlt\" on an append: the child table and its links take dlt's names (ClickHouse)",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"LineItems\"]\n",
             runs: &[(
                 "a.ndjson",
                 "{\"OrderID\": 1, \"LineItems\": [{\"UnitPrice\": 5}, {\"UnitPrice\": 6}]}\n{\"OrderID\": 2, \"LineItems\": []}\n",
@@ -926,8 +926,8 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
             expected_result: "1:5@0,1:6@1",
         },
         RowIdTestCase {
-            description: "naming = \"dlt\" with a layout naming columns as the files spell them: bare names take the loaded names, an expression stays as written (ClickHouse)",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\norder_by = [\"OrderID\", \"cityHash64(order_id)\"]\npartition_by = \"Region\"\n",
+            description: "compat = \"dlt\" with a layout naming columns as the files spell them: bare names take the loaded names, an expression stays as written (ClickHouse)",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\norder_by = [\"OrderID\", \"cityHash64(order_id)\"]\npartition_by = \"Region\"\n",
             runs: &[(
                 "a.ndjson",
                 "{\"OrderID\": 1, \"Region\": \"eu\"}\n{\"OrderID\": 2, \"Region\": \"us\"}\n",
@@ -1110,8 +1110,8 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
-            description: "under dlt naming a list inside an object inside items keeps its existing child table's choice",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            description: "under compat = \"dlt\" a list inside an object inside items keeps its existing child table's choice",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             runs: &[(
                 "a.ndjson",
                 "{\"id\": 1, \"items\": [{\"dims\": {\"tags\": [\"t\"]}}]}\n",
@@ -1135,16 +1135,16 @@ fn given_unnest_when_a_later_load_breaks_what_it_chose_then_the_load_fails_namin
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
-            description: "under dlt naming a later file's column loading as an existing one's name fails, naming both",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n",
+            description: "a later file's column loading as an existing column's name fails, naming both, as no load recorded which one the column holds",
+            settings: "write_strategy = \"append\"\n",
             runs: &[("a.ndjson", "{\"OrderID\": 1}\n")],
             failing: ("b.ndjson", "{\"OrderID\": 2, \"Order ID\": 3}\n"),
-            expected_error: "columns \"OrderID\" and \"Order ID\" both load as order_id",
+            expected_error: "columns \"Order ID\" and \"OrderID\" now both load as order_id, which the table already has, and no earlier load recorded which of them it holds",
             expected_after: ("SELECT CAST(count(*) AS VARCHAR) FROM raw.orders", "1"),
         },
         UnnestFailTestCase {
-            description: "under dlt naming two keys of one child item loading as one name fail, naming both",
-            settings: "naming = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\"]\n",
+            description: "under compat = \"dlt\" two keys of one child item loading as one name fail, naming both",
+            settings: "compat = \"dlt\"\nwrite_strategy = \"append\"\n[sources.orders.tables.orders]\nunnest = [\"items\"]\n",
             runs: &[("a.ndjson", "{\"id\": 1, \"items\": [{\"UnitPrice\": 1}]}\n")],
             failing: (
                 "b.ndjson",
@@ -1228,8 +1228,8 @@ fn given_tables_named_like_child_tables_when_unnest_all_replaces_then_only_its_o
             expected_result: "1/1/0/1",
         },
         NamedLikeTestCase {
-            description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (naming = \"dlt\", which names the parent-id column _dlt_parent_id)",
-            settings: "write_strategy = \"replace\"\nnaming = \"dlt\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
+            description: "a plain table and another root's child table named like child tables keep their rows, and a real child table no row fills is emptied (compat = \"dlt\", which names the parent-id column _dlt_parent_id)",
+            settings: "write_strategy = \"replace\"\ncompat = \"dlt\"\n[sources.orders.tables.orders]\nunnest = \"all\"\n",
             parent_id: "_dlt_parent_id",
             expected_result: "1/1/0/1",
         },

@@ -27,12 +27,20 @@ pub(crate) async fn sample_file(
         SourceFormat::Xlsx | SourceFormat::Xml => {
             let mut reader = CellReader::open(bytes, encoding).await?;
             let records = reader.next_records(SAMPLE_ROWS);
-            Ok((cell_columns(reader.names(), &records), Vec::new()))
+            let mut columns = cell_columns(reader.names(), &records);
+            for (column, repeat) in columns.iter_mut().zip(reader.repeats()) {
+                column.repeat_of.clone_from(repeat);
+            }
+            Ok((columns, Vec::new()))
         }
         SourceFormat::Csv => {
             let mut reader = CsvReader::open(bytes, &encoding.csv, SAMPLE_ROWS).await?;
             let batch = reader.next_batch().await?.map(|(batch, _)| batch);
-            Ok((csv_columns(reader.names(), batch.as_ref()), Vec::new()))
+            let mut columns = csv_columns(reader.names(), batch.as_ref());
+            for (column, repeat) in columns.iter_mut().zip(reader.repeats()) {
+                column.repeat_of.clone_from(repeat);
+            }
+            Ok((columns, Vec::new()))
         }
         format => {
             let mut reader = JsonReader::new(bytes, format == SourceFormat::Ndjson)
@@ -61,6 +69,7 @@ pub(crate) fn json_columns(records: &[JsonRecord]) -> Vec<SampledColumn> {
                     direct_refusal: None,
                     stored_read: StoredRead::Plain,
                     lists: None,
+                    repeat_of: None,
                 });
                 columns.len() - 1
             });
@@ -107,6 +116,7 @@ fn text_column(name: &str) -> SampledColumn {
         direct_refusal: None,
         stored_read: StoredRead::Plain,
         lists: None,
+        repeat_of: None,
     }
 }
 
@@ -139,6 +149,7 @@ pub(crate) fn csv_columns(names: &[String], batch: Option<&RecordBatch>) -> Vec<
             direct_refusal: None,
             stored_read: StoredRead::Plain,
             lists: Some(false),
+            repeat_of: None,
         });
     }
     columns

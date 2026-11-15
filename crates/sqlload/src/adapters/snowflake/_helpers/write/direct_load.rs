@@ -405,7 +405,7 @@ fn filled_columns(
                     .fraction_digits
                     .is_some_and(|digits| digits < i64::from(MAX_FRACTION_DIGITS))
         });
-        let value = match (found, metadata_role(spec.naming, &column.name)) {
+        let value = match (found, metadata_role(spec.compat, &column.name)) {
             (
                 Some(CopyColumn {
                     value:

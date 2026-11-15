@@ -124,6 +124,8 @@ pub struct SheetColumn {
     pub column_type: Result<ColumnType, String>,
     /// Whether any cell below the header holds a value; a column without one is typed `text` until the live table says otherwise.
     pub has_values: bool,
+    /// The header this column repeats, when the header row has it more than once; its `name` is then numbered (`Qty_1`).
+    pub repeat_of: Option<String>,
 }
 
 /// A range read as a table: its columns, its row count, and warnings about how its cells were typed.

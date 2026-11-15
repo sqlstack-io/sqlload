@@ -7,7 +7,7 @@ use arrow_schema::{FieldRef, Schema};
 
 use crate::postgres_source::models::SourceTable;
 
-/// `batch`, read under the source's spellings, with each field `table` renames (under `naming = "dlt"`) under the name it loads as; every other field as it is.
+/// `batch`, read under the source's spellings, with each field `table` renames under the name it loads as; every other field as it is.
 pub fn loaded_batch(batch: &RecordBatch, table: &SourceTable) -> Result<RecordBatch, String> {
     let schema = batch.schema();
     let fields: Vec<FieldRef> = schema

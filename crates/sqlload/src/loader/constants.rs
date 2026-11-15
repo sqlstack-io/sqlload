@@ -52,6 +52,9 @@ pub const NO_PYTHON_HOST: &str = "this project has Python sources (python_paths)
 /// Why the standalone executable cannot run a `transform`; `{place}` names the source or table that sets it.
 pub const NO_TRANSFORM_HOST: &str = "{place} sets transform, which runs only in the sqlload Python package's command; install it (for example `uv tool install sqlload`) and run its sqlload instead of the standalone executable";
 
+/// Why the standalone executable cannot run a `rename` function; `{place}` names the source or table that sets it.
+pub const NO_RENAME_HOST: &str = "{place} sets rename to a function, which runs only in the sqlload Python package's command; install it (for example `uv tool install sqlload`) and run its sqlload, or give rename a map";
+
 /// The rows of a file or range a `transform` returned dicts for, from which a slow call gets the hint that Arrow or a DataFrame is faster.
 pub const DICT_HINT_ROWS: u64 = 100_000;
 
@@ -60,9 +63,6 @@ pub const DICT_HINT_MILLISECONDS: u64 = 5_000;
 
 /// The cursor type a Python table function is told before the table's first load shows it.
 pub const UNKNOWN_CURSOR_TYPE: &str = "unknown";
-
-/// The offset suffix of cursor bounds in UTC, as `cursor_text` writes them.
-pub const UTC_OFFSET_SUFFIX: &str = "+00";
 
 /// The remark for a Python table's first load that yielded no rows and declares no columns, so nothing was created.
 pub const NO_DATA_NOTE: &str = "(table created on first data)";

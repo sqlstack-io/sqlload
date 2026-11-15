@@ -20,6 +20,8 @@ pub(crate) struct SampledColumn {
     pub(crate) stored_read: StoredRead,
     /// Whether the sampled values were lists (`unnest = "all"` unnests the column): `Some(true)` when some held items and every other was NULL or empty, `Some(false)` once any was not a list, `None` while none decided.
     pub(crate) lists: Option<bool>,
+    /// The header this column repeats (see [`FileColumn::repeat_of`](crate::files_source::models::FileColumn::repeat_of)).
+    pub(crate) repeat_of: Option<String>,
 }
 
 /// What two sightings of a column's values say about it being a list field: any value that is not a list says no, any list with items yes.
@@ -78,6 +80,7 @@ pub(crate) fn schema_columns(schema: &SchemaRef) -> Vec<SampledColumn> {
             direct_refusal: direct_refusal(field.data_type()),
             stored_read: arrow_read(field.data_type()),
             lists: arrow_lists(field.data_type()),
+            repeat_of: None,
         })
         .collect()
 }
@@ -117,6 +120,7 @@ pub(crate) fn parquet_columns(footer: &ArrowReaderMetadata) -> Vec<SampledColumn
                 direct_refusal,
                 stored_read,
                 lists: arrow_lists(field.data_type()),
+                repeat_of: None,
             }
         })
         .collect()
@@ -294,6 +298,7 @@ pub(crate) fn merge_columns(
         existing.stored_read =
             joined_read(existing.stored_read, column.stored_read).unwrap_or(existing.stored_read);
         existing.lists = joined_lists(existing.lists, column.lists);
+        existing.repeat_of = existing.repeat_of.take().or(column.repeat_of);
         match (&existing.column_type, column.column_type) {
             (_, None) => {}
             (None, found_type) => existing.column_type = found_type,
@@ -360,6 +365,7 @@ pub(crate) fn merge_schema(
             direct_refusal: column.direct_refusal,
             stored_read: column.stored_read,
             lists: column.lists,
+            repeat_of: column.repeat_of,
         })
         .collect();
     let merge = ColumnMerge {
@@ -381,6 +387,7 @@ pub(crate) fn file_columns(columns: Vec<SampledColumn>) -> Vec<FileColumn> {
             direct_refusal: column.direct_refusal,
             stored_read: column.stored_read,
             lists: column.lists,
+            repeat_of: column.repeat_of,
         })
         .collect()
 }

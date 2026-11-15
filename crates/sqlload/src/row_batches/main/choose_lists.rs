@@ -1,6 +1,6 @@
 //! Which of a batch's columns are list fields under `unnest = "all"`.
 
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, Naming};
 use crate::row_batches::_helpers::unnest::Split;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::types::ListChoices;
@@ -12,7 +12,8 @@ pub fn choose_lists(batch: &RecordBatch, choices: &mut ListChoices) -> Result<bo
     let mut split = Split {
         unnest: &Unnest::All,
         max_depth: 1,
-        naming: Naming::Sqlload,
+        naming: Naming::Source,
+        compat: Compat::Sqlload,
         name_limit: None,
         flatten_objects: false,
         live: &[],

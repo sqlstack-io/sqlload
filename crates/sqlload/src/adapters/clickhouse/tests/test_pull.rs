@@ -61,7 +61,7 @@ fn given_a_parquet_file_in_s3_when_clickhouse_pulls_it_then_each_column_takes_th
             (&test_case.columns, &sql_type),
             (&file, signed),
             (
-                crate::load_naming::models::Naming::Sqlload,
+                crate::load_naming::models::Compat::Sqlload,
                 "load1",
                 "2026-11-08T07:00:00Z",
             ),

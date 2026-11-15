@@ -46,7 +46,7 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         metadata: request
             .columns
             .iter()
-            .map(|column| metadata_role(request.naming, &column.name))
+            .map(|column| metadata_role(request.compat, &column.name))
             .collect(),
         load_id: request.load_id.to_owned(),
         file_id: request.file_id.to_owned(),

@@ -49,15 +49,18 @@ from sqlload._http import (
 	single,
 )
 from sqlload._declare import Context, Source, Table, source, table
+from sqlload._rename import Column, RenameContext, rename
 from sqlload._transform import TransformContext, transform
 
 __version__: str = version("sqlload")
 
 __all__ = [
 	"Cells",
+	"Column",
 	"Context",
 	"Http",
 	"Job",
+	"RenameContext",
 	"Source",
 	"Table",
 	"TransformContext",
@@ -82,6 +85,7 @@ __all__ = [
 	"offset",
 	"page_number",
 	"parent",
+	"rename",
 	"single",
 	"source",
 	"table",

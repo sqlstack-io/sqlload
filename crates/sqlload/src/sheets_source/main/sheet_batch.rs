@@ -23,7 +23,7 @@ pub fn sheet_batch(
     for (name, column_type) in columns {
         let position = names
             .iter()
-            .position(|header| header.eq_ignore_ascii_case(name))
+            .position(|(header, _)| header.eq_ignore_ascii_case(name))
             .ok_or_else(|| {
                 format!(
                     "{}: column {name} is no longer in the header; run plan again",

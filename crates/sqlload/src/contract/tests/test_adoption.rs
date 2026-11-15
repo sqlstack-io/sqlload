@@ -11,8 +11,8 @@ fn given_live_columns_when_adopting_then_undeclared_ones_are_declared_and_overwr
     };
     let test_cases = [
         AdoptionTestCase {
-            description: "undeclared columns take the source's spelling; ones the source lacks and SQLLoad's own are left out",
-            settings: "",
+            description: "under naming = \"source\", undeclared columns take the source's spelling; ones the source lacks and SQLLoad's own are left out",
+            settings: "naming = \"source\"\n",
             spec: postgres_spec,
             warehouse: Warehouse::DuckDb,
             live: vec![

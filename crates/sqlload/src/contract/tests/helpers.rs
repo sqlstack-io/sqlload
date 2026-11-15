@@ -6,7 +6,7 @@ use crate::contract::main::render_contract::render_contract;
 use crate::contract::main::write_contracts::write_contracts;
 use crate::contract::models::{AdoptedColumn, Adoption, ContractReport, ContractResource};
 use crate::contract::tests::test_types::{AdoptionTestCase, FileDriftTestCase};
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::Compat;
 use crate::loader::_helpers::python::{python_table, python_tables};
 use crate::loader::_helpers::resolve::resolve_tables;
 use crate::loader::models::{FileSchema, TableSpec};
@@ -25,6 +25,7 @@ fn text_column(name: &str) -> SourceColumn {
         column_type: Ok(ColumnType::Text),
         nullable: true,
         source_spelling: None,
+        repeat_of: None,
     }
 }
 
@@ -179,7 +180,7 @@ pub(crate) fn drift_messages(test_case: &FileDriftTestCase) -> Vec<String> {
             columns: live_of(columns),
         })
         .collect();
-    file_drift(Naming::Sqlload, &live_of(&test_case.live), &files)
+    file_drift(Compat::Sqlload, &live_of(&test_case.live), &files)
         .into_iter()
         .map(|finding| format!("{}: {}", finding.kind, finding.message))
         .collect()

@@ -9,3 +9,6 @@ pub const SECONDS_PER_DAY: u64 = 86_400;
 
 /// The most windows one plan may split a table's read into; a smaller `batch_size` over a longer range is refused.
 pub const MAX_WINDOWS: u64 = 100_000;
+
+/// The offset suffix of cursor bounds in UTC, as `cursor_text` writes them.
+pub const UTC_OFFSET_SUFFIX: &str = "+00";

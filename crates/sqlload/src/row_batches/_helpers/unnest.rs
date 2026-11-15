@@ -15,7 +15,7 @@ use crate::load_naming::constants::VALUE_COLUMN;
 use crate::load_naming::main::child_table_name::child_table_name;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::main::metadata_name::metadata_name;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole, Naming};
 use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::_helpers::json_seed::raw_cell;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
@@ -44,7 +44,9 @@ pub(crate) struct Split<'a> {
     pub(crate) unnest: &'a Unnest,
     pub(crate) max_depth: u32,
     pub(crate) naming: Naming,
-    /// The longest name dlt's naming gives on the destination.
+    /// Whose names the child rows' id, parent and position columns take.
+    pub(crate) compat: Compat,
+    /// The longest name the destination takes.
     pub(crate) name_limit: Option<usize>,
     /// Whether an object inside an item flattens into `<key>__<inner>` fields.
     pub(crate) flatten_objects: bool,
@@ -291,13 +293,13 @@ impl Split<'_> {
         Ok(())
     }
 
-    /// An item's `entries` with each key as it loads under the split's naming (dlt's normalises it); two keys of one item at `path` loading as one name is an error naming both.
+    /// An item's `entries` with each key as it loads under the split's naming (snake_case normalises it); two keys of one item at `path` loading as one name is an error naming both.
     fn loaded_keys(
         &self,
         entries: Vec<(String, Box<RawValue>)>,
         path: &str,
     ) -> Result<Vec<(String, Box<RawValue>)>, String> {
-        if self.naming == Naming::Sqlload {
+        if self.naming == Naming::Source {
             return Ok(entries);
         }
         let mut loaded: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
@@ -306,7 +308,7 @@ impl Split<'_> {
             let name = loaded_name(self.naming, &key, self.name_limit);
             if let Some(other) = loaded.iter().position(|(taken, _)| *taken == name) {
                 return Err(format!(
-                    "{path}: keys {:?} and {key:?} both load as {name} under naming = \"dlt\"",
+                    "{path}: keys {:?} and {key:?} both load as {name}; a list's items must not have keys that load under one name",
                     spelled[other]
                 ));
             }
@@ -368,8 +370,8 @@ fn raw(text: &str, path: &str) -> Result<Box<RawValue>, String> {
     RawValue::from_string(text.to_owned()).map_err(|error| format!("{path}: {error}"))
 }
 
-/// `level`'s rows as a batch: the items' data columns, then, in dlt's order, the root's id when it has them, the parent's id, the position and the row's own id, named under `naming`; a data column taking one of those names is an error.
-fn level_batch(level: Level, naming: Naming) -> Result<ChildBatch, String> {
+/// `level`'s rows as a batch: the items' data columns, then, in dlt's order, the root's id when it has them, the parent's id, the position and the row's own id, named under `compat`; a data column taking one of those names is an error.
+fn level_batch(level: Level, compat: Compat) -> Result<ChildBatch, String> {
     let data = columns_batch(level.rows)?;
     let schema = data.schema();
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
@@ -391,7 +393,7 @@ fn level_batch(level: Level, naming: Naming) -> Result<ChildBatch, String> {
     ));
     linkage.push((MetadataRole::RowId, Arc::new(StringArray::from(level.ids))));
     for (role, column) in linkage {
-        let name = metadata_name(naming, role);
+        let name = metadata_name(compat, role);
         if schema.fields().iter().any(|field| field.name() == name) {
             return Err(format!(
                 "{}: its items have a field {name}, the name of the column linking {} to its parent; rename it before loading",
@@ -480,10 +482,10 @@ pub(crate) fn parent_batch(
 
 /// Every level `split` gathered as its child table's batch, parents before children.
 pub(crate) fn child_batches(split: Split<'_>) -> Result<Vec<ChildBatch>, String> {
-    let naming = split.naming;
+    let compat = split.compat;
     split
         .levels
         .into_iter()
-        .map(|level| level_batch(level, naming))
+        .map(|level| level_batch(level, compat))
         .collect()
 }

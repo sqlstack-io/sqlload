@@ -80,6 +80,8 @@ pub struct FileColumn {
     pub stored_read: StoredRead,
     /// Whether the sampled values were lists, for `unnest = "all"`; `None` while every one was NULL or empty.
     pub lists: Option<bool>,
+    /// The header this column repeats, when a file's header has it more than once; its `name` is then numbered (`Qty_1`).
+    pub repeat_of: Option<String>,
 }
 
 /// How a stage read returns a Parquet column's values (with `USE_LOGICAL_TYPE`), where loading them exactly takes more than a cast.
@@ -108,7 +110,7 @@ pub struct FilesTable {
     pub unmatched: usize,
     /// The loader's own columns found in the files (as they spell them), dropped for this load's.
     pub dropped: Vec<String>,
-    /// The objects `naming = "dlt"` flattened into `<object>__<key>` columns in the sampled JSON records, sorted (a key holding `__` inside an object is not one).
+    /// The objects `compat = "dlt"` flattened into `<object>__<key>` columns in the sampled JSON records, sorted (a key holding `__` inside an object is not one).
     pub objects: Vec<String>,
 }
 
@@ -345,7 +347,7 @@ pub struct FilesEncoding {
     pub members: Option<String>,
     /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
     pub record: Option<String>,
-    /// Under `naming = "dlt"`, a JSON object's fields that hold objects load as one column per key, `<field>__<key>`, as dlt flattens them.
+    /// Under `compat = "dlt"`, a JSON object's fields that hold objects load as one column per key, `<field>__<key>`, as dlt flattens them.
     pub flatten_objects: bool,
 }
 

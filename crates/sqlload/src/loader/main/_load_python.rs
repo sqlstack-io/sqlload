@@ -27,6 +27,7 @@ pub(in crate::loader) async fn load_python(
         state,
         reconciled,
         flattened: std::collections::BTreeMap::new(),
+        names: crate::load_naming::models::NameMemo::default(),
     };
     let loaded = feed.load(load).await;
     if let Some(publisher) = &mut feed.publisher {

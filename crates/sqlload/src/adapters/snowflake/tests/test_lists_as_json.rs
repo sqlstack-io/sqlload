@@ -11,7 +11,7 @@ fn given_float_arrays_when_staging_for_snowflake_then_values_json_holds_load_and
             expected_text: Ok("[1.5,null]|[]|null"),
         },
         ListsAsJsonTestCase {
-            description: "NaN would load as a NULL element, so the batch fails, naming the row",
+            description: "NaN would load as a NULL element, so the batch fails, compat the row",
             rows: vec![Some(vec![Some(1.5)]), Some(vec![Some(2.0), Some(f64::NAN)])],
             expected_text: Err(
                 "column ratios, row 2: an array holds NaN or an infinity, which a Snowflake array holds as JSON and cannot keep; pin array(text) to keep such values as text",

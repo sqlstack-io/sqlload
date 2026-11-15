@@ -7,7 +7,7 @@ use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
@@ -24,7 +24,7 @@ pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[String]),
     files: &[PulledFile],
-    (naming, load_id, loaded_at): (Naming, &str, &str),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -39,7 +39,7 @@ pub(crate) fn pull_insert(
     let values: Vec<String> = columns
         .iter()
         .map(
-            |column| match (metadata_role(naming, &column.name), column.name.as_str()) {
+            |column| match (metadata_role(compat, &column.name), column.name.as_str()) {
                 (Some(MetadataRole::LoadId), _) => cast(literal(load_id), column),
                 (Some(MetadataRole::LoadedAt), _) => cast(literal(loaded_at), column),
                 (None, SOURCE_ROW_COLUMN) => cast("f.file_row_number + 1".to_owned(), column),
@@ -106,7 +106,7 @@ pub(crate) struct UnloadedColumns<'a> {
     pub read: &'a [ReadColumn],
     pub constants: &'a [(String, ColumnType, String)],
     /// How the table names the columns a load adds.
-    pub naming: Naming,
+    pub compat: Compat,
     /// The batch, from 1: a merge's `_sqlload_row` numbers its rows after earlier batches', by file and row in file.
     pub batch: u64,
 }
@@ -118,7 +118,7 @@ pub(crate) fn unloaded_insert(
         columns,
         read,
         constants,
-        naming,
+        compat,
         batch,
     }: UnloadedColumns<'_>,
     urls: &[String],
@@ -132,7 +132,7 @@ pub(crate) fn unloaded_insert(
             match column_value(
                 column,
                 (read, constants),
-                (naming, load_id, loaded_at),
+                (compat, load_id, loaded_at),
                 batch,
             ) {
                 Some(value) => format!(
@@ -167,14 +167,14 @@ pub(crate) fn unloaded_insert(
 fn column_value(
     column: &DesiredColumn,
     (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
-    (naming, load_id, loaded_at): (Naming, &str, &str),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
     batch: u64,
 ) -> Option<String> {
     let constant = constants
         .iter()
         .find(|(name, _, _)| *name == column.name)
         .map(|(_, _, value)| DuckDbSql.render_loader_value_literal(value));
-    match (metadata_role(naming, &column.name), column.name.as_str()) {
+    match (metadata_role(compat, &column.name), column.name.as_str()) {
         (Some(MetadataRole::LoadId), _) => Some(DuckDbSql.render_loader_value_literal(load_id)),
         (Some(MetadataRole::LoadedAt), _) => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
         (None, MERGE_ROW_COLUMN) => Some(format!(
