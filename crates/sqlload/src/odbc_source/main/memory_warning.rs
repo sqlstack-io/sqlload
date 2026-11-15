@@ -1,6 +1,6 @@
 //! Whether an ODBC source's fetches, loading at once, near the machine's memory.
 
-use crate::odbc_source::_helpers::memory::memory_text;
+use crate::number_text::main::memory_text::memory_text;
 use crate::odbc_source::constants::FETCH_SHARE_OF_LIMIT;
 
 /// A warning when the fetch buffers of the `concurrency` largest of `fetches` (each table's planned bytes per fetch, its source, and the machine's memory limit it was planned under), which may load at once, together pass half the limit, the share the budget leaves them, naming the fix and that it counts only those buffers; `None` otherwise, or without a limit.

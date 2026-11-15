@@ -66,6 +66,44 @@ See [Load methods](/docs/targets/).
 For an ODBC table, `plan`'s `fetch` line says when a table is read value by value, which is slower
 than bulk. See [Memory](/docs/sources/odbc/#memory).
 
+## Finding a source that uses too much memory
+
+From 0.52.0, every load ends with its peak memory: `peak memory` in the summary, and
+`peak_memory_bytes` in the [JSON report](/docs/cli/load/#results-as-json) and the `run_finished`
+event. It's the peak for the whole run, all tables together, ODBC drivers, DuckDB and Python
+sources included. Under the [Python package](/docs/guides/python/), it includes the Python
+interpreter.
+
+To find the table behind it, run once on Linux with
+[`--memory-per-table`](/docs/cli/load/#peak-memory). It loads one table at a time and gives each
+table's peak:
+
+```console
+$ sqlload load --memory-per-table
+…
+loaded  raw.customers    500 rows 0.0s  peak memory 79.8 MiB
+loaded  raw.orders     2,000,000 rows 8.5s  peak memory 245 MiB
+
+✓ Completed  2 loaded, 2,000,500 rows, 8.6s
+├── slowest      raw.orders 8.5s
+└── peak memory  245 MiB
+```
+
+A table's figure includes what the process already held when it started, so compare the tables of
+one run. Then, for the table it names:
+
+- Lower [`concurrency`](/docs/configuration/), or pass `--concurrency`, as tables loading at once
+  add up.
+- Set a smaller [`batch_size`](/docs/concepts/cursors/#batches) on a cursor table, so it reads and
+  commits smaller windows, one at a time.
+- On an [ODBC source](/docs/sources/odbc/#memory), lower `max_batch_memory`, its fetch buffer.
+  When wide text or binary columns hold short values, lower `long_column_threshold` so they're read
+  value by value, which holds each value's real size instead of the column's whole width, but is
+  slower.
+
+Run it again with `--memory-per-table` to check. On macOS and Windows, load the table on its own
+(`sqlload load TABLE`) and compare its run's peak with the others'.
+
 ## A large first load
 
 A cursor table without an ordered read commits once for the whole read. For a large first load,

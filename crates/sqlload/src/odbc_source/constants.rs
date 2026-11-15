@@ -44,14 +44,6 @@ pub const VALUE_OVERHEAD: usize = 4;
 /// How many of a table's long columns `plan` names.
 pub const NAMED_LONG_COLUMNS: usize = 3;
 
-/// The step between binary memory units, and the units `plan` shows memory in.
-pub const BINARY_UNIT: u64 = 1024;
-pub const MEMORY_UNITS: [&str; 4] = ["bytes", "KiB", "MiB", "GiB"];
-
-/// Memory is shown to a tenth of its unit, and as a whole number from 100 of it (1,000 tenths) up.
-pub const TENTHS: u64 = 10;
-pub const WHOLE_FROM_TENTHS: u64 = 1_000;
-
 /// What a cgroup's limit file holds when it sets none.
 pub const UNLIMITED: &str = "max";
 

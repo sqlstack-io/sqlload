@@ -20,7 +20,8 @@ created  raw.orders  9 columns
 loaded  raw.orders      3 rows 0.0s
 
 ✓ Completed  1 loaded, 3 rows, 0.1s
-└── slowest      raw.orders 0.0s
+├── slowest      raw.orders 0.0s
+└── peak memory  72.3 MiB
 ```
 
 The plan's closing line comes first: one table to create and load. DuckDB reads the Parquet files
@@ -187,7 +188,8 @@ loaded  raw.app__customers     50 rows 0.0s
 loaded  raw.app__orders     1,000 rows 0.0s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.1s
-└── slowest      raw.app__orders 0.0s
+├── slowest      raw.app__orders 0.0s
+└── peak memory  85.4 MiB
 ```
 
 ### 4. Load again
@@ -223,7 +225,8 @@ $ sqlload load app__orders
 loaded  raw.app__orders      3 rows 0.0s
 
 ✓ Completed  1 loaded, 3 rows, 0.1s
-└── slowest      raw.app__orders 0.0s
+├── slowest      raw.app__orders 0.0s
+└── peak memory  80.8 MiB
 ```
 
 Three rows: the two changed ones, and the row at the previous maximum, which the cursor includes.

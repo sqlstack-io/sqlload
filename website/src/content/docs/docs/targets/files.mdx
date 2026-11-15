@@ -35,6 +35,7 @@ Loads (1)                                           sqlload load
 └── app__orders                                     delete_insert (cursor: updated_at)
     ├── source  postgres  app  public.orders
     ├── reads   updated_at: first run, everything
+    ├── columns 5
     ├── files   out/app/orders/  parquet (zstd)  partitions dt={cursor:date}/
     ├── schema  first files, 7 columns
     ├── note    each partition written or in the window gets its new files first, then its older files are deleted; not atomic, so a reader in between sees both
@@ -47,7 +48,8 @@ $ sqlload load
 loaded  out/app/orders/  1,000 rows 0.1s
 
 ✓ Completed  1 loaded, 1,000 rows, 0.1s
-└── slowest      out/app/orders/ 0.1s
+├── slowest      out/app/orders/ 0.1s
+└── peak memory  66.2 MiB
 ```
 
 Files targets take `append`, `replace` and `delete_insert`. `merge` needs a table format that

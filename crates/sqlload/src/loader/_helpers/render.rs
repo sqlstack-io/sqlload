@@ -1341,6 +1341,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         outcomes,
         started,
         elapsed,
+        peak_memory_bytes,
     } = *run;
     let changes = outcomes
         .iter()
@@ -1377,6 +1378,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         failed: statuses("failed"),
         skipped: statuses("skipped"),
         rows: tables.iter().filter_map(|table| table.rows).sum(),
+        peak_memory_bytes,
     };
     let view = plan_view(plan);
     let finished = started + chrono::Duration::from_std(elapsed).unwrap_or_default();
@@ -1431,6 +1433,7 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.transforms.clone(),
             Err(_) => Vec::new(),
         },
+        peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
 
