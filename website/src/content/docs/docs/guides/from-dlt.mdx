@@ -254,7 +254,18 @@ Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
   [contract](/docs/concepts/contracts/) allows. dlt adds a variant column such as `amount__v_text`
   ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
 - A field listed in `unnest` is always a child table, even when an XML element appears only once;
-  dlt keeps a single match as a column of the parent.
+  dlt keeps a single match as a column of the parent, so its schema changes with the data. Models
+  that read dlt's column can read a view over the child table instead, as long as each parent has
+  at most one match (a second one repeats the parent row):
+
+  ```sql
+  create view raw.orders_with_customer as
+  select o.*, c.name as customer__name, c.email as customer__email
+  from raw.orders o
+  left join raw.orders__customer c on c._sqlload_parent_id = o._sqlload_row_id
+  ```
+
+  With dlt's names the link columns are `_dlt_parent_id` and `_dlt_id`.
 - Two columns whose names normalise to one stop the plan, naming both, where dlt keeps one of them.
 - Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,
   `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources, and `plan` names

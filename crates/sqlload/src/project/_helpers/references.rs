@@ -97,6 +97,7 @@ fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<St
 fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let place = source_place(project, name);
+    problems.extend(after_load_problems(project, (name, &place), source));
     let (kinds, expected): (&[&str], &str) = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => (&["postgres"], "postgres"),
         SourceKind::Snowflake => (&["snowflake"], "snowflake"),
@@ -306,7 +307,6 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
             problems.extend(path_value_problems(place, source));
-            problems.extend(after_load_problems(place, source));
         }
         SourceKind::GoogleSheets => {
             if source.ranges.len() != 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -631,14 +631,47 @@ fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     problems
 }
 
-/// A files source's `after_load` that cannot apply to a ZIP archive's members, which share their archive (another source may still read it); where `move_to` may go is checked once `path` is resolved.
-fn after_load_problems(place: &str, source: &SourceConfig) -> Vec<String> {
-    match source.after_load != AfterLoad::Keep && source.compression == Some(Compression::Zip) {
-        true => vec![format!(
-            "{place} after_load is not for compression = \"zip\": an archive's members load one by one, and another source may read the same archive"
-        )],
-        false => Vec::new(),
+/// A ZIP files source's `after_load` while another files source over the same connection reads ZIP archives under an overlapping `path`, which may still need an archive this one moves or deletes; where `move_to` may go is checked once `path` is resolved.
+fn after_load_problems(
+    project: &ProjectConfig,
+    (name, place): (&str, &str),
+    source: &SourceConfig,
+) -> Vec<String> {
+    if source.kind != SourceKind::Files
+        || source.after_load == AfterLoad::Keep
+        || source.compression != Some(Compression::Zip)
+    {
+        return Vec::new();
     }
+    let folder = |source: &SourceConfig| {
+        let path = source.path.as_deref().unwrap_or_default();
+        let path = path.strip_prefix("./").unwrap_or(path);
+        path.trim_matches('/').to_owned()
+    };
+    let inside = |inner: &str, outer: &str| {
+        outer.is_empty() || inner == outer || inner.starts_with(&format!("{outer}/"))
+    };
+    let mine = folder(source);
+    project
+        .sources
+        .iter()
+        .filter(|(other_name, other)| {
+            other_name.as_str() != name
+                && other.kind == SourceKind::Files
+                && other.connection == source.connection
+                && other.compression == Some(Compression::Zip)
+        })
+        .filter(|(_, other)| {
+            let theirs = folder(other);
+            inside(&mine, &theirs) || inside(&theirs, &mine)
+        })
+        .map(|(other_name, other)| {
+            format!(
+                "{place} after_load moves or deletes each ZIP archive once its members load, and [sources.{other_name}] reads ZIP archives in {:?} on the same connection, which may still need them; remove after_load, or give the sources folders apart",
+                other.path.as_deref().unwrap_or_default()
+            )
+        })
+        .collect()
 }
 
 /// Settings of the xlsx and xml formats and of ZIP archives that do not fit the source.

@@ -802,7 +802,7 @@ pub(crate) async fn run_after_load(
     for (key, text) in test_case.rewritten {
         std::fs::write(dir.join(key), text).map_err(|error| error.to_string())?;
     }
-    let report = after_load(&folder, &test_case.after_load, &loaded)
+    let report = after_load(&folder, &test_case.after_load, (&loaded, &loaded))
         .await
         .map_or("none".to_owned(), |report| {
             format!(

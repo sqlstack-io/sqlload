@@ -1494,7 +1494,17 @@ pub(crate) async fn publish_table(
     let transforms = transformed(table, (destination, transform, recorded)).await;
     let report = match reader {
         SourceReader::Files(folder) => {
-            after_load(folder, &table.spec.after_load, &publisher.settled_files).await
+            let read = table
+                .files
+                .as_ref()
+                .map(|read| unarchived(table, &read.files))
+                .unwrap_or_default();
+            after_load(
+                folder,
+                &table.spec.after_load,
+                (&read, &publisher.settled_files),
+            )
+            .await
         }
         _ => None,
     };

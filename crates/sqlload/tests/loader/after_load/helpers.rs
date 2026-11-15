@@ -31,11 +31,23 @@ pub(crate) async fn run_after_load_case(
     );
     std::fs::write(&config, text).map_err(|error| error.to_string())?;
     for (index, step) in test_case.steps.iter().enumerate() {
-        for (path, contents) in step.files {
+        let (archives, plain): (Vec<_>, Vec<_>) = step
+            .files
+            .iter()
+            .copied()
+            .partition(|(path, _)| path.ends_with(".zip"));
+        let mut written: Vec<(&str, Vec<u8>)> = plain
+            .into_iter()
+            .map(|(path, contents)| (path, contents.as_bytes().to_vec()))
+            .collect();
+        for (path, members) in archives {
+            written.push((path, zip_archive(members)?));
+        }
+        for (path, bytes) in written {
             let file = root.path().join(path);
             std::fs::create_dir_all(file.parent().unwrap_or(root.path()))
                 .map_err(|error| error.to_string())?;
-            std::fs::write(&file, contents).map_err(|error| error.to_string())?;
+            std::fs::write(&file, bytes).map_err(|error| error.to_string())?;
         }
         for folder in step.removed {
             std::fs::remove_dir_all(root.path().join(folder)).map_err(|error| error.to_string())?;
@@ -81,10 +93,11 @@ pub(crate) async fn run_after_load_case(
             .map(Vec::as_slice)
             .unwrap_or_default()
             .iter()
-            .map(|item| {
+            .map(|item| &item["details"][0]["text"])
+            .chain(report["error"].get("message"))
+            .map(|text| {
                 serde_json::Value::from(
-                    item["details"][0]["text"]
-                        .as_str()
+                    text.as_str()
                         .unwrap_or_default()
                         .replace(&root.path().display().to_string(), "<root>"),
                 )
@@ -112,11 +125,16 @@ pub(crate) async fn run_after_load_case(
         prefix: String::new(),
     })
     .map_err(|error| error.to_string())?;
-    let mut files: Vec<String> = Vec::new();
-    for file in list_files(&folder)
+    let (archives, plain): (Vec<_>, Vec<_>) = list_files(&folder)
         .await
         .map_err(|error| error.to_string())?
-    {
+        .into_iter()
+        .partition(|file| file.relative_key.ends_with(".zip"));
+    let mut files: Vec<String> = archives
+        .iter()
+        .map(|file| format!("{}=zip", file.relative_key))
+        .collect();
+    for file in plain {
         let contents = read_file(&folder, &file.relative_key)
             .await
             .map_err(|error| error.to_string())?;
@@ -128,6 +146,25 @@ pub(crate) async fn run_after_load_case(
     }
     files.sort();
     Ok(files)
+}
+
+/// A ZIP archive of `members`, each `name=contents`, separated by `;`.
+fn zip_archive(members: &str) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for member in members.split(';') {
+        let (name, contents) = member.split_once('=').unwrap_or((member, ""));
+        writer
+            .start_file(name, zip::write::SimpleFileOptions::default())
+            .map_err(|error| error.to_string())?;
+        writer
+            .write_all(contents.as_bytes())
+            .map_err(|error| error.to_string())?;
+    }
+    writer
+        .finish()
+        .map(std::io::Cursor::into_inner)
+        .map_err(|error| error.to_string())
 }
 
 /// Write `test_case`'s files into its folder of `bucket` at `endpoint`, list the source's `drop/` files, rewrite its `rewritten` ones, run its `after_load` on the listed files, and return the report as `action status files failed` and every file left in its folder as `key=contents`, sorted.
@@ -163,7 +200,7 @@ pub(crate) async fn run_s3_after_load(
             .await
             .map_err(|error| error.to_string())?;
     }
-    let report = after_load(&source, &test_case.after_load, &listed)
+    let report = after_load(&source, &test_case.after_load, (&listed, &listed))
         .await
         .map_or("none".to_owned(), |report| {
             format!(

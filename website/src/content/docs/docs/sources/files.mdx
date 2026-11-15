@@ -575,8 +575,13 @@ after_load = { move_to = "loaded" }
   still can't replace or `delete_insert` into it, even when it runs alone. On S3 a prefix exists only while it holds files, and an unmounted share is an
   empty folder, so after the first load those look empty: watch the `skipped` reason. Without
   `after_load`, an empty folder fails unless `on_empty = "skip"`; see [Empty folders](#empty-folders).
-- It isn't for SFTP connections, which SQLLoad only reads, ZIP archives, whose members another
-  source may still read, or files targets.
+- From 0.54.0, it works on ZIP archives (`compression = "zip"`): an archive is deleted or moved
+  once, after every member the load read from it (those matching `members` and the format) has
+  committed, and only if it's still the version read. If a member fails, the load fails and the
+  archive stays where it is. `plan` refuses it while another files source on the same connection
+  reads ZIP archives in the same folder, or one inside or around it, naming that source, since it
+  may still need them. `load --json` counts archives, not members, under `after_load`.
+- It isn't for SFTP connections, which SQLLoad only reads, or files targets.
 
 ### Empty folders
 
