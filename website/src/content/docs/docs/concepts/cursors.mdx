@@ -63,8 +63,10 @@ Systems that set a modified date only after the first edit leave it NULL on ever
 
 From 0.51.0, a load that would skip such rows fails the table instead. Before the read, SQLLoad
 counts the source rows with a NULL cursor (`SELECT count(*) ... WHERE <cursor> IS NULL` on a
-database or warehouse source; a Python table counts the rows it yields). When there are any, the
-table fails and nothing is written:
+database or warehouse source; a Python table counts the rows it yields). On a database or warehouse
+source, the table fails before its read when there are any, and nothing is written. A Python table
+counts while it reads, so it fails at the end of the window holding them: the windows before it are
+already committed, and that window and the ones after it aren't written:
 
 ```console
 $ sqlload load
@@ -104,6 +106,17 @@ $ sqlload plan app__orders
 | `fail`, cursor nullable at the source | `(NULL cursors: fail the load)` |
 | `include` | `(NULL cursors: included)` |
 | `ignore` | `(NULL cursors: skipped)` |
+
+The count is one more query on the source before each read that has a lower or upper bound. It
+filters on the cursor alone, so its cost depends on the source:
+
+- On Postgres, a cursor column without an index makes it a sequential scan of the table.
+- On BigQuery, a table read through a read session gets a query job for it, which needs
+  `bigquery.jobs.create` (as in `bigquery.jobUser`) and bills a scan of the cursor column. See
+  [BigQuery permissions](/docs/sources/bigquery/#permissions).
+
+`null_cursor = "ignore"` and `null_cursor = "include"` skip the count, as does a cursor column the
+source declares `NOT NULL`.
 
 Sources differ in what they check:
 

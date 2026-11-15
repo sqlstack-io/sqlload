@@ -878,6 +878,8 @@ pub struct Publisher {
     pub merged_file: Option<String>,
     /// The `replace_key` values committed so far; `None` without a `replace_key`.
     pub replaced: Option<ReplacedKeys>,
+    /// Every `replace_key` value a files source's commits inserted in this run, with the file it came from, which a later file of the run may not hold too.
+    pub run_keys: std::collections::BTreeMap<String, String>,
     /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).
     pub fed_files: Vec<StoredFile>,
     /// The files whose rows are committed, as they were read, which `after_load` deletes or moves.

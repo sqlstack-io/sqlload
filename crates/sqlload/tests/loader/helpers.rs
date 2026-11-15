@@ -1812,8 +1812,14 @@ pub(crate) async fn run_merge_case(
         )
         .await
         .map_err(|error| error.to_string())?;
+        for key in step.removed {
+            std::fs::remove_file(directory.path().join("drop").join(key))
+                .map_err(|error| error.to_string())?;
+        }
         for file in step.files {
             let path = directory.path().join("drop").join(file.key);
+            std::fs::create_dir_all(path.parent().unwrap_or(directory.path()))
+                .map_err(|error| error.to_string())?;
             std::fs::write(&path, file.contents).map_err(|error| error.to_string())?;
             let modified =
                 std::time::UNIX_EPOCH + std::time::Duration::from_secs(file.modified_secs);

@@ -53,6 +53,28 @@ const RUNS: &[BatchedRun] = &[
     },
 ];
 
+/// A first load, then `--reload --start-cursor 2026-11-02`, showing the plan's warning about the rows it drops.
+const RELOAD_RUNS: &[BatchedRun] = &[
+    BatchedRun {
+        source_change: "SELECT 1",
+        destination_change: "",
+        start_cursor: None,
+        end_cursor: None,
+        reload: false,
+        check_query: ROWS,
+        show: "",
+    },
+    BatchedRun {
+        source_change: "SELECT 1",
+        destination_change: "",
+        start_cursor: Some("2026-11-02"),
+        end_cursor: None,
+        reload: true,
+        check_query: ROWS,
+        show: "--reload rebuilds",
+    },
+];
+
 #[test]
 fn given_source_rows_with_a_null_cursor_when_loading_incrementally_then_each_null_cursor_rule_holds()
 -> Result<(), String> {
@@ -132,6 +154,42 @@ cursor_column = ["updated_at", "created_at"]
                     "ok => 1:a,2:b,3:c",
                     "ok => 1:a2,2:b,3:c,4:d",
                     "ok => 1:a2,2:b3,3:c,4:d",
+                ],
+            },
+            BatchedScenarioTestCase {
+                description: "--reload from a start cursor under null_cursor = \"include\" reads the NULL-cursor row with the first window, and its warning says they are kept",
+                setup: SETUP,
+                settings: r#"
+[sources.app.tables."public.t"]
+write_strategy = "merge"
+unique_key = "{primary_key}"
+cursor_column = "updated_at"
+null_cursor = "include"
+"#,
+                batch_bytes: None,
+                concurrency: None,
+                runs: RELOAD_RUNS,
+                expected_outcomes: &[
+                    "ok => 1:a,2:b,3:c",
+                    "ok => 2:b,3:c | --reload rebuilds the table with only the rows from 2026-11-02 (--start-cursor): rows before 2026-11-02 are dropped; rows with a NULL cursor are kept",
+                ],
+            },
+            BatchedScenarioTestCase {
+                description: "under null_cursor = \"ignore\" the reload drops the NULL-cursor row, and its warning says so",
+                setup: SETUP,
+                settings: r#"
+[sources.app.tables."public.t"]
+write_strategy = "merge"
+unique_key = "{primary_key}"
+cursor_column = "updated_at"
+null_cursor = "ignore"
+"#,
+                batch_bytes: None,
+                concurrency: None,
+                runs: RELOAD_RUNS,
+                expected_outcomes: &[
+                    "ok => 1:a,2:b,3:c",
+                    "ok => 3:c | --reload rebuilds the table with only the rows from 2026-11-02 (--start-cursor): rows before 2026-11-02 are dropped; rows with a NULL cursor are dropped",
                 ],
             },
         ];

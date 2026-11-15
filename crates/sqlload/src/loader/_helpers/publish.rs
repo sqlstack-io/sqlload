@@ -80,13 +80,16 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::merged_record;
-use crate::loader::_helpers::run_log::{in_file, merged_file_text};
+use crate::loader::_helpers::run_log::{
+    in_file, listed_sources, merged_file_text, merged_name, with_file_keys,
+};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
+use crate::loader::_helpers::specs::checked_key;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
     cursor_binding, source_cursor, source_filter, with_null_cursors,
@@ -114,6 +117,7 @@ use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
+use crate::publish_checks::main::key_sources::key_sources;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
@@ -649,6 +653,7 @@ impl Publisher {
             files,
             merged_file: None,
             replaced: None,
+            run_keys: Default::default(),
             fed_files: Vec::new(),
             settled_files: Vec::new(),
         })
@@ -1090,6 +1095,7 @@ impl Publisher {
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
+        let file = self.merged_file.clone();
         let merged = self.merged_file.take().map(|file| {
             merged_record(
                 spec,
@@ -1128,7 +1134,7 @@ impl Publisher {
             columns: &self.table.schema.write_columns,
             committed: self.committed_rows,
         };
-        if let (Some((key, setting)), NullKeys::Fail) = (mode.staged_key(), spec.null_keys) {
+        if let (Some((key, setting)), NullKeys::Fail) = (checked_key(spec, &mode), spec.null_keys) {
             refuse_null_keys(&checked, (key, setting), merging_file).await?;
         }
         if let WriteMode::Merge {
@@ -1144,8 +1150,24 @@ impl Publisher {
         }
         let replaced = match &mode {
             WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
-                let shown = (replace_key.as_slice(), REPLACED_KEYS_SHOWN as u64 + 1);
-                Some((replace_key.clone(), staged_keys(&checked, shown).await?))
+                let limit = file
+                    .as_ref()
+                    .map_or(REPLACED_KEYS_SHOWN as u64 + 1, |_| i64::MAX as u64);
+                let mut values = staged_keys(&checked, (replace_key.as_slice(), limit)).await?;
+                if let Some(file) = file.as_deref() {
+                    let earlier = std::mem::take(&mut self.run_keys);
+                    self.run_keys = with_file_keys(&self.table, (file, &values), earlier)
+                        .map_err(LoaderError::Invalid)?;
+                    let named = (
+                        replace_key.as_slice(),
+                        SOURCE_FILE_COLUMN,
+                        merged_name(file),
+                    );
+                    let sources = key_sources(&checked, named).await?;
+                    listed_sources(&self.table, file, &sources).map_err(LoaderError::Invalid)?;
+                }
+                values.truncate(REPLACED_KEYS_SHOWN + 1);
+                Some((replace_key.clone(), values))
             }
             _ => None,
         };

@@ -278,4 +278,11 @@ pub enum CheckQuery<'a> {
     NullKeyExamples(&'a [String]),
     /// Up to this many distinct values of these columns, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
     KeyValues(&'a [String], u64),
+    /// The distinct values of `file_column` among the relation's rows whose `key` values (as `KeyValues` gives them) a row of `staged` holds, other than `file`, in order: the files a commit's key values already come from.
+    KeySources {
+        key: &'a [String],
+        staged: &'a TableName,
+        file_column: &'a str,
+        file: &'a str,
+    },
 }
