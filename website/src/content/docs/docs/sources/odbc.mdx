@@ -1,6 +1,6 @@
 ---
 title: "ODBC"
-description: "Load tables and query results from any database with an ODBC driver: connections, choosing tables, query tables, value sizes and types."
+description: "Load tables and query results from any database with an ODBC driver: connections, choosing tables, query tables, value sizes, memory and types."
 ---
 
 From sqlload 0.27.0, an `odbc` source loads tables, views and query
@@ -23,7 +23,6 @@ connection = "erp"
 description = "Tables of the ERP database."
 include = ["sales.*"]
 exclude = ["sales.tmp_*"]
-max_text_size = 8000
 write_strategy = "replace"
 
 [sources.erp.tables."sales.items"]
@@ -278,14 +277,99 @@ cursor outside it, so the query needs no placeholder. Write the query in the dat
 ## Value sizes
 
 Drivers read values into buffers of a fixed size per column, from the length the driver reports.
-`max_text_size` (bytes) caps the buffer of every text column, and `max_binary_size` that of every
-binary column, so set them when the driver reports a huge length for unbounded columns such as
-`TEXT` or `VARCHAR(MAX)`, or none at all, which the read then refuses, naming the setting. A value
-longer than its buffer, even in a `VARCHAR(10000)` column capped at 8000 bytes, fails the read,
-naming the setting to raise; it's never cut short.
+From 0.52.0, a text or binary column whose buffer would be over `long_column_threshold` (4 KiB when
+omitted), or that the driver gives no length for, such as `TEXT`, `LONGTEXT` or `VARCHAR(MAX)`, is a
+long column. A table with a long column is read value by value: each value at its own size, in
+pieces for a long one, and never cut. A table without one is read in bulk, many rows per fetch. See
+[Memory](#memory).
+
+`max_text_size` (bytes) caps every text column, and `max_binary_size` every binary column. They are
+optional. A capped column counts as long only when the cap is over the threshold. A value longer than
+its cap, even in a `VARCHAR(10000)` column capped at 8000 bytes, fails the read, naming the setting
+to raise; it's never cut short.
 
 From 0.47.0, the driver's own notes on the buffer size it chose for each column are no longer
 logged; set `RUST_LOG=info` to see them again.
+
+## Memory
+
+From 0.52.0, each ODBC table has a fetch buffer: the most the rows of one fetch hold. It's 512 MiB
+per table by default. On a smaller machine, it's half the memory shared between the tables loading
+at once ([`concurrency`](/docs/configuration/)), when that is less. The memory is the container's
+limit (the cgroup's `memory.max`) when SQLLoad runs in one, and otherwise the machine's memory. The
+fetch buffer is never raised above 512 MiB unless the source sets `max_batch_memory`:
+
+```toml
+[sources.shop]
+kind = "odbc"
+connection = "shop"
+max_batch_memory = "2GB"
+```
+
+The fetch buffer bounds the source's fetches only, not the load's whole memory: the batches made
+from them, the destination and the commits take memory besides.
+
+`plan` shows how each ODBC table fetches (`fetch`) and its fetch buffer, and why (`buffer`):
+
+```console
+$ sqlload plan
+…
+Loads (2)                                           sqlload load
+├── raw.shop__contacts                              replace
+│   ├── source  odbc  shop  contacts
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   ├── fetch   up to 512 MiB or 65,536 rows per fetch; 265 long columns (c001, c002, c003, …), so all 266 columns are read value by value
+│   └── buffer  512 MiB fetch buffer per table (default; 6 GiB container limit, concurrency 4)
+└── raw.shop__orders                                replace
+    ├── source  odbc  shop  orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── fetch   ~13.6 MiB per fetch, 65,536 rows
+    └── buffer  512 MiB fetch buffer per table (default; 6 GiB container limit, concurrency 4)
+```
+
+- **In bulk** (`orders`): a fetch reads as many rows as its buffers hold within the fetch buffer,
+  at most 65,536. The `fetch` line shows the buffers of one fetch.
+- **Value by value** (`contacts`): the driver returns one row at a time, and SQLLoad reads each of
+  its values. A fetch ends at 65,536 rows, or once the values it has read reach the fetch buffer. A
+  value larger than the whole fetch buffer still loads; its fetch ends after its row, and SQLLoad
+  logs it:
+
+  ```text
+  … WARN sqlload::odbc_source::_helpers::values: a value is larger than the table's fetch buffer (max_batch_memory); it loads, and its fetch ends after its row table="notes" column=body bytes=40000000 budget=16000000
+  ```
+
+A table with a long column fetches one row at a time because reading values with `SQLGetData`
+from a block of rows breaks on common drivers: on MariaDB Connector/ODBC 3.1, every row after the
+first returns `SQL_NO_DATA`, and on Microsoft ODBC Driver 18 for SQL Server, `SQLSetPos` fails on
+the forward-only cursor. Tables without a long column keep fetching in bulk.
+
+The fetch buffer sets only how many rows a fetch reads. Commits stay as `batch_size` sets them, so
+a smaller fetch buffer means more fetches, not different data.
+
+When the fetch buffers of the tables that may load at once together pass half the memory, `plan`
+warns, and `load` checks again when it starts, since it may run on another machine. The warning
+counts the fetch buffers only. Here the source sets `max_batch_memory = "4GB"` on a machine with a
+6 GiB container limit:
+
+```console
+$ sqlload plan --concurrency 2
+…
+Warnings (1)
+└── the ODBC fetch buffers of 2 tables loading at once may hold 3.7 GiB together, more than half of this machine's 6 GiB memory limit; this counts only those buffers, not the memory the batches, the destination and the commits take besides; lower max_batch_memory on source shop, or lower concurrency (now 2)
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `max_batch_memory` | 512 MiB, or less on a small machine | The fetch buffer of each table: the most the rows of one fetch hold, such as `"2GB"` or `"256MiB"`. It doesn't bound the load's whole memory. |
+| `long_column_threshold` | `"4KiB"` | The buffer per value over which a text or binary column is read value by value. |
+
+Value by value is slower than bulk: SQLLoad asks the driver for each value with its own call
+(`SQLGetData`), as pyodbc reads every value
+([pyodbc 5.2.0, `getdata.cpp`](https://github.com/mkleehammer/pyodbc/blob/5.2.0/src/getdata.cpp)).
+It saves memory when most values are much shorter than their column allows, as in wide tables of
+short notes. When the values really are long, they take the memory either way. A table with one
+long column is read value by value in all its columns; raise `long_column_threshold` above the
+column's size to read it in bulk, with buffers of that size.
 
 ## Types
 

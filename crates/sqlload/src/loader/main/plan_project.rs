@@ -13,6 +13,8 @@ use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::{
     admit_tables, destination_names, spec_names, unmatched_selectors,
 };
+#[cfg(feature = "odbc")]
+use crate::loader::_helpers::sources::with_fetch_memory;
 use crate::loader::_helpers::sources::{PLANNED_SOURCES, found_sources, selected, source_ends};
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
@@ -110,6 +112,10 @@ async fn planned_tables(
         #[cfg(feature = "odbc")]
         block_refused_bounds(project, (source_name, source), &mut planned).await?;
     }
+    #[cfg(feature = "odbc")]
+    if source.kind == SourceKind::Odbc {
+        planned = with_fetch_memory(project, source, planned, options).await?;
+    }
     Ok((planned, unselected))
 }
 
@@ -123,6 +129,28 @@ fn block_conflicts(
     names.extend(drained.iter().cloned());
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));
+    #[cfg(feature = "odbc")]
+    {
+        let fetches: Vec<(usize, &str, Option<u64>)> = plan
+            .tables
+            .iter()
+            .filter(|table| table.schema.blocked.is_none())
+            .filter_map(|table| {
+                let fetch = table.fetch_memory.as_ref()?;
+                Some((
+                    fetch.estimate?,
+                    table.spec.source_name.as_str(),
+                    fetch.limit,
+                ))
+            })
+            .collect();
+        let concurrency = options.concurrency.or(project.concurrency);
+        plan.warnings
+            .extend(crate::odbc_source::main::memory_warning::memory_warning(
+                &fetches,
+                concurrency.unwrap_or(crate::loader::constants::DEFAULT_THREADS),
+            ));
+    }
     let mut plan = block_shared_destinations(plan, configured);
     for table in plan
         .tables

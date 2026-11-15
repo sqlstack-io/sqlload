@@ -59,6 +59,9 @@ mod test_null_cursors;
 #[path = "loader/test_odbc_drivers.rs"]
 mod test_odbc_drivers;
 #[cfg(feature = "odbc")]
+#[path = "loader/test_odbc_memory.rs"]
+mod test_odbc_memory;
+#[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_to_duckdb.rs"]
 mod test_odbc_to_duckdb;
 #[path = "loader/test_postgres_cdc.rs"]

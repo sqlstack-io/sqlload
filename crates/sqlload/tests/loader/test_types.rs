@@ -1309,3 +1309,46 @@ pub(crate) struct BigQueryNullCursorTestCase {
     /// The loaded labels, NULL as `NULL`.
     pub(crate) expected_values: &'static str,
 }
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcValueReadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The driver name in the server's connection string and the one SQLLoad reads through instead; both empty to keep it.
+    pub(crate) driver: (&'static str, &'static str),
+    /// The table as the source's `include` names it, and as DuckDB holds it.
+    pub(crate) table: (&'static str, &'static str),
+    /// Statements creating the table, its long column second, and its rows.
+    pub(crate) setup: &'static [&'static str],
+    /// The loaded table's columns in order, then its rows, as `TYPED_ROWS` shows them.
+    pub(crate) expected_rows: &'static str,
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcWideTableTestCase {
+    pub(crate) description: &'static str,
+    /// The wide table's `TEXT` columns and rows of short values.
+    pub(crate) wide: (usize, usize),
+    /// Settings added to the source for the second load, and the warning its plan must show.
+    pub(crate) second_settings: &'static str,
+    pub(crate) expected_lines: &'static [&'static str],
+    pub(crate) expected_warning: &'static str,
+    /// The most the first load may hold, in KiB.
+    pub(crate) expected_max_peak_kib: u64,
+    /// The wide table's row count, one value, and some of its columns in order, as loaded.
+    pub(crate) expected_wide: &'static str,
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcLargeValuesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) setup: &'static [&'static str],
+    pub(crate) source_settings: &'static str,
+    /// The rows of each fetch read value by value, in order.
+    pub(crate) expected_fetch_rows: &'static [usize],
+    /// The most any fetch's values may hold: the budget, passed by at most the row ending it.
+    pub(crate) expected_max_fetch_bytes: u64,
+    pub(crate) expected_log: &'static [&'static str],
+    /// The table's row count, longest body and count of 2 MB bodies, as loaded.
+    pub(crate) expected_values: &'static str,
+}

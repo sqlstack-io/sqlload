@@ -434,6 +434,23 @@ pub struct TablePlan {
     pub stage: Option<StageRoute>,
     /// The stage `apply` must create.
     pub planned_stage: Option<PlannedStage>,
+    /// How an ODBC table's rows are fetched under its memory budget.
+    pub fetch_memory: Option<FetchMemory>,
+}
+
+/// How an ODBC table's rows are fetched, worked out at plan on the machine that loads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchMemory {
+    /// The bytes one fetch may hold.
+    pub budget: usize,
+    /// The bytes one fetch holds at most, as planned: its bound buffers, or the budget for a table read value by value; `None` when the driver couldn't describe the columns.
+    pub estimate: Option<usize>,
+    /// What `plan` says about the fetches, the `fetch` line.
+    pub memory: String,
+    /// The fetch buffer and why, `plan`'s `buffer` line.
+    pub budget_note: String,
+    /// The machine's memory limit the budget was worked out from, in bytes; `None` when it can't be read.
+    pub limit: Option<u64>,
 }
 
 /// A logged table's run log and what it means for this run.

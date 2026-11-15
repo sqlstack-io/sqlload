@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::config::models::AuthConfig;
+use crate::config::models::{AuthConfig, ByteSize};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
     AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
@@ -501,6 +501,12 @@ pub struct SourceConfig {
     /// The largest binary value an `odbc` source's reads hold, in bytes.
     #[serde(default)]
     pub max_binary_size: Option<usize>,
+    /// The size over which an `odbc` source's text or binary column is read value by value rather than into a buffer per row; 4 KiB when omitted.
+    #[serde(default)]
+    pub long_column_threshold: Option<ByteSize>,
+    /// The memory one fetch of an `odbc` source's table holds; worked out from the machine's memory and `concurrency` when omitted.
+    #[serde(default)]
+    pub max_batch_memory: Option<ByteSize>,
     /// The project a `bigquery` source's tables live in; the connection's when omitted.
     #[serde(default)]
     pub project: Option<String>,

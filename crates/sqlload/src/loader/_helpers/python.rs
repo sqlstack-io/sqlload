@@ -1394,6 +1394,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         commits: CommitRule::Size,
         stage: parent.stage.clone(),
         planned_stage: None,
+        fetch_memory: None,
     }
 }
 

@@ -220,6 +220,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         commits: CommitRule::Whole(WholeReason::Blocked),
         stage: None,
         planned_stage: None,
+        fetch_memory: None,
     }
 }
 
@@ -789,6 +790,7 @@ async fn plan_table_once(
                 commits: CommitRule::Whole(WholeReason::Blocked),
                 stage: None,
                 planned_stage: None,
+                fetch_memory: None,
             });
         }
     };
@@ -981,6 +983,7 @@ async fn plan_table_once(
         commits,
         stage,
         planned_stage,
+        fetch_memory: None,
     })
 }
 
@@ -1875,6 +1878,7 @@ pub(crate) async fn block_refused_bounds(
                 filter: Some(&filter),
                 parameters: &parameters,
                 batch_rows: 1,
+                memory_budget: crate::odbc_source::constants::DEFAULT_BATCH_MEMORY,
             };
             crate::odbc_source::main::run_query::run_query(&reader, &request)
                 .await

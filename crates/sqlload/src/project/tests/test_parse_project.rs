@@ -405,6 +405,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] project is for kind = \"bigquery\"",
         },
         ParseProjectErrorTestCase {
+            description: "an ODBC source's memory settings are refused on another kind, rather than ignored",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nmax_batch_memory = \"2GB\"\n",
+            expected_message: "[sources.app] long_column_threshold and max_batch_memory are for kind = \"odbc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a fetch budget of nothing could read no row",
+            text: "[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\ninclude = [\"*\"]\nmax_batch_memory = 0\n",
+            expected_message: "[sources.erp] max_batch_memory must be more than 0",
+        },
+        ParseProjectErrorTestCase {
             description: "an empty AWS profile is never read as a profile named \"\"",
             text: "[connections.lake]\nkind = \"s3\"\nbucket = \"b\"\nprofile = \"\"\n",
             expected_message: "[connections.lake] profile is empty; omit it",
