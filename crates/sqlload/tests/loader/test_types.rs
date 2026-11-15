@@ -1057,7 +1057,7 @@ pub(crate) struct FilesMergeTestCase {
 
 /// One `sqlload load --json` of an `after_load` case.
 pub(crate) struct AfterLoadStep {
-    /// Files written first, by path below the connection's root, such as `drop/a.csv`.
+    /// Files written first, by path below the connection's root, such as `drop/a.csv`; one ending `.zip` is an archive of the members its contents list, each `name=contents`, separated by `;`.
     pub(crate) files: &'static [(&'static str, &'static str)],
     /// Folders removed next, by path below the root, such as `drop`.
     pub(crate) removed: &'static [&'static str],
@@ -1075,7 +1075,7 @@ pub(crate) struct AfterLoadTestCase {
     /// Folders below the root made links to a fresh folder in another directory, such as `/dev/shm`, which may be another volume.
     pub(crate) linked: &'static [(&'static str, &'static str)],
     pub(crate) steps: &'static [AfterLoadStep],
-    /// Every file left below the root, sorted, as `path=contents`.
+    /// Every file left below the root, sorted, as `path=contents` (`path=zip` for an archive).
     pub(crate) expected_files: &'static [&'static str],
 }
 
