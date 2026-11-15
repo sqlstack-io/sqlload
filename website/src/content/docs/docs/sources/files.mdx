@@ -343,8 +343,10 @@ old one in one commit at the end; until then readers see the old table.
   `delete_insert` with a [`replace_key`](#replacing-rows-by-a-key) refuses `--reload`.
 - From 0.52.0, `merge` tables reload too, on DuckDB targets (Postgres targets refuse `--reload` for
   every table). Each file merges into the new table on its own, as a load merges them: files merged
-  before go in the order they merged, matched by name and version or else by name, so a file
-  `after_load` moved keeps its place; files never merged follow, oldest modified first. The new
+  before go in the order they merged, matched by name and version, or for a file under `move_to`
+  by name, so a file `after_load` moved keeps its place; files never merged follow, oldest
+  modified first, and so does a new file in `path` named as one `move_to` holds, whose rows then
+  win over the older copy's. The new
   table's file record (a reset, then one record per file) is written in the commit that swaps it
   in, so a reload that fails part way leaves the old table and its file record as they were. After
   a reload, the next load reads only files added since. `plan` shows

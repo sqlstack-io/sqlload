@@ -283,20 +283,16 @@ pub(crate) fn merged_file_round_trip(
     Ok((loaded.name, loaded.version))
 }
 
-/// The keys of `test_case`'s files in the order a merge `--reload` applies them, an archived one as `done/{key}`.
+/// The paths of `test_case`'s files in the order a merge `--reload` applies them.
 pub(crate) fn reload_keys(test_case: &ReloadOrderTestCase) -> Vec<String> {
     use crate::file_store::models::StoredFile;
     use crate::files_source::models::{DataFile, LoadedFile};
     let files: Vec<DataFile> = test_case
         .files
         .iter()
-        .enumerate()
-        .map(|(index, (key, modified_ms))| DataFile {
+        .map(|(folder, key, modified_ms)| DataFile {
             file: StoredFile {
-                path: object_store::path::Path::from(match test_case.archived.contains(&index) {
-                    true => format!("done/{key}"),
-                    false => format!("drop/{key}"),
-                }),
+                path: object_store::path::Path::from(format!("{folder}{key}")),
                 relative_key: (*key).to_owned(),
                 size: 1,
                 etag: None,
@@ -322,10 +318,7 @@ pub(crate) fn reload_keys(test_case: &ReloadOrderTestCase) -> Vec<String> {
     };
     crate::loader::_helpers::run_log::reload_order(files, "drop/", &merged, Some(&archive))
         .into_iter()
-        .map(|data| match data.file.path.as_ref().starts_with("done/") {
-            true => data.file.path.to_string(),
-            false => data.file.relative_key,
-        })
+        .map(|data| data.file.path.to_string())
         .collect()
 }
 
