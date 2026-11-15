@@ -153,7 +153,7 @@ async fn typed_records(
         }
         format => Records::Json {
             reader: JsonReader::new(bytes, format == SourceFormat::Ndjson)
-                .flattening(request.encoding.flatten_objects),
+                .flattening(&request.encoding.flatten),
             columns: request
                 .columns
                 .iter()

@@ -21,6 +21,7 @@ use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
     DEFAULT_TABLE_NAME,
 };
+use crate::row_batches::models::Flatten;
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
 #[derive(Debug, Clone, Deserialize)]
@@ -589,8 +590,8 @@ impl SourceConfig {
     pub fn files_encoding(&self) -> FilesEncoding {
         let mut xml = self.xml.clone().unwrap_or_default();
         for path in self.tables.values().flat_map(|table| match &table.unnest {
-            Some(UnnestSetting::Paths(paths)) => paths.as_slice(),
-            Some(UnnestSetting::Word(_)) | None => &[],
+            Some(PathsSetting::Paths(paths)) => paths.as_slice(),
+            Some(PathsSetting::Word(_)) | None => &[],
         }) {
             let element = path.rsplit('.').next().unwrap_or_default().to_owned();
             if !xml.lists.contains(&element) {
@@ -620,7 +621,7 @@ impl SourceConfig {
                     .clone()
                     .unwrap_or_else(|| RECORD_COLUMN.to_owned())
             }),
-            flatten_objects: false,
+            flatten: Flatten::default(),
         }
     }
 
@@ -1018,21 +1019,21 @@ pub struct TableOverride {
     pub exclude_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
-    /// Top-level objects of a Python table expanded one level into `<object>__<key>` columns; everything else nested stays JSON.
+    /// Objects whose keys load as `<object>__<key>` columns: dotted paths (`"customer"`, `"customer.address"`, `"items.dimensions"` inside unnested items), or `"all"`; everything else nested stays JSON.
     #[serde(default)]
-    pub flatten: Vec<String>,
+    pub flatten: Option<PathsSetting>,
     /// List fields whose items become rows of child tables: dotted paths (`"items"`, `"items.parts"`), or `"all"`.
     #[serde(default)]
-    pub unnest: Option<UnnestSetting>,
-    /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON (default 1000, as dlt's).
+    pub unnest: Option<PathsSetting>,
+    /// How many levels down `unnest` makes child tables and `flatten` flattens objects at most; deeper lists and objects stay JSON (default 1000, as dlt's).
     #[serde(default)]
     pub max_depth: Option<u32>,
 }
 
-/// A table's `unnest` as written: a word (`"all"`) or a list of dotted paths.
+/// A table's `unnest` or `flatten` as written: a word (`"all"`) or a list of dotted paths.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
-pub enum UnnestSetting {
+pub enum PathsSetting {
     Word(String),
     Paths(Vec<String>),
 }
