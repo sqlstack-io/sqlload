@@ -25,6 +25,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::models::{DataFile, LoadedFile};
+use crate::load_naming::models::NumberedName;
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, column_fix, live_has};
 use crate::loader::errors::LoaderError;
@@ -47,7 +48,7 @@ use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{
     DecodedRuns, RecordTable, RunEvent, RunOutcome, RunRecord, StateEvent, UnreadableRecord,
 };
-use crate::schema_plan::models::TableAction;
+use crate::schema_plan::models::{LiveColumn, TableAction};
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -326,6 +327,7 @@ pub(crate) fn run_entry(
             recorded_at: String::new(),
             batch: None,
             transform: None,
+            numbered: recorded_names(spec),
         },
         cursor_type,
         before: window.and_then(|window| window.maximum.clone()),
@@ -446,6 +448,7 @@ pub(crate) fn merged_record(
         recorded_at: now_utc_text(),
         batch: Some(batch),
         transform: None,
+        numbered: Vec::new(),
     }
 }
 
@@ -531,6 +534,98 @@ pub(crate) fn transform_record(spec: &TableSpec, version: &str) -> RunRecord {
         transform: Some(version.to_owned()),
         ..record
     }
+}
+
+/// The names numbering gave `spec`'s columns and those its earlier loads gave that no column now loads as otherwise, for its run log; none when they are the ones the log holds already.
+pub(crate) fn recorded_names(spec: &TableSpec) -> Vec<NumberedName> {
+    let names = &spec.names;
+    let taken = |column: &str| {
+        names
+            .numbered
+            .iter()
+            .any(|name| name.column.eq_ignore_ascii_case(column))
+            || names
+                .columns
+                .iter()
+                .any(|loaded| loaded.loaded.eq_ignore_ascii_case(column))
+    };
+    let mut recorded: Vec<NumberedName> = names.numbered.clone();
+    recorded.extend(
+        names
+            .kept
+            .iter()
+            .filter(|kept| !taken(&kept.column))
+            .cloned(),
+    );
+    recorded.sort();
+    let mut kept = names.kept.clone();
+    kept.sort();
+    match recorded == kept {
+        true => Vec::new(),
+        false => recorded,
+    }
+}
+
+/// Once a load that is not logged succeeded, the names numbering gave its columns, when they are not the ones its run log holds already, so the next plan keeps them; a logged table's own run records carry them instead (see [`recorded_names`]), so its current state stays its newest run.
+pub(crate) async fn record_numbered(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<(), LoaderError> {
+    let numbered = recorded_names(&table.spec);
+    if numbered.is_empty() || table.spec.logged {
+        return Ok(());
+    }
+    let record = event_record(
+        &record_table(&table.spec),
+        StateEvent {
+            event: RunEvent::Run,
+            cursor_before: None,
+            cursor_after: None,
+            state: None,
+            note: "names".to_owned(),
+            recorded_at: now_utc_text(),
+        },
+    );
+    append_run(table, destination, &RunRecord { numbered, ..record }).await
+}
+
+/// The names numbering gave the table's columns in its earlier loads, from the newest record of its run log holding any; `None` when the table doesn't exist, is rebuilt (`--reload`), or none of its live columns look numbered (`x` beside `x_1`), so the log is read only then.
+pub(crate) async fn kept_numbered(
+    plan: &TablePlan,
+    destination: &Destination,
+    reload: bool,
+) -> Result<Option<Vec<NumberedName>>, LoaderError> {
+    let live = plan.live.as_deref().unwrap_or_default();
+    let numbered = live
+        .iter()
+        .any(|column| numbered_beside(&column.name, live));
+    if !plan.exists || reload || !numbered || plan.schema.blocked.is_some() {
+        return Ok(None);
+    }
+    let (log, _) = read_run_log(plan, destination).await?;
+    let spec = &plan.spec;
+    Ok(log
+        .records
+        .iter()
+        .filter(|record| {
+            record.source == spec.source_name
+                && record.source_table == spec.source_table.name
+                && !record.numbered.is_empty()
+        })
+        .max_by(|left, right| left.recorded_at.cmp(&right.recorded_at))
+        .map(|record| record.numbered.clone()))
+}
+
+/// Whether `name` is a numbered name (`x_1`) whose base (`x`) is a column of `live` too, ignoring case.
+fn numbered_beside(name: &str, live: &[LiveColumn]) -> bool {
+    let Some((base, number)) = name.rsplit_once('_') else {
+        return false;
+    };
+    !number.is_empty()
+        && number.bytes().all(|digit| digit.is_ascii_digit())
+        && live
+            .iter()
+            .any(|other| other.name.eq_ignore_ascii_case(base))
 }
 
 /// The reset a files source's merge writes when it creates the table: files it merged into an earlier table of the name no longer count.

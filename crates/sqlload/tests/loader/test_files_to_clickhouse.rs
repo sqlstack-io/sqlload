@@ -12,7 +12,7 @@ use crate::clickhouse_helpers::{
 use crate::helpers::{described_project, run_async};
 use crate::test_types::{EventsFile, FilesPullTestCase, StoppedLoadTestCase};
 
-const EVENTS: &str = "SELECT toString(count()) || '|' || toString(countIf(_sqlload_source_row != id - if(id > 9000, 9000, 0))) || '|' || arrayStringConcat(groupUniqArray(hex(raw)), ',') || '|' || toString(countIf(note IS NULL)) || '|' || arrayStringConcat(arraySort(groupUniqArray(toString(day) || '@' || _sqlload_source_file)), ',') FROM raw.events";
+const EVENTS: &str = "SELECT toString(count()) || '|' || toString(countIf(_sqlload_source_row != id - if(id > 9000, 9000, 0))) || '|' || arrayStringConcat(groupUniqArray(hex(raw)), ',') || '|' || toString(countIf(note_text IS NULL)) || '|' || arrayStringConcat(arraySort(groupUniqArray(toString(day) || '@' || _sqlload_source_file)), ',') FROM raw.events";
 
 #[test]
 fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_files_itself_exactly()
@@ -39,7 +39,7 @@ fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_fi
             .ok_or_else(|| "no ClickHouse destination".to_owned())?;
         let test_cases = [
             FilesPullTestCase {
-                description: "ClickHouse reads Parquet in S3 itself: each file's rows numbered in stored order across row groups, fixed-size values kept whole, a column a file lacks NULL, days from the folders, and a key with a space read",
+                description: "ClickHouse reads Parquet in S3 itself: each file's rows numbered in stored order across row groups, fixed-size values kept whole, a column a file lacks NULL, days from the folders, a key with a space read, and the file column `Note Text` selected into `note_text`",
                 files: vec![
                     EventsFile {
                         key: "events/day=2026-10-30/part one.parquet",

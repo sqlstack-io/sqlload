@@ -165,11 +165,11 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
     for column in desired
         .iter_mut()
-        .filter(|column| is_load_column(spec.naming, &column.name))
+        .filter(|column| is_load_column(spec.compat, &column.name))
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns(spec.naming, spec.row_id));
+    desired.extend(metadata_columns(spec.compat, spec.row_id));
     desired
 }
 
@@ -421,7 +421,7 @@ pub(crate) async fn replan_columns(
                 auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
-                naming: spec.naming,
+                compat: spec.compat,
             };
             let compared = live.as_deref().filter(|_| !options.reload);
             let mut schema = plan_schema(&desired, compared, rules);
@@ -765,7 +765,7 @@ async fn plan_table_once(
         auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
-        naming: spec.naming,
+        compat: spec.compat,
     };
     let compared = live.as_deref().filter(|_| !options.reload);
     let mut schema = plan_schema(&desired, compared, rules);

@@ -29,7 +29,7 @@ use crate::load_events::main::close::close;
 use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::models::EventKind;
-use crate::loader::constants::{NO_PYTHON_HOST, NO_TRANSFORM_HOST};
+use crate::loader::constants::{NO_PYTHON_HOST, NO_RENAME_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
@@ -49,7 +49,7 @@ use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::project::models::{ProjectConfig, SourceKind};
+use crate::project::models::{ProjectConfig, RenameSetting, SourceKind, TableSettings};
 use crate::python_sources::types::PythonHost;
 use tokio_util::sync::CancellationToken;
 
@@ -154,6 +154,9 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
     if let (None, Some((place, _))) = (&request.host, transforms.first()) {
         return Err(NO_TRANSFORM_HOST.replace("{place}", place));
     }
+    if let (None, Some((place, _))) = (&request.host, rename_places(&project).first()) {
+        return Err(NO_RENAME_HOST.replace("{place}", place));
+    }
     if project.python_paths.is_empty() {
         return Ok(project);
     }
@@ -183,6 +186,17 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
             .map_err(|error| format!("Python transform check failed: {error}"))?;
         project.transforms.insert(function, version);
     }
+    for (_, function) in rename_places(&project) {
+        if project.renames.contains_key(&function) {
+            continue;
+        }
+        let checking = Arc::clone(&host);
+        let called = function.clone();
+        let found = tokio::task::spawn_blocking(move || checking.rename(&called, None, "{}"))
+            .await
+            .map_err(|error| format!("Python rename check failed: {error}"))?;
+        project.renames.insert(function, found.map(|_| ()));
+    }
     project.python_host = Some(host);
     Ok(project)
 }
@@ -197,6 +211,26 @@ fn transform_places(project: &ProjectConfig) -> Vec<(String, String)> {
         for (table, overrides) in &source.tables {
             if let Some(function) = &overrides.settings.transform {
                 places.push((format!("table {name}.{table}"), function.clone()));
+            }
+        }
+    }
+    places
+}
+
+/// Each source or table in `project` whose `rename` names a function (`source x` or `table x.y`), with the function.
+fn rename_places(project: &ProjectConfig) -> Vec<(String, String)> {
+    let function = |settings: &TableSettings| match &settings.rename {
+        Some(RenameSetting::Function(function)) => Some(function.clone()),
+        _ => None,
+    };
+    let mut places: Vec<(String, String)> = Vec::new();
+    for (name, source) in &project.sources {
+        if let Some(function) = function(&source.defaults) {
+            places.push((format!("source {name}"), function));
+        }
+        for (table, overrides) in &source.tables {
+            if let Some(function) = function(&overrides.settings) {
+                places.push((format!("table {name}.{table}"), function));
             }
         }
     }

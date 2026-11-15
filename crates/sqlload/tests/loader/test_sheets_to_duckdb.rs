@@ -7,7 +7,7 @@ use crate::sheets_helpers::{
 };
 use crate::test_types::{SheetsLoadTestCase, SheetsRefusalTestCase, SheetsUserTestCase};
 
-const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || ':' || coalesce(CAST(Opened AS VARCHAR), '') || ':' || coalesce(CAST(Active AS VARCHAR), '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(CAST(\"Updated At\" AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations";
+const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || ':' || coalesce(CAST(Opened AS VARCHAR), '') || ':' || coalesce(CAST(Active AS VARCHAR), '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(CAST(updated_at AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations";
 
 #[test]
 fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_and_replaces_its_table()
@@ -26,14 +26,14 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
                 refused_reads: 0,
                 expected_output: "tab \"Empty\" is empty, so it loads no table",
                 query: LOCATIONS,
-                expected_result: "L1:North:2026-01-15:true:120:2026-11-08 09:30:00:00123,L2:South, Upper:2025-12-31:false:::|Code VARCHAR,Name VARCHAR,Opened DATE,Active BOOLEAN,Capacity BIGINT,Updated At TIMESTAMP,Ref VARCHAR",
+                expected_result: "L1:North:2026-01-15:true:120:2026-11-08 09:30:00:00123,L2:South, Upper:2025-12-31:false:::|code VARCHAR,name VARCHAR,opened DATE,active BOOLEAN,capacity BIGINT,updated_at TIMESTAMP,ref VARCHAR",
             },
             SheetsLoadTestCase {
                 description: "a range below title rows takes its header from header_row and stops at the range's last column; the header-only tab is an empty table",
                 tabs: first_tabs,
                 refused_reads: 0,
                 expected_output: "",
-                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'Note') || '|' || (SELECT count(*) FROM raw.reference__header_only) FROM raw.report__items",
+                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'note') || '|' || (SELECT count(*) FROM raw.reference__header_only) FROM raw.report__items",
                 expected_result: "alpha:1.0,beta:2.5|0|0",
             },
             SheetsLoadTestCase {
@@ -49,7 +49,7 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
                 tabs: retyped_tabs,
                 refused_reads: 0,
                 expected_output: "",
-                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT string_agg(id || ':' || name, ',') FROM raw.reference__header_only) || '|' || (SELECT string_agg(data_type, ',' ORDER BY table_name) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name IN ('Qty', 'id')) || '|' || (SELECT CAST(\"Updated At\" AS VARCHAR) FROM raw.reference__locations WHERE Code = 'L1') FROM raw.report__items",
+                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT string_agg(id || ':' || name, ',') FROM raw.reference__header_only) || '|' || (SELECT string_agg(data_type, ',' ORDER BY table_name) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name IN ('qty', 'id')) || '|' || (SELECT CAST(updated_at AS VARCHAR) FROM raw.reference__locations WHERE Code = 'L1') FROM raw.report__items",
                 expected_result: "alpha:3.0,beta:4.0|7:seven|VARCHAR,DOUBLE|2026-01-15 00:00:00",
             },
         ];

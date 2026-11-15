@@ -1,5 +1,5 @@
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::Compat;
 use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 
@@ -8,7 +8,7 @@ pub(crate) struct FindingsTestCase {
     pub(crate) declared: Vec<(&'static str, ColumnType)>,
     pub(crate) contract: Contract,
     pub(crate) warehouse: Warehouse,
-    pub(crate) naming: Naming,
+    pub(crate) compat: Compat,
     pub(crate) live: Option<Vec<(&'static str, ColumnType)>>,
     pub(crate) expected_messages: &'static [&'static str],
 }

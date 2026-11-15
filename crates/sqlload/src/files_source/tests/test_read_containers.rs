@@ -157,13 +157,13 @@ fn given_xlsx_xml_and_zip_files_when_reading_then_cells_load_typed_and_errors_na
             expected_rows: Err("the workbook has no sheet \"Nope\"; its sheets are [\"Orders\"]"),
         },
         ReadTextFilesTestCase {
-            description: "xlsx: a header naming a column twice fails with its row",
+            description: "xlsx: a header naming a column twice reads the repeat as a column of its own",
             encoding: xlsx(sheet(None, true, 0), None),
             files: &[("a.xlsx", "[S]\nid|id\nn:1|n:2\n")],
             unsampled: &[],
             exclude: &[],
             pinned: &[],
-            expected_rows: Err("row 1: column id appears twice in the header"),
+            expected_rows: Ok("1|2"),
         },
         ReadTextFilesTestCase {
             description: "xlsx: a value later rows hold that the sampled type does not fit fails with its row",

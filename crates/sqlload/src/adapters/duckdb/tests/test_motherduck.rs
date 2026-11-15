@@ -278,7 +278,7 @@ fn given_a_motherduck_target_when_resolving_its_tables_then_they_are_named_with_
             ),
         },
         ResolvedDatabaseTestCase {
-            description: "a target naming no database is refused, as MotherDuck attaches every database",
+            description: "a target compat no database is refused, as MotherDuck attaches every database",
             connection_line: "",
             target_line: "",
             expected_database: Err(

@@ -115,7 +115,7 @@ impl ClickHouseWriter {
                 &into,
                 (columns, &sql_type),
                 (&file, credentials.as_ref()),
-                (target.naming, target.load_id, batch.loaded_at),
+                (target.compat, target.load_id, batch.loaded_at),
             );
             rows += written_rows(&self.destination, &insert, &parameters)
                 .await
@@ -145,15 +145,12 @@ fn pulled_file(
     url: String,
     (batch, columns): (&DirectBatch<'_>, &[DesiredColumn]),
 ) -> Result<PulledFile, LoaderError> {
-    let mut in_file: Vec<String> = Vec::new();
+    let mut in_file: Vec<(String, String)> = Vec::new();
     if let Some(footer) = batch.footers.parquet.get(&data.file.relative_key) {
-        in_file.extend(
-            footer
-                .schema()
-                .fields()
-                .iter()
-                .map(|field| field.name().clone()),
-        );
+        in_file.extend(footer.schema().fields().iter().map(|field| {
+            let loaded = batch.spec.source_table.loaded_as(field.name());
+            (loaded.to_owned(), field.name().clone())
+        }));
     }
     let mut constants = vec![
         (
@@ -168,9 +165,10 @@ fn pulled_file(
             .iter()
             .find(|(partition, _)| partition == name)
             .map(|(_, value)| value.clone());
+        let loaded = batch.spec.source_table.loaded_as(name);
         let column_type = columns
             .iter()
-            .find(|column| column.name == *name)
+            .find(|column| column.name == loaded)
             .map(|column| &column.column_type);
         let value = match (value, column_type) {
             (Some(value), Some(column_type)) => {
@@ -183,7 +181,7 @@ fn pulled_file(
             }
             (value, _) => value,
         };
-        constants.push((name.clone(), value));
+        constants.push((loaded.to_owned(), value));
     }
     Ok(PulledFile {
         url,

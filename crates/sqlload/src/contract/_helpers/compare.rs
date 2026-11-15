@@ -9,7 +9,7 @@ use crate::contract::constants::{
 };
 use crate::contract::models::ContractFinding;
 use crate::load_naming::main::is_load_column::is_load_column;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::Compat;
 use crate::loader::models::TableSpec;
 use crate::project::models::Contract;
 use crate::schema_plan::models::LiveColumn;
@@ -19,7 +19,7 @@ pub(crate) fn findings(
     declared: &BTreeMap<String, ColumnType>,
     contract: Contract,
     live: Option<&[LiveColumn]>,
-    (warehouse, naming, relation): (Warehouse, Naming, &str),
+    (warehouse, compat, relation): (Warehouse, Compat, &str),
 ) -> Vec<ContractFinding> {
     let Some(live) = live else {
         return vec![ContractFinding {
@@ -38,7 +38,7 @@ pub(crate) fn findings(
     };
     let mut found: Vec<ContractFinding> = live
         .iter()
-        .filter(|column| !is_own(naming, &column.name))
+        .filter(|column| !is_own(compat, &column.name))
         .filter_map(|column| live_finding(column, declared_type(&column.name), contract, warehouse))
         .collect();
     found.extend(
@@ -57,9 +57,9 @@ pub(crate) fn findings(
     found
 }
 
-/// Whether a load under `naming` added the column itself: any `_sqlload_*` column, or one of dlt's metadata columns under `naming = "dlt"`.
-pub(crate) fn is_own(naming: Naming, name: &str) -> bool {
-    is_load_column(naming, &name.to_ascii_lowercase())
+/// Whether a load under `compat` added the column itself: any `_sqlload_*` column, or one of dlt's metadata columns under `compat = "dlt"`.
+pub(crate) fn is_own(compat: Compat, name: &str) -> bool {
+    is_load_column(compat, &name.to_ascii_lowercase())
 }
 
 /// Whether `live` has a column named `name`, ignoring case.

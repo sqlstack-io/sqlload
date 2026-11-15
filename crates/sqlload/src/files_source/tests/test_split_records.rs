@@ -143,7 +143,7 @@ fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_becom
             description: "a flattened name the record already has is an error naming it",
             text: r#"{"c__n":1,"c":{"n":2}}"#,
             expected_flattened: Err(
-                "line 1: naming = \"dlt\" flattens an object into the column c__n",
+                "line 1: compat = \"dlt\" flattens an object into the column c__n",
             ),
         },
     ];

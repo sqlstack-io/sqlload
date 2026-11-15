@@ -36,3 +36,11 @@ pub(crate) struct PartitionFiles {
     pub(crate) files: usize,
     pub(crate) file_bytes: u64,
 }
+
+pub(crate) struct BoundArrayTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) cursor_type: ColumnType,
+    /// The bound as Arrow displays it.
+    pub(crate) expected_value: &'static str,
+}

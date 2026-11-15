@@ -1,6 +1,6 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
 use crate::row_batches::models::Unnest;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -202,8 +202,16 @@ pub struct TableSpec {
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
-    /// How the load names the columns it adds, and under dlt's naming its tables and columns.
+    /// How the table's and its columns' names load.
     pub naming: Naming,
+    /// Whose names the columns the load adds take.
+    pub compat: Compat,
+    /// Each source column's name through the name pipeline (none for a Python table, whose columns are named as they arrive), and the names numbering gave.
+    pub names: LoadedNames,
+    /// What the name pipeline ran under.
+    pub name_rules: NameRules,
+    /// The table as its source listed it, before the name pipeline, so the plan can name its columns again keeping the numbers its earlier loads gave; `None` for a Python table.
+    pub listed: Option<Box<SourceTable>>,
     /// The Python function each file's (or Sheets range's) rows go through before they load; `None` without `transform`.
     pub transform: Option<TableTransform>,
 }
@@ -809,6 +817,8 @@ pub struct TableLoaded {
     pub replaced_keys: Option<ReplacedKeys>,
     /// How long the table's `transform` took on each file or range, in the order they loaded.
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// A line per column `rename` named or numbering numbered.
+    pub names: Vec<String>,
 }
 
 /// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
@@ -886,6 +896,8 @@ pub struct PythonFeed {
     pub reconciled: Option<String>,
     /// Each column seen so far, and whether flattening a listed object made it, so no column comes from both.
     pub flattened: std::collections::BTreeMap<String, bool>,
+    /// The names the load gave the yielded fields so far.
+    pub names: NameMemo,
 }
 
 /// A Postgres table's integer cursor as plan found it, ending its `batch_size` windows.
@@ -1292,6 +1304,9 @@ pub struct TableResult {
     /// How long the table's `transform` took on each file or range; left out without one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// A line per column `rename` named or numbering numbered; left out when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
     /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_bytes: Option<u64>,

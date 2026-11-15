@@ -29,8 +29,8 @@ fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_
             source_change: "",
             max_text_size: 1000,
             expected_output: (true, "4 loaded"),
-            check_query: "SELECT (SELECT string_agg(table_name || '.' || column_name || ' ' || data_type, ',' ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') || '|' || (SELECT string_agg(\"Id\" || '=' || \"Label\", ',' ORDER BY \"Id\") FROM raw.\"erp__mixed case\") || '|' || (SELECT count(*) || ':' || min(id) FROM raw.erp__recent)",
-            expected_result: "erp__amounts.id BIGINT,erp__amounts.n DECIMAL(28,6),erp__items.id BIGINT,erp__items.name VARCHAR,erp__items.price DECIMAL(10,2),erp__items.active BOOLEAN,erp__items.opened DATE,erp__items.updated_at TIMESTAMP,erp__items.note VARCHAR,erp__mixed case.Id BIGINT,erp__mixed case.Label VARCHAR,erp__recent.id BIGINT,erp__recent.name VARCHAR|1=one,2=two|10:2991",
+            check_query: "SELECT (SELECT string_agg(table_name || '.' || column_name || ' ' || data_type, ',' ORDER BY table_name, ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') || '|' || (SELECT string_agg(id || '=' || label, ',' ORDER BY id) FROM raw.erp__mixed_case) || '|' || (SELECT count(*) || ':' || min(id) FROM raw.erp__recent)",
+            expected_result: "erp__amounts.id BIGINT,erp__amounts.n DECIMAL(28,6),erp__items.id BIGINT,erp__items.name VARCHAR,erp__items.price DECIMAL(10,2),erp__items.active BOOLEAN,erp__items.opened DATE,erp__items.updated_at TIMESTAMP,erp__items.note VARCHAR,erp__mixed_case.id BIGINT,erp__mixed_case.label VARCHAR,erp__recent.id BIGINT,erp__recent.name VARCHAR|1=one,2=two|10:2991",
         },
         OdbcLoadTestCase {
             description: "a cursor merge reads the changed rows and upserts them",

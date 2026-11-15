@@ -267,6 +267,7 @@ pub(crate) fn event_lines(
             position,
             changes,
             transforms,
+            names,
             peak_memory_bytes,
         } => {
             let word = match rows {
@@ -287,7 +288,11 @@ pub(crate) fn event_lines(
                     note.join("  ")
                 )
                 .trim_end(),
-                transform_lines(transforms)
+                names
+                    .iter()
+                    .map(|line| format!("\nnames  {line}"))
+                    .collect::<String>()
+                    + &transform_lines(transforms)
             );
             let mut lines: Vec<String> = changes
                 .iter()

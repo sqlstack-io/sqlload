@@ -1,4 +1,5 @@
-use crate::load_naming::models::Naming;
+use crate::load_naming::main::name_lines::name_lines;
+use crate::load_naming::models::NameChange;
 use crate::loader::constants::{
     FIX_LABEL, HOURS_OFFSET_LENGTH, REASON_LABEL, ROUTE_LABEL, SECOND_TIMESTAMP_LENGTH,
     SOURCE_LABEL,
@@ -130,6 +131,11 @@ fn aligned(left: &str, right: &str) -> String {
     }
 }
 
+/// The `names` detail of a table: a line per column `rename` or numbering named, as [`name_lines`] gives them; `None` when there are none.
+fn names_details(lines: &[String]) -> Option<PlanDetail> {
+    (!lines.is_empty()).then(|| detail("names", lines.join("\n")))
+}
+
 /// `name` padded so `detail` starts in the plan's detail column (after a branch prefix), or two spaces after a name too long for it.
 fn row(name: &str, detail: &str) -> String {
     format!("{name:<width$}  {detail}", width = PLAN_DETAIL_COLUMN - 6)
@@ -257,7 +263,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .schema
         .write_columns
         .iter()
-        .partition(|column| is_load_column(table.spec.naming, &column.name));
+        .partition(|column| is_load_column(table.spec.compat, &column.name));
     let name_width = data
         .iter()
         .map(|column| column.name.len())
@@ -1399,6 +1405,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.transforms.clone(),
             Err(_) => Vec::new(),
         },
+        names: match &outcome.loaded {
+            Ok(loaded) => loaded.names.clone(),
+            Err(_) => Vec::new(),
+        },
         peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
@@ -1488,6 +1498,7 @@ pub(crate) fn text_item(
     }
     if one {
         added.extend(columns_line(table).map(|text| detail("columns", text)));
+        added.extend(names_details(&name_lines(&table.spec.names.columns)));
         added.extend(checks_line(table).map(|text| detail("checks", text)));
     }
     details.splice(after_source..after_source, added);
@@ -1498,7 +1509,7 @@ pub(crate) fn text_item(
     }
 }
 
-/// How many columns the table loads from its source, and under dlt's naming the first names it changes: `6, named by naming = "dlt": company-no -> company_no, item-no -> item_no, ...`; `None` when they are only known at load.
+/// How many columns the table loads from its source, and how many of them `naming` alone changes, with the first few: `6, 4 named by snake_case: Company No -> company_no, ItemNo -> item_no, ...`; `None` when they are only known at load. The columns `rename` or numbering named have lines of their own (see [`names_details`]).
 fn columns_line(table: &TablePlan) -> Option<String> {
     let count = table
         .schema
@@ -1511,20 +1522,18 @@ fn columns_line(table: &TablePlan) -> Option<String> {
     }
     let renamed: Vec<String> = table
         .spec
-        .source_table
+        .names
         .columns
         .iter()
-        .filter(|_| table.spec.naming == Naming::Dlt)
-        .filter_map(|column| {
-            let spelled = column.source_spelling.as_deref()?;
-            (spelled != column.name).then(|| format!("{spelled} -> {}", column.name))
-        })
+        .filter(|column| column.change == Some(NameChange::Named))
+        .map(|column| format!("{} -> {}", column.source, column.loaded))
         .collect();
     Some(match renamed.as_slice() {
         [] => thousands(count as u64),
         shown => format!(
-            "{}, named by naming = \"dlt\": {}{}",
+            "{}, {} named by snake_case: {}{}",
             thousands(count as u64),
+            thousands(shown.len() as u64),
             shown
                 .iter()
                 .take(SHOWN_RENAMES)

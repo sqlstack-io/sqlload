@@ -5,7 +5,8 @@ use crate::schema_plan::models::DesiredColumn;
 pub(crate) struct PullInsertTestCase {
     pub(crate) description: &'static str,
     pub(crate) columns: Vec<DesiredColumn>,
-    pub(crate) in_files: Vec<String>,
+    /// Each column the files hold, with its name in them.
+    pub(crate) in_files: Vec<(String, String)>,
     pub(crate) files: Vec<PulledFile>,
     pub(crate) expected_sql: &'static str,
 }

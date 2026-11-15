@@ -111,7 +111,7 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
         },
         DatabricksLoadTestCase {
             description: "replace with unnest = \"all\" finds an existing child table by the lower-cased name Unity Catalog lists, so a camelCase field's items load into it once and no second, empty table replaces them",
-            settings: "write_strategy = \"replace\"\nformat = \"ndjson\"\n[sources.orders.tables.orders]\nunnest = \"all\"",
+            settings: "write_strategy = \"replace\"\nformat = \"ndjson\"\nnaming = \"source\"\n[sources.orders.tables.orders]\nunnest = \"all\"",
             file_set: camel_items,
             prepare: lowercased_child_table,
             expected_sent: &[

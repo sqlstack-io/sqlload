@@ -77,7 +77,7 @@ pub(crate) fn flattened_record(
         .find(|(name, _, _)| !seen.insert(name.as_str()))
     {
         return Err(format!(
-            "line {}: naming = \"dlt\" flattens an object into the column {name}, which the record already has as a key; rename one of them",
+            "line {}: compat = \"dlt\" flattens an object into the column {name}, which the record already has as a key; rename one of them",
             record.line
         ));
     }

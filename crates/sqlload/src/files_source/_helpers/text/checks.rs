@@ -51,7 +51,7 @@ impl ColumnChecks {
             || loader_column(name)
     }
 
-    /// Whether `name` is an object whose `<name>__<key>` columns the source has, as `naming = "dlt"` flattens it.
+    /// Whether `name` is an object whose `<name>__<key>` columns the source has, as `compat = "dlt"` flattens it.
     pub(crate) fn is_flattened_object(&self, name: &str) -> bool {
         let prefix = format!("{name}{FLATTEN_SEPARATOR}");
         self.known.iter().any(|known| known.starts_with(&prefix))

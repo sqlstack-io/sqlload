@@ -173,7 +173,7 @@ constant_columns = { run_tag = "second" }
 
 const ADDED_CONSTANT_ROWS_QUERY: &str = "SELECT string_agg(id || ':' || label || ':' || coalesce(run_tag, ''), ',' ORDER BY id) FROM raw.app__items";
 
-/// A table whose quoted names dlt's naming renames, read in integer windows of one key each.
+/// A table whose quoted names snake_case renames, under compat = "dlt", read in integer windows of one key each.
 const DLT_SETUP: &str = r#"
 CREATE TABLE public."Orders-V2" ("OrderID" int8 PRIMARY KEY, "Seq" int8 NOT NULL, "Unit Price" numeric(10,2), "UpdatedAt" timestamptz NOT NULL);
 INSERT INTO public."Orders-V2" VALUES (1, 1, 1.50, '2026-11-01 10:00:00+00'), (2, 2, 2.25, '2026-11-02 10:00:00+00');
@@ -182,7 +182,7 @@ INSERT INTO public."Orders-V2" VALUES (1, 1, 1.50, '2026-11-01 10:00:00+00'), (2
 /// The key named as the source spells it, the cursor as it loads.
 const DLT_TABLES: &str = r#"include = ["public.Orders-V2"]
 [sources.app.tables."public.Orders-V2"]
-naming = "dlt"
+compat = "dlt"
 write_strategy = "merge"
 unique_key = ["OrderID"]
 cursor_column = "seq"
@@ -211,7 +211,7 @@ Loads (1)                                           sqlload load
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── key     from unique_key; the source reports the same primary key
     ├── reads   seq >= 0 (first run, from cursor_start)
-    ├── columns 4, named by naming = \"dlt\": OrderID -> order_id, Seq -> seq, ...
+    ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
@@ -225,7 +225,7 @@ Loads (1)                                           sqlload load
     ├── route   read as Arrow -> DuckDB takes Arrow
     ├── key     from unique_key; the source reports the same primary key
     ├── reads   seq >= 2 (warehouse maximum)
-    ├── columns 4, named by naming = \"dlt\": OrderID -> order_id, Seq -> seq, ...
+    ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
@@ -599,7 +599,7 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
             },
             ConstantLoadTestCase {
                 description: "a source column named like a constant, in another case, fails the plan, naming it",
-                settings: "include = [\"public.clash*\"]\nwrite_strategy = \"replace\"\nconstant_columns = { tenant_id = \"a\" }\n",
+                settings: "include = [\"public.clash*\"]\nwrite_strategy = \"replace\"\nnaming = \"source\"\nconstant_columns = { tenant_id = \"a\" }\n",
                 expected_error: "constant column tenant_id: the source already has a column Tenant_ID, and a constant never replaces it",
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__clashing'",
                 expected_result: NO_SUCH_TABLE,

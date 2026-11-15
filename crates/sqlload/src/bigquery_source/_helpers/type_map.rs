@@ -45,6 +45,7 @@ pub(crate) fn source_column(field: &Value) -> SourceColumn {
         column_type,
         nullable: field["mode"].as_str() != Some("REQUIRED"),
         source_spelling: None,
+        repeat_of: None,
     }
 }
 

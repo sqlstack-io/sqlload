@@ -39,7 +39,7 @@ pub fn plan_schema(
     };
     let owned = live.iter().any(|live| {
         live.name
-            .eq_ignore_ascii_case(metadata_name(rules.naming, MetadataRole::LoadId))
+            .eq_ignore_ascii_case(metadata_name(rules.compat, MetadataRole::LoadId))
     });
     let kept_as_is = !owned && sql_adapter(rules.warehouse).keeps_tables();
     let mut changes: Vec<ColumnChange> = Vec::new();

@@ -64,6 +64,7 @@ pub(crate) fn typed_column(
         position,
         column_type: error.map_or(Ok(column_type), Err),
         has_values: !seen.is_empty(),
+        repeat_of: None,
     };
     (column, warning)
 }

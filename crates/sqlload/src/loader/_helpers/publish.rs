@@ -64,23 +64,24 @@ use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, LoadedFile, SourceFormat, TextChecks};
 use crate::load_naming::main::metadata_name::metadata_name;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::main::name_lines::name_lines;
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::loader::_helpers::destination::{commit_deletes, nanosecond_columns, replace_files};
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::python::without_deleted_items;
-use crate::loader::_helpers::resolve::resolve_tables;
+use crate::loader::_helpers::resolve::{KnownNames, resolve_known};
 use crate::loader::_helpers::run_log::append_run;
 use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
-use crate::loader::_helpers::run_log::transformed;
 use crate::loader::_helpers::run_log::{
     in_file, listed_sources, merge_rebuild, merged_file_text, merged_name, merged_record,
     swap_rebuild, with_file_keys,
 };
+use crate::loader::_helpers::run_log::{record_numbered, recorded_names, transformed};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
@@ -181,7 +182,7 @@ fn write_target<'a>(
         staging,
         columns,
         write_columns: &table.schema.write_columns,
-        naming: table.spec.naming,
+        compat: table.spec.compat,
         load_id,
         batch,
         direct,
@@ -396,10 +397,10 @@ pub(crate) fn with_constants(
     RecordBatch::try_new(Arc::new(schema), columns).map_err(|error| error.to_string())
 }
 
-/// `batch` with this load's id and load time added under `naming`, so the staged files carry them, then each row's id from `row_ids` when the table gives rows one, and with `first_row` its rows numbered from it in `_sqlload_row`.
+/// `batch` with this load's id and load time added under `compat`, so the staged files carry them, then each row's id from `row_ids` when the table gives rows one, and with `first_row` its rows numbered from it in `_sqlload_row`.
 fn with_metadata(
     batch: &RecordBatch,
-    ((naming, load_id), row_ids): ((Naming, &str), Option<Vec<String>>),
+    ((compat, load_id), row_ids): ((Compat, &str), Option<Vec<String>>),
     (loaded_at_micros, first_row): (i64, Option<i64>),
 ) -> Result<RecordBatch, String> {
     let rows = batch.num_rows();
@@ -409,12 +410,12 @@ fn with_metadata(
     let loaded_at =
         TimestampMicrosecondArray::from(vec![loaded_at_micros; rows]).with_timezone("UTC");
     fields.push(Arc::new(Field::new(
-        metadata_name(naming, MetadataRole::LoadId),
+        metadata_name(compat, MetadataRole::LoadId),
         arrow_schema::DataType::Utf8,
         true,
     )));
     fields.push(Arc::new(Field::new(
-        metadata_name(naming, MetadataRole::LoadedAt),
+        metadata_name(compat, MetadataRole::LoadedAt),
         loaded_at.data_type().clone(),
         true,
     )));
@@ -422,7 +423,7 @@ fn with_metadata(
     columns.push(Arc::new(loaded_at));
     if let Some(ids) = row_ids {
         fields.push(Arc::new(Field::new(
-            metadata_name(naming, MetadataRole::RowId),
+            metadata_name(compat, MetadataRole::RowId),
             arrow_schema::DataType::Utf8,
             true,
         )));
@@ -698,6 +699,7 @@ impl Publisher {
                         unnest: &spec.unnest,
                         max_depth: spec.max_depth,
                         naming: spec.naming,
+                        compat: spec.compat,
                         name_limit: sql_adapter(spec.warehouse).max_identifier_length(),
                         flatten_objects: spec
                             .files
@@ -740,7 +742,7 @@ impl Publisher {
         self.staged_ordinal += i64::try_from(masked.num_rows()).unwrap_or(i64::MAX);
         let batch = with_metadata(
             &masked,
-            ((self.table.spec.naming, &self.load_id), ids),
+            ((self.table.spec.compat, &self.load_id), ids),
             (micros, first_row),
         )
         .map_err(LoaderError::Invalid)?;
@@ -1226,6 +1228,7 @@ impl Publisher {
             ));
         };
         run.record.state = self.state.clone();
+        run.record.numbered = recorded_names(&self.table.spec);
         let mut record = run.finished(RunOutcome {
             run_id: self.load_id.clone(),
             recorded_at: now_utc_text(),
@@ -1330,10 +1333,27 @@ impl Publisher {
         let (source_table, files_source) = files_source_parts(
             &spec.source_name,
             source,
-            (spec.warehouse, spec.naming),
+            (spec.warehouse, (spec.naming, spec.compat)),
             (source_files.location.clone(), found),
         )?;
-        let resolved = resolve_tables(run.project, &spec.source_name, &[source_table]);
+        let known = KnownNames {
+            numbered: spec
+                .names
+                .numbered
+                .iter()
+                .chain(&spec.names.kept)
+                .cloned()
+                .collect(),
+            named: None,
+            existing: self
+                .table
+                .live
+                .iter()
+                .flatten()
+                .map(|column| column.name.clone())
+                .collect(),
+        };
+        let resolved = resolve_known(run.project, &spec.source_name, &[source_table], &known);
         let mut widened = match (resolved.problems.first(), resolved.specs.into_iter().next()) {
             (None, Some(widened)) => widened,
             (problem, _) => {
@@ -1484,6 +1504,7 @@ pub(crate) async fn publish_table(
     publisher.close().await;
     let rows = result?;
     let transforms = transformed(table, (destination, transform)).await?;
+    Box::pin(record_numbered(table, destination)).await?;
     let report = match reader {
         SourceReader::Files(folder) => {
             after_load(folder, &table.spec.after_load, &publisher.settled_files).await
@@ -1497,6 +1518,7 @@ pub(crate) async fn publish_table(
         after_load: report,
         replaced_keys: publisher.replaced.clone(),
         transforms,
+        names: name_lines(&table.spec.names.columns),
     })
 }
 
@@ -1756,7 +1778,7 @@ impl Publisher {
             path: &sink.output.path,
             cursor_column: spec.cursor.as_ref().map(|cursor| cursor.column.as_str()),
             columns: &self.table.schema.write_columns,
-            naming: self.table.spec.naming,
+            compat: self.table.spec.compat,
             load_id: &self.load_id,
             file_id: &file_id,
             loaded_at: &self.loaded_at,
@@ -1898,7 +1920,7 @@ impl Publisher {
             path: &sink.output.path,
             cursor_column,
             columns: &self.table.schema.write_columns,
-            naming: self.table.spec.naming,
+            compat: self.table.spec.compat,
             load_id: &self.load_id,
             file_id: &writer.file_id,
             loaded_at: &self.loaded_at,

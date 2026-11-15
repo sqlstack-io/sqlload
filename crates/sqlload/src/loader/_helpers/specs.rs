@@ -24,7 +24,7 @@ use crate::files_source::models::{
     AfterLoad, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
@@ -372,6 +372,10 @@ pub(crate) fn build_spec(
         settings_at: None,
         unique_key_at: None,
         naming: nesting.naming,
+        compat: nesting.compat,
+        names: LoadedNames::default(),
+        name_rules: NameRules::default(),
+        listed: None,
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -769,7 +773,7 @@ fn excluded_by(name: &str, exclude: &[(&String, GlobMatcher)]) -> Option<(String
     Some((name.to_owned(), format!("exclude_columns {pattern}")))
 }
 
-/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in; as it loads under `rule`.
+/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in, in lower case under `naming = "source"`; as it loads under `rule`.
 pub(crate) fn table_name(
     (source_name, source): (&str, &SourceConfig),
     name: Option<&str>,
@@ -777,11 +781,17 @@ pub(crate) fn table_name(
 ) -> String {
     let name = match name {
         Some(name) if !name.contains('{') => name.to_owned(),
-        _ => destination_name(
-            name.unwrap_or(source.table_name_template()),
-            source_name,
-            table,
-        ),
+        _ => {
+            let filled = destination_name(
+                name.unwrap_or(source.table_name_template()),
+                source_name,
+                table,
+            );
+            match rule.0 {
+                Naming::Source => filled.to_ascii_lowercase(),
+                Naming::SnakeCase => filled,
+            }
+        }
     };
     loaded_name(rule.0, &name, rule.1)
 }
@@ -792,7 +802,6 @@ pub(crate) fn destination_name(template: &str, source: &str, table: &SourceTable
         .replace("{source}", source)
         .replace("{schema}", &table.schema)
         .replace("{table}", &table.name)
-        .to_ascii_lowercase()
 }
 
 /// A table's value if set, otherwise its source's.
@@ -1355,12 +1364,13 @@ fn after_load_problems(
 /// What a table's nesting settings come to.
 struct Nesting {
     naming: Naming,
+    compat: Compat,
     row_id: bool,
     unnest: Unnest,
     max_depth: u32,
 }
 
-/// The table's naming (its own, its source's, then its target's), whether its rows get an id (always under dlt's naming), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
+/// The table's naming and compat (each its own, its source's, then its target's), whether its rows get an id (always under `compat = "dlt"`), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
 fn nesting(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
@@ -1369,11 +1379,14 @@ fn nesting(
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let naming = table_naming((settings, defaults), context.target.naming);
+    let compat = table_compat((settings, defaults), context.target.compat);
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
     let mut problems: Vec<String> = Vec::new();
-    if naming == Naming::Dlt && row_id == Some(false) {
-        problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
+    if compat == Compat::Dlt && row_id == Some(false) {
+        problems.push(
+            "row_id = false: compat = \"dlt\" gives every row its _dlt_id; drop row_id".to_owned(),
+        );
     }
     let unnest = match &overrides.unnest {
         None => Unnest::None,
@@ -1408,7 +1421,8 @@ fn nesting(
     (
         Nesting {
             naming,
-            row_id: row_id.unwrap_or(naming == Naming::Dlt || unnest != Unnest::None),
+            compat,
+            row_id: row_id.unwrap_or(compat == Compat::Dlt || unnest != Unnest::None),
             unnest,
             max_depth,
         },
@@ -1416,12 +1430,23 @@ fn nesting(
     )
 }
 
-/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else SQLLoad's.
+/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else snake_case.
 pub(crate) fn table_naming(
     (settings, defaults): (&TableSettings, &TableSettings),
     target: Option<Naming>,
 ) -> Naming {
     layered(&settings.naming, &defaults.naming)
+        .map(|(value, _)| value)
+        .or(target)
+        .unwrap_or_default()
+}
+
+/// Whose names the columns a table's load adds take: its own `compat`, else its source's, else its target's (`target`), else SQLLoad's.
+pub(crate) fn table_compat(
+    (settings, defaults): (&TableSettings, &TableSettings),
+    target: Option<Compat>,
+) -> Compat {
+    layered(&settings.compat, &defaults.compat)
         .map(|(value, _)| value)
         .or(target)
         .unwrap_or_default()
@@ -1555,6 +1580,7 @@ pub(crate) fn referenced_columns(
             column_type: Ok(ColumnType::Text),
             nullable: true,
             source_spelling: None,
+            repeat_of: None,
         })
         .collect()
 }
@@ -1623,7 +1649,7 @@ pub(crate) fn flattened_object_problems(
                 continue;
             }
             problems.push(format!(
-                "{setting} {pattern} names {object}, which naming = \"dlt\" flattens into {}; name those columns instead",
+                "{setting} {pattern} names {object}, which compat = \"dlt\" flattens into {}; name those columns instead",
                 keys.join(", ")
             ));
         }
@@ -1731,7 +1757,7 @@ pub(crate) fn path_values(
     Ok((values, types))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. A pin naming a sampled column by the name `rule`'s naming gives it is one sampling saw.
 pub(crate) fn pinned_unsampled(
     overrides: Option<&TableOverride>,
     (table, added, rule): (&FilesTable, &[&str], NameRule),

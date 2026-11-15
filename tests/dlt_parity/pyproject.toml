@@ -1,7 +1,7 @@
 [project]
 name = "sqlload-dlt-parity"
 version = "0"
-description = "The pinned dlt that SQLLoad's naming = \"dlt\" and unnest are compared against."
+description = "The pinned dlt that SQLLoad's compat = \"dlt\" and unnest are compared against."
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "dlt[duckdb]==1.32.0",

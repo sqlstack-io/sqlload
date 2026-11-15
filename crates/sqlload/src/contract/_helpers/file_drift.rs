@@ -7,18 +7,18 @@ use crate::contract::constants::{
     FILES_EXTRA_COLUMN, FILES_MISSING_COLUMN, FILES_TYPE_MISMATCH, NAMED_FILES,
 };
 use crate::contract::models::ContractFinding;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::Compat;
 use crate::loader::models::FileSchema;
 use crate::schema_plan::models::LiveColumn;
 
-/// One finding per column whose files disagree with the newest load (`live`): per other type the files hold it as, for files lacking it, and for a column only older files hold; names as the files spell them, the columns a load under `naming` adds left out.
+/// One finding per column whose files disagree with the newest load (`live`): per other type the files hold it as, for files lacking it, and for a column only older files hold; names as the files spell them, the columns a load under `compat` adds left out.
 pub(crate) fn file_drift(
-    naming: Naming,
+    compat: Compat,
     live: &[LiveColumn],
     files: &[FileSchema],
 ) -> Vec<ContractFinding> {
     let mut found: Vec<ContractFinding> = Vec::new();
-    for column in live.iter().filter(|column| !is_own(naming, &column.name)) {
+    for column in live.iter().filter(|column| !is_own(compat, &column.name)) {
         let expected = column.column_type.to_string();
         let mut other_types: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         let mut missing: Vec<&str> = Vec::new();
@@ -58,13 +58,13 @@ pub(crate) fn file_drift(
             source_type: None,
         }));
     }
-    found.extend(extra_columns(naming, live, files));
+    found.extend(extra_columns(compat, live, files));
     found
 }
 
 /// Columns some files hold that the newest load lacks, with the type each first appears as.
 fn extra_columns(
-    naming: Naming,
+    compat: Compat,
     live: &[LiveColumn],
     files: &[FileSchema],
 ) -> Vec<ContractFinding> {
@@ -74,7 +74,7 @@ fn extra_columns(
         for column in file
             .columns
             .iter()
-            .filter(|column| is_extra(naming, live, column))
+            .filter(|column| is_extra(compat, live, column))
         {
             extra
                 .entry(&column.name)
@@ -99,9 +99,9 @@ fn extra_columns(
         .collect()
 }
 
-/// Whether `column` is neither one a load under `naming` adds nor in the newest load (`live`).
-fn is_extra(naming: Naming, live: &[LiveColumn], column: &LiveColumn) -> bool {
-    !is_own(naming, &column.name) && !live.iter().any(|newest| newest.name == column.name)
+/// Whether `column` is neither one a load under `compat` adds nor in the newest load (`live`).
+fn is_extra(compat: Compat, live: &[LiveColumn], column: &LiveColumn) -> bool {
+    !is_own(compat, &column.name) && !live.iter().any(|newest| newest.name == column.name)
 }
 
 /// `keys` as a count and the first few: `2 files: a.parquet, b.parquet`, or `5 files: a, b, c and 2 more`.
