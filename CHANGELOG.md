@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.51.0](https://github.com/sqlstack-io/sqlload/compare/v0.50.0...v0.51.0) (2026-11-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* **merge:** merges match a NULL key part with a NULL. On a Postgres target, a merge table whose key column can be NULL (every Python and files table, and database columns without NOT NULL) fails plan until its unique index is recreated NULLS NOT DISTINCT, or null_keys = "fail" is set; Postgres 14 or older needs null_keys = "fail" or NOT NULL key columns. A key column an existing Postgres table declares NOT NULL needs neither. unique_key = "{primary_key}" with a nullable reported key column (including most BigQuery sources) fails plan; name the key columns. Repeated NULL keys in one commit collapse to one row, and on_duplicate_keys = "fail" fails on them; a files merge without _sqlload_source_row fails on a file repeating a key with NULLs in it. --reload of a merge with null_keys = "fail" fails on a NULL key. Tables that already hold copies from this bug keep them; see "NULLs in keys" under merge in the write strategies docs for the cleanup.
+* **delete_insert:** delete_insert with replace_key and a cursor_column fails plan; drop cursor_column to read the whole source each run, or use merge. A files delete_insert by replace_key fails when a file holds a key value that another file still in the folder holds, in the same run or an earlier one; put each value's rows in one file, or remove the outdated file from the folder. Plan refuses such a table that excludes _sqlload_source_file. Under delete_insert on a partition cursor of a files source, a file that changed since it loaded, or a new file in a partition the table holds, below the range a load reads fails the table instead of being skipped (load it with --start-cursor or --reload, or switch to replace_key), and plan refuses such a table without _sqlload_source_file or _sqlload_source_version.
+* **cursor:** an incremental load whose source has rows with a NULL cursor fails instead of skipping them, naming how many. Set null_cursor = "include" (merge) to read them on every run, list a column that is always set to coalesce with the cursor (cursor_column = ["updated_at", "created_at"]), or set null_cursor = "ignore" to keep skipping them. Under the default, each bounded read of a nullable cursor first counts NULL cursors: on BigQuery a query job, which needs bigquery.jobs.create and bills a scan of the cursor column; on Postgres a sequential scan when the column has no index.
+
+### Features
+
+* **cli:** plan and load print what matters for each table, and load streams events ([#253](https://github.com/sqlstack-io/sqlload/issues/253)) ([059a2cc](https://github.com/sqlstack-io/sqlload/commit/059a2ccdf3b28e5c5f893204d6fa39d159b15eaa))
+* **delete_insert:** replace rows by replace_key, and fail instead of skipping a changed or new file below the cursor ([a451adf](https://github.com/sqlstack-io/sqlload/commit/a451adf451eab6340a8fc4ff904bed97dc689990))
+
+
+### Bug Fixes
+
+* **cursor:** fail a load whose source has rows with a NULL cursor, which never loaded after the first run; add null_cursor and coalesced cursor columns ([a451adf](https://github.com/sqlstack-io/sqlload/commit/a451adf451eab6340a8fc4ff904bed97dc689990))
+* **merge:** match NULLs in a unique_key, so a row with a NULL key part no longer loads again on every run; null_keys = "fail" refuses NULL keys instead ([a451adf](https://github.com/sqlstack-io/sqlload/commit/a451adf451eab6340a8fc4ff904bed97dc689990))
+* **odbc:** preload libstdc++ for MySQL Connector/ODBC on Linux, and name the fix for a driver registered under //odbc/ ([#251](https://github.com/sqlstack-io/sqlload/issues/251)) ([64743fb](https://github.com/sqlstack-io/sqlload/commit/64743fb89672373dc6f2f9a610ed02d38a757718))
+* **reload:** take --start-cursor and --end-cursor, so a table with an integer batch_size can be reloaded ([a451adf](https://github.com/sqlstack-io/sqlload/commit/a451adf451eab6340a8fc4ff904bed97dc689990))
+* **website:** keep docs tables inside the content column, check layout in CI, and give the Kafka exporter its own section ([#257](https://github.com/sqlstack-io/sqlload/issues/257)) ([afa6de9](https://github.com/sqlstack-io/sqlload/commit/afa6de95117f3e9e848550ddc184f4d7464a4bbf))
+
+
+### Documentation
+
+* **motherduck:** describe the separate process as users see it ([#258](https://github.com/sqlstack-io/sqlload/issues/258)) ([85ff26a](https://github.com/sqlstack-io/sqlload/commit/85ff26abc768b0a25766cc3d1fd387efa76fca8f))
+* **orchestrators:** fix the per-table asset recipes when a table fails or the run can't start ([#256](https://github.com/sqlstack-io/sqlload/issues/256)) ([2570f8d](https://github.com/sqlstack-io/sqlload/commit/2570f8d334f234289ae76d88b100047419d1d850))
+* **orchestrators:** give each table its own Prefect or Dagster asset, from the final --json report ([#255](https://github.com/sqlstack-io/sqlload/issues/255)) ([4f92aa8](https://github.com/sqlstack-io/sqlload/commit/4f92aa8978e959b68419695c7b44e6adaaaa5639))
+
 ## [0.50.0](https://github.com/sqlstack-io/sqlload/compare/v0.49.0...v0.50.0) (2026-11-14)
 
 
