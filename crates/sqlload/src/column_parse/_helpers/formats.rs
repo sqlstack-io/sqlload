@@ -5,7 +5,7 @@ use chrono::format::{Fixed, Item, Numeric, StrftimeItems};
 use crate::column_parse::constants::{EPOCH_FORMATS, ISO_FORMAT, SHOWN_CHARS};
 use crate::column_parse::models::{ColumnParse, EpochUnit, ParseKind, TimeFormat};
 
-/// Why strftime `format` can't read values as written, if it can't: a directive it doesn't know, none at all (a typo for `"iso"` reads nothing), or `%f`, which reads nanoseconds here rather than Python's microseconds.
+/// Why strftime `format` can't read values as written, if it can't: a directive it doesn't know, none at all (a typo for `"iso"` reads nothing), `%s` (an instant, which `"epoch_s"` reads without the table's zone shifting it), or `%f`, which reads nanoseconds here rather than Python's microseconds.
 pub(crate) fn format_problem(format: &str) -> Option<String> {
     if StrftimeItems::new(format).any(|item| item == Item::Error) {
         return Some(format!(
@@ -16,6 +16,12 @@ pub(crate) fn format_problem(format: &str) -> Option<String> {
     if !StrftimeItems::new(format).any(directive) {
         return Some(format!(
             "format {format:?} has no directive; write \"iso\", an epoch format such as \"epoch_ms\", or a strftime format such as \"%d/%m/%Y\""
+        ));
+    }
+    let epoch = |item: Item<'_>| matches!(item, Item::Numeric(Numeric::Timestamp, _));
+    if StrftimeItems::new(format).any(epoch) {
+        return Some(format!(
+            "format {format:?} has %s, seconds since the epoch, which a time zone would shift; write \"epoch_s\""
         ));
     }
     let nanoseconds = |item: Item<'_>| matches!(item, Item::Numeric(Numeric::Nanosecond, _));

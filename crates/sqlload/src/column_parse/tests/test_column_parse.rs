@@ -107,6 +107,13 @@ fn given_a_columns_parse_as_written_when_reading_it_then_it_has_its_formats_or_a
             ),
         },
         ColumnParseTestCase {
+            description: "%s, an instant a time zone would shift",
+            setting: r#"{"timestamp": ["iso", "%s"], "tz": "Europe/Paris"}"#,
+            expected_outcome: Err(
+                "format \"%s\" has %s, seconds since the epoch, which a time zone would shift; write \"epoch_s\"",
+            ),
+        },
+        ColumnParseTestCase {
             description: "an unknown directive",
             setting: r#"{"date": "%d/%Q"}"#,
             expected_outcome: Err(

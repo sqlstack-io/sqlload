@@ -233,8 +233,8 @@ A format is one of these:
   `HH:MM:SS` or `HH:MM:SS.ffffff`, then optionally `Z` or an offset such as `+01:00`, `+0100` or
   `+01`. A date alone is midnight. Under `date`, `"iso"` reads `YYYY-MM-DD` only.
 - A strftime format, such as `"%m/%d/%Y %H:%M"`. A fraction of a second is `%.f`, as in
-  `"%H:%M:%S%.f"`. Python's `%f` is refused. A format with an offset uses `%z`, or `%#z` to take
-  `Z` too.
+  `"%H:%M:%S%.f"`. Python's `%f` is refused, and so is `%s`: write `"epoch_s"` for seconds since
+  the epoch. A format with an offset uses `%z`, or `%#z` to take `Z` too.
 - `"epoch_s"`, `"epoch_ms"` or `"epoch_us"`, in a `timestamp` list.
 
 A time without an offset is read in the column's `tz`, else in the table's or source's `timezone`,
