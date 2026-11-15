@@ -459,11 +459,42 @@ async fn discover_odbc(
     let reader = odbc_source_reader(project, source).map_err(|error| error.to_string())?;
     crate::odbc_source::main::read_catalog::read_catalog(
         &reader,
-        (&source.include, &source.exclude),
+        (&source.include, &source.exclude, &key_uses(project, source)),
         queries,
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
+#[cfg(feature = "odbc")]
+fn key_uses(project: &ProjectConfig, source: &SourceConfig) -> crate::odbc_source::models::KeyUses {
+    use crate::odbc_source::models::{KeyUse, KeyUses};
+    let sorts = source_target(project, source).map_or(true, |target| {
+        sql_adapter(target.warehouse).sorts_by_unique_key()
+    });
+    let key_use = |settings: &TableSettings| {
+        let strategy = settings.write_strategy.or(source.defaults.write_strategy);
+        let placeholder = settings
+            .unique_key
+            .as_ref()
+            .or(source.defaults.unique_key.as_ref())
+            .is_some_and(|key| key.iter().any(|column| column == PRIMARY_KEY_PLACEHOLDER));
+        match (strategy, placeholder) {
+            (Some(WriteStrategy::Merge), true) => KeyUse::Merged,
+            (None, _) | (Some(WriteStrategy::Merge), false) => KeyUse::Read,
+            _ if sorts => KeyUse::Read,
+            _ => KeyUse::Unused,
+        }
+    };
+    KeyUses {
+        source: key_use(&TableSettings::default()),
+        tables: source
+            .tables
+            .iter()
+            .map(|(name, table)| (name.clone(), key_use(&table.settings)))
+            .collect(),
+    }
 }
 
 #[cfg(not(feature = "odbc"))]

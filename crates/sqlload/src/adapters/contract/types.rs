@@ -74,6 +74,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         None
     }
 
+    /// Whether a created table is sorted by its `unique_key` when it sets no `order_by`: for a table that doesn't merge, the primary key its source reports.
+    fn sorts_by_unique_key(&self) -> bool {
+        false
+    }
+
     /// Whether SQLLoad never drops or recreates the warehouse's tables and never alters one it did not create: `replace` empties and refills the table in one transaction instead of swapping a new one in, `--reload` is refused, and an existing table without `_sqlload_load_id` is loaded as it is.
     fn keeps_tables(&self) -> bool {
         false

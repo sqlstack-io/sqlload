@@ -317,3 +317,127 @@ fn peak_kib(status: &str) -> u64 {
         .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
         .unwrap_or_default()
 }
+
+/// A project whose odbc source `erp` reads through `connection_string` with `source` (its `include`, settings and table entries) added, into DuckDB.
+pub(crate) fn catalog_project(
+    connection_string: &str,
+    source: &str,
+    database: &std::path::Path,
+) -> String {
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "{connection_string}"
+
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Tables of a generic ERP."
+{source}
+"#,
+        database = database.display(),
+    )
+}
+
+/// Run the `sqlload` executable on `config` with `args`, unixODBC tracing every call into a file beside it (through an `odbcinst.ini` there, named by `ODBCSYSINI`, holding the system's drivers): whether it succeeded, what it printed, and its catalog calls in order, as [`catalog_calls`] reads them.
+#[cfg(target_os = "linux")]
+pub(crate) fn run_traced(
+    config: &std::path::Path,
+    args: &[&str],
+) -> Result<(bool, String, Vec<String>), String> {
+    let folder = config.parent().ok_or("the config has no folder")?;
+    let trace = folder.join("trace.log");
+    let drivers =
+        std::fs::read_to_string("/etc/odbcinst.ini").map_err(|error| error.to_string())?;
+    std::fs::write(
+        folder.join("odbcinst.ini"),
+        format!(
+            "[ODBC]\nTrace=Yes\nTraceFile={}\n\n{drivers}",
+            trace.display()
+        ),
+    )
+    .map_err(|error| error.to_string())?;
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(config)
+        .arg("--no-color")
+        .args(args)
+        .env("ODBCSYSINI", folder)
+        .output()
+        .map_err(|error| error.to_string())?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let traced = std::fs::read_to_string(&trace).map_err(|error| format!("no trace: {error}"))?;
+    Ok((output.status.success(), text, catalog_calls(&traced)))
+}
+
+/// The catalog calls in a unixODBC trace, in order: `SQLTables(schema, table)` and `SQLPrimaryKeys(schema, table)` with their arguments (`NULL` for none), followed by ` refused` when the driver returned an error, and `INFORMATION_SCHEMA` for each run of SQLLoad's query of the keys it lists. Each call is a block from an `[ODBC]` line: one on entry, with its arguments, and one on exit.
+#[cfg(target_os = "linux")]
+fn catalog_calls(trace: &str) -> Vec<String> {
+    // unixODBC labels SQLPrimaryKeys' table argument `Table Type`.
+    let functions = [
+        ("SQLTables", "Table Name"),
+        ("SQLPrimaryKeys", "Table Type"),
+    ];
+    trace
+        .split("\n[ODBC]")
+        .flat_map(|block| {
+            let function = block
+                .split(".c]")
+                .next()
+                .and_then(|head| head.rsplit('[').next())
+                .unwrap_or_default();
+            functions
+                .iter()
+                .filter(move |(name, _)| *name == function)
+                .flat_map(move |(name, table)| {
+                    [
+                        block.contains("Entry:").then(|| {
+                            format!(
+                                "{name}({}, {})",
+                                trace_argument(block, "Schema Name"),
+                                trace_argument(block, table)
+                            )
+                        }),
+                        block
+                            .contains("Exit:[SQL_ERROR]")
+                            .then(|| " refused".to_owned()),
+                    ]
+                })
+                .flatten()
+                .chain(
+                    block
+                        .contains("SQL = [SELECT tc.CONSTRAINT_TYPE")
+                        .then(|| "INFORMATION_SCHEMA".to_owned()),
+                )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+        .replace("\n refused", " refused")
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The value a unixODBC trace block shows for argument `name` (`Schema Name = [erp][length = 3]`), `NULL` for none.
+#[cfg(target_os = "linux")]
+fn trace_argument(block: &str, name: &str) -> String {
+    block
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(&format!("{name} = [")))
+        .and_then(|value| value.split(']').next())
+        .unwrap_or_default()
+        .to_owned()
+}

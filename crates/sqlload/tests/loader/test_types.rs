@@ -1422,3 +1422,22 @@ pub(crate) struct ArchivedReloadTestCase {
     /// Every row as `id:score`, in order, after the reload.
     pub(crate) expected_rows: &'static str,
 }
+
+/// One `plan` of an ODBC source, its catalog calls traced.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcCatalogTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The driver name in the server's connection string and the one SQLLoad reads through instead; both empty to keep it.
+    pub(crate) driver: (&'static str, &'static str),
+    /// Statements creating the tables.
+    pub(crate) setup: &'static [&'static str],
+    /// The source's `include`, settings and table entries.
+    pub(crate) source: &'static str,
+    /// The `SQLTables` and `SQLPrimaryKeys` calls and `INFORMATION_SCHEMA` queries, in order.
+    pub(crate) expected_calls: &'static [&'static str],
+    /// Whether `plan` succeeds, and text its output shows.
+    pub(crate) expected_output: (bool, &'static [&'static str]),
+    /// Text it must not show.
+    pub(crate) absent: &'static [&'static str],
+}
