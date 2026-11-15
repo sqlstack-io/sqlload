@@ -105,6 +105,44 @@ fn given_a_tab_when_reading_its_rows_then_each_cell_loads_as_its_value_in_the_co
             expected_result: Err("Errors!A2 holds the error #N/A"),
         },
         SheetBatchTestCase {
+            description: "a formula's \"\" in a column pinned to float loads NULL, as a cell the answer leaves out does",
+            sheet: sheet(
+                "Months",
+                (0, 0),
+                vec![
+                    vec![text("month"), text("rate")],
+                    vec![text("Jan"), number(0.5, "0.5", "")],
+                    vec![text("Feb"), text("")],
+                    vec![text("Mar")],
+                ],
+            ),
+            rule: HeaderRule::default(),
+            columns: vec![("month", ColumnType::Text), ("rate", ColumnType::Float)],
+            expected_result: Ok("Jan|0.5;Feb|NULL;Mar|NULL"),
+        },
+        SheetBatchTestCase {
+            description: "_sqlload_source_row is each row's number in the sheet: a range starting at A3 starts at 3, and the skipped empty row leaves a gap",
+            sheet: sheet(
+                "Blocks",
+                (2, 0),
+                vec![
+                    vec![text("M1"), number(5.0, "5", "")],
+                    vec![blank(), number(6.0, "6", "")],
+                    vec![blank(), blank()],
+                    vec![text("M2"), number(7.0, "7", "")],
+                ],
+            ),
+            rule: HeaderRule {
+                header: false,
+                ..HeaderRule::default()
+            },
+            columns: vec![
+                ("column_1", ColumnType::Text),
+                ("_sqlload_source_row", ColumnType::Int),
+            ],
+            expected_result: Ok("M1|3;NULL|4;M2|6"),
+        },
+        SheetBatchTestCase {
             description: "a column renamed in the sheet since plan fails rather than loading NULLs",
             sheet: typed(),
             rule: HeaderRule::default(),

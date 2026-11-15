@@ -7,6 +7,7 @@ use crate::store_paths::models::StoreKind;
 /// Listed files, as (key, modified ms), and the order a merge applies them in.
 pub(crate) struct MergeOrderTestCase {
     pub(crate) description: &'static str,
+    pub(crate) order: crate::files_source::models::FilesOrder,
     pub(crate) files: &'static [(&'static str, i64)],
     pub(crate) expected_keys: &'static [&'static str],
 }

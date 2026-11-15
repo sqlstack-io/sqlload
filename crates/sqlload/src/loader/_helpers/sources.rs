@@ -35,7 +35,7 @@ use crate::files_source::main::select_files::select_files;
 use crate::files_source::main::shape_rows::shape_rows;
 use crate::files_source::models::{
     AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesEncoding, FilesRead,
-    FilesTable, LoadedFile, StoredRead, TextChecks,
+    FilesTable, LoadedFile, OnEmpty, StoredRead, TextChecks,
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -301,7 +301,8 @@ pub(crate) async fn source_tables(
                 {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(LoaderError::Files(FilesError::NoFiles { .. }))
-                        if source.after_load != AfterLoad::Keep =>
+                        if source.after_load != AfterLoad::Keep
+                            || source.on_empty == OnEmpty::Skip =>
                     {
                         Ok((Vec::new(), None, Vec::new()))
                     }
@@ -696,7 +697,27 @@ async fn sheets_tables(
         {
             column.column_type = Err(problem);
         }
+        if let Some(column) = read
+            .columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(SOURCE_ROW_COLUMN))
+        {
+            problems.push(format!(
+                "tab {:?}: column {} has the name of the column SQLLoad adds with each row's number in the sheet; rename it in the header",
+                grid.title, column.name
+            ));
+            continue;
+        }
         warnings.extend(read.warnings);
+        let row_column = SourceColumn {
+            name: SOURCE_ROW_COLUMN.to_owned(),
+            postgres_type: SHEET_COLUMN_KIND.to_owned(),
+            pg_type: PgType::Other,
+            column_type: Ok(ColumnType::Int),
+            nullable: false,
+            source_spelling: None,
+            repeat_of: None,
+        };
         tables.push(SourceTable {
             split_pages: None,
             schema: String::new(),
@@ -717,6 +738,7 @@ async fn sheets_tables(
                     source_spelling: None,
                     repeat_of: column.repeat_of,
                 })
+                .chain([row_column])
                 .collect(),
             primary_key: Vec::new(),
             indexed_columns: Vec::new(),
@@ -1345,10 +1367,13 @@ pub(crate) async fn plan_files(
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
     let ordered = select_files(&selection).map(|files| match &merged {
-        Some((_, recorded)) if request.options.reload => {
-            reload_order(files, &location, recorded, request.files.archive.as_ref())
-        }
-        Some(_) => merge_order(files),
+        Some((_, recorded)) if request.options.reload => reload_order(
+            files,
+            &location,
+            recorded,
+            (request.files.archive.as_ref(), spec.files_order),
+        ),
+        Some(_) => merge_order(files, spec.files_order),
         None => files,
     });
     Ok(ordered.map(|files| FilesRead {
@@ -1771,7 +1796,7 @@ pub(crate) async fn scoped_tables(
     Ok(Ok((resolved, files)))
 }
 
-/// A files source whose `after_load` emptied its folder, which a load leaves alone until new files come, as with `keep` every file in the folder is already loaded: its destination table, which [`found_sources`] checks exists before skipping it (when the selection in `options` takes it).
+/// A files source whose existing folder holds no files, as `after_load` leaves it (every file it read is already loaded, as with `keep`) or as `on_empty = "skip"` accepts, which a load leaves alone until new files come: its destination table, which [`found_sources`] checks exists before skipping it under `after_load` (when the selection in `options` takes it).
 fn drained_files(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
@@ -1838,7 +1863,12 @@ fn drained_files(
                 source_name: source_name.to_owned(),
                 source_table: source_name.to_owned(),
                 destination: shown,
-                reason: format!("no files to load in {path}{DRAINED_REASON}"),
+                reason: match (source.on_empty, &source.after_load) {
+                    (OnEmpty::Skip, AfterLoad::Keep) => {
+                        format!("no files to load in {path} (on_empty = \"skip\")")
+                    }
+                    _ => format!("no files to load in {path}{DRAINED_REASON}"),
+                },
             },
             problem: format!(
                 "[sources.{source_name}]: no files to load in {path}, and {} was never loaded: after_load skips an emptied folder only once its table exists; check the source's path and connection",

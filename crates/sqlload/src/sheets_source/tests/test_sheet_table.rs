@@ -228,6 +228,23 @@ fn given_a_tab_when_reading_it_as_a_table_then_columns_are_named_by_the_header_a
             expected_warnings: &[],
         },
         SheetTableTestCase {
+            description: "a formula's \"\" and a cell the answer leaves out are both empty, so a column of numbers with months not filled in yet stays numeric, whichever way the API returns them (not live-tested: the API returns either)",
+            sheet: sheet(
+                "Months",
+                (0, 0),
+                vec![
+                    vec![text("month"), text("rate")],
+                    vec![text("Jan"), number(0.5, "0.5", "")],
+                    vec![text("Feb"), text("")],
+                    vec![text("Mar")],
+                    vec![text("Apr"), blank()],
+                ],
+            ),
+            rule: header.clone(),
+            expected: Ok(("month:text,rate:float", 4)),
+            expected_warnings: &[],
+        },
+        SheetTableTestCase {
             description: "an empty tab has no header to name columns with",
             sheet: sheet("Empty", (0, 0), Vec::new()),
             rule: header.clone(),

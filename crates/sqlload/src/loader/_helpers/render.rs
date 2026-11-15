@@ -20,6 +20,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::batch_plan::main::cursor_rules::cursor_rules;
 use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
+use crate::files_source::models::FilesOrder;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::publish::send_line;
@@ -819,10 +820,14 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
         }
         (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(
-                "{}, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                "{}, one commit each, {}, each recorded in the run log",
                 match groups.len() {
                     1 => "1 file".to_owned(),
                     count => format!("{count} files"),
+                },
+                match spec.files_order {
+                    FilesOrder::Modified => "oldest modified first (ties by path)",
+                    FilesOrder::Path => "in path order",
                 }
             )
         }

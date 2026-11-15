@@ -144,6 +144,48 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["done/a.csv=id,v\\n1,a\\n"],
         },
         AfterLoadTestCase {
+            description: "without after_load an existing empty folder fails, naming on_empty",
+            settings: "write_strategy = \"append\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[("drop/.keep", "")],
+                expected_exit: 1,
+                expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination); where an empty folder is normal, set on_empty = \"skip\""],"rows":null,"skipped":[],"status":null}"#,
+            }],
+            expected_files: &[],
+        },
+        AfterLoadTestCase {
+            description: "on_empty = \"skip\" skips an existing empty folder with exit 0 before and after the table exists, and a missing folder still fails",
+            settings: "write_strategy = \"append\"\non_empty = \"skip\"\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/.keep", "")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in drop/ (on_empty = \"skip\")"],"status":null}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/a.csv", "id,v\n1,a\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &["drop"],
+                    args: &[],
+                    files: &[],
+                    expected_exit: 1,
+                    expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination); the folder cannot be read: No such file or directory (os error 2)"],"rows":null,"skipped":[],"status":null}"#,
+                },
+            ],
+            expected_files: &[],
+        },
+        AfterLoadTestCase {
             description: "an emptied source still protects its rows: a table sharing its destination cannot replace it, even when only that table is selected",
             settings: "write_strategy = \"append\"\nafter_load = \"delete\"\nconstant_columns = { feed = \"a\" }\n\n[sources.other]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"other/\"\nformat = \"csv\"\nwrite_strategy = \"replace\"\nconstant_columns = { feed = \"b\" }\n[sources.other.tables.other]\nname = \"scores\"\n",
             linked: &[],

@@ -2,7 +2,9 @@ use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
-use crate::files_source::models::{AfterLoad, Compression, RecordShape, SourceFormat};
+use crate::files_source::models::{
+    AfterLoad, Compression, FilesOrder, OnEmpty, RecordShape, SourceFormat,
+};
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
@@ -368,9 +370,11 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || source.unmatched_paths.is_some()
         || source.copy_to_internal_stage
         || source.after_load != AfterLoad::Keep
+        || source.order != FilesOrder::default()
+        || source.on_empty != OnEmpty::default()
     {
         problems.push(format!(
-            "{place} path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\""
+            "{place} path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\""
         ));
     }
     if source.format != SourceFormat::Parquet
