@@ -205,3 +205,115 @@ unique_key = "{{primary_key}}"
         database = database.display(),
     )
 }
+
+/// A project replacing each of `tables` (as the source's `include` names them) through `connection_string`, with `source_settings` added to the source, into DuckDB.
+pub(crate) fn memory_project(
+    (connection_string, source_settings): (&str, &str),
+    tables: &[&str],
+    database: &std::path::Path,
+) -> String {
+    let entries: String = tables
+        .iter()
+        .map(|table| {
+            format!("\n[sources.erp.tables.\"{table}\"]\ndescription = \"The {table} table.\"\n")
+        })
+        .collect();
+    format!(
+        r#"
+[connections.erp]
+kind = "odbc"
+connection_string = "{connection_string}"
+
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "odbc"
+connection = "erp"
+description = "Tables of a generic ERP."
+include = [{include}]
+write_strategy = "replace"
+{source_settings}
+{entries}"#,
+        include = tables
+            .iter()
+            .map(|table| format!("\"{table}\""))
+            .collect::<Vec<_>>()
+            .join(", "),
+        database = database.display(),
+    )
+}
+
+/// A query of DuckDB table `raw.{table}`: its columns in order, without SQLLoad's own, then each row's id, body length and start, and other values, `NULL` where null.
+pub(crate) fn typed_rows(table: &str) -> String {
+    format!(
+        "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = '{table}' AND NOT starts_with(column_name, '_sqlload')) || ' | ' || (SELECT string_agg(concat_ws(':', id::VARCHAR, coalesce(length(body)::VARCHAR, 'NULL'), coalesce(left(body, 3), 'NULL'), coalesce(title, 'NULL'), coalesce(price::VARCHAR, 'NULL'), coalesce(strftime(\"at\", '%Y-%m-%d %H:%M:%S.%g'), 'NULL'), coalesce(\"day\"::VARCHAR, 'NULL'), coalesce(n::VARCHAR, 'NULL')), ' ; ' ORDER BY id) FROM raw.{table})"
+    )
+}
+
+/// Run the `sqlload` executable on `config` with `args` and `RUST_LOG` set to `log`, its output uncoloured; whether it succeeded, what it printed, and its peak resident memory in KiB, read from `/proc` (VmHWM, the most it ever held) every few milliseconds until it exits.
+#[cfg(target_os = "linux")]
+pub(crate) fn run_measured(
+    config: &std::path::Path,
+    args: &[&str],
+    log: &str,
+) -> Result<(bool, String, u64), String> {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+        .arg("--config")
+        .arg(config)
+        .arg("--no-color")
+        .args(args)
+        .env("RUST_LOG", log)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let readers = [stdout_reader(stdout), stdout_reader(stderr)];
+    let status = format!("/proc/{}/status", child.id());
+    let mut peak: u64 = 0;
+    let exited = std::iter::repeat_with(|| {
+        peak = peak.max(peak_kib(&status));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        child.try_wait().transpose()
+    })
+    .find_map(|waited| waited)
+    .ok_or("the process was not waited for")?
+    .map_err(|error| error.to_string())?;
+    let text = readers
+        .into_iter()
+        .map(|reader| reader.join().unwrap_or_default())
+        .collect::<String>();
+    Ok((exited.success(), text, peak))
+}
+
+/// A thread reading all of `output` as text.
+#[cfg(target_os = "linux")]
+fn stdout_reader(
+    mut output: impl std::io::Read + Send + 'static,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        output
+            .read_to_string(&mut text)
+            .map(|_| text)
+            .unwrap_or_default()
+    })
+}
+
+/// The `VmHWM` line of a process's `/proc/<pid>/status`, in KiB; 0 once it is gone.
+#[cfg(target_os = "linux")]
+fn peak_kib(status: &str) -> u64 {
+    std::fs::read_to_string(status)
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| line.strip_prefix("VmHWM:"))
+        .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+        .unwrap_or_default()
+}

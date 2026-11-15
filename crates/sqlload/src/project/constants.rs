@@ -76,6 +76,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "stage",
     "max_text_size",
     "max_binary_size",
+    "long_column_threshold",
+    "max_batch_memory",
     "project",
     "spreadsheet_id",
     "ranges",

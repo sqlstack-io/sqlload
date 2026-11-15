@@ -106,6 +106,7 @@ pub(in crate::loader) async fn plan_files_table(
         commits,
         stage: None,
         planned_stage: None,
+        fetch_memory: None,
         output: Some(FilesOutput {
             path,
             encoding: destination.encoding.clone(),

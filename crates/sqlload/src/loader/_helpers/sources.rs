@@ -368,6 +368,9 @@ pub(crate) fn odbc_source_reader(
     let limits = crate::odbc_source::models::ValueLimits {
         max_text_size: source.max_text_size,
         max_binary_size: source.max_binary_size,
+        long_column_threshold: source
+            .long_column_threshold
+            .map(|size| usize::try_from(size.0).unwrap_or(usize::MAX)),
     };
     crate::odbc_source::main::odbc_reader::odbc_reader(
         (connection_string.as_ref(), dsn.as_deref()),
@@ -375,6 +378,61 @@ pub(crate) fn odbc_source_reader(
         limits,
     )
     .map_err(LoaderError::Invalid)
+}
+
+/// `planned`, each unblocked table of ODBC source `source` given how its rows are fetched on this machine: its budget, and in bulk or value by value (see [`plan_fetches`](plan_fetches)).
+#[cfg(feature = "odbc")]
+pub(crate) async fn with_fetch_memory(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+    mut planned: Vec<TablePlan>,
+    options: &PlanOptions,
+) -> Result<Vec<TablePlan>, LoaderError> {
+    let reader = odbc_source_reader(project, source)?;
+    let open: Vec<usize> = (0..planned.len())
+        .filter(|&index| planned[index].schema.blocked.is_none())
+        .collect();
+    let requests: Vec<crate::odbc_source::models::OdbcReadRequest<'_>> = open
+        .iter()
+        .map(|&index| crate::odbc_source::models::OdbcReadRequest {
+            table: &planned[index].spec.source_table,
+            sql: planned[index]
+                .spec
+                .warehouse_source
+                .as_ref()
+                .and_then(|source| source.sql.as_deref()),
+            columns: &planned[index].read_columns,
+            filter: None,
+            parameters: &[],
+            batch_rows: SOURCE_BATCH_ROWS,
+            memory_budget: 0,
+        })
+        .collect();
+    let set = source
+        .max_batch_memory
+        .map(|size| usize::try_from(size.0).unwrap_or(usize::MAX));
+    let fetches = crate::odbc_source::main::plan_fetches::plan_fetches(
+        &reader,
+        &requests,
+        (
+            set,
+            options
+                .concurrency
+                .or(project.concurrency)
+                .unwrap_or(crate::loader::constants::DEFAULT_THREADS),
+        ),
+    )
+    .await;
+    for (index, fetch) in open.into_iter().zip(fetches) {
+        planned[index].fetch_memory = Some(crate::loader::models::FetchMemory {
+            budget: fetch.budget,
+            estimate: fetch.estimate,
+            memory: fetch.memory,
+            budget_note: fetch.budget_note,
+            limit: fetch.limit,
+        });
+    }
+    Ok(planned)
 }
 
 #[cfg(feature = "odbc")]
@@ -1414,6 +1472,10 @@ async fn read_each(
                 filter: filter.as_deref(),
                 parameters,
                 batch_rows: SOURCE_BATCH_ROWS,
+                memory_budget: table.fetch_memory.as_ref().map_or(
+                    crate::odbc_source::constants::DEFAULT_BATCH_MEMORY,
+                    |fetch| fetch.budget,
+                ),
             };
             Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
         }

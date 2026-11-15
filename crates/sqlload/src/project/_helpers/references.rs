@@ -242,6 +242,16 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         ));
     }
     if source.kind != SourceKind::Odbc
+        && (source.long_column_threshold.is_some() || source.max_batch_memory.is_some())
+    {
+        problems.push(format!(
+            "{place} long_column_threshold and max_batch_memory are for kind = \"odbc\""
+        ));
+    }
+    if source.max_batch_memory.is_some_and(|size| size.0 == 0) {
+        problems.push(format!("{place} max_batch_memory must be more than 0"));
+    }
+    if source.kind != SourceKind::Odbc
         && sheet_settings(source).any(|settings| settings.cursor_bounds.is_some())
     {
         problems.push(format!(
