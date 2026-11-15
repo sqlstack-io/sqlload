@@ -41,6 +41,8 @@ pub(crate) struct FlattenBatchTestCase {
     pub(crate) keep: &'static [&'static str],
     /// Columns pinned as another type.
     pub(crate) pinned: &'static [(&'static str, &'static str)],
+    /// `exclude_columns` patterns.
+    pub(crate) excluded: &'static [&'static str],
     pub(crate) max_depth: u32,
     pub(crate) expected_batch: Result<&'static str, &'static str>,
 }

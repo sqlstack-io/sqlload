@@ -183,9 +183,10 @@ columns line_totals = "text": flatten replaces line_totals with its keys' column
 ```
 
 `plan` also fails on a listed path that a json pin, mask or name keeps whole, and on an
-`exclude_columns` or `allow_columns` pattern that matches an object but none of its columns. The
-load fails when a listed path holds a scalar or a list, or when a key's column is also a field of
-the rows or comes from another object.
+`exclude_columns` or `allow_columns` pattern that matches an object but none of its columns. Under
+`"all"`, where a Python table's objects only show as it loads, such an `exclude_columns` pattern
+fails the load instead. The load also fails when a listed path holds a scalar or a list, or when a
+key's column is also a field of the rows or comes from another object.
 
 Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
 NULL from then on, next to the new key columns.
@@ -240,7 +241,8 @@ columns' order. `load` prints the same `names` lines under each table, and its
 
 Settings may name a column either way (`unique_key = ["OrderID"]` or `["order_id"]`), and `plan`
 shows the loaded name, and so may `flatten` paths. `exclude_columns`, `allow_columns` and
-`skip_tables_with_columns` match the source's own names. A Python table's
+`skip_tables_with_columns` match the source's own names: a Python table's fields as yielded
+(`accessToken`, or `api_secret__key` once flattened), before naming changes them. A Python table's
 `ctx.cursor_column` is the cursor's loaded name (`updated_at` for a field yielded as `UpdatedAt`).
 The target schema keeps the name it is given.
 
@@ -325,7 +327,10 @@ Errors (1)
     └── reason  orders: column order_id holds "Order ID" from earlier loads, which the source no longer has, and "ORDER_ID" would now load into it; give "ORDER_ID" a name of its own with rename, or rename it to order_id if it is the same column under a new name
 ```
 
-`--reload` rebuilds the table and numbers it afresh.
+`--reload` rebuilds the table and numbers it afresh, and its record replaces the earlier ones.
+
+A Python table's fields are named as they arrive. A field that first shows in a later batch keeps
+clear of the names earlier batches gave, taking the next free number.
 
 ### compat
 

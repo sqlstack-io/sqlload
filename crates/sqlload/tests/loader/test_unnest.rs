@@ -425,7 +425,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             files_target: false,
             file: "{\"id\": 1, \"Customer\": {\"Email\": \"e\"}}\n",
             expected_ok: false,
-            expected_problem: "exclude_columns C?stomer names Customer, which flatten replaces with Customer__Email; name those columns instead, or keep Customer whole with columns = { Customer = \"json\" }",
+            expected_problem: "exclude_columns C?stomer names Customer, which flatten replaces with Customer__<key> columns the pattern doesn't match; name those columns instead, or keep Customer whole with columns = { Customer = \"json\" }",
         },
         UnnestPlanTestCase {
             description: "under \"all\", plan lists each object it flattens and warns once about an object whose keys are data",

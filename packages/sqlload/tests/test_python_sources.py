@@ -200,6 +200,32 @@ def test_given_two_yielded_fields_loading_as_one_name_when_loading_then_they_are
 	assert query(project, 'SELECT order_id, order_id_1 FROM "RAW"."shop__rows"') == [(2, 1)]
 
 
+def test_given_a_reload_whose_fields_need_no_numbers_when_loading_again_then_the_numbers_from_before_it_do_not_come_back(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
+	give(project, "rows", [{"OrderID": 1, "Order ID": 2}])
+	load(project)
+	give(project, "rows", [{"order_id": 7, "order_id_1": 8}])
+	load(project, "--reload", "--yes")
+	give(project, "rows", [{"order_id": 9, "order_id_1": 10}])
+	load(project)
+	assert query(project, 'SELECT order_id, order_id_1 FROM "RAW"."shop__rows" ORDER BY order_id') == [(7, 8), (9, 10)]
+
+
+def test_given_a_setting_naming_a_field_whose_name_another_field_loads_as_when_loading_then_it_applies_to_the_field_it_names(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', columns={'name': 'smallint'})(rows)\n")
+	give(project, "rows", [{"Name": "Ann", "name": 7}])
+	load(project)
+	assert query(project, 'SELECT name, name_1 FROM "RAW"."shop__rows"') == [("Ann", 7)]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'name_1'") == [("SMALLINT",)]
+
+
+def test_given_a_rename_map_and_a_pin_on_a_child_tables_key_of_the_same_name_when_loading_then_the_pin_applies_to_the_child_column(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', unnest=['items'], rename={'SKU': 'product_code'}, columns={'items.SKU': 'smallint'})(rows)\n")
+	give(project, "rows", [{"id": 1, "SKU": 9, "items": [{"SKU": 5}]}])
+	load(project)
+	assert query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows__items' AND column_name = 'sku'") == [("sku", "SMALLINT")]
+
+
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
 	give(project, "rows", [{"id": 1, "code": "x1", "meta": {"k": 1}}])
@@ -516,6 +542,23 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	assert len(email) == 64 and email != "a@example.com"
 	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows'")]
 	assert "secret_note" not in columns
+
+
+def test_given_exclude_columns_naming_a_yielded_field_as_spelt_when_loading_then_it_does_not_load(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', exclude_columns=['accessToken', '*Key'])(rows)\n")
+	give(project, "rows", [{"id": 1, "accessToken": "t0k3n", "apiKey": "k3y"}])
+	load(project)
+	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' AND NOT starts_with(column_name, '_')")]
+	assert columns == ["id"]
+
+
+def test_given_flatten_all_and_an_exclude_pattern_matching_an_object_but_not_its_columns_when_loading_then_it_fails_and_nothing_loads(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten='all', exclude_columns=['*_secret'])(rows)\n")
+	give(project, "rows", [{"id": 1, "api_secret": {"key": "s3cr3t"}}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "exclude_columns *_secret names api_secret, which flatten replaces with api_secret__<key> columns" in done.stdout, done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
 
 
 #: Times as a CSV file or a dict gives them, in Paris around the change to summer time on 29 March 2026, and the UTC instant each loads as;

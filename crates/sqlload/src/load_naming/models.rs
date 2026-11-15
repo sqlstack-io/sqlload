@@ -74,6 +74,10 @@ pub struct NameRules {
     pub function: Option<String>,
     /// The columns the table already has, when it exists: a clash group whose name is one of them, which `kept` doesn't say which source column holds, can't be numbered without guessing.
     pub existing: Vec<String>,
+    /// The table's `exclude_columns` patterns, which leave out a field of a table whose fields arrive as it loads (a Python table's) by the name it arrives under, before naming changes it.
+    pub excluded: Vec<String>,
+    /// The patterns that keep such a field all the same: `allow_columns`, and the masked columns' names.
+    pub allowed: Vec<String>,
 }
 
 /// A column a rename function is given.

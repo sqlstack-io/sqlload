@@ -1,11 +1,15 @@
 use std::collections::BTreeMap;
 
 use crate::load_naming::main::loaded_columns::loaded_columns;
+use crate::load_naming::main::named_batch::named_batch;
 use crate::load_naming::main::numbered_header::numbered_header;
 use crate::load_naming::models::{
-    ColumnName, NameRules, Naming, NumberedName, OnDuplicateNames, RenameColumn,
+    ColumnName, NameMemo, NameRules, Naming, NumberedName, OnDuplicateNames, RenameColumn,
 };
-use crate::load_naming::tests::test_types::{LoadedColumnsTestCase, NumberedHeaderTestCase};
+use crate::load_naming::tests::helpers::{field_names, int_batch};
+use crate::load_naming::tests::test_types::{
+    LoadedColumnsTestCase, NamedBatchTestCase, NumberedHeaderTestCase,
+};
 
 const NO_KEPT: &[(&str, &str, usize)] = &[];
 const SNAKE: Naming = Naming::SnakeCase;
@@ -278,6 +282,7 @@ fn given_a_tables_columns_when_naming_them_then_naming_rename_and_numbering_appl
                 .iter()
                 .map(|name| (*name).to_owned())
                 .collect(),
+            ..NameRules::default()
         };
         let returned: BTreeMap<usize, String> = test_case
             .returned
@@ -336,6 +341,87 @@ fn given_a_header_row_when_reading_it_then_a_repeated_name_is_numbered_past_ever
         assert_eq!(
             read.join(","),
             test_case.expected_read,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_batches_bringing_new_fields_when_naming_them_then_each_field_keeps_the_name_it_first_loaded_as()
+ {
+    let test_cases = [
+        NamedBatchTestCase {
+            description: "fields meeting in one batch: numbering in source-name order",
+            batches: &[&["name", "Name"]],
+            excluded: &[],
+            expected_names: Ok(&["name_1,name"]),
+            expected_numbered: "name<Name,name_1<name",
+        },
+        NamedBatchTestCase {
+            description: "a later field meeting one an earlier batch named takes the next number, and the earlier keeps its name",
+            batches: &[&["name"], &["Name", "name"]],
+            excluded: &[],
+            expected_names: Ok(&["name", "name_1,name"]),
+            expected_numbered: "name_1<Name,name<name",
+        },
+        NamedBatchTestCase {
+            description: "fields that meet no other record no numbering",
+            batches: &[&["a"], &["B", "a"]],
+            excluded: &[],
+            expected_names: Ok(&["a", "b,a"]),
+            expected_numbered: "",
+        },
+        NamedBatchTestCase {
+            description: "exclude_columns leaves out a field by the name it arrives under, before naming changes it",
+            batches: &[&["accessToken", "id", "api_secret__key"]],
+            excluded: &["accessToken", "*secret*"],
+            expected_names: Ok(&["id"]),
+            expected_numbered: "",
+        },
+    ];
+    let rename = |_: &[RenameColumn]| Ok(BTreeMap::new());
+    for test_case in test_cases {
+        let rules = NameRules {
+            excluded: test_case
+                .excluded
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect(),
+            ..NameRules::default()
+        };
+        let mut memo = NameMemo::default();
+        let outcome: Result<Vec<String>, String> = test_case
+            .batches
+            .iter()
+            .map(|fields| {
+                let (named, next) = named_batch(
+                    int_batch(fields),
+                    std::mem::take(&mut memo),
+                    &rules,
+                    &rename,
+                );
+                memo = next;
+                named.map(|batch| field_names(&batch))
+            })
+            .collect();
+        assert_eq!(
+            outcome,
+            test_case
+                .expected_names
+                .map(|names| names.iter().map(|name| (*name).to_owned()).collect())
+                .map_err(str::to_owned),
+            "{}",
+            test_case.description
+        );
+        let numbered: Vec<String> = memo
+            .numbered
+            .iter()
+            .map(|name| format!("{}<{}", name.column, name.source))
+            .collect();
+        assert_eq!(
+            numbered.join(","),
+            test_case.expected_numbered,
             "{}",
             test_case.description
         );

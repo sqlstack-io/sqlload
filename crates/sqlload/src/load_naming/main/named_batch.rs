@@ -5,17 +5,23 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::{FieldRef, Schema};
 
+use crate::load_naming::_helpers::excluded::unexcluded;
+use crate::load_naming::_helpers::numbering::clashes;
 use crate::load_naming::main::loaded_columns::loaded_columns;
-use crate::load_naming::models::{ColumnName, NameMemo, NameRules};
+use crate::load_naming::models::{ColumnName, NameMemo, NameRules, NumberedName};
 use crate::load_naming::types::RenameFunction;
 
-/// `batch` with each field under the name it loads as, through the name pipeline under `rules` over every field `memo` has seen so far in this load, in the order they first came; and `memo` with the names given, which later batches keep: a field that would now load under another name (a rename function answering differently) is an error, and numbering keeps the numbers it gave.
+/// `batch` without the fields `rules.excluded` matches by the names they arrive under (unless `rules.allowed` does too), and with each other field under the name it loads as, through the name pipeline under `rules` over every field `memo` has seen so far in this load, in the order they first came; and `memo` with the names given, which later batches keep: a field that would now load under another name (a rename function answering differently) is an error, and numbering keeps the numbers it gave.
 pub fn named_batch(
     batch: RecordBatch,
     memo: NameMemo,
     rules: &NameRules,
     rename: RenameFunction<'_>,
 ) -> (Result<RecordBatch, String>, NameMemo) {
+    let batch = match unexcluded(batch, rules) {
+        Ok(batch) => batch,
+        Err(problem) => return (Err(problem), memo),
+    };
     let new: Vec<String> = batch
         .schema()
         .fields()
@@ -32,7 +38,7 @@ pub fn named_batch(
     }
 }
 
-/// `memo` with the fields `new` added and every field seen named again through the pipeline; an error when a field already named would now load under another name.
+/// `memo` with the fields `new` added and every field seen named again through the pipeline, each field named before keeping its name as numbering keeps an earlier load's (so a new field meeting it takes the next number); an error when a field already named would now load under another name.
 fn remembered(
     memo: &NameMemo,
     new: Vec<String>,
@@ -51,10 +57,15 @@ fn remembered(
             read_as: name.clone(),
         })
         .collect();
-    let mut kept = rules.kept.clone();
-    kept.extend(memo.numbered.iter().cloned());
+    let mut earlier = rules.kept.clone();
+    earlier.extend(memo.numbered.iter().cloned());
+    let given = memo.loaded.iter().map(|(source, loaded)| NumberedName {
+        column: loaded.clone(),
+        source: source.clone(),
+        repeat: 0,
+    });
     let rules = NameRules {
-        kept,
+        kept: earlier.iter().cloned().chain(given).collect(),
         ..rules.clone()
     };
     let names = loaded_columns(&columns, &rules, rename).map_err(|problems| problems.join("; "))?;
@@ -70,8 +81,12 @@ fn remembered(
         memo.loaded
             .insert(column.source.clone(), column.loaded.clone());
     }
+    memo.numbered = names
+        .numbered
+        .into_iter()
+        .filter(|name| earlier.contains(name) || clashes(name, &names.columns))
+        .collect();
     memo.columns = names.columns;
-    memo.numbered = names.numbered;
     Ok(memo)
 }
 

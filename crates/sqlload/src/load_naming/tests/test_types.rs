@@ -32,3 +32,15 @@ pub(crate) struct NumberedHeaderTestCase {
     /// Each read name, with `<` and the header it repeats when it is a repeat, joined by `,`.
     pub(crate) expected_read: &'static str,
 }
+
+pub(crate) struct NamedBatchTestCase {
+    pub(crate) description: &'static str,
+    /// Each batch's field names, in the order the batches arrive.
+    pub(crate) batches: &'static [&'static [&'static str]],
+    /// The table's `exclude_columns` patterns.
+    pub(crate) excluded: &'static [&'static str],
+    /// Each batch's fields as they load, joined by `,`; or the first problem.
+    pub(crate) expected_names: Result<&'static [&'static str], &'static str>,
+    /// The names numbering gave once every batch arrived, as `column<source`, joined by `,`.
+    pub(crate) expected_numbered: &'static str,
+}

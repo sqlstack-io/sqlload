@@ -1651,24 +1651,18 @@ pub(crate) fn referenced_columns(
         .collect()
 }
 
-/// Problems with `exclude_columns` and `allow_columns` patterns matching an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them) but none of its sampled `columns`, so they would silently stop applying (a setting naming the object itself keeps it whole; see [`table_flatten`]).
+/// Problems with `allow_columns` patterns matching an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them) but none of its sampled `columns`, so they would silently stop applying (a setting naming the object itself keeps it whole; see [`table_flatten`]); flattening refuses such an `exclude_columns` pattern itself.
 pub(crate) fn flattened_object_problems(
     (source, overrides): (&SourceConfig, Option<&TableOverride>),
     (columns, objects): (&[FileColumn], &[String]),
 ) -> Result<Vec<String>, String> {
     let sampled: BTreeSet<&str> = columns.iter().map(|column| column.name.as_str()).collect();
     let own = |pick: fn(&TableOverride) -> &Vec<String>| overrides.map(pick).into_iter().flatten();
-    let patterns = own(|table| &table.exclude_columns)
-        .chain(&source.exclude_columns)
-        .map(|pattern| ("exclude_columns", pattern))
-        .chain(
-            own(|table| &table.allow_columns)
-                .chain(&source.allow_columns)
-                .map(|pattern| ("allow_columns", pattern)),
-        )
-        .filter(|(_, pattern)| pattern.contains(['*', '?', '[', '{']));
+    let patterns = own(|table| &table.allow_columns)
+        .chain(&source.allow_columns)
+        .filter(|pattern| pattern.contains(['*', '?', '[', '{']));
     let mut problems: Vec<String> = Vec::new();
-    for (setting, pattern) in patterns {
+    for pattern in patterns {
         let matcher = Glob::new(pattern)
             .map_err(|error| format!("invalid column pattern {pattern:?}: {error}"))?
             .compile_matcher();
@@ -1686,7 +1680,7 @@ pub(crate) fn flattened_object_problems(
                 continue;
             }
             problems.push(format!(
-                "{setting} {pattern} names {object}, which flatten replaces with {}; name those columns instead, or keep {object} whole with columns = {{ {object} = \"json\" }}",
+                "allow_columns {pattern} names {object}, which flatten replaces with {}; name those columns instead, or keep {object} whole with columns = {{ {object} = \"json\" }}",
                 keys.join(", ")
             ));
         }

@@ -315,3 +315,12 @@ pub(crate) fn shown(column: &LoadedColumn, loaded: &[LoadedColumn]) -> String {
         false => format!("{:?}", column.source),
     }
 }
+
+/// Whether another column of `columns` loads as `name`'s column or as it numbered (`x` beside `x_1`), so `name` belongs to a numbered group rather than only holding the name an earlier batch gave its field.
+pub(crate) fn clashes(name: &NumberedName, columns: &[LoadedColumn]) -> bool {
+    columns.iter().any(|column| {
+        column.source != name.source
+            && (numbered_from(&column.loaded, &name.column)
+                || numbered_from(&name.column, &column.loaded))
+    })
+}

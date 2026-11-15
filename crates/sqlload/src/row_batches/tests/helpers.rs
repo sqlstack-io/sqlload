@@ -178,14 +178,24 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
         Ok(())
     })?;
     let batch = batches.first().ok_or("no rows")?;
-    let rule = flatten_rule(
-        (test_case.flatten)(),
-        (test_case.keep, test_case.pinned),
-        (
-            test_case.max_depth,
-            crate::load_naming::models::Naming::SnakeCase,
-        ),
-    );
+    let rule = crate::row_batches::models::Flatten {
+        excluded: crate::row_batches::models::ExcludePatterns::new(
+            test_case
+                .excluded
+                .iter()
+                .map(|pattern| (*pattern).to_owned())
+                .collect(),
+        )
+        .map_err(|error| error.to_string())?,
+        ..flatten_rule(
+            (test_case.flatten)(),
+            (test_case.keep, test_case.pinned),
+            (
+                test_case.max_depth,
+                crate::load_naming::models::Naming::SnakeCase,
+            ),
+        )
+    };
     flatten_batch(batch, &rule).map(|batch| render(&batch))
 }
 
@@ -204,6 +214,7 @@ pub(crate) fn flatten_rule(
             .collect(),
         max_depth,
         naming,
+        excluded: crate::row_batches::models::ExcludePatterns::default(),
     }
 }
 

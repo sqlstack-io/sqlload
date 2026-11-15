@@ -262,6 +262,17 @@ fn resolve_table(
         .unwrap_or_default(),
         kept: known.numbered.clone(),
         existing: known.existing.clone(),
+        excluded: [&context.source.exclude_columns, &overrides.exclude_columns]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect(),
+        allowed: [&context.source.allow_columns, &overrides.allow_columns]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .chain(overrides.mask.keys().map(|name| globset::escape(name)))
+            .collect(),
         function: match layered(&overrides.settings.rename, &context.source.defaults.rename) {
             Some((RenameSetting::Function(function), _))
                 if context.source.kind != SourceKind::Python =>
@@ -480,12 +491,15 @@ fn renamed_table(table: &SourceTable, names: &LoadedNames) -> SourceTable {
     loaded
 }
 
-/// The column a setting's `key` names, as it loads: the column whose source name it is (the first, for a repeated header), else one loading under it, else `key` as `rules` would name a column of that name (a Python table's columns are known only at load); a dotted path (a nested field's), part by part.
+/// The column a setting's `key` names, as it loads: on a Python table's re-plan, the loaded name of the field it names; else the column whose source name it is (the first, for a repeated header), else one loading under it, else `key` as `rules` would name a column of that name (a Python table's columns are known only at load). A dotted path (a nested field's) is named part by part: its first part as the table's column, the parts below it under `naming` alone, as a child table or a flattened object names its keys.
 fn setting_name(
     key: &str,
     (names, known): (&LoadedNames, &KnownNames),
     rules: &NameRules,
 ) -> String {
+    if let Some(loaded) = known.named.as_ref().and_then(|named| named.get(key)) {
+        return loaded.clone();
+    }
     let column = names
         .columns
         .iter()
@@ -497,13 +511,12 @@ fn setting_name(
     if names.columns.iter().any(|column| column.loaded == key) {
         return key.to_owned();
     }
-    if let Some(loaded) = known.named.as_ref().and_then(|named| named.get(key)) {
-        return loaded.clone();
-    }
-    if key.contains('.') {
-        return key
+    if let Some((first, below)) = key.split_once('.') {
+        let below = below
             .split('.')
-            .map(|part| setting_name(part, (names, known), rules))
+            .map(|part| loaded_name(rules.naming, part, rules.max_length));
+        return std::iter::once(setting_name(first, (names, known), rules))
+            .chain(below)
             .collect::<Vec<_>>()
             .join(".");
     }

@@ -334,6 +334,45 @@ pub struct Flatten {
     pub max_depth: u32,
     /// How the table names its columns: under snake_case, a path or name matches a key as written or as both load (`LineTotals` is `line_totals`); under `source`, only as written.
     pub naming: Naming,
+    /// The table's `exclude_columns` patterns: one matching an object flattening would replace, but not its `<object>__<key>` columns, fails rather than let those columns load.
+    pub excluded: ExcludePatterns,
+}
+
+/// A table's `exclude_columns` patterns, matched as one set.
+#[derive(Debug, Clone, Default)]
+pub struct ExcludePatterns {
+    patterns: Vec<String>,
+    set: globset::GlobSet,
+}
+
+impl PartialEq for ExcludePatterns {
+    fn eq(&self, other: &Self) -> bool {
+        self.patterns == other.patterns
+    }
+}
+
+impl Eq for ExcludePatterns {}
+
+impl ExcludePatterns {
+    /// `patterns` as one set, or why one isn't a glob.
+    pub fn new(patterns: Vec<String>) -> Result<Self, globset::Error> {
+        let mut builder = globset::GlobSetBuilder::new();
+        for pattern in &patterns {
+            builder.add(globset::Glob::new(pattern)?);
+        }
+        let set = builder.build()?;
+        Ok(Self { patterns, set })
+    }
+
+    /// The first pattern matching object `name` but not the `<name>__<key>` columns flattening replaces it with.
+    pub fn bypassed(&self, name: &str) -> Option<&str> {
+        let below = self.set.matches(format!("{name}{FLATTEN_SEPARATOR}"));
+        self.set
+            .matches(name)
+            .into_iter()
+            .find(|index| !below.contains(index))
+            .map(|index| self.patterns[index].as_str())
+    }
 }
 
 impl Flatten {
@@ -342,7 +381,7 @@ impl Flatten {
         self.objects == FlattenObjects::None
     }
 
-    /// Whether the object at `path` (keys from the row down, as the data spells them) flattens: listed, or any under `"all"`, no deeper than `max_depth`, and not kept whole; an error when a pin of another type than `json` names it.
+    /// Whether the object at `path` (keys from the row down, as the data spells them) flattens: listed, or any under `"all"`, no deeper than `max_depth`, and not kept whole; an error when a pin of another type than `json` names it, or an `exclude_columns` pattern matches it but not its columns.
     pub fn flattens(&self, path: &[&str]) -> Result<bool, String> {
         let chosen = match &self.objects {
             FlattenObjects::None => false,
@@ -353,6 +392,11 @@ impl Flatten {
             return Ok(false);
         }
         let name = path.join(FLATTEN_SEPARATOR);
+        if let Some(pattern) = self.excluded.bypassed(&name) {
+            return Err(format!(
+                "exclude_columns {pattern} names {name}, which flatten replaces with {name}__<key> columns the pattern doesn't match; name those columns instead, or keep {name} whole with columns = {{ {name} = \"json\" }}"
+            ));
+        }
         match self
             .pinned
             .iter()
