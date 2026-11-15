@@ -3,10 +3,12 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime};
 
 use crate::adapters::contract::constants::{CURSOR_TIMESTAMP_FORMAT, NAIVE_TIMESTAMP_FORMATS};
+use crate::column_parse::main::local_instant::local_instant;
 use crate::column_types::models::ColumnType;
+use chrono_tz::Tz;
 
-/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00`, wall-clock times without an offset; for a timestamp or date cursor, an ODBC `{ts '...'}` or `{d '...'}` literal, as a query against an ODBC source writes it, reads as the value inside (any other cursor keeps it as given).
-pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, String> {
+/// `text` as the cursor literal every system reads alike: zoned instants in UTC with `+00` (text without an offset on a `timestamp_tz` cursor read in `zone`, the table's `timezone` or UTC), wall-clock times without an offset; for a timestamp or date cursor, an ODBC `{ts '...'}` or `{d '...'}` literal, as a query against an ODBC source writes it, reads as the value inside (any other cursor keeps it as given).
+pub fn cursor_text(text: &str, column_type: &ColumnType, zone: Tz) -> Result<String, String> {
     let text = match column_type {
         ColumnType::TimestampTz | ColumnType::TimestampNtz | ColumnType::Date => {
             odbc_value(text).unwrap_or(text)
@@ -30,9 +32,13 @@ pub fn cursor_text(text: &str, column_type: &ColumnType) -> Result<String, Strin
             "{}+00",
             time.naive_utc().format(CURSOR_TIMESTAMP_FORMAT)
         )),
-        (ColumnType::TimestampTz, Err(_), Some(time)) => {
-            Ok(format!("{}+00", time.format(CURSOR_TIMESTAMP_FORMAT)))
-        }
+        (ColumnType::TimestampTz, Err(_), Some(time)) => Ok(format!(
+            "{}+00",
+            local_instant(time, zone)
+                .map_err(|reason| format!("{text:?} is {reason}"))?
+                .naive_utc()
+                .format(CURSOR_TIMESTAMP_FORMAT)
+        )),
         (ColumnType::TimestampNtz, Ok(time), _) if time.offset().local_minus_utc() != 0 => {
             Err(format!(
                 "{text:?} has a UTC offset, but the cursor is a timestamp without a time zone; give the wall-clock time without an offset"

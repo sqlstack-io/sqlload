@@ -13,9 +13,11 @@ use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::main::session::table_names::table_names;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::batch_plan::main::outside_text::outside_text;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::main::window_rows::window_rows;
 use crate::batch_plan::models::CursorWindow;
+use crate::batch_plan::models::{OutsideRows, WindowRows};
 use crate::cdc::constants::DELETE_OP;
 use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
@@ -46,6 +48,7 @@ use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::constants::NO_STATE;
 use crate::loader::constants::PYTHON_COLUMN_TYPE;
+use crate::loader::constants::SHOWN_OUTSIDE_WINDOWS;
 use crate::loader::constants::UNKNOWN_CURSOR_TYPE;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_plan_files::plan_files_table;
@@ -72,6 +75,7 @@ use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::CheckName;
 use crate::project::models::Contract;
 use crate::project::models::NullCursor;
+use crate::project::models::OnCursorOutOfRange;
 use crate::project::models::OnSchemaChange;
 use crate::project::models::ProjectConfig;
 use crate::project::models::SourceConfig;
@@ -569,7 +573,7 @@ pub(crate) fn batch_cursor_max(
     }
     let formatter = ArrayFormatter::try_new(values.as_ref(), &FormatOptions::default())
         .map_err(|error| error.to_string())?;
-    cursor_text(&formatter.value(index).to_string(), column_type).map(Some)
+    cursor_text(&formatter.value(index).to_string(), column_type, Tz::UTC).map(Some)
 }
 
 /// The portable type of a column the crossing produced.
@@ -649,33 +653,40 @@ pub(crate) async fn final_state(
         .map_err(LoaderError::Invalid)
 }
 
-/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given, with those whose cursor is NULL under `null_cursor = "include"`; returns the batch, the rows left outside, and how many of those had a NULL cursor.
+/// One yielded batch as the plan reads it: in the schema merged so far (`merged`, all-NULL columns as text), each read column converted to its planned type (excluded columns dropped), and only the rows inside `window` when it is given (and those outside it under `on_cursor_out_of_range = "warn"`), with those whose cursor is NULL under `null_cursor = "include"`; returns the batch, how many rows had a NULL cursor, and `seen`, the rows outside the window so far, with this batch's (numbered after `rows_before`).
 pub(crate) fn typed_batch(
     batch: &RecordBatch,
     table: &TablePlan,
-    merged: &SchemaRef,
-    window: Option<&ReadWindow>,
-) -> Result<(RecordBatch, usize, usize), LoaderError> {
+    (merged, window): (&SchemaRef, Option<&ReadWindow>),
+    (rows_before, seen): (u64, OutsideRows),
+) -> Result<WindowRows, LoaderError> {
     let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
     let typed = read_types(&conformed, &read_schema(table))?;
-    let cursor_type = window.and_then(|window| {
-        table
-            .read_columns
-            .iter()
-            .find(|column| column.name.eq_ignore_ascii_case(&window.column))
-            .map(|column| column.output.clone())
-    });
-    let include = table
-        .spec
-        .cursor
-        .as_ref()
-        .is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
-    let (kept, nulls) = match (window, &cursor_type) {
-        (Some(window), Some(cursor_type)) => window_rows(&typed, window, (cursor_type, include))?,
-        _ => (typed, 0),
-    };
-    let outside = batch.num_rows() - kept.num_rows();
-    Ok((kept, outside, nulls))
+    let cursor = table.spec.cursor.as_ref();
+    let include = cursor.is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
+    let warns = cursor.is_some_and(|cursor| cursor.out_of_range == OnCursorOutOfRange::Warn);
+    match window.and_then(|window| Some((window, cursor_type_of(table, &window.column)?))) {
+        Some((window, cursor_type)) => window_rows(
+            &typed,
+            window,
+            (&cursor_type, include, warns),
+            (table.spec.zone(), rows_before, seen),
+        ),
+        None => Ok(WindowRows {
+            kept: typed,
+            nulls: 0,
+            outside: seen,
+        }),
+    }
+}
+
+/// The planned type of `table`'s read column `column`.
+fn cursor_type_of(table: &TablePlan, column: &str) -> Option<ColumnType> {
+    table
+        .read_columns
+        .iter()
+        .find(|read| read.name.eq_ignore_ascii_case(column))
+        .map(|read| read.output.clone())
 }
 
 /// The batches' target schema: each read column in its planned type.
@@ -740,6 +751,7 @@ impl PythonFeed {
         let calls = windows.map_or(1, |windows| windows.count);
         let table = load.table.spec.source_table.name.clone();
         for index in 0..calls {
+            let start = self.rows;
             let window: Option<CursorWindow> = windows
                 .map(|windows| window_at(windows, index))
                 .transpose()
@@ -758,6 +770,11 @@ impl PythonFeed {
                     &load.table.spec,
                     self.null_cursors,
                 )));
+            }
+            let read = window.as_ref().map(|window| self.read_window(window));
+            if let Some(read) = read.or_else(|| self.table.window.clone()) {
+                let outside = std::mem::take(&mut self.outside);
+                self.out_of_window(outside, (&read, start))?;
             }
             if load.table.logged.is_some()
                 && let Some(state) = final_state(load.host.clone(), table.clone()).await?
@@ -778,12 +795,17 @@ impl PythonFeed {
                     .await?;
             }
         }
-        if self.outside > 0 {
-            tracing::warn!(
-                table = %load.table.spec.destination.table,
-                rows = self.outside,
-                "skipped rows outside the cursor window; use ctx.cursor_value to read only new data"
-            );
+        let (rows, windows) = self.unshown;
+        if windows > 0 {
+            let rows = match rows {
+                1 => "1 more row".to_owned(),
+                rows => format!("{} more rows", thousands(rows)),
+            };
+            let windows = match windows {
+                1 => "1 later window".to_owned(),
+                windows => format!("{} later windows", thousands(windows)),
+            };
+            self.warnings.push(format!("{rows} outside {windows}"));
         }
         let declared = load
             .table
@@ -810,6 +832,7 @@ impl PythonFeed {
                 replaced_keys: None,
                 transforms: Vec::new(),
                 names: Vec::new(),
+                warnings: std::mem::take(&mut self.warnings),
             });
         }
         let unsettled = self.publisher.is_none()
@@ -836,6 +859,7 @@ impl PythonFeed {
             replaced_keys,
             transforms: Vec::new(),
             names: name_lines(&self.names.columns),
+            warnings: std::mem::take(&mut self.warnings),
         })
     }
 
@@ -951,8 +975,16 @@ impl PythonFeed {
             Some(window) => Some(self.read_window(window)),
             None => self.table.window.clone(),
         };
-        let (typed, outside, nulls) = typed_batch(&batch, &self.table, &schema, read.as_ref())?;
-        self.outside += outside as u64;
+        let seen = std::mem::take(&mut self.outside);
+        let before = self.rows - batch.num_rows() as u64;
+        let rows = typed_batch(
+            &batch,
+            &self.table,
+            (&schema, read.as_ref()),
+            (before, seen),
+        )?;
+        let (typed, nulls) = (rows.kept, rows.nulls);
+        self.outside = rows.outside;
         self.null_cursors += nulls as u64;
         let sized = self.table.commits == CommitRule::Size && self.table.logged.is_none();
         let publisher = self.publisher(load).await?;
@@ -1040,6 +1072,37 @@ impl PythonFeed {
         self.publisher
             .as_mut()
             .ok_or_else(|| LoaderError::Invalid("the table's load could not start".to_owned()))
+    }
+
+    /// Fail the table, or keep a warning, for `outside`, the rows the function returned outside `read` (numbered from the window's first row, after `start`), as `on_cursor_out_of_range` says; a few windows' warnings show, and the rest are counted.
+    fn out_of_window(
+        &mut self,
+        outside: OutsideRows,
+        (read, start): (&ReadWindow, u64),
+    ) -> Result<(), LoaderError> {
+        let spec = &self.table.spec;
+        let rule = spec
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.out_of_range)
+            .unwrap_or_default();
+        let Some(cursor_type) = cursor_type_of(&self.table, &read.column) else {
+            return Ok(());
+        };
+        if outside.count() == 0 {
+            return Ok(());
+        }
+        let outside = OutsideRows {
+            first: outside.first.map(|(row, value)| (row - start, value)),
+            ..outside
+        };
+        let text = outside_text(&outside, read, (&cursor_type, spec.zone()), rule)?;
+        match rule {
+            OnCursorOutOfRange::Fail => return Err(LoaderError::Invalid(text)),
+            _ if self.warnings.len() < SHOWN_OUTSIDE_WINDOWS => self.warnings.push(text),
+            _ => self.unshown = (self.unshown.0 + outside.count(), self.unshown.1 + 1),
+        }
+        Ok(())
     }
 
     fn read_window(&self, window: &CursorWindow) -> ReadWindow {
@@ -1193,12 +1256,14 @@ fn table_read(
         .collect();
     let mut connections = load.project.connection_settings.clone();
     connections.retain(|name, _| !withheld.contains(name));
+    let timezone: Option<String> = spec.timezone.map(|(zone, _)| zone.name().to_owned());
     let cursor = table.window.as_ref().map(|planned| CursorRead {
         column: planned.column.clone(),
         column_type: cursor_type_name(&feed.table, &planned.column),
         start: window.map_or(planned.from.clone(), |window| window.from.clone()),
         end: window.map_or(planned.to.clone(), |window| window.to.clone()),
         inclusive: window.map_or(planned.inclusive, |window| window.inclusive),
+        timezone: timezone.clone(),
     });
     TableRead {
         source: spec.source_name.clone(),
@@ -1430,7 +1495,13 @@ impl ChildTables {
             }
             let ids = given_ids(&child.batch, parent.spec.compat)?;
             let schema: SchemaRef = Arc::new(settled_schema(&feed.merged));
-            let (typed, _, _) = typed_batch(&child.batch, &feed.table, &schema, None)?;
+            let typed = typed_batch(
+                &child.batch,
+                &feed.table,
+                (&schema, None),
+                (0, OutsideRows::default()),
+            )?
+            .kept;
             let publisher = match &mut feed.publisher {
                 Some(publisher) => publisher,
                 None => {

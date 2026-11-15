@@ -60,6 +60,8 @@ pub struct CursorRead {
     pub end: Option<String>,
     /// Whether `start` itself is included.
     pub inclusive: bool,
+    /// The table's `timezone` (an IANA name), which `ctx.cursor_value` and `ctx.cursor_end` arrive in; `None` is UTC.
+    pub timezone: Option<String>,
 }
 
 /// What a `transform` gets as `ctx`: the unit its rows came from, `"file"`, `"range"` or `"page"`. A file sets `path`, `modified_at` and, for its format, `sheet`, `range` and `skip_rows`; a Google Sheets range sets `spreadsheet_id`, `sheet` (the tab) and `range`; an `sl.http` page sets `page` and, in a fan-out, `key`.

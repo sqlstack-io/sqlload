@@ -1476,7 +1476,7 @@ async fn lower_bound(
     let cursor_start = match cursor
         .start
         .as_deref()
-        .map(|start| cursor_text(start, cursor_type))
+        .map(|start| cursor_text(start, cursor_type, request.spec.zone()))
     {
         Some(Ok(start)) => Some(start),
         Some(Err(problem)) => return Ok(Err(format!("cursor_start: {problem}"))),
@@ -1607,7 +1607,7 @@ pub(crate) async fn cursor_window(
     let flag = |value: &Option<String>| {
         value
             .as_deref()
-            .map(|text| cursor_text(text, cursor_type))
+            .map(|text| cursor_text(text, cursor_type, spec.zone()))
             .transpose()
     };
     let (start_flag, to) = match (flag(&options.start_cursor), flag(&options.end_cursor)) {
@@ -1748,6 +1748,7 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
                 .cursor_type
                 .filter(|known| spec.python.is_none() || **known != ColumnType::Text),
             now: chrono::Utc::now(),
+            zone: spec.zone(),
         })?;
         return Ok(CommitRule::Windows(windows));
     }

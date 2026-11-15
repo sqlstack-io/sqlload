@@ -10,6 +10,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "append_cursor_inclusive",
     "cursor_bounds",
     "null_cursor",
+    "on_cursor_out_of_range",
     "contract",
     "on_schema_change",
     "auto_widen",

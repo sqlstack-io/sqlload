@@ -268,6 +268,7 @@ pub(crate) fn event_lines(
             changes,
             transforms,
             names,
+            warnings,
             peak_memory_bytes,
         } => {
             let word = match rows {
@@ -291,6 +292,7 @@ pub(crate) fn event_lines(
                 names
                     .iter()
                     .map(|line| format!("\nnames  {line}"))
+                    .chain(warnings.iter().map(|line| format!("\n⚠ {line}")))
                     .collect::<String>()
                     + &transform_lines(transforms)
             );

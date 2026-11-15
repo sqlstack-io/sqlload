@@ -26,8 +26,9 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange,
-    OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnCursorOutOfRange, OnDuplicateKeys,
+    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks,
+    WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -76,6 +77,8 @@ pub struct CursorSpec {
     pub coalesce: Vec<String>,
     /// What an incremental read does with source rows whose cursor is NULL.
     pub null_cursor: NullCursor,
+    /// What a Python table's load does with the rows its function returns outside the window it was asked for.
+    pub out_of_range: OnCursorOutOfRange,
 }
 
 impl CursorSpec {
@@ -219,6 +222,13 @@ pub struct TableSpec {
     pub parses: BTreeMap<String, ColumnParse>,
     /// The zone of the times without an offset that a parse without its own `tz` reads, and whose setting it is; `None` reads them as UTC.
     pub timezone: Option<(chrono_tz::Tz, SettingOrigin)>,
+}
+
+impl TableSpec {
+    /// The zone the table's times without an offset are in: its `timezone`, else UTC.
+    pub fn zone(&self) -> chrono_tz::Tz {
+        self.timezone.map_or(chrono_tz::Tz::UTC, |(zone, _)| zone)
+    }
 }
 
 /// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.
@@ -826,6 +836,8 @@ pub struct TableLoaded {
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
     /// A line per column `rename` named or numbering numbered.
     pub names: Vec<String>,
+    /// What the load warns of: a Python table's rows outside the cursor window it skipped or loaded.
+    pub warnings: Vec<String>,
 }
 
 /// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
@@ -889,8 +901,12 @@ pub struct PythonFeed {
     /// The schema merged from every batch so far, all-NULL columns as `Null`.
     pub merged: arrow_schema::Schema,
     pub rows: u64,
-    /// Rows the function yielded outside the cursor window, which were skipped.
-    pub outside: u64,
+    /// The rows the function returned outside the current cursor window.
+    pub outside: crate::batch_plan::models::OutsideRows,
+    /// The load report's lines on rows outside windows (`on_cursor_out_of_range = "skip"` or `"warn"`), for the first few windows that had any.
+    pub warnings: Vec<String>,
+    /// The rows outside later windows, and how many windows, which no line shows.
+    pub unshown: (u64, u64),
     /// Of those, the rows whose cursor was NULL, which fail the table unless `null_cursor` says otherwise.
     pub null_cursors: u64,
     /// Opened once the table exists for the data.
@@ -1316,6 +1332,9 @@ pub struct TableResult {
     /// A line per column `rename` named or numbering numbered; left out when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+    /// What the load warns of, such as rows outside a cursor window; left out when there is nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_bytes: Option<u64>,

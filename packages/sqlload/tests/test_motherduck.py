@@ -221,7 +221,7 @@ def local(project: Path, sql: str) -> list[tuple[Any, ...]]:
 		),
 		("write_strategy='replace'", [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}], [{"id": 3, "v": "c"}], [(3, "c")]),
 		(
-			"write_strategy='delete_insert', cursor_column='day'",
+			"write_strategy='delete_insert', cursor_column='day', on_cursor_out_of_range='skip'",
 			[{"id": 1, "v": "a", "day": "2026-01-01T00:00:00Z"}, {"id": 2, "v": "b", "day": "2026-01-02T00:00:00Z"}],
 			[
 				{"id": 1, "v": "stale", "day": "2026-01-01T00:00:00Z"},
@@ -278,7 +278,7 @@ def test_given_every_portable_type_when_loaded_then_motherduck_holds_what_duckdb
 
 
 def test_given_an_incremental_table_when_loaded_again_and_rerun_then_only_new_rows_arrive(tmp_path: Path) -> None:
-	project = make_project(tmp_path, "cloud.table(description='Rows.', name='rows', write_strategy='append', cursor_column='at')(rows)\n")
+	project = make_project(tmp_path, "cloud.table(description='Rows.', name='rows', write_strategy='append', cursor_column='at', on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [{"id": 1, "at": "2026-01-01T10:00:00Z"}, {"id": 2, "at": "2026-01-02T10:00:00Z"}])
 	load(project)
 	give(project, "rows", [{"id": 2, "at": "2026-01-02T10:00:00Z"}, {"id": 3, "at": "2026-01-03T10:00:00Z", "note": "new column"}])

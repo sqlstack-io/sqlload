@@ -1441,7 +1441,11 @@ fn deletes_range(table: &TablePlan) -> bool {
 fn cut_value(values: &dyn Array, index: usize, cursor_type: &ColumnType) -> Result<String, String> {
     let formatter = ArrayFormatter::try_new(values, &FormatOptions::default())
         .map_err(|error| error.to_string())?;
-    cursor_text(&formatter.value(index).to_string(), cursor_type)
+    cursor_text(
+        &formatter.value(index).to_string(),
+        cursor_type,
+        chrono_tz::Tz::UTC,
+    )
 }
 
 /// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions (its `replace_key` kept).
@@ -1508,6 +1512,7 @@ pub(crate) async fn publish_table(
         replaced_keys: publisher.replaced.clone(),
         transforms,
         names: name_lines(&table.spec.names.columns),
+        warnings: Vec::new(),
     })
 }
 

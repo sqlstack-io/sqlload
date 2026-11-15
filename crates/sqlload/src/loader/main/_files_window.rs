@@ -53,7 +53,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
     let flag = |value: &Option<String>| {
         value
             .as_deref()
-            .map(|text| cursor_text(text, cursor_type))
+            .map(|text| cursor_text(text, cursor_type, spec.zone()))
             .transpose()
     };
     let (start, end) = (flag(&options.start_cursor)?, flag(&options.end_cursor)?);

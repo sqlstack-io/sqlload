@@ -17,6 +17,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
@@ -110,8 +111,8 @@ def start_table(request: str) -> Iterator[Any]:
 		connection=connection,
 		logger=logging.getLogger(f"sqlload.{read['source']}.{table.name}"),
 		cursor_column=cursor.get("column"),
-		cursor_value=_cursor_value(cursor.get("start"), cursor.get("column_type")),
-		cursor_end=_cursor_value(cursor.get("end"), cursor.get("column_type")),
+		cursor_value=_cursor_value(cursor.get("start"), cursor.get("column_type"), cursor.get("timezone")),
+		cursor_end=_cursor_value(cursor.get("end"), cursor.get("column_type"), cursor.get("timezone")),
 		cursor_inclusive=cursor.get("inclusive", True),
 		is_reload=read["is_reload"],
 		client_factory=_shared_client(source) if source is not None and source.client_factory else None,
@@ -314,8 +315,9 @@ def _shared_client(source: Source) -> Any:
 	return build
 
 
-def _cursor_value(text: str | None, column_type: str | None) -> Any:
-	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime (aware for `timestamp_tz`).
+def _cursor_value(text: str | None, column_type: str | None, zone: str | None = None) -> Any:
+	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime: aware for `timestamp_tz`, in the
+	table's `timezone` (`zone`) or UTC; for `timestamp_ntz`, aware in `zone` when it is set, its wall-clock time kept.
 
 	Before the first load shows the cursor's type (`unknown`), ISO dates and timestamps and integers
 	are read as such, so the value's type matches later runs.
@@ -327,7 +329,7 @@ def _cursor_value(text: str | None, column_type: str | None) -> Any:
 		kind = "decimal"
 	try:
 		if kind == "unknown":
-			return _guessed_value(text)
+			return _zoned(_guessed_value(text), zone)
 		if kind in ("int", "smallint"):
 			return int(text)
 		if kind == "float":
@@ -337,7 +339,7 @@ def _cursor_value(text: str | None, column_type: str | None) -> Any:
 		if kind == "date":
 			return date.fromisoformat(text[:10])
 		if kind in ("timestamp_tz", "timestamp_ntz"):
-			return _timestamp(text, aware=kind == "timestamp_tz")
+			return _zoned(_timestamp(text, aware=kind == "timestamp_tz"), zone)
 	except (ValueError, ArithmeticError):
 		return text
 	return text
@@ -356,6 +358,15 @@ def _offset_text(text: str) -> str:
 	"""`text` with a `Z` or `+00` offset written as `+00:00`, which `fromisoformat` reads on Python 3.10."""
 	normal = text.replace("Z", "+00:00")
 	return normal + ":00" if normal.endswith("+00") else normal
+
+
+def _zoned(value: Any, zone: str | None) -> Any:
+	"""`value` in the IANA zone `zone` when it is a datetime and `zone` is set: an aware one converted, a naive one (a
+	wall-clock time declared to be in that zone) given it; anything else as it is."""
+	if zone is None or not isinstance(value, datetime):
+		return value
+	where = ZoneInfo(zone)
+	return value.astimezone(where) if value.tzinfo is not None else value.replace(tzinfo=where)
 
 
 def _timestamp(text: str, *, aware: bool) -> datetime:

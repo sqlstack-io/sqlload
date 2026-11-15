@@ -14,6 +14,7 @@ use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::{CursorWindow, WindowSplit};
 use crate::batch_plan::tests::test_types::{
     BoundArrayTestCase, FileGroupsTestCase, PartitionFiles, SplitWindowsTestCase,
+    WindowRowsTestCase,
 };
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::models::StoredFile;
@@ -35,6 +36,7 @@ pub(crate) fn windows(test_case: &SplitWindowsTestCase) -> Result<Vec<String>, S
         step: test_case.step,
         cursor_type: test_case.cursor_type.as_ref(),
         now: now(),
+        zone: test_case.zone,
     };
     let plan = split_windows(&split)?;
     (0..plan.count)
@@ -126,9 +128,78 @@ pub(crate) const fn eu(day: &'static str, files: usize) -> PartitionFiles {
 /// The bound built for a cursor column of the case's type, as Arrow displays it.
 pub(crate) fn bound_text(test_case: &BoundArrayTestCase) -> Result<String, String> {
     let field = arrow_field("c", &test_case.cursor_type).ok_or("no Arrow type")?;
-    let array = bound_array(test_case.text, &test_case.cursor_type, field.data_type())
-        .map_err(|error| error.to_string())?;
+    let array = bound_array(
+        test_case.text,
+        &test_case.cursor_type,
+        field.data_type(),
+        chrono_tz::Tz::UTC,
+    )
+    .map_err(|error| error.to_string())?;
     let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
         .map_err(|error| error.to_string())?;
     Ok(format!("{} {}", array.data_type(), formatter.value(0)))
+}
+
+/// 2026-03-01 00:00 UTC, in microseconds.
+const MARCH_FIRST_MICROS: i64 = 1_772_323_200_000_000;
+
+/// The case's rows read as one window in two batches: how many load, how many the bounds skipped for a NULL cursor, and what the load says of those outside.
+pub(crate) fn window_report(
+    test_case: &WindowRowsTestCase,
+) -> Result<(usize, usize, String), String> {
+    use crate::batch_plan::main::outside_text::outside_text;
+    use crate::batch_plan::main::window_rows::window_rows;
+    use crate::batch_plan::models::OutsideRows;
+    use crate::column_types::models::ColumnType;
+    use crate::loader::models::ReadWindow;
+    use crate::project::models::OnCursorOutOfRange;
+    use arrow_array::{Array, RecordBatch, TimestampMicrosecondArray};
+    let micros: Vec<Option<i64>> = test_case
+        .hours
+        .iter()
+        .map(|hours| hours.map(|hours| MARCH_FIRST_MICROS + hours * 3_600_000_000))
+        .collect();
+    let column = TimestampMicrosecondArray::from(micros).with_timezone("UTC");
+    let field = arrow_schema::Field::new("updated_at", column.data_type().clone(), true);
+    let batch = RecordBatch::try_new(
+        Arc::new(arrow_schema::Schema::new(vec![field])),
+        vec![Arc::new(column)],
+    )
+    .map_err(|error| error.to_string())?;
+    let window = ReadWindow {
+        column: "updated_at".to_owned(),
+        from: test_case.from.map(str::to_owned),
+        to: test_case.to.map(str::to_owned),
+        inclusive: test_case.inclusive,
+        maximum: None,
+    };
+    let keep_outside = test_case.rule == OnCursorOutOfRange::Warn;
+    let rules = (&ColumnType::TimestampTz, test_case.include, keep_outside);
+    let split = test_case.split_at;
+    let first = window_rows(
+        &batch.slice(0, split),
+        &window,
+        rules,
+        (test_case.zone, 0, OutsideRows::default()),
+    )
+    .map_err(|error| error.to_string())?;
+    let second = window_rows(
+        &batch.slice(split, batch.num_rows() - split),
+        &window,
+        rules,
+        (test_case.zone, split as u64, first.outside),
+    )
+    .map_err(|error| error.to_string())?;
+    let text = outside_text(
+        &second.outside,
+        &window,
+        (&ColumnType::TimestampTz, test_case.zone),
+        test_case.rule,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((
+        first.kept.num_rows() + second.kept.num_rows(),
+        first.nulls + second.nulls,
+        text,
+    ))
 }

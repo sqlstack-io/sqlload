@@ -175,3 +175,6 @@ pub const RANGE_NEEDS_CURSOR: &str =
 
 /// The note of a `transform` record whose load rewrote the table whole, so the files earlier records name are gone from it.
 pub const TRANSFORM_REWROTE_NOTE: &str = "transform, table rewritten";
+
+/// How many windows' rows outside them the load report shows a line for; later ones are counted in one line.
+pub const SHOWN_OUTSIDE_WINDOWS: usize = 3;

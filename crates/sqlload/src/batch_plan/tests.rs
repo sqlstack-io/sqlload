@@ -10,3 +10,5 @@ mod helpers;
 mod split_windows;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_window_rows.rs"]
+mod window_rows;
