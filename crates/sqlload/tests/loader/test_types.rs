@@ -1411,6 +1411,15 @@ pub(crate) struct NamesRun {
     pub(crate) expected_plan: &'static str,
 }
 
+/// What the runs of a [`ColumnNamesTestCase`] did: for each run whether `plan` and `load` succeeded and the plan held its text, then the table's columns, what the check query returned, and every run's output.
+#[derive(Debug, Default)]
+pub(crate) struct NamesOutcome {
+    pub(crate) runs: Vec<(bool, bool, bool)>,
+    pub(crate) columns: String,
+    pub(crate) checked: String,
+    pub(crate) output: String,
+}
+
 /// A files source under `drop/` with `settings`, planned and loaded by the executable into DuckDB once per run, each run adding its file.
 pub(crate) struct ColumnNamesTestCase {
     pub(crate) description: &'static str,

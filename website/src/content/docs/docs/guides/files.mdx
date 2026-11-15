@@ -171,6 +171,10 @@ SQLLoad. `plan` names the route on each table's `route` line:
 | Snowflake | Parquet, JSON, NDJSON and CSV under the `url` of an `external_stage` load method, with `COPY`. |
 | ClickHouse | Parquet in S3, with `s3()`. |
 
+SQLLoad reads the files itself for a table that changes its rows before they load: one with a
+`transform`, a `parse`, `checks`, `row_id`, `unnest`, a `flatten` of the files' objects, or a column
+masked with `hmac`.
+
 Otherwise SQLLoad reads the files and loads the rows. Into Snowflake, files no external stage
 covers fail `plan`, unless the source sets `copy_to_internal_stage = true`, which uploads them to
 the user stage first and is much slower. To have Snowflake read files in S3 in place, give the

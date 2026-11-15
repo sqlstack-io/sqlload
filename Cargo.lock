@@ -5752,6 +5752,7 @@ dependencies = [
  "arrow-array",
  "arrow-pyarrow",
  "arrow-schema",
+ "chrono-tz",
  "pyo3",
  "serde_json",
  "sqlload",

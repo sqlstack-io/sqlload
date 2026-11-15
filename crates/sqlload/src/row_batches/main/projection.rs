@@ -1,6 +1,7 @@
 //! A projection of JSON row objects: which values load, under which column names.
 
-use crate::row_batches::_helpers::parsed::format_problem;
+use crate::column_parse::main::column_parse::column_parse;
+use crate::column_parse::models::ColumnParse;
 use crate::row_batches::_helpers::projected::{column_name, names_field, path_tree};
 use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::models::{FieldSpec, ProjectedField, Projection};
@@ -26,23 +27,25 @@ pub fn projection(
                 .to_owned(),
         );
     }
-    let projected = fields
-        .iter()
-        .map(|field| {
-            if let Some(problem) = field.parse.as_ref().and_then(format_problem) {
-                return Err(format!("fields[{:?}]: {problem}", field.name));
-            }
-            Ok(ProjectedField {
-                name: column_name(&field.name)?,
-                path: field_path(&field.path)
-                    .map_err(|reason| format!("fields[{:?}]: field path {reason}", field.name))?,
-                text: field.path.clone(),
-                required: field.required,
-                parse: field.parse.clone(),
+    let mut projected: Vec<ProjectedField> = Vec::with_capacity(fields.len());
+    for field in fields {
+        let parse = match &field.parse {
+            Some(setting) => Some(ColumnParse {
                 on_error: field.on_error,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+                ..column_parse(setting)
+                    .map_err(|problem| format!("fields[{:?}]: parse {problem}", field.name))?
+            }),
+            None => None,
+        };
+        projected.push(ProjectedField {
+            name: column_name(&field.name)?,
+            path: field_path(&field.path)
+                .map_err(|reason| format!("fields[{:?}]: field path {reason}", field.name))?,
+            text: field.path.clone(),
+            required: field.required,
+            parse,
+        });
+    }
     let keep_record = keep_record.map(column_name).transpose()?;
     let clash = keep_record
         .as_ref()
@@ -56,5 +59,6 @@ pub fn projection(
         tree: path_tree(&projected),
         fields: projected,
         keep_record,
+        zone: None,
     }))
 }

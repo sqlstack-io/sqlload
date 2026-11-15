@@ -17,6 +17,8 @@ mod render_tally;
 mod retryable_errors;
 #[path = "tests/test_source_filter.rs"]
 mod source_filter;
+#[path = "tests/test_table_parses.rs"]
+mod table_parses;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_transform_reader.rs"]

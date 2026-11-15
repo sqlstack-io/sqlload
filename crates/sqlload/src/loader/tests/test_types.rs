@@ -54,10 +54,21 @@ pub(crate) struct RenderTallyTestCase {
     pub(crate) expected_output: &'static str,
 }
 
+/// A Python table's settings, with its `parse` and `timezone`.
+pub(crate) struct TableParsesTestCase {
+    pub(crate) description: &'static str,
+    /// The table's settings as JSON.
+    pub(crate) settings: &'static str,
+    /// Each parsed column by its loaded name, the zone and where it is set (`updated_at|Europe/Paris|table`), or text a plan problem holds.
+    pub(crate) expected_outcome: Result<&'static str, &'static str>,
+}
+
 pub(crate) struct TransformReaderTestCase {
     pub(crate) description: &'static str,
     /// The files table's `transform`, if any.
     pub(crate) transform: Option<&'static str>,
+    /// The column the table parses, if any.
+    pub(crate) parse: Option<&'static str>,
     /// Why SQLLoad must read the Parquet files itself, if it must.
     pub(crate) expected_reason: Option<&'static str>,
 }

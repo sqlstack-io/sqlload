@@ -173,15 +173,16 @@ def accounts(ctx):
   flattening a field makes. A job whose `fields` leave it out fails before any request; `sl.json`
   and `sl.ndjson` data fails before it is parsed.
 - A fan-out's `over` picks keys with its `select` and takes no `fields`.
-- From 0.48.0, `sl.field(path, parse=...)` converts the value, from a closed list:
-  `"epoch_s"`, `"epoch_ms"` and `"epoch_us"` turn a number (or numeric text) into a UTC
-  `timestamp_tz`; `{"timestamp": "%d/%m/%Y %H:%M"}` reads text with a strftime format, as a
-  `timestamp_ntz`, or a `timestamp_tz` when the format has an offset (`%z`, or `%#z`, which also
-  takes `Z`); `{"date": "%d/%m/%Y"}` reads a date. A fraction of a second is `%.f`, as in
-  `"%H:%M:%S%.f"`; Python's `%f` is refused, as it reads nanoseconds here. A value outside the years
-  1 to 9999 doesn't convert.
+- `sl.field(path, parse=...)` converts the value as a table's
+  [`parse`](/docs/concepts/types/#parsing-text-into-times) does, and takes the same entry:
+  `"epoch_s"`, `"epoch_ms"` or `"epoch_us"`, or `{"timestamp": [...]}` or `{"date": [...]}` with a
+  format or a list of formats tried in turn, and `"tz"`. For example,
+  `sl.field("$.updated", parse={"timestamp": ["iso", "%m/%d/%Y %H:%M"], "tz": "Europe/Paris"})`.
+  A timestamp loads as `timestamp_tz`, a time without an offset read in `tz`, else the table's
+  `timezone`, else UTC. A value outside the years 1 to 9999 doesn't convert.
   A value that doesn't convert fails the table, naming the row, the field and the value, or loads
-  NULL with `on_error="null"`. Anything else belongs downstream or in a Python table that yields rows.
+  NULL with `on_error="null"`. A table's `parse` reaches any column without listing it in `fields`.
+  Other conversions belong in a [transform](/docs/sources/files/#transforming-each-file).
 
 #### Path syntax
 

@@ -17,6 +17,7 @@ use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::main::window_rows::window_rows;
 use crate::batch_plan::models::CursorWindow;
 use crate::cdc::constants::DELETE_OP;
+use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
@@ -116,16 +117,22 @@ use arrow_schema::Schema;
 use arrow_schema::SchemaRef;
 use arrow_schema::TimeUnit;
 use arrow_select::filter::filter_record_batch;
+use chrono_tz::Tz;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-/// A Python source's tables as planning sees them before any data: the declared (`columns`) and masked columns only.
+/// A Python source's tables as planning sees them before any data: the declared (`columns`), masked and parsed columns only.
 pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
     let mut tables: Vec<SourceTable> = Vec::new();
     for (name, table) in &source.tables {
         let mut columns: Vec<SourceColumn> = Vec::new();
-        for column in table.columns.keys().chain(table.mask.keys()) {
+        for column in table
+            .columns
+            .keys()
+            .chain(table.mask.keys())
+            .chain(table.parse.keys())
+        {
             if !columns.iter().any(|known| known.name == *column) && !is_child_column(column, table)
             {
                 columns.push(python_column(column, ColumnType::Text));
@@ -414,7 +421,7 @@ pub(crate) fn inferred_table(
     }
 }
 
-/// Why the declared `columns` and `mask` keys do not match the data: a key that names no column but is close to one (a different case or a typo), or a masked column the data lacks while it has rows; masking must never miss the real column.
+/// Why the declared `columns`, `mask` and `parse` keys do not match the data: a key that names no column but is close to one (a different case or a typo), or a masked column the data lacks while it has rows; masking must never miss the real column.
 pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec<String> {
     let names: Vec<&str> = data
         .schema
@@ -428,7 +435,8 @@ pub(crate) fn declared_problems(spec: &TableSpec, data: &YieldedData<'_>) -> Vec
         .keys()
         .filter(|key| !spec.masked.columns.contains_key(*key))
         .map(|key| ("columns", key))
-        .chain(spec.masked.columns.keys().map(|key| ("mask", key)));
+        .chain(spec.masked.columns.keys().map(|key| ("mask", key)))
+        .chain(spec.parses.keys().map(|key| ("parse", key)));
     let mut problems: Vec<String> = Vec::new();
     for (setting, key) in keys {
         if names.contains(&key.as_str()) {
@@ -923,6 +931,9 @@ impl PythonFeed {
     ) -> Result<(), LoaderError> {
         self.check_flattened(&batch)?;
         let batch = self.named(load, batch).await?;
+        let zone = self.table.spec.timezone.map_or(Tz::UTC, |(zone, _)| zone);
+        let batch = parsed_batch(&batch, &self.table.spec.parses, zone, self.rows)
+            .map_err(LoaderError::Invalid)?;
         let merged = merge_schema(&self.merged, &batch.schema());
         self.rows += batch.num_rows() as u64;
         let chosen = match (&self.table.spec.unnest, &mut self.table.spec.python) {
@@ -1211,6 +1222,7 @@ fn table_read(
             spec.naming,
             sql_adapter(spec.warehouse).max_identifier_length(),
         ),
+        zone: spec.timezone.map(|(zone, _)| zone),
     }
 }
 
@@ -1299,6 +1311,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         }),
         sheet: None,
         transform: None,
+        parses: BTreeMap::new(),
         cdc: None,
         checks: None,
         warehouse_source: None,
