@@ -795,7 +795,7 @@ impl Publisher {
             .unwrap_or_default()
     }
 
-    /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, with the files `send = "at_commit"` holds for it, Arrow elsewhere), where a size-cut table may end it.
+    /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, with the zstd files `send = "at_commit"` holds for it, which come within a few percent of that Parquet, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
         let bytes = match (self.writer.staged_bytes(), &self.spool) {
             (Some(staged), Some(spool)) => staged + spool.held_bytes(self.batch),

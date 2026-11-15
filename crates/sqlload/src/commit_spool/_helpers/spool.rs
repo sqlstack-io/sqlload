@@ -26,7 +26,7 @@ impl Spool {
         })
     }
 
-    /// Hold `rows`, part of batch `batch`, in a local file of their own, LZ4-compressed.
+    /// Hold `rows`, part of batch `batch`, in a local file of their own, zstd-compressed so its size is close to the Parquet a staging writer would make of it.
     pub(crate) fn hold(&mut self, batch: u64, rows: &RecordBatch) -> Result<(), String> {
         let path = self
             .folder
@@ -41,7 +41,7 @@ impl Spool {
         };
         let file = std::fs::File::create(&path).map_err(|error| failed(error.to_string()))?;
         let options = IpcWriteOptions::default()
-            .try_with_compression(Some(CompressionType::LZ4_FRAME))
+            .try_with_compression(Some(CompressionType::ZSTD))
             .map_err(|error| failed(error.to_string()))?;
         let mut writer = FileWriter::try_new_with_options(
             std::io::BufWriter::new(file),
