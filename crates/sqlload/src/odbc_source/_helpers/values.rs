@@ -278,7 +278,10 @@ impl ValueColumn {
         let size = match cfg!(target_os = "windows") {
             true => {
                 let capped = (cap, "max_text_size");
-                if !read_capped::<WideText>(row, number, &mut self.wide, (name, capped))? {
+                let wide = std::mem::take(&mut self.wide);
+                let present;
+                (self.wide, present) = row.read_capped::<WideText>(number, wide, (name, capped))?;
+                if !present {
                     builder.append_null();
                     return Ok(0);
                 }
@@ -290,7 +293,10 @@ impl ValueColumn {
             }
             false => {
                 let capped = (cap, "max_text_size");
-                if !read_capped::<Text>(row, number, &mut self.bytes, (name, capped))? {
+                let bytes = std::mem::take(&mut self.bytes);
+                let present;
+                (self.bytes, present) = row.read_capped::<Text>(number, bytes, (name, capped))?;
+                if !present {
                     builder.append_null();
                     return Ok(0);
                 }
@@ -316,7 +322,9 @@ impl ValueColumn {
     ) -> Result<usize, OdbcSourceError> {
         let name = self.name.as_str();
         let capped = (cap, "max_binary_size");
-        let present = read_capped::<Binary>(row, number, &mut self.bytes, (name, capped))?;
+        let bytes = std::mem::take(&mut self.bytes);
+        let present;
+        (self.bytes, present) = row.read_capped::<Binary>(number, bytes, (name, capped))?;
         over_cap(name, (self.bytes.len(), true), cap, "max_binary_size")?;
         let size = self.bytes.len();
         match (&mut self.values, present) {
@@ -452,47 +460,61 @@ fn over_cap(
     }
 }
 
-/// Read the current row's value of column `number` into `buffer` piece by piece with `SQLGetData`, as odbc-api's `get_text` does, but stop with `over_cap`'s error as soon as the value is known to be longer than the cap (in `K`'s elements): once the driver reports the length still to come, or the pieces read pass it. `false` for NULL, with `buffer` empty.
-fn read_capped<K: VarKind>(
-    row: &mut CursorRow<'_>,
-    number: u16,
-    buffer: &mut Vec<K::Element>,
-    (name, (cap, setting)): (&str, (Option<usize>, &str)),
-) -> Result<bool, OdbcSourceError> {
-    let failed = |error: arrow_odbc::odbc_api::Error| {
-        OdbcSourceError::Invalid(format!("column {name}: ODBC: {error}"))
-    };
-    let element = size_of::<K::Element>();
-    if buffer.capacity() == 0 {
-        buffer.reserve(256);
-    }
-    buffer.resize(buffer.capacity(), K::ZERO);
-    let mut start = 0;
-    loop {
-        let mut piece =
-            VarCell::<&mut [K::Element], K>::from_buffer(&mut buffer[start..], Indicator::NoTotal);
-        row.get_data(number, &mut piece).map_err(failed)?;
-        let (complete, indicator) = (piece.is_complete(), piece.indicator());
-        let Some(fetched) = piece.len_in_bytes() else {
-            buffer.clear();
-            return Ok(false);
+/// A row's text or binary value read under a cap.
+trait CappedValue {
+    /// Read column `number`'s value into `buffer` piece by piece with `SQLGetData`, as odbc-api's `get_text` does, but stop with `over_cap`'s error as soon as the value is known to be longer than the cap (in `K`'s elements): once the driver reports the length still to come, or the pieces read pass it. Returns the buffer, and `false` for NULL (the buffer then empty).
+    fn read_capped<K: VarKind>(
+        &mut self,
+        number: u16,
+        buffer: Vec<K::Element>,
+        capped: (&str, (Option<usize>, &str)),
+    ) -> Result<(Vec<K::Element>, bool), OdbcSourceError>;
+}
+
+impl CappedValue for CursorRow<'_> {
+    fn read_capped<K: VarKind>(
+        &mut self,
+        number: u16,
+        mut buffer: Vec<K::Element>,
+        (name, (cap, setting)): (&str, (Option<usize>, &str)),
+    ) -> Result<(Vec<K::Element>, bool), OdbcSourceError> {
+        let failed = |error: arrow_odbc::odbc_api::Error| {
+            OdbcSourceError::Invalid(format!("column {name}: ODBC: {error}"))
         };
-        if complete {
-            buffer.truncate(start + fetched / element);
-            return Ok(true);
+        let element = size_of::<K::Element>();
+        if buffer.capacity() == 0 {
+            buffer.reserve(256);
         }
-        let known = match indicator {
-            Indicator::Length(length) => (start + length / element, true),
-            _ => (start + fetched / element, false),
-        };
-        over_cap(name, known, cap, setting)?;
-        let old = buffer.len();
-        let grown = match indicator {
-            Indicator::Length(length) => old + (length - fetched) / element,
-            _ => old * 2,
-        };
-        buffer.resize(grown, K::ZERO);
-        start = old - K::TERMINATING_ZEROES;
+        buffer.resize(buffer.capacity(), K::ZERO);
+        let mut start = 0;
+        loop {
+            let mut piece = VarCell::<&mut [K::Element], K>::from_buffer(
+                &mut buffer[start..],
+                Indicator::NoTotal,
+            );
+            self.get_data(number, &mut piece).map_err(failed)?;
+            let (complete, indicator) = (piece.is_complete(), piece.indicator());
+            let Some(fetched) = piece.len_in_bytes() else {
+                buffer.clear();
+                return Ok((buffer, false));
+            };
+            if complete {
+                buffer.truncate(start + fetched / element);
+                return Ok((buffer, true));
+            }
+            let known = match indicator {
+                Indicator::Length(length) => (start + length / element, true),
+                _ => (start + fetched / element, false),
+            };
+            over_cap(name, known, cap, setting)?;
+            let old = buffer.len();
+            let grown = match indicator {
+                Indicator::Length(length) => old + (length - fetched) / element,
+                _ => old * 2,
+            };
+            buffer.resize(grown, K::ZERO);
+            start = old - K::TERMINATING_ZEROES;
+        }
     }
 }
 
