@@ -1,6 +1,35 @@
+use std::collections::BTreeMap;
+
 use crate::adapters::contract::models::BoundParameter;
 use crate::auth::models::Secret;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
+
+/// What a table's primary key is read for, so the catalog asks the driver (`SQLPrimaryKeys`) only for tables that use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyUse {
+    /// Nothing reads it.
+    Unused,
+    /// `plan` reads it: beside a merge's own `unique_key`, in the `write_strategy` it suggests, or as a ClickHouse table's sorting key.
+    Read,
+    /// The table merges on it (`unique_key = "{primary_key}"`): when the driver reports none, the keys `INFORMATION_SCHEMA` lists explain the error.
+    Merged,
+}
+
+/// What each table of a source reads its primary key for: by `schema.table` as its `[sources.*.tables]` entry names it, else the source's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyUses {
+    pub source: KeyUse,
+    pub tables: BTreeMap<String, KeyUse>,
+}
+
+/// A table or view as `SQLTables` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedTable {
+    pub catalog: String,
+    /// Empty for a driver without schemas.
+    pub schema: String,
+    pub name: String,
+}
 
 /// An ODBC source: the connection string its driver manager connects with, and the buffer caps for long values.
 #[derive(Debug, Clone)]

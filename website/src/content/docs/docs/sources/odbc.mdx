@@ -253,18 +253,69 @@ When both ways fail, the error shows both of the driver's errors.
 ## Choosing tables
 
 `include` and `exclude` are `schema.table` patterns, matched without regard to case (`*` matches
-any text). SQLLoad lists the tables and views the driver reports. For a database without schemas,
-the patterns match the table name alone. A `[sources.erp.tables."schema.table"]` entry sets options
-for one table; on its own, it doesn't add the table.
+any text). SQLLoad loads the tables and views the driver reports that match. For a database without
+schemas, the patterns match the table name alone. A `[sources.erp.tables."schema.table"]` entry sets
+options for one table; on its own, it doesn't add the table.
 
 A source needs at least one `include` pattern or one query table. Every table needs a
 `write_strategy`, from its entry or the source, and a `merge` table a `unique_key`: its columns, or
 `"{primary_key}"` for the primary key the driver reports (`SQLPrimaryKeys`); see
 [Write strategies](/docs/concepts/write-strategies/). A query table reports no key, so name its
-columns. When the driver reports no primary key for a table set to `"{primary_key}"`, SQLLoad
-also asks the database's `INFORMATION_SCHEMA` for the table's primary key and unique constraints,
-so that the error can name them; a database without `INFORMATION_SCHEMA` gets the error without
-them.
+columns.
+
+### How the driver is asked
+
+From 0.53.0, SQLLoad asks the driver only for the tables `include` names, with one `SQLTables`
+lookup per pattern, rather than for every table and view in the database. On a large catalog over
+a slow network, that listing can take most of `plan`'s time, and every `load` plans first.
+
+| `include` | Schema and table the driver is asked for |
+|-----------|------------------------------------------|
+| `PUB.action` | `PUB`, `action` |
+| `PUB.*` | `PUB`, `%` |
+| `sales.tmp_?` | `sales`, `tmp__` |
+| `events` (a database without schemas) | any schema, `events` |
+
+`*` becomes `%` and `?` becomes `_`. A `_` or `%` in a name stays a wildcard to the driver, so a
+lookup may return a few more tables. SQLLoad drops the tables the pattern doesn't match, and applies
+`exclude` itself.
+
+SQLLoad lists every table instead, once per source, when:
+
+- a pattern holds `[`, `{` or `\`, more than one `.`, or a `*` or `?` without a `.`;
+- a lookup finds no table its pattern matches. `include` ignores case, but many drivers compare
+  names case-sensitively: psqlODBC, and MySQL Connector/ODBC and MariaDB Connector/ODBC against
+  MySQL on Linux. There `ERP.Items` finds nothing for `erp.items`. A table that doesn't exist finds
+  nothing too.
+
+The tables `plan` finds, and its errors, are the same either way: a missing table still fails
+`plan`. Write the names in the catalog's case to skip the full listing. Microsoft ODBC Driver 18
+against SQL Server's default collation compares names without regard to case, so either case
+works there. With `RUST_LOG=info`, SQLLoad logs each full listing and why:
+
+```text
+… INFO sqlload::odbc_source::_helpers::catalog: listing every table the ODBC driver reports, as include can't be looked up pattern by pattern reason="looking up \"ERP.Items\" found no table it matches (the driver may compare names case-sensitively)"
+```
+
+Where the driver compares names case-sensitively, a pattern that its lookup finds a table for
+doesn't also find a table whose name differs from it only in case, such as `erp.Items` beside
+`erp.items`. Name each such table in `include`.
+
+### When keys are read
+
+From 0.53.0, SQLLoad reads a table's primary key (`SQLPrimaryKeys`) only when the table uses it:
+
+- a `merge` table with `unique_key = "{primary_key}"`, which merges on it;
+- a `merge` table that names its `unique_key` columns, for which `plan` says whether the source
+  reports the same primary key;
+- a table without a `write_strategy`, whose error suggests one by its key;
+- every table that loads into ClickHouse, which can sort a created table by the key.
+
+Other tables, such as `replace`, `append` and `delete_insert` tables, skip it. When the driver
+reports no primary key for a table set to `"{primary_key}"`, SQLLoad also asks the database's
+`INFORMATION_SCHEMA` for the table's primary key and unique constraints, so that the error can name
+them; a database without `INFORMATION_SCHEMA` gets the error without them. From 0.53.0, SQLLoad
+asks it only for such a table.
 
 ## Query tables
 

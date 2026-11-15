@@ -93,3 +93,11 @@ pub(crate) struct MemoryWarningTestCase {
     pub(crate) concurrency: usize,
     pub(crate) expected_warning: Option<&'static str>,
 }
+
+pub(crate) struct SearchPatternsTestCase {
+    pub(crate) description: &'static str,
+    /// An `include` pattern.
+    pub(crate) pattern: &'static str,
+    /// The schema and table search patterns `SQLTables` is asked with; `None` for a pattern the whole catalog is listed for.
+    pub(crate) expected_patterns: Option<(&'static str, &'static str)>,
+}

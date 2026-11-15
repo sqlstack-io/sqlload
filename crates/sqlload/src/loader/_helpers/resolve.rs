@@ -530,6 +530,40 @@ pub(crate) struct ResolvedTarget {
     pub(crate) compat: Option<Compat>,
 }
 
+/// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
+#[cfg(feature = "odbc")]
+pub(crate) fn key_uses(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> crate::odbc_source::models::KeyUses {
+    use crate::odbc_source::models::{KeyUse, KeyUses};
+    let sorts = source_target(project, source).map_or(true, |target| {
+        sql_adapter(target.warehouse).sorts_by_unique_key()
+    });
+    let key_use = |settings: &TableSettings| {
+        let strategy = settings.write_strategy.or(source.defaults.write_strategy);
+        let placeholder = settings
+            .unique_key
+            .as_ref()
+            .or(source.defaults.unique_key.as_ref())
+            .is_some_and(|key| key.iter().any(|column| column == PRIMARY_KEY_PLACEHOLDER));
+        match (strategy, placeholder) {
+            (Some(crate::project::models::WriteStrategy::Merge), true) => KeyUse::Merged,
+            (None, _) | (Some(crate::project::models::WriteStrategy::Merge), false) => KeyUse::Read,
+            _ if sorts => KeyUse::Read,
+            _ => KeyUse::Unused,
+        }
+    };
+    KeyUses {
+        source: key_use(&TableSettings::default()),
+        tables: source
+            .tables
+            .iter()
+            .map(|(name, table)| (name.clone(), key_use(&table.settings)))
+            .collect(),
+    }
+}
+
 /// The target `source` loads into: its own, the project default, or the only target.
 pub(crate) fn source_target(
     project: &ProjectConfig,
