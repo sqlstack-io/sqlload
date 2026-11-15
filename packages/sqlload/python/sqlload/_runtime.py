@@ -21,6 +21,7 @@ from typing import Any
 from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
 from sqlload._http_paths import literal_paths
+from sqlload._rename import RENAMES, Column, RenameContext, renamed
 from sqlload._transform import TRANSFORMS, TransformContext, returned_items
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
@@ -188,9 +189,30 @@ def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None
 	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
 
 
+def rename(name: str, columns: str | None, context: str) -> tuple[str | None, str | None]:
+	"""Call the rename function `name` on `columns` (JSON: each column's `position`, `source` and `default`) with its
+	`ctx` (JSON); with no `columns`, only look it up.
+
+	Returns the names it gives, by position, as JSON, or why it gives none: no function or two are registered as
+	`name`, or it failed or returned something else.
+	"""
+	function, problem = RENAMES.lookup(name, _root[0] if _root else None)
+	if function is None:
+		return None, problem
+	if columns is None:
+		return "{}", None
+	given = [Column(**column) for column in json.loads(columns)]
+	ctx = RenameContext(**json.loads(context))
+	try:
+		return json.dumps(renamed(name, function, given, ctx)), None
+	except Exception as error:
+		return None, f"{type(error).__name__}: {error}"
+
+
 def finish_run() -> None:
 	"""Close every client the run built (their `close()`, when they have one)."""
 	TRANSFORMS.release()
+	RENAMES.release()
 	clients = list(_clients.values())
 	_clients.clear()
 	for client in clients:
@@ -241,6 +263,8 @@ def _remember(table: Table) -> None:
 
 def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in source.settings.items() if value is not None}
+	if callable(source.settings.get("rename")):
+		settings["rename"], _ = RENAMES.key(source.settings["rename"])
 	if source.description is not None:
 		settings["description"] = source.description
 	if source.client_factory is not None:
@@ -257,6 +281,8 @@ def _http_paths(tables: list[Table]) -> dict[str, Any]:
 
 def _table_settings(table: Table) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in table.settings.items() if value is not None}
+	if callable(table.settings.get("rename")):
+		settings["rename"], _ = RENAMES.key(table.settings["rename"])
 	if "table_name" in settings:
 		settings["name"] = settings.pop("table_name")
 	if table.description is not None:

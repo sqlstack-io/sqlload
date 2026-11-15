@@ -22,6 +22,7 @@ fn column(
         column_type: Ok(column_type),
         nullable: true,
         source_spelling: spelling.map(str::to_owned),
+        repeat_of: None,
     }
 }
 

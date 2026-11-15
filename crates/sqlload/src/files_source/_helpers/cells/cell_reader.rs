@@ -18,6 +18,8 @@ use crate::files_source::models::{CellRecord, FilesEncoding, SourceFormat};
 pub(crate) struct CellReader {
     /// A worksheet's column names, in sheet order; empty for XML, whose records name their own.
     names: Vec<String>,
+    /// The header each of `names` repeats, by position: `None` for a name the header has once, or the first time.
+    repeats: Vec<Option<String>>,
     records: std::vec::IntoIter<CellRecord>,
 }
 
@@ -29,20 +31,27 @@ impl CellReader {
     ) -> Result<Self, String> {
         let whole = bytes.whole().await?;
         let encoding = encoding.clone();
-        let (names, records) = tokio::task::spawn_blocking(move || match encoding.format {
+        let (named, records) = tokio::task::spawn_blocking(move || match encoding.format {
             SourceFormat::Xlsx => xlsx_records(whole, &encoding.xlsx),
             _ => xml_records(&whole, &encoding.xml).map(|records| (Vec::new(), records)),
         })
         .await
         .map_err(|error| error.to_string())??;
+        let (names, repeats) = named.into_iter().unzip();
         Ok(Self {
             names,
+            repeats,
             records: records.into_iter(),
         })
     }
 
     pub(crate) fn names(&self) -> &[String] {
         &self.names
+    }
+
+    /// The header each column repeats, by position.
+    pub(crate) fn repeats(&self) -> &[Option<String>] {
+        &self.repeats
     }
 
     /// Up to `count` more records; empty at the end.

@@ -10,6 +10,7 @@ use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker
 use crate::files_source::constants::{ENCODING_HINT, MAX_RECORD_BYTES};
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::CsvOptions;
+use crate::load_naming::main::numbered_header::numbered_header;
 
 /// Reads a CSV file's records in order as text columns, a chunk of bytes at a time.
 pub(crate) struct CsvReader {
@@ -23,6 +24,8 @@ pub(crate) struct CsvReader {
     /// Whether the decoder was told the file ended (an empty `decode`), which completes a last record without a line break.
     end_sent: bool,
     names: Vec<String>,
+    /// The header each column repeats, by position: `None` for a name the header has once, or the first time.
+    repeats: Vec<Option<String>>,
     /// The line of the next data record: lines count records, the header and the skipped lines included.
     next_line: u64,
     /// Lines skipped before the header, which the record parsers' line numbers leave out.
@@ -71,8 +74,11 @@ impl CsvReader {
             }
         };
         let given = options.column_names.as_deref().filter(|_| named);
-        let names = column_names(first, options.header && named, given)
-            .map_err(|error| shifted(&error, skipped))?;
+        let (names, repeats): (Vec<String>, Vec<Option<String>>) =
+            column_names(first, options.header && named, given)
+                .map_err(|error| shifted(&error, skipped))?
+                .into_iter()
+                .unzip();
         let decoder = match names.is_empty() {
             true => None,
             false => Some(decoder(&names, options, batch_rows)?),
@@ -86,6 +92,7 @@ impl CsvReader {
             at_end,
             end_sent: false,
             names,
+            repeats,
             next_line: 1 + skipped + u64::from(options.header),
             skipped,
         })
@@ -94,6 +101,11 @@ impl CsvReader {
     /// The file's columns, in order.
     pub(crate) fn names(&self) -> &[String] {
         &self.names
+    }
+
+    /// The header each column repeats, by position (see [`numbered_header`]).
+    pub(crate) fn repeats(&self) -> &[Option<String>] {
+        &self.repeats
     }
 
     /// The next batch of records and the line its first row is on; `None` at the end of the file.
@@ -178,14 +190,15 @@ fn ascii(character: char, setting: &str) -> Result<u8, String> {
     }
 }
 
-/// The header's names, checked; or for a file without a header, `given` (one per field of the first record) or `column_1`, ...
+/// The header's names, checked, a repeated one numbered (see [`numbered_header`]); or for a file without a header, `given` (one per field of the first record) or `column_1`, ...
 fn column_names(
     first: Vec<String>,
     header: bool,
     given: Option<&[String]>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<(String, Option<String>)>, String> {
+    let plain = |names: Vec<String>| names.into_iter().map(|name| (name, None)).collect();
     match (header, given) {
-        (false, Some(given)) if first.len() == given.len() => return Ok(given.to_vec()),
+        (false, Some(given)) if first.len() == given.len() => return Ok(plain(given.to_vec())),
         (false, Some(given)) if !first.is_empty() => {
             return Err(format!(
                 "line 1: the file has {} columns, but column_names names {}; name each column",
@@ -194,9 +207,11 @@ fn column_names(
             ));
         }
         (false, _) => {
-            return Ok((1..=first.len())
-                .map(|position| format!("column_{position}"))
-                .collect());
+            return Ok(plain(
+                (1..=first.len())
+                    .map(|position| format!("column_{position}"))
+                    .collect(),
+            ));
         }
         (true, _) => {}
     }
@@ -204,11 +219,8 @@ fn column_names(
         if name.is_empty() {
             return Err(format!("line 1: header field {} is empty", position + 1));
         }
-        if first[..position].contains(name) {
-            return Err(format!("line 1: column {name} appears twice in the header"));
-        }
     }
-    Ok(first)
+    Ok(numbered_header(&first))
 }
 
 /// arrow-csv's error without its prefix; invalid UTF-8 says which encoding setting fixes it.

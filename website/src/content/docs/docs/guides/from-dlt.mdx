@@ -166,9 +166,10 @@ table is named after the source:
 Three settings make SQLLoad's tables look like the ones dlt made, so the models and queries over
 them keep working:
 
-- `naming = "dlt"` on the target names tables, columns and child tables as dlt's default
-  `snake_case` naming does (`OrderID` is `order_id`), and the columns a load adds as dlt names them
-  (`_dlt_load_id`, `_dlt_id`, `_dlt_parent_id`, `_dlt_list_idx`, `_dlt_root_id`).
+- `compat = "dlt"` on the target names the columns a load adds as dlt names them (`_dlt_load_id`,
+  `_dlt_id`, `_dlt_parent_id`, `_dlt_list_idx`, `_dlt_root_id`). Tables, columns and child tables
+  already take dlt's default `snake_case` names (`OrderID` is `order_id`), as `naming` defaults to
+  `snake_case`.
 - `unnest = "all"` makes a child table of every list field, as dlt does.
 - `max_depth` is dlt's `max_table_nesting`.
 
@@ -243,7 +244,7 @@ kept between runs, so it can run on workers whose disks are thrown away.
 
 ## Known differences
 
-Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
+Under `compat = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
 
 - An object from a Python table or a database's JSON column stays a JSON column, where dlt
   flattens it into `parent__key` columns
@@ -255,7 +256,8 @@ Under `naming = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
   ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
 - A field listed in `unnest` is always a child table, even when an XML element appears only once;
   dlt keeps a single match as a column of the parent.
-- Two columns whose names normalise to one stop the plan, naming both, where dlt keeps one of them.
+- Two columns whose names normalise to one are numbered (`order_id`, `order_id_1`), where dlt keeps
+  one of them. See [on_duplicate_names](/docs/concepts/nested-data/#on_duplicate_names).
 - Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,
   `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources, and `plan` names
   the setting. ClickHouse targets take it from 0.41.0.

@@ -40,7 +40,7 @@ use crate::files_source::models::{
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, Naming};
 use crate::loader::_helpers::destination::{folder_claims, nanosecond_columns};
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::python::{read_schema, read_types};
@@ -53,7 +53,7 @@ use crate::loader::_helpers::run_log::{
 use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::{files_read_as, path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{
-    flattened_object_problems, referenced_columns, table_name, table_naming,
+    flattened_object_problems, referenced_columns, table_compat, table_name, table_naming,
 };
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 use crate::loader::constants::NO_TRANSFORM_HOST;
@@ -270,11 +270,12 @@ pub(crate) async fn source_tables(
                 .get(source_name)
                 .map_or(&unset, |overrides| &overrides.settings);
             let naming = table_naming((settings, &source.defaults), target.naming);
+            let compat = table_compat((settings, &source.defaults), target.compat);
             Ok(
                 match discover_files_table(
                     (project, options),
                     (source_name, source),
-                    (target.warehouse, naming),
+                    (target.warehouse, (naming, compat)),
                 )
                 .await
                 {
@@ -690,6 +691,7 @@ async fn sheets_tables(
                     column_type: column.column_type,
                     nullable: true,
                     source_spelling: None,
+                    repeat_of: column.repeat_of,
                 })
                 .collect(),
             primary_key: Vec::new(),
@@ -730,6 +732,7 @@ async fn transformed_sheet(
             column_type: Ok(column_type),
             nullable: true,
             source_spelling: None,
+            repeat_of: None,
         })
         .collect();
     Ok(SourceTable {
@@ -909,13 +912,13 @@ fn snowflake_session(
 pub(crate) async fn discover_files_table(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
-    (warehouse, naming): (Warehouse, Naming),
+    (warehouse, (naming, compat)): (Warehouse, (Naming, Compat)),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
     let (values, _) = path_values((source_name, source), warehouse)?;
     let encoding = FilesEncoding {
-        flatten_objects: naming == Naming::Dlt,
+        flatten_objects: compat == Compat::Dlt,
         ..source.files_encoding()
     };
     let archive = match &source.after_load {
@@ -965,8 +968,12 @@ pub(crate) async fn discover_files_table(
         }
         None => (table, None),
     };
-    let (table, files) =
-        files_source_parts(source_name, source, (warehouse, naming), (location, table))?;
+    let (table, files) = files_source_parts(
+        source_name,
+        source,
+        (warehouse, (naming, compat)),
+        (location, table),
+    )?;
     Ok((
         table,
         FilesSource {
@@ -1013,6 +1020,7 @@ async fn transform_sample(
             direct_refusal: None,
             stored_read: StoredRead::Plain,
             lists: None,
+            repeat_of: None,
         })
         .collect();
     let sample = format!("{}{}", folder.location, newest.file.relative_key);
@@ -1042,11 +1050,11 @@ fn input_read(input: &FilesTransform, encoding: &FilesEncoding, data: &DataFile)
 pub(crate) fn files_source_parts(
     source_name: &str,
     source: &SourceConfig,
-    (warehouse, naming): (Warehouse, Naming),
+    (warehouse, (naming, compat)): (Warehouse, (Naming, Compat)),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = FilesEncoding {
-        flatten_objects: naming == Naming::Dlt,
+        flatten_objects: compat == Compat::Dlt,
         ..source.files_encoding()
     };
     let (values, partition_types) = path_values((source_name, source), warehouse)?;
@@ -1082,30 +1090,37 @@ pub(crate) fn files_source_parts(
         .columns
         .iter()
         .filter(|column| !added.contains(&column.name.as_str()))
-        .map(|column| (column.name.clone(), column.column_type.clone()))
+        .map(|column| {
+            (
+                column.name.clone(),
+                column.column_type.clone(),
+                column.repeat_of.clone(),
+            )
+        })
         .chain(
             pinned_only
                 .into_iter()
-                .map(|name| (name, Ok(ColumnType::Text))),
+                .map(|name| (name, Ok(ColumnType::Text), None)),
         )
         .chain(
             partition_types
                 .iter()
-                .map(|(name, column_type)| (name.clone(), Ok(column_type.clone()))),
+                .map(|(name, column_type)| (name.clone(), Ok(column_type.clone()), None)),
         )
         .chain([
-            (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text)),
-            (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text)),
-            (SOURCE_ROW_COLUMN.to_owned(), Ok(ColumnType::Int)),
+            (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text), None),
+            (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text), None),
+            (SOURCE_ROW_COLUMN.to_owned(), Ok(ColumnType::Int), None),
         ]);
     let columns: Vec<SourceColumn> = typed
-        .map(|(name, column_type)| SourceColumn {
+        .map(|(name, column_type, repeat_of)| SourceColumn {
             name,
             postgres_type: encoding.format.to_string(),
             pg_type: PgType::Other,
             column_type,
             nullable: true,
             source_spelling: None,
+            repeat_of,
         })
         .collect();
     let checks = TextChecks {

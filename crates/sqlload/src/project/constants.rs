@@ -30,6 +30,9 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "replace_key",
     "dedup_sort",
     "naming",
+    "compat",
+    "rename",
+    "on_duplicate_names",
     "row_id",
     "transform",
     #[cfg(feature = "container-tests")]

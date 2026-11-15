@@ -12,8 +12,8 @@ use crate::project::constants::{
     TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, SourceConfig,
-    SourceKind, TableSettings, WriteStrategy,
+    CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, RenameSetting,
+    SourceConfig, SourceKind, TableSettings, WriteStrategy,
 };
 use crate::sheets_source::main::a1_range::a1_range;
 use crate::store_paths::main::resolve_location::resolve_location;
@@ -159,6 +159,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     }
     problems.extend(kind_problems(&place, source));
     problems.extend(transform_problems(project, &place, source));
+    problems.extend(rename_problems(project, &place, source));
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_name_problems(&place, name, source));
     }
@@ -413,6 +414,28 @@ fn transform_problems(project: &ProjectConfig, place: &str, source: &SourceConfi
     if project.python_paths.is_empty() {
         problems.push(format!(
             "{place} transform needs python_paths, naming the folder that holds the @sl.transform function"
+        ));
+    }
+    problems
+}
+
+/// Where a `rename` function does not fit: an empty name, or a project without `python_paths` to find it on. A Python source's tables find theirs where they are declared.
+fn rename_problems(project: &ProjectConfig, place: &str, source: &SourceConfig) -> Vec<String> {
+    let functions: Vec<&String> = sheet_settings(source)
+        .filter_map(|settings| match &settings.rename {
+            Some(RenameSetting::Function(function)) => Some(function),
+            _ => None,
+        })
+        .collect();
+    let mut problems: Vec<String> = Vec::new();
+    if functions.iter().any(|function| function.trim().is_empty()) {
+        problems.push(format!(
+            "{place} rename is empty; give a map of source names to loaded names, or the name @sl.rename registered a function under"
+        ));
+    }
+    if !functions.is_empty() && project.python_paths.is_empty() {
+        problems.push(format!(
+            "{place} rename names a function, which needs python_paths, naming the folder that holds the @sl.rename function"
         ));
     }
     problems

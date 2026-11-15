@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
+
 use arrow_array::Int64Array;
 use chrono::{DateTime, Utc};
 
+use crate::batch_plan::_helpers::bound_array::bound_array;
 use crate::batch_plan::main::cut_index::cut_index;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::last_value::last_value;
@@ -10,8 +13,9 @@ use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::{CursorWindow, WindowSplit};
 use crate::batch_plan::tests::test_types::{
-    FileGroupsTestCase, PartitionFiles, SplitWindowsTestCase,
+    BoundArrayTestCase, FileGroupsTestCase, PartitionFiles, SplitWindowsTestCase,
 };
+use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 
@@ -117,4 +121,14 @@ pub(crate) const fn eu(day: &'static str, files: usize) -> PartitionFiles {
         files,
         file_bytes: 1,
     }
+}
+
+/// The bound built for a cursor column of the case's type, as Arrow displays it.
+pub(crate) fn bound_text(test_case: &BoundArrayTestCase) -> Result<String, String> {
+    let field = arrow_field("c", &test_case.cursor_type).ok_or("no Arrow type")?;
+    let array = bound_array(test_case.text, &test_case.cursor_type, field.data_type())
+        .map_err(|error| error.to_string())?;
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
+        .map_err(|error| error.to_string())?;
+    Ok(format!("{} {}", array.data_type(), formatter.value(0)))
 }

@@ -588,6 +588,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "column_names is for columns of data without a header row",
         },
         ParseProjectErrorTestCase {
+            description: "naming takes snake_case or source; dlt is no naming",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nnaming = \"dlt\"\n",
+            expected_message: "unknown variant `dlt`, expected `snake_case` or `source`",
+        },
+        ParseProjectErrorTestCase {
             description: "an xlsx header_row past the range's rows is refused",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xlsx\"\nxlsx = { range = \"A1:C5\", header_row = 10 }\n",
             expected_message: "[sources.raw] xlsx.header_row 10 is past the range's 5 rows",

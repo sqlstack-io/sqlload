@@ -9,14 +9,14 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::schema_plan::models::DesiredColumn;
 
-/// One Parquet file ClickHouse reads: its URL, the columns its own footer holds, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
+/// One Parquet file ClickHouse reads: its URL, the columns its own footer holds (each table column with its name in the file, which `naming`, `rename` or numbering may have changed), and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PulledFile {
     pub url: String,
-    pub in_file: Vec<String>,
+    pub in_file: Vec<(String, String)>,
     pub constants: Vec<(String, Option<String>)>,
 }
 
@@ -79,7 +79,7 @@ pub(crate) fn pull_insert(
     into: &str,
     (columns, sql_type): (&[DesiredColumn], SqlTypeOf<'_>),
     (file, credentials): (&PulledFile, Option<&PullCredentials>),
-    (naming, load_id, loaded_at): (Naming, &str, &str),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
     let literal = |text: &str| ClickHouseSql.render_loader_value_literal(text);
     let identifier = |name: &str| ClickHouseSql.render_identifier(name);
@@ -89,22 +89,26 @@ pub(crate) fn pull_insert(
     let mut values: Vec<String> = Vec::with_capacity(columns.len());
     for column in columns {
         let constant = file.constants.iter().find(|(name, _)| *name == column.name);
-        let held = file.in_file.contains(&column.name);
+        let held = file
+            .in_file
+            .iter()
+            .find(|(held, _)| *held == column.name)
+            .map(|(_, name)| name.as_str());
         let value = match (column.name.as_str(), constant, held) {
             (_, Some((_, Some(value))), _) => typed_literal(value, &column.column_type),
             (_, Some((_, None)), _) => "NULL".to_owned(),
-            (_, None, _) if metadata_role(naming, &column.name) == Some(MetadataRole::LoadId) => {
+            (_, None, _) if metadata_role(compat, &column.name) == Some(MetadataRole::LoadId) => {
                 typed_literal(load_id, &column.column_type)
             }
-            (_, None, _) if metadata_role(naming, &column.name) == Some(MetadataRole::LoadedAt) => {
+            (_, None, _) if metadata_role(compat, &column.name) == Some(MetadataRole::LoadedAt) => {
                 typed_literal(loaded_at, &column.column_type)
             }
             (SOURCE_ROW_COLUMN, None, _) => "rowNumberInAllBlocks() + 1".to_owned(),
-            (name, None, true) => match column.column_type {
+            (_, None, Some(name)) => match column.column_type {
                 ColumnType::Binary => format!("substring({}, 1)", identifier(name)),
                 _ => identifier(name),
             },
-            (_, None, false) => "NULL".to_owned(),
+            (_, None, None) => "NULL".to_owned(),
         };
         values.push(cast(value, column));
     }

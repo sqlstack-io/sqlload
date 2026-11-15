@@ -206,7 +206,7 @@ pub(crate) const DLT_CRM_SOURCE: &str = r#"
 kind = "postgres_cdc"
 connection = "pg"
 include = ["crm.*"]
-naming = "dlt"
+compat = "dlt"
 "#;
 
 const CRM: &[&str] = &["load", "crm"];

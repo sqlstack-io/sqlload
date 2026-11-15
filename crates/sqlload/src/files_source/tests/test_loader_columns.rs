@@ -38,6 +38,7 @@ fn given_files_with_the_loaders_own_columns_when_sampling_then_they_are_dropped_
                 direct_refusal: None,
                 stored_read: crate::files_source::models::StoredRead::Plain,
                 lists: None,
+                repeat_of: None,
             })
             .collect();
         let (kept, dropped) = drop_loader_columns(found);

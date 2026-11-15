@@ -1422,3 +1422,27 @@ pub(crate) struct ArchivedReloadTestCase {
     /// Every row as `id:score`, in order, after the reload.
     pub(crate) expected_rows: &'static str,
 }
+
+/// One run of a [`ColumnNamesTestCase`]: a file written under `drop/`, then `plan` and `load`.
+pub(crate) struct NamesRun {
+    pub(crate) file: &'static str,
+    pub(crate) contents: &'static str,
+    /// The file's bytes from `contents`: the text itself, or a workbook of rows by line and cells by `|`.
+    pub(crate) encode: fn(&str) -> Result<Vec<u8>, String>,
+    /// Whether `plan` and `load` succeed.
+    pub(crate) expected_ok: bool,
+    /// Text the plan's output holds.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// A files source under `drop/` with `settings`, planned and loaded by the executable into DuckDB once per run, each run adding its file.
+pub(crate) struct ColumnNamesTestCase {
+    pub(crate) description: &'static str,
+    /// The source's `format` and other settings, after its `path`.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [NamesRun],
+    /// The table in `raw` and its columns after the runs, in order and joined by `,`, the ones a load adds left out.
+    pub(crate) expected_columns: (&'static str, &'static str),
+    /// A query of the database after the runs and what it returns.
+    pub(crate) check: (&'static str, &'static str),
+}

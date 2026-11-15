@@ -143,7 +143,7 @@ fn given_batches_when_encoded_as_binary_copy_then_the_source_reader_reads_the_sa
             .join("; ")),
         },
         CopyRoundTripTestCase {
-            description: "a value too large for its column fails the batch, naming the column, rather than becoming NULL",
+            description: "a value too large for its column fails the batch, compat the column, rather than becoming NULL",
             columns: vec![(
                 "small",
                 ColumnType::SmallInt,
@@ -266,7 +266,7 @@ fn given_array_columns_when_staged_then_each_list_is_postgres_array_input_text()
             .join("; ")),
         },
         ArrayTextTestCase {
-            description: "an element too large for the array's element type fails the batch, naming the column",
+            description: "an element too large for the array's element type fails the batch, compat the column",
             columns: vec![(
                 "ids",
                 ColumnType::Array(Box::new(ColumnType::SmallInt)),

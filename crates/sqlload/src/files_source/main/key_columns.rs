@@ -23,6 +23,7 @@ pub fn key_columns(
             direct_refusal: None,
             stored_read: StoredRead::Plain,
             lists: None,
+            repeat_of: None,
         });
     }
     Ok(columns)

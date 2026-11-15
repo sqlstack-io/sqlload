@@ -1,4 +1,4 @@
-"""The columns a load adds are named by `load_naming` alone, so `naming = "dlt"` renames every one of them (CHI-1234 E10)."""
+"""The columns a load adds are named by `load_naming` alone, so `compat = "dlt"` renames every one of them (CHI-1234 E10)."""
 
 from __future__ import annotations
 

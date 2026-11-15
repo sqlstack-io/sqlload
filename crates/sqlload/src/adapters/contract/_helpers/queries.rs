@@ -12,7 +12,7 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::metadata_name::metadata_name;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::schema_plan::models::DesiredColumn;
 
 /// A query for `MAX(column)` (of a coalesced cursor, `MAX(COALESCE(column, ...))`) over the rows of the request's scope, whose text never depends on session time zones or output formats; `None` if a lookback needs a time column. `MAX` skips a row whose cursor is NULL, so such rows never move it.
@@ -97,9 +97,9 @@ pub(crate) fn child_tables_query<A: SqlAdapter + ?Sized>(
 ) -> String {
     let schema = adapter.render_loader_value_literal(&adapter.stored_table_name(&parent.schema));
     let prefix = adapter.stored_table_name(&format!("{}{CHILD_TABLE_SEPARATOR}", parent.table));
-    let parent_ids = [Naming::Sqlload, Naming::Dlt]
-        .map(|naming| {
-            let name = metadata_name(naming, MetadataRole::ParentId);
+    let parent_ids = [Compat::Sqlload, Compat::Dlt]
+        .map(|compat| {
+            let name = metadata_name(compat, MetadataRole::ParentId);
             adapter.render_loader_value_literal(&adapter.stored_name(name))
         })
         .join(", ");

@@ -105,8 +105,10 @@ same name, ignoring case, fails `plan`.
 
 ## Columns and types
 
-- The header row names the columns, as written. A blank header cell between named ones, or two names
-  equal ignoring case, fails `plan` naming the cell (`Locations!C1`). A merged header cell names
+- The header row names the columns, under [`naming`](/docs/concepts/nested-data/#naming). A blank
+  header cell between named ones fails `plan` naming the cell (`Locations!C1`). A name the header
+  repeats, ignoring case, is numbered as
+  [`on_duplicate_names`](/docs/concepts/nested-data/#on_duplicate_names) says. A merged header cell names
   only its first column; the rest count as blank. Cells right of the last named header cell are not
   loaded, with a warning.
 - Rows with nothing in the header's columns are skipped; a short row is padded with NULLs.

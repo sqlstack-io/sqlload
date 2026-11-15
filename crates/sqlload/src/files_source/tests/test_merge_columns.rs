@@ -49,6 +49,7 @@ fn given_int_and_float_in_different_files_when_merging_then_text_formats_widen_a
                 direct_refusal: None,
                 stored_read: crate::files_source::models::StoredRead::Plain,
                 lists: None,
+                repeat_of: None,
             }]
         };
         let merge = ColumnMerge {
