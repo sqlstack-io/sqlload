@@ -5,6 +5,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::files_source::models::AfterLoad;
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::load_naming::main::loaded_columns::loaded_columns;
@@ -13,7 +14,9 @@ use crate::load_naming::models::{
     ColumnName, Compat, LoadedColumn, LoadedNames, NameRules, Naming, NumberedName, RenameColumn,
 };
 use crate::load_naming::types::RenameFunction;
+use crate::loader::_helpers::destination::folder_claims;
 use crate::loader::_helpers::run_log::kept_numbered;
+use crate::loader::_helpers::sources::scoped_tables;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::missing_description;
 use crate::loader::_helpers::specs::table_name;
@@ -27,6 +30,7 @@ use crate::loader::constants::{
     RANGE_NEEDS_CURSOR,
 };
 use crate::loader::errors::LoaderError;
+use crate::loader::models::{DrainedFiles, FoundSource, FoundSources};
 use crate::loader::models::{
     PlanOptions, ProjectPlan, RangeFlags, ResolvedTables, SkippedTable, TablePlan, TableSpec,
     TableTransform, TypedCursors, UnreadSource,
@@ -1325,4 +1329,91 @@ pub(crate) async fn with_kept_names(
         ..kept_spec
     };
     Box::pin(plan_table(&kept_spec, destination, options)).await
+}
+
+/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.
+pub(crate) async fn found_sources<'a>(
+    project: &'a ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    options: &PlanOptions,
+) -> Result<FoundSources<'a>, LoaderError> {
+    let mut found = FoundSources::default();
+    let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
+    for (source_name, source) in &project.sources {
+        let (mut resolved, files) =
+            match scoped_tables((project, options), (source_name, source)).await? {
+                Ok(tables) => tables,
+                Err(problem) => {
+                    found.unresolved.push(source_name.clone());
+                    if let Some(problem) = problem {
+                        found.plan.unread_sources.insert(
+                            source_name.clone(),
+                            unread_source(project, (source_name, source)),
+                        );
+                        if problem.retryable {
+                            found.plan.retryable_problems.push(problem.message.clone());
+                        }
+                        found.plan.failed_sources.insert(source_name.clone());
+                        found.plan.problems.push(problem.message);
+                    }
+                    continue;
+                }
+            };
+        if let Some(drained) = resolved.drained.take() {
+            drained_sources.push((found.sources.len(), drained));
+        }
+        found
+            .claims
+            .extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
+        found.configured.extend(resolved.specs.iter().cloned());
+        found.sources.push(FoundSource {
+            name: source_name,
+            source,
+            resolved,
+            files,
+        });
+    }
+    let mut drained_specs: Vec<TableSpec> = Vec::new();
+    for (index, drained) in drained_sources {
+        let source = &mut found.sources[index];
+        let shared = found
+            .configured
+            .iter()
+            .any(|spec| spec.target == drained.target && spec.destination == drained.table);
+        if shared {
+            found.unresolved.push(source.name.clone());
+        }
+        found.drained.extend([
+            drained.table.table.clone(),
+            drained.skipped.destination.clone(),
+            source.name.clone(),
+        ]);
+        drained_specs.extend(drained.spec);
+        if !drained.in_scope {
+            continue;
+        }
+        let exists = match destinations.get(&drained.target) {
+            Some(destination) => live_columns(destination, &drained.table).await?.is_some(),
+            None => false,
+        };
+        let path = source.source.path.as_deref().unwrap_or_default();
+        let problem = match (exists, shared, options.reload) {
+            (false, _, _) => Some(drained.problem),
+            (true, true, _) => Some(format!(
+                "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
+                source.name, drained.table.table, source.name
+            )),
+            (true, false, true) if source.source.after_load == AfterLoad::Delete => Some(format!(
+                "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
+                source.name
+            )),
+            (true, false, _) => None,
+        };
+        match problem {
+            Some(problem) => source.resolved.problems.push(problem),
+            None => source.resolved.skipped.push(drained.skipped),
+        }
+    }
+    found.configured.extend(drained_specs);
+    Ok(found)
 }

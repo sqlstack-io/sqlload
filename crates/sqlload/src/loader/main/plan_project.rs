@@ -11,11 +11,12 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::{
-    admit_tables, destination_names, spec_names, unmatched_selectors, with_kept_names,
+    admit_tables, destination_names, found_sources, spec_names, unmatched_selectors,
+    with_kept_names,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::sources::with_fetch_memory;
-use crate::loader::_helpers::sources::{PLANNED_SOURCES, found_sources, selected, source_ends};
+use crate::loader::_helpers::sources::{PLANNED_SOURCES, selected, source_ends};
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table, skip_up_to_date};

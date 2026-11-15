@@ -3,12 +3,10 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use chrono_tz::Tz;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
@@ -43,11 +41,11 @@ use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
-use crate::loader::_helpers::destination::{folder_claims, nanosecond_columns};
+use crate::loader::_helpers::destination::nanosecond_columns;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::python::{read_schema, read_types};
 use crate::loader::_helpers::resolve::{
-    display_name, resolve_tables, source_target, spec_names, target_display_name, unread_source,
+    display_name, resolve_tables, source_target, spec_names, target_display_name,
 };
 use crate::loader::_helpers::run_log::{
     file_column_problem, loaded_file, logs_files, merge_ledger, reload_order,
@@ -65,11 +63,11 @@ use crate::loader::constants::{
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesTransform;
+use crate::loader::models::TransformRun;
 use crate::loader::models::{
     CommitRule, DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd,
     SourceProblem, SourceReader, TablePlan, TableSpec,
 };
-use crate::loader::models::{FoundSource, FoundSources, TransformRun};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -1909,91 +1907,4 @@ pub(crate) fn source_in_scope(
         || tables
             .iter()
             .any(|names| selected(options, (source_name, names)))
-}
-
-/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.
-pub(crate) async fn found_sources<'a>(
-    project: &'a ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    options: &PlanOptions,
-) -> Result<FoundSources<'a>, LoaderError> {
-    let mut found = FoundSources::default();
-    let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
-    for (source_name, source) in &project.sources {
-        let (mut resolved, files) =
-            match scoped_tables((project, options), (source_name, source)).await? {
-                Ok(tables) => tables,
-                Err(problem) => {
-                    found.unresolved.push(source_name.clone());
-                    if let Some(problem) = problem {
-                        found.plan.unread_sources.insert(
-                            source_name.clone(),
-                            unread_source(project, (source_name, source)),
-                        );
-                        if problem.retryable {
-                            found.plan.retryable_problems.push(problem.message.clone());
-                        }
-                        found.plan.failed_sources.insert(source_name.clone());
-                        found.plan.problems.push(problem.message);
-                    }
-                    continue;
-                }
-            };
-        if let Some(drained) = resolved.drained.take() {
-            drained_sources.push((found.sources.len(), drained));
-        }
-        found
-            .claims
-            .extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
-        found.configured.extend(resolved.specs.iter().cloned());
-        found.sources.push(FoundSource {
-            name: source_name,
-            source,
-            resolved,
-            files,
-        });
-    }
-    let mut drained_specs: Vec<TableSpec> = Vec::new();
-    for (index, drained) in drained_sources {
-        let source = &mut found.sources[index];
-        let shared = found
-            .configured
-            .iter()
-            .any(|spec| spec.target == drained.target && spec.destination == drained.table);
-        if shared {
-            found.unresolved.push(source.name.clone());
-        }
-        found.drained.extend([
-            drained.table.table.clone(),
-            drained.skipped.destination.clone(),
-            source.name.clone(),
-        ]);
-        drained_specs.extend(drained.spec);
-        if !drained.in_scope {
-            continue;
-        }
-        let exists = match destinations.get(&drained.target) {
-            Some(destination) => live_columns(destination, &drained.table).await?.is_some(),
-            None => false,
-        };
-        let path = source.source.path.as_deref().unwrap_or_default();
-        let problem = match (exists, shared, options.reload) {
-            (false, _, _) => Some(drained.problem),
-            (true, true, _) => Some(format!(
-                "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
-                source.name, drained.table.table, source.name
-            )),
-            (true, false, true) if source.source.after_load == AfterLoad::Delete => Some(format!(
-                "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
-                source.name
-            )),
-            (true, false, _) => None,
-        };
-        match problem {
-            Some(problem) => source.resolved.problems.push(problem),
-            None => source.resolved.skipped.push(drained.skipped),
-        }
-    }
-    found.configured.extend(drained_specs);
-    Ok(found)
 }
