@@ -94,11 +94,12 @@ async fn planned_tables(
     (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
 ) -> Result<(Vec<TablePlan>, Vec<TableSpec>), LoaderError> {
     let module = project.python_modules.get(source_name);
+    let paths = project.python_http_paths.get(source_name);
     let mut planned: Vec<TablePlan> = Vec::new();
     let mut unselected: Vec<TableSpec> = Vec::new();
     for mut spec in specs {
         spec.files = files.clone();
-        spec.python = module.map(|module| python_table(module, &spec.source_table));
+        spec.python = module.map(|module| python_table(module, &spec.source_table, paths));
         if !selected(options, (source_name, &spec_names(&spec))) {
             unselected.push(spec);
             continue;

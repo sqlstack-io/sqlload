@@ -44,6 +44,7 @@ use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::destination::truncated_nanoseconds;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
+use crate::loader::_helpers::python::python_problems;
 use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::render::up_to_date;
@@ -55,7 +56,6 @@ use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, with_live_types};
 use crate::loader::_helpers::specs::files_read_columns;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
-use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
 use crate::loader::constants::RANGE_NEEDS_CURSOR;
 use crate::loader::errors::LoaderError;
@@ -78,7 +78,6 @@ use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::SourceTable;
 use crate::postgres_source::models::{PgType, ReadColumn};
 use crate::project::models::BatchStep;
-use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
@@ -232,15 +231,9 @@ pub(crate) async fn plan_table(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
-    let undeclared = spec
-        .python
-        .as_ref()
-        .is_some_and(|python| python.declared.is_empty());
-    if undeclared && spec.contract == Contract::Enforced {
-        return Ok(blocked_table(
-            spec,
-            vec![ENFORCED_UNDECLARED_PROBLEM.to_owned()],
-        ));
+    let problems = python_problems(spec);
+    if !problems.is_empty() {
+        return Ok(blocked_table(spec, problems));
     }
     let children = match spec.unnest {
         Unnest::All => live_child_tables(destination, spec).await?,
