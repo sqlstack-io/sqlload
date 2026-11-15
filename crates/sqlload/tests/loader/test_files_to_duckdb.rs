@@ -1,7 +1,7 @@
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
-use crate::after_load_helpers::run_after_load_case;
+use crate::after_load_helpers::{run_after_load_case, run_archived_reload};
 use crate::files_helpers::run_source_row_upgrade;
 use crate::helpers::{MEGABYTE, run_peak_memory};
 use crate::helpers::{
@@ -9,7 +9,9 @@ use crate::helpers::{
     run_large_partition, run_replaced_keys, seaweedfs_store,
 };
 use crate::merge_helpers::run_merge_case;
-use crate::test_types::{AfterLoadStep, AfterLoadTestCase, FileSetTestCase};
+use crate::test_types::{
+    AfterLoadStep, AfterLoadTestCase, ArchivedReloadTestCase, FileSetTestCase,
+};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep, ReplacedKeysTestCase};
 use crate::test_types::{FilesRun, FilesScenarioTestCase, LargePartitionTestCase, ParquetFile};
 use crate::test_types::{PeakMemoryTestCase, SourceRowUpgradeTestCase};
@@ -1840,4 +1842,36 @@ fn given_a_later_batch_holding_a_column_duckdb_cannot_read_exactly_when_duckdb_r
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_an_append_parquet_table_with_move_to_when_reloading_then_each_archived_file_is_read_from_where_it_was_moved()
+-> Result<(), String> {
+    let test_cases = [ArchivedReloadTestCase {
+        description: "a.parquet loaded and moved to done/, then a new drop/a.parquet: the reload reads each copy once, the archived one from done/",
+        first: &[ParquetFile {
+            key: "a.parquet",
+            ids: &[1],
+            score: 1.0,
+            extra: None,
+        }],
+        later: &[ParquetFile {
+            key: "a.parquet",
+            ids: &[2],
+            score: 2.0,
+            extra: None,
+        }],
+        expected_plan: "route   read parquet into Arrow -> DuckDB takes Arrow (--reload also reads the files after_load moved to",
+        expected_rows: "1:1.0,2:2.0",
+    }];
+    for test_case in &test_cases {
+        let (plan, rows) = run_archived_reload(test_case)?;
+        assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
+        assert!(
+            plan.contains(test_case.expected_plan),
+            "{}:\n{plan}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

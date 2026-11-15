@@ -363,6 +363,13 @@ old one in one commit at the end; until then readers see the old table.
 
   Once the new table is in, files read from `path` move as usual; those already under `move_to`
   stay there. A reload that fails moves nothing.
+
+  When some of the files are under `move_to`, SQLLoad reads them itself, even where the destination
+  reads files directly on a normal load, and the route line says why:
+
+  ```text
+  ├── route   read parquet into Arrow -> DuckDB takes Arrow (--reload also reads the files after_load moved to ./done/scores/)
+  ```
 - With `after_load = "delete"`, `--reload` is still refused: the files loaded before are gone.
 
 ## Which files load

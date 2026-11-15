@@ -993,6 +993,16 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     }
 }
 
+/// Why SQLLoad reads a `--reload`'s files itself when some come from `after_load`'s `move_to` folder: a destination reading the files addresses each by the source's folder and its key, which would read `done/a.parquet` as `drop/a.parquet`.
+pub(crate) fn archived_reason(spec: &TableSpec, read: Option<&FilesRead>) -> Option<String> {
+    let archive = spec.files.as_ref()?.archive.as_ref()?;
+    read?
+        .files
+        .iter()
+        .any(|data| data.file.path.as_ref().starts_with(&archive.prefix))
+        .then(|| format!("--reload also reads the files after_load moved to {archive}"))
+}
+
 /// What a table's source offers: rows as Arrow, plus the files themselves for a files source, with why the destination must not read them itself.
 pub(crate) fn reader_offer(
     spec: &TableSpec,
@@ -1060,7 +1070,8 @@ pub(crate) fn reader_offer(
         spec.transform
             .as_ref()
             .map(|transform| format!("transform {} runs on each file", transform.function))
-    });
+    })
+    .or_else(|| archived_reason(spec, read));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },

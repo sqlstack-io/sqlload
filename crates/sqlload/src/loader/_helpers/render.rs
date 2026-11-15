@@ -24,7 +24,9 @@ use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{source_readers, unarchived};
-use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
+use crate::loader::_helpers::table_plan::{
+    archived_reason, is_direct, publishes_once, pulls_unloaded,
+};
 use crate::loader::constants::{
     CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS,
     PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
@@ -629,12 +631,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             "changed columns move to the end of the column order",
         ));
     }
-    details.extend(
-        table
-            .route
-            .as_ref()
-            .map(|route| detail("route", route_text(table, route))),
-    );
+    let why_shown =
+        (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
+            || spec.warehouse_source.is_some();
+    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !why_shown);
+    details.extend(table.route.as_ref().map(|route| {
+        let text = route_text(table, route);
+        detail(
+            "route",
+            archived
+                .as_ref()
+                .map_or_else(|| text.clone(), |why| format!("{text} ({why})")),
+        )
+    }));
     if let Some(WarehouseSource {
         route: WarehouseRoute::Unload { stage, .. },
         ..
@@ -645,10 +654,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     if let Some(reason) = table
         .route
         .as_ref()
-        .filter(|_| {
-            (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
-                || spec.warehouse_source.is_some()
-        })
+        .filter(|_| why_shown)
         .map(|route| route.reason.clone())
     {
         details.push(detail("why", reason));

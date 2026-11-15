@@ -1409,3 +1409,16 @@ pub(crate) struct FileSetTestCase {
     pub(crate) check_query: &'static str,
     pub(crate) expected_result: &'static str,
 }
+
+/// An append Parquet source under `drop/` with `after_load = { move_to = "done" }`, loaded into DuckDB by the executable, then given `later` files and loaded again with `--reload --yes`.
+pub(crate) struct ArchivedReloadTestCase {
+    pub(crate) description: &'static str,
+    /// The files the first load reads and moves to `done/`, by key below `drop/`.
+    pub(crate) first: &'static [ParquetFile],
+    /// The files written to `drop/` before the reload.
+    pub(crate) later: &'static [ParquetFile],
+    /// Text the reload's plan must contain.
+    pub(crate) expected_plan: &'static str,
+    /// Every row as `id:score`, in order, after the reload.
+    pub(crate) expected_rows: &'static str,
+}
