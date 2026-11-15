@@ -76,9 +76,9 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
             expected_value: "Some([\"id\"])",
         },
         ParseProjectTestCase {
-            description: "lookback is a duration",
+            description: "lookback written as text is a duration",
             read: |project| format!("{:?}", project.sources["app"].defaults.lookback),
-            expected_value: "Some(3600s)",
+            expected_value: "Some(Duration(3600s))",
         },
         ParseProjectTestCase {
             description: "the table name template defaults to source and table",

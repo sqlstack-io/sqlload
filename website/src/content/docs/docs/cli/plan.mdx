@@ -35,6 +35,8 @@ selects a table by name, since that table could be one of its own.
 | `--exclude <SELECTOR>...` | Sources or tables to leave out. Wins over `--select`. |
 | `--start-cursor <VALUE>` | Read from this cursor value instead of the destination's maximum. Typed from each table's cursor: an integer, an RFC 3339 timestamp or a date. |
 | `--end-cursor <VALUE>` | Read only cursor values below this one. |
+| `--start-cursor-ts <TIMESTAMP>`, `--end-cursor-ts <TIMESTAMP>` | From 0.52.0. The range for the selected date and timestamp cursor tables only: an RFC 3339 timestamp or a date. A date cursor takes a date. Not with `--start-cursor`/`--end-cursor`. See [Backfilling a range](/docs/concepts/cursors/#backfilling-a-range). |
+| `--start-cursor-int <INTEGER>`, `--end-cursor-int <INTEGER>` | From 0.52.0. The range for the selected integer cursor tables only. Can be given with the `-ts` flags, so one run ranges tables of both kinds. |
 | `--reload` | Rebuild the selected tables from the whole source, with the current columns and types. Asks first, unless `--yes`. Refuses `postgres_cdc` tables, which `--resnapshot` copies again; see [Reloading](/docs/guides/postgres-cdc/#reloading). |
 | `--resnapshot` | `postgres_cdc` sources: drop and recreate the replication slot, then copy every table again. Asks first, unless `--yes`. See [Postgres changes](/docs/guides/postgres-cdc/#re-snapshot). |
 | `--follow` | `load` of one `postgres_cdc` source only: keep streaming after catching up, writing a batch every `batch_interval`, until `--max-duration` passes or Ctrl-C or SIGTERM. See [Keep streaming](/docs/guides/postgres-cdc/#keep-streaming). |

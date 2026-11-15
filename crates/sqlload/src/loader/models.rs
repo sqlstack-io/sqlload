@@ -59,7 +59,10 @@ impl std::fmt::Display for SettingOrigin {
 pub struct CursorSpec {
     pub column: String,
     pub start: Option<String>,
+    /// A duration `lookback`, on a date or timestamp cursor.
     pub lookback: Option<Duration>,
+    /// An integer `lookback`, in cursor units, on an integer cursor.
+    pub lookback_units: Option<i64>,
     /// Read only cursor values before now plus this (`lookahead`).
     pub lookahead: Option<Duration>,
     /// `lookback_from = "now"`: incremental runs read from now minus `lookback`, not from the destination's maximum minus it.
@@ -651,10 +654,14 @@ pub struct PlanOptions {
     pub rebuild_allowed: bool,
     /// `--reload`: rebuild each selected table from the whole source, ignoring the destination's cursor.
     pub reload: bool,
-    /// `--start-cursor` (or `-ts`/`-int`): read from this cursor value instead of the destination's maximum.
+    /// `--start-cursor` (or, for one table, its family's `-ts`/`-int`): read from this cursor value instead of the destination's maximum.
     pub start_cursor: Option<String>,
-    /// `--end-cursor` (or `-ts`/`-int`): read only cursor values below this one.
+    /// `--end-cursor` (or, for one table, its family's `-ts`/`-int`): read only cursor values below this one.
     pub end_cursor: Option<String>,
+    /// `--start-cursor-ts`/`--end-cursor-ts` and `--start-cursor-int`/`--end-cursor-int`: each cursor table reads the range of its own family.
+    pub typed_cursors: TypedCursors,
+    /// The flags `start_cursor` and `end_cursor` came from, as `plan` names them: the untyped ones, or the typed ones of the family one table's options took.
+    pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
@@ -665,6 +672,48 @@ pub struct PlanOptions {
     pub fail_fast: bool,
     /// `--memory-per-table` (Linux): one table at a time, each table's peak memory measured.
     pub memory_per_table: bool,
+}
+
+/// The typed cursor range flags, as given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypedCursors {
+    pub start_ts: Option<String>,
+    pub end_ts: Option<String>,
+    pub start_int: Option<String>,
+    pub end_int: Option<String>,
+}
+
+impl PlanOptions {
+    /// Whether a cursor range is given, by `--start-cursor`/`--end-cursor` or a typed flag.
+    pub fn ranged(&self) -> bool {
+        let typed = &self.typed_cursors;
+        [
+            &self.start_cursor,
+            &self.end_cursor,
+            &typed.start_ts,
+            &typed.end_ts,
+            &typed.start_int,
+            &typed.end_int,
+        ]
+        .iter()
+        .any(|value| value.is_some())
+    }
+}
+
+/// The flags a cursor range came from, as `plan` names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeFlags {
+    pub start: &'static str,
+    pub end: &'static str,
+}
+
+impl Default for RangeFlags {
+    fn default() -> Self {
+        Self {
+            start: "--start-cursor",
+            end: "--end-cursor",
+        }
+    }
 }
 
 /// What one Python table's load needs.

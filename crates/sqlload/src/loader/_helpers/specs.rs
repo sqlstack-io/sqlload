@@ -44,7 +44,7 @@ use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::postgres_source::models::{ReadColumn, WireType};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    CdcDeletes, CdcMode, CursorBounds, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
     OnDuplicateKeys, ProjectConfig, SortDirection, SourceConfig, SourceKind, StateMode,
     TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
@@ -818,7 +818,14 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
             .map(|(value, _)| value)
             .unwrap_or_default(),
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
-        lookback: layered(&table.lookback, &source.lookback).map(|(value, _)| value),
+        lookback: match layered(&table.lookback, &source.lookback) {
+            Some((Lookback::Duration(duration), _)) => Some(duration),
+            _ => None,
+        },
+        lookback_units: match layered(&table.lookback, &source.lookback) {
+            Some((Lookback::Units(units), _)) => Some(units),
+            _ => None,
+        },
         lookahead: layered(&table.lookahead, &source.lookahead).map(|(value, _)| value),
         from_now: layered(&table.lookback_from, &source.lookback_from)
             .is_some_and(|(value, _)| value == LookbackFrom::Now),
@@ -1112,10 +1119,14 @@ pub(crate) fn strategy_problems(
         (WriteStrategy::Merge, _) if unique_key.is_empty() => problems.push(format!(
             "write_strategy = \"merge\" needs a unique_key: the key columns, such as unique_key = [\"id\"], or unique_key = {PRIMARY_KEY_PLACEHOLDER:?} for the primary key the source reports"
         )),
-        (WriteStrategy::Append, Some(cursor)) if cursor.lookback.is_some() => problems.push(
-            "lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge"
-                .to_owned(),
-        ),
+        (WriteStrategy::Append, Some(cursor))
+            if cursor.lookback.is_some() || cursor.lookback_units.is_some() =>
+        {
+            problems.push(
+                "lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge"
+                    .to_owned(),
+            )
+        }
         (WriteStrategy::Replace, Some(_)) => problems.push(
             "write_strategy = \"replace\" reloads the whole table, so it takes no cursor_column".to_owned(),
         ),
@@ -1133,7 +1144,16 @@ pub(crate) fn strategy_problems(
             "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; {strategy} does not delete by it. Fix: set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key{merge}"
         ));
     }
-    if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback.is_none()) {
+    if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback_units.is_some())
+    {
+        problems.push(format!(
+            "lookback_from = \"now\" counts lookback back from the time of the run, so {} needs a duration lookback, such as lookback = \"1d\", not a number of cursor units",
+            cursor.label()
+        ));
+    }
+    if let Some(cursor) = cursor.filter(|cursor| {
+        cursor.from_now && cursor.lookback.is_none() && cursor.lookback_units.is_none()
+    }) {
         problems.push(format!(
             "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
             cursor.label()

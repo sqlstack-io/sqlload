@@ -8,6 +8,8 @@ mod batched_helpers;
 mod bigquery_helpers;
 #[path = "loader/clickhouse/helpers.rs"]
 mod clickhouse_helpers;
+#[path = "loader/cursors/helpers.rs"]
+mod cursor_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
 #[path = "loader/files/helpers.rs"]
@@ -94,6 +96,8 @@ mod test_sheets_to_duckdb;
 mod test_snowflake_routes;
 #[path = "loader/test_text_files_to_duckdb.rs"]
 mod test_text_files_to_duckdb;
+#[path = "loader/test_typed_cursors.rs"]
+mod test_typed_cursors;
 #[path = "loader/test_types.rs"]
 mod test_types;
 #[path = "loader/test_unnest.rs"]

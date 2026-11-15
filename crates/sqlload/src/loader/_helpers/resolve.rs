@@ -4,7 +4,7 @@ use crate::adapters::dispatch::main::dialect::files_destination::files_destinati
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
-use crate::column_types::models::Warehouse;
+use crate::column_types::models::{ColumnType, Warehouse};
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
@@ -15,19 +15,22 @@ use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, pinned_types, table_naming,
 };
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table};
-use crate::loader::constants::{NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER};
+use crate::loader::constants::{
+    DATE_TEXT_LENGTH, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER, RANGE_NEEDS_CURSOR,
+};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    PlanOptions, ProjectPlan, ResolvedTables, SkippedTable, TablePlan, TableSpec, TableTransform,
-    UnreadSource,
+    PlanOptions, ProjectPlan, RangeFlags, ResolvedTables, SkippedTable, TablePlan, TableSpec,
+    TableTransform, TypedCursors, UnreadSource,
 };
 use crate::postgres_source::models::SourceTable;
 use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, ProjectConfig, SourceConfig,
-    SourceKind, TableOverride, TableSettings, UnnestSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, ProjectConfig,
+    SourceConfig, SourceKind, TableOverride, TableSettings, UnnestSetting,
 };
+use crate::schema_plan::models::SchemaPlan;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::ssh_tunnel::models::SshTunnel;
 use std::collections::BTreeMap;
@@ -719,4 +722,235 @@ pub(crate) fn unmatched_selectors(
             },
         )
         .collect()
+}
+
+/// The cursors a typed range flag applies to: dates and timestamps (`-ts`), or integers (`-int`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorFamily {
+    Time,
+    Integer,
+}
+
+/// A typed range flag given: its name, its value and the cursors it applies to.
+type GivenFlag<'a> = (&'static str, &'a String, CursorFamily);
+
+/// One table's `options` and `schema` once its cursor, `cursor_type` (`None` while a Python table's cursor is unseen), is known: its family's typed range as `start_cursor`/`end_cursor`, and `schema` blocked by why the typed flags or the lookback can't apply, or warned of the rows a ranged `--reload` drops.
+pub(crate) fn ranged_table(
+    options: &PlanOptions,
+    spec: &TableSpec,
+    cursor_type: Option<&ColumnType>,
+    mut schema: SchemaPlan,
+) -> (PlanOptions, SchemaPlan) {
+    let (ranged, problem) = match table_range(options, spec, cursor_type, false) {
+        Ok(ranged) => (ranged, None),
+        Err(problem) => (options.clone(), Some(problem)),
+    };
+    if let Some(problem) = problem.filter(|_| schema.blocked.is_none()) {
+        schema = blocked_plan(vec![problem]);
+    }
+    schema.warnings.extend(reload_range(spec, &ranged));
+    (ranged, schema)
+}
+
+/// `options` for one table whose cursor is `cursor_type` (`None` while a Python table's cursor is unseen), into a files target when `files_target`: with typed flags, its family's range as `start_cursor`/`end_cursor`; or why the typed flags or its `lookback` can't apply to it.
+pub(crate) fn table_range(
+    options: &PlanOptions,
+    spec: &TableSpec,
+    cursor_type: Option<&ColumnType>,
+    files_target: bool,
+) -> Result<PlanOptions, String> {
+    let ranged = table_options(options, spec, cursor_type)?;
+    lookback_problem(spec, cursor_type, files_target).map_or(Ok(ranged), Err)
+}
+
+/// The typed flags given, in the order `plan` names them.
+fn given_flags(typed: &TypedCursors) -> Vec<GivenFlag<'_>> {
+    let flags = [
+        ("--start-cursor-ts", &typed.start_ts, CursorFamily::Time),
+        ("--end-cursor-ts", &typed.end_ts, CursorFamily::Time),
+        (
+            "--start-cursor-int",
+            &typed.start_int,
+            CursorFamily::Integer,
+        ),
+        ("--end-cursor-int", &typed.end_int, CursorFamily::Integer),
+    ];
+    let mut given: Vec<GivenFlag<'_>> = Vec::new();
+    for (flag, value, family) in flags {
+        if let Some(value) = value {
+            given.push((flag, value, family));
+        }
+    }
+    given
+}
+
+/// [`table_range`] without the lookback.
+fn table_options(
+    options: &PlanOptions,
+    spec: &TableSpec,
+    cursor_type: Option<&ColumnType>,
+) -> Result<PlanOptions, String> {
+    let typed = &options.typed_cursors;
+    let given = given_flags(typed);
+    if given.is_empty() {
+        return Ok(options.clone());
+    }
+    let Some(cursor) = &spec.cursor else {
+        return Err(RANGE_NEEDS_CURSOR.to_owned());
+    };
+    let named: Vec<&str> = given.iter().map(|(flag, _, _)| *flag).collect();
+    let has = |family: CursorFamily| given.iter().any(|(_, _, given)| *given == family);
+    let family = match cursor_type {
+        Some(ColumnType::Int | ColumnType::SmallInt) => CursorFamily::Integer,
+        Some(ColumnType::Date | ColumnType::TimestampTz | ColumnType::TimestampNtz) => {
+            CursorFamily::Time
+        }
+        Some(other) => {
+            return Err(format!(
+                "cursor {} is {other}, which takes --start-cursor/--end-cursor, not {}: the -ts flags are for date and timestamp cursors and the -int flags for integer ones",
+                cursor.label(),
+                named.join(", ")
+            ));
+        }
+        None => match (has(CursorFamily::Time), has(CursorFamily::Integer)) {
+            (true, false) => CursorFamily::Time,
+            (false, true) => CursorFamily::Integer,
+            _ => {
+                return Err(format!(
+                    "cursor {} has no type until the table first loads, so it can't choose between the -ts and -int flags; give one family's flags, or --start-cursor/--end-cursor",
+                    cursor.label()
+                ));
+            }
+        },
+    };
+    if !has(family) {
+        let (given_kind, wanted) = match family {
+            CursorFamily::Time => ("integer", "--start-cursor-ts/--end-cursor-ts"),
+            CursorFamily::Integer => ("date and timestamp", "--start-cursor-int/--end-cursor-int"),
+        };
+        return Err(format!(
+            "{} {} for {given_kind} cursors, but cursor {} is {}; give this table {wanted}, or leave it out of the selection",
+            named.join(", "),
+            match named.len() {
+                1 => "is",
+                _ => "are",
+            },
+            cursor.label(),
+            cursor_type.map(ToString::to_string).unwrap_or_default(),
+        ));
+    }
+    if cursor_type == Some(&ColumnType::Date)
+        && let Some((flag, value, _)) = given.iter().find(|(_, value, family)| {
+            *family == CursorFamily::Time && value.trim().len() > DATE_TEXT_LENGTH
+        })
+    {
+        return Err(format!(
+            "{flag} {value} has a time of day, but cursor {} is a date; give a date, such as {}",
+            cursor.label(),
+            value.trim().get(..DATE_TEXT_LENGTH).unwrap_or_default()
+        ));
+    }
+    let (start, end, range_flags) = match family {
+        CursorFamily::Time => (
+            &typed.start_ts,
+            &typed.end_ts,
+            RangeFlags {
+                start: "--start-cursor-ts",
+                end: "--end-cursor-ts",
+            },
+        ),
+        CursorFamily::Integer => (
+            &typed.start_int,
+            &typed.end_int,
+            RangeFlags {
+                start: "--start-cursor-int",
+                end: "--end-cursor-int",
+            },
+        ),
+    };
+    Ok(PlanOptions {
+        start_cursor: start.clone(),
+        end_cursor: end.clone(),
+        range_flags,
+        ..options.clone()
+    })
+}
+
+/// Why `spec`'s `lookback` can't apply to its cursor, `cursor_type` (`None` while a Python table's cursor is unseen), or into a files target (`files_target`): an integer lookback that counts back no units, or on anything but an integer cursor; a duration on anything but a date or timestamp cursor.
+fn lookback_problem(
+    spec: &TableSpec,
+    cursor_type: Option<&ColumnType>,
+    files_target: bool,
+) -> Option<String> {
+    let cursor = spec.cursor.as_ref()?;
+    let label = cursor.label();
+    if let Some(units) = cursor.lookback_units {
+        if units < 1 {
+            return Some(format!(
+                "lookback = {units} counts back no cursor units; give 1 or more, or leave lookback out"
+            ));
+        }
+        if files_target {
+            return Some(format!(
+                "lookback = {units} counts back integer cursor units, which a files target's window can't: it follows its newest partition; leave lookback out"
+            ));
+        }
+        return match cursor_type? {
+            ColumnType::Int | ColumnType::SmallInt => None,
+            time @ (ColumnType::Date | ColumnType::TimestampTz | ColumnType::TimestampNtz) => {
+                Some(format!(
+                    "lookback = {units} counts integer cursor units, but cursor {label} is {time}; use a duration, such as lookback = \"1d\""
+                ))
+            }
+            other => Some(format!(
+                "lookback needs a date, timestamp or integer cursor, but cursor {label} is {other}; leave lookback out"
+            )),
+        };
+    }
+    let duration = cursor.lookback?;
+    match cursor_type? {
+        ColumnType::Date | ColumnType::TimestampTz | ColumnType::TimestampNtz => None,
+        ColumnType::Int | ColumnType::SmallInt => Some(format!(
+            "lookback = \"{}\" is a duration, but cursor {label} is an integer; use a number of cursor units, such as lookback = 1",
+            humantime::format_duration(duration)
+        )),
+        other => Some(format!(
+            "lookback needs a date, timestamp or integer cursor, but cursor {label} is {other}; leave lookback out"
+        )),
+    }
+}
+
+/// What a `--reload` with a cursor range (`options`, as one table's [`table_range`] gave them) leaves out of the rebuilt table: the rows outside that range are dropped; rows with a NULL cursor are kept under `null_cursor = "include"`, which reads them with the first window, and dropped under `"ignore"` (under `"fail"`, the load fails on them).
+fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
+    let RangeFlags {
+        start: start_flag,
+        end: end_flag,
+    } = options.range_flags;
+    let (start, end) = (
+        options.start_cursor.as_deref().filter(|_| options.reload),
+        options.end_cursor.as_deref().filter(|_| options.reload),
+    );
+    let (kept, dropped) = match (start, end) {
+        (Some(start), Some(end)) => (
+            format!("from {start} ({start_flag}), below {end} ({end_flag})"),
+            format!("rows before {start} and from {end} on are dropped"),
+        ),
+        (Some(start), None) => (
+            format!("from {start} ({start_flag})"),
+            format!("rows before {start} are dropped"),
+        ),
+        (None, Some(end)) => (
+            format!("below {end} ({end_flag})"),
+            format!("rows from {end} on are dropped"),
+        ),
+        (None, None) => return None,
+    };
+    let nulls = match spec.cursor.as_ref().map(|cursor| cursor.null_cursor) {
+        Some(NullCursor::Include) => "; rows with a NULL cursor are kept",
+        Some(NullCursor::Ignore) => "; rows with a NULL cursor are dropped",
+        Some(NullCursor::Fail) | None => "",
+    };
+    Some(format!(
+        "--reload rebuilds the table with only the rows {kept}: {dropped}{nulls}"
+    ))
 }
