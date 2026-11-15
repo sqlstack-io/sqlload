@@ -126,8 +126,9 @@ How `rest_api` settings map:
   [Transforming each page](/docs/sources/python/#transforming-each-page).
 - `response_actions` that ignore a status are `on_status={404: "skip"}`. 429, 5xx and dropped
   connections are retried, honouring `Retry-After`; `retries=` on `sl.http` sets how many times.
-- An API that returns each row as a list of cells, such as a spreadsheet's, is `cells=sl.cells(...)`;
-  see [Rows of cells](/docs/sources/python/#rows-of-cells).
+- An API that returns each row as a list of cells, such as a spreadsheet's or an EAM grid's, is
+  `cells=sl.cells(..., name=...)`, whether each cell names its own column or the response lists
+  them; see [Rows of cells](/docs/sources/python/#rows-of-cells).
 - `include_from_parent` is `sl.key(name)` in a fan-out's `fields`. Records an adapter reshapes in
   Python, such as one flat row per Jira change history with its issue's ID, are a `select` through
   both lists with `sl.parent`: `select="$.issueChangeLogs[*].changeHistories[*]"` and

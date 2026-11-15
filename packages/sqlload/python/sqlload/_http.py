@@ -37,10 +37,6 @@ class Auth:
 	spec: Mapping[str, Any]
 
 
-#: `cells(names_from=...)` left unset: `"$.columns"`, or none with `header_row=True`.
-_LISTED_COLUMNS: Any = object()
-
-
 @dataclass(frozen=True)
 class Cells:
 	"""How each row's list of cells becomes columns; `paginate` and `fan_out` take it as `cells=`."""
@@ -48,27 +44,42 @@ class Cells:
 	spec: Mapping[str, Any]
 
 
-def cells(
-	pointer: str = "$.cells",
-	*,
-	key: str | None = "columnId",
-	value: str | Sequence[str] = "$.value",
-	names_from: str | None = _LISTED_COLUMNS,
-	name_key: str | None = "title",
-	id_key: str = "id",
-	header_row: bool = False,
-) -> Cells:
+@dataclass(frozen=True)
+class CellName:
+	"""Where the cells' column names come from: `sl.listed(...)` or `sl.header_row()`; `sl.cells` takes it as `name=`."""
+
+	spec: Mapping[str, Any]
+
+
+def cells(pointer: str = "$.cells", *, value: str | Sequence[str] = "$.value", name: str | CellName) -> Cells:
 	"""Each row's cells at `pointer` as one column per named column, typed like any other value; a missing cell loads NULL.
 
-	A cell's column is its `key` field, matched to the `id_key` of the columns the response lists at `names_from`,
-	named by their `name_key` (Smartsheet: the defaults). With `key=None` cells match columns by position, and with
-	`header_row=True` the first row's cells name them (Google's grid data). `value` is where
-	a cell's value is, or several places tried in turn. A cell whose column is not named fails the load."""
+	`value` is where a cell's value is, or several places tried in turn. `name` is where each cell's column name comes
+	from: a path in the cell (`"$.FIELDNAME"`), so each cell names itself; `sl.listed("$.columns")`, the columns the
+	response lists; or `sl.header_row()`, the first row's cells. The names then load like any other column's, through
+	`naming` and `rename`."""
 	values = [value] if isinstance(value, str) else list(value)
-	if names_from is _LISTED_COLUMNS:
-		names_from = None if header_row else "$.columns"
-	spec: dict[str, Any] = {"pointer": pointer, "key": key, "value": values, "names_from": names_from, "name_key": name_key, "id_key": id_key}
-	return Cells({**spec, "header_row": header_row})
+	if isinstance(name, str):
+		named: dict[str, Any] = {"kind": "field", "path": name}
+	elif isinstance(name, CellName):
+		named = dict(name.spec)
+	else:
+		raise TypeError(f'sl.cells name= takes a path in the cell such as "$.name", sl.listed(...) or sl.header_row(), not {name!r}')
+	return Cells({"pointer": pointer, "value": values, "name": named})
+
+
+def listed(path: str, /, *, key: str | None = "columnId", id_key: str = "id", name_key: str | None = "title", by_position: bool = False) -> CellName:
+	"""The columns a response lists at `path` (such as `"$.columns"`; a page without the list keeps the names before it).
+
+	Each cell's `key` field is matched to a listed column's `id_key`, and the column is named by its `name_key`
+	(Smartsheet: the defaults); `name_key=None` when each listed column is its name. `by_position=True` matches cells to
+	the listed columns by position instead. A cell whose column is not listed fails the load."""
+	return CellName({"kind": "listed", "from": path, "key": None if by_position else key, "id_key": id_key, "name_key": name_key})
+
+
+def header_row() -> CellName:
+	"""The first row's cells name the columns, matched by position (Google's grid data); that row does not load."""
+	return CellName({"kind": "header_row"})
 
 
 def single() -> Paginator:
@@ -254,12 +265,15 @@ class Http:
 		key: str | None = None,
 		cells: Cells | None = None,
 		select_missing: str = "fail",
+		error_path: str | None = None,
 		transform: Callable[..., Any] | str | None = None,
 	) -> Job:
 		"""Every page of `path`; `select` (such as `"$.items"`) is where the rows are, `on_status={404: "skip"}` treats a status as no rows.
 
 		A response without the `select` path fails the load, naming what it holds, unless `select_missing="empty"` reads it as
 		no rows, for APIs that leave an empty list out (as Google's do); an empty list or null is no rows either way.
+		`error_path` (such as `"$.errors"`) is where an API answering 200 reports an error: any value there but null,
+		false, `""`, `[]` or `{}` fails the table with it, before that page's rows load.
 
 		`fields` loads only those values of each row, renamed (`{"account_code": "$.code"}`); `keep_record` adds each
 		row's whole object as a JSON column. `method="POST"` sends `json_body` as JSON with every page, each page's copy
@@ -277,6 +291,7 @@ class Http:
 				**_key(key),
 				**_cells(cells),
 				**_select_missing(select_missing),
+				**_error_path(error_path),
 				**_transform(transform),
 			}
 		)
@@ -299,6 +314,7 @@ class Http:
 		cells: Cells | None = None,
 		batch: int | None = None,
 		select_missing: str = "fail",
+		error_path: str | None = None,
 		key_path: str | Field | None = None,
 		transform: Callable[..., Any] | str | None = None,
 	) -> Job:
@@ -314,7 +330,7 @@ class Http:
 		a value that is just `"{id}"` takes the key as it is (a number stays a number), and `plan` checks a level
 		above gives every one. `batch=1000` sends up to 1000 keys per request instead, each such value holding the
 		list of the batch's keys (`{"ids": "{id}"}` sends `{"ids": [1, 2, 3]}`); each batch is one request,
-		retried as a whole. `select_missing` is as for `paginate`.
+		retried as a whole. `select_missing` and `error_path` are as for `paginate`.
 
 		`key_path="$.issueId"` (from each record, or `sl.parent("$.issueId")` from an object around it) fails the
 		table when a record's key is not among the keys its request sent (with `batch=`, the batch's), catching an
@@ -338,6 +354,7 @@ class Http:
 				**_key(key),
 				**_cells(cells),
 				**_select_missing(select_missing),
+				**_error_path(error_path),
 				**_key_path(key_path),
 				**_transform(transform),
 				"over": over_spec,
@@ -385,6 +402,11 @@ def _select_missing(select_missing: str) -> dict[str, Any]:
 	if select_missing not in ("fail", "empty"):
 		raise ValueError(f'select_missing must be "fail" or "empty", not {select_missing!r}')
 	return {} if select_missing == "fail" else {"select_missing": select_missing}
+
+
+def _error_path(error_path: str | None) -> dict[str, Any]:
+	"""`error_path` as a job field, left out when unset so jobs without it are unchanged."""
+	return {} if error_path is None else {"error_path": error_path}
 
 
 def _key_path(key_path: str | Field | None) -> dict[str, Any]:
