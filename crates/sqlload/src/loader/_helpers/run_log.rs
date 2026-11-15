@@ -253,7 +253,7 @@ pub(crate) fn reset_record(table: &TablePlan, to: Option<&str>) -> Result<RunRec
                 .find(|read| read.name.eq_ignore_ascii_case(&cursor.column))
                 .map(|read| read.output.clone());
             let normal = match column_type {
-                Some(column_type) => cursor_text(to, &column_type)?,
+                Some(column_type) => cursor_text(to, &column_type, spec.zone())?,
                 None => to.to_owned(),
             };
             (

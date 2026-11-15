@@ -6,6 +6,7 @@ use arrow_array::{ArrayRef, Date32Array, StringArray, TimestampMicrosecondArray}
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::DataType;
 use chrono::{NaiveDate, NaiveDateTime};
+use chrono_tz::Tz;
 
 use crate::adapters::contract::constants::CURSOR_TIMESTAMP_FORMAT;
 use crate::adapters::contract::main::cursor_text::cursor_text;
@@ -13,15 +14,16 @@ use crate::batch_plan::constants::UTC_OFFSET_SUFFIX;
 use crate::column_types::models::ColumnType;
 use crate::loader::errors::LoaderError;
 
-/// A cursor bound as a one-value array of the cursor column's Arrow type `data_type`, converted from the bound's text (timestamps and dates parsed, every other type cast).
+/// A cursor bound as a one-value array of the cursor column's Arrow type `data_type`, converted from the bound's text (timestamps and dates parsed, text without an offset on a `timestamp_tz` cursor read in `zone`, every other type cast).
 pub(crate) fn bound_array(
     text: &str,
     cursor_type: &ColumnType,
     data_type: &DataType,
+    zone: Tz,
 ) -> Result<ArrayRef, LoaderError> {
     let normal = match text.strip_suffix(UTC_OFFSET_SUFFIX) {
         Some(_) => text.to_owned(),
-        None => cursor_text(text, cursor_type).map_err(LoaderError::Invalid)?,
+        None => cursor_text(text, cursor_type, zone).map_err(LoaderError::Invalid)?,
     };
     let unreadable = || {
         LoaderError::Invalid(format!(

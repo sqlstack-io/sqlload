@@ -55,6 +55,9 @@ pub enum EventKind {
         /// A line per column `rename` named or numbering numbered: `Qty (column 3) -> qty_1 (numbered)`.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         names: Vec<String>,
+        /// What the load warns of, such as rows outside a cursor window.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
         /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         peak_memory_bytes: Option<u64>,

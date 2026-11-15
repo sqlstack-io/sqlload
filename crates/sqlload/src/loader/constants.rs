@@ -178,3 +178,6 @@ pub const DATE_TEXT_LENGTH: usize = 10;
 /// Why a cursor range can't apply to a table without a cursor.
 pub const RANGE_NEEDS_CURSOR: &str =
     "--start-cursor/--end-cursor and their -ts and -int forms need a cursor_column";
+
+/// How many windows' rows outside them the load report shows a line for; later ones are counted in one line.
+pub const SHOWN_OUTSIDE_WINDOWS: usize = 3;

@@ -1,12 +1,12 @@
 //! Reading one value with one format.
 
-use chrono::offset::LocalResult;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime};
 use chrono_tz::Tz;
 
 use crate::column_parse::_helpers::formats::{has_offset, has_time, micros_per};
 use crate::column_parse::_helpers::iso::iso_time;
 use crate::column_parse::constants::YEARS;
+use crate::column_parse::main::local_instant::local_instant;
 use crate::column_parse::models::{
     EpochUnit, FormatRead, IsoTime, ParseKind, ParsedTime, RawTime, TimeFormat,
 };
@@ -62,13 +62,9 @@ fn zoned(local: NaiveDateTime, zone: Tz) -> FormatRead {
     if !YEARS.contains(&local.year()) {
         return FormatRead::NoMatch;
     }
-    match zone.from_local_datetime(&local) {
-        LocalResult::Single(instant) | LocalResult::Ambiguous(instant, _) => {
-            instant_read(instant.to_utc())
-        }
-        LocalResult::None => FormatRead::Failed(format!(
-            "a time that does not exist in {zone}, whose clocks go forward past it"
-        )),
+    match local_instant(local, zone) {
+        Ok(instant) => instant_read(instant),
+        Err(reason) => FormatRead::Failed(reason),
     }
 }
 

@@ -18,7 +18,7 @@ classifiers = [
   "Topic :: Database",
 ]
 # orjson writes gathered dict rows as JSON bytes, which Rust parses without the GIL.
-dependencies = ["orjson>=3.10"]
+dependencies = ["orjson>=3.10", "tzdata; sys_platform == \"win32\""]
 
 [project.optional-dependencies]
 # MotherDuck targets: MotherDuck accepts DuckDB 1.4.1 to 1.5.6 (raise the bound as MotherDuck does), not the DuckDB

@@ -1,59 +1,53 @@
-//! The rows of a batch inside its cursor window.
+//! The rows of a batch inside its cursor window, and those outside it.
 
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, Scalar};
-use arrow_ord::cmp::{gt, gt_eq, lt};
-use arrow_select::filter::filter_record_batch;
+use arrow_array::{Array, BooleanArray, RecordBatch};
+use arrow_select::filter::{filter, filter_record_batch};
+use chrono_tz::Tz;
 
-use crate::batch_plan::_helpers::bound_array::bound_array;
+use crate::batch_plan::_helpers::bounds::window_masks;
+use crate::batch_plan::_helpers::outside::{merged_outside, row_marks};
+use crate::batch_plan::models::{OutsideRows, WindowRows};
 use crate::column_types::models::ColumnType;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::ReadWindow;
 
-/// The rows of `batch` whose cursor is inside `window`, and how many rows its bounds skipped for a NULL cursor (none without bounds): a NULL cursor is outside, as a source filter would have it, unless `include` (`null_cursor = "include"`) keeps it.
+/// The rows of `batch` to load for `window`: those whose cursor is inside it, and with `keep_outside` (`on_cursor_out_of_range = "warn"`) those outside it too; how many rows its bounds skipped for a NULL cursor (none without bounds), which is outside as a source filter would have it unless `include` (`null_cursor = "include"`) keeps it; and `seen`, the rows outside the window in its earlier batches, with this batch's added (their numbers counted after `rows_before`). Bounds without an offset on a `timestamp_tz` cursor are read in `zone`.
 pub fn window_rows(
     batch: &RecordBatch,
     window: &ReadWindow,
-    (cursor_type, include): (&ColumnType, bool),
-) -> Result<(RecordBatch, usize), LoaderError> {
-    let schema = batch.schema();
-    let Some((position, _)) = schema
+    (cursor_type, include, keep_outside): (&ColumnType, bool, bool),
+    (zone, rows_before, seen): (Tz, u64, OutsideRows),
+) -> Result<WindowRows, LoaderError> {
+    let position = batch
+        .schema()
         .fields()
         .iter()
-        .enumerate()
-        .find(|(_, field)| field.name().eq_ignore_ascii_case(&window.column))
-    else {
-        return Ok((batch.clone(), 0));
+        .position(|field| field.name().eq_ignore_ascii_case(&window.column));
+    let (Some(position), true) = (position, window.from.is_some() || window.to.is_some()) else {
+        return Ok(WindowRows {
+            kept: batch.clone(),
+            nulls: 0,
+            outside: seen,
+        });
     };
-    let bounded = window.from.is_some() || window.to.is_some();
-    let nulls = match bounded && !include {
-        true => batch.column(position).null_count(),
-        false => 0,
-    };
-    let with_nulls = |column: &ArrayRef, mask: BooleanArray| -> BooleanArray {
-        (0..mask.len())
-            .map(|row| {
-                Some((include && column.is_null(row)) || (mask.is_valid(row) && mask.value(row)))
-            })
-            .collect()
-    };
-    let mut kept = batch.clone();
-    if let Some(from) = &window.from {
-        let column = kept.column(position).clone();
-        let bound = Scalar::new(bound_array(from, cursor_type, column.data_type())?);
-        let mask = match window.inclusive {
-            true => gt_eq(&column, &bound),
-            false => gt(&column, &bound),
-        }
-        .map_err(invalid)?;
-        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
-    }
-    if let Some(to) = &window.to {
-        let column = kept.column(position).clone();
-        let bound = Scalar::new(bound_array(to, cursor_type, column.data_type())?);
-        let mask = lt(&column, &bound).map_err(invalid)?;
-        kept = filter_record_batch(&kept, &with_nulls(&column, mask)).map_err(invalid)?;
-    }
-    Ok((kept, nulls))
+    let column = batch.column(position);
+    let (above_start, below_end) = window_masks(column, window, cursor_type, zone)?;
+    let (found, keep, outside) = row_marks(
+        column,
+        (&above_start, &below_end),
+        (include, keep_outside),
+        rows_before,
+    );
+    let kept = filter_record_batch(batch, &BooleanArray::from(keep)).map_err(invalid)?;
+    let values = filter(column, &BooleanArray::from(outside)).map_err(invalid)?;
+    Ok(WindowRows {
+        kept,
+        nulls: match include {
+            true => 0,
+            false => column.null_count(),
+        },
+        outside: merged_outside(seen, found, &values).map_err(invalid)?,
+    })
 }
 
 fn invalid(error: impl std::fmt::Display) -> LoaderError {
