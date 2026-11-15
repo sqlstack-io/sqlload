@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Mutex;
 
 use tracing_subscriber::EnvFilter;
@@ -22,12 +22,14 @@ impl Write for LogWriter {
     }
 }
 
-/// Log to stderr at `info`, without the ODBC crates' per-column buffer notes (`arrow_odbc` at `warn`, `odbc_api` at `error`), unless `RUST_LOG` says otherwise; above `load`'s live block when it is drawn.
+/// Log to stderr at `info`, without the ODBC crates' per-column buffer notes (`arrow_odbc` at `warn`, `odbc_api` at `error`), unless `RUST_LOG` says otherwise; above `load`'s live block when it is drawn. In colour only on a terminal without `NO_COLOR`, so piped and redirected logs hold no escape codes.
 pub(crate) fn init_logging(format: LogFormat) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,odbc_api=error,arrow_odbc=warn"));
+    let coloured = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
+        .with_ansi(coloured)
         .with_writer(|| LogWriter);
     let _ = match format {
         LogFormat::Text => builder.try_init(),
