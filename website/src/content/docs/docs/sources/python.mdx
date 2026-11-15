@@ -240,6 +240,8 @@ Errors (1)
 - Only calls whose names lead to sqlload count, however it was imported (`import sqlload as sl`,
   `from sqlload import parent`), on a client from `sl.http(...)` made at module level or in the
   function. A `paginate` method of another library isn't checked.
+- `plan` checks every literal path in the table function, including those in branches a load may
+  not take, such as an `if` on `ctx.cursor_value`; a bad path there fails `plan` too.
 - A path `plan` can't read as a literal, such as a variable, an f-string or a `fields` dict built
   elsewhere, is checked at load, before any request, as before. So is every path of a function
   whose source can't be read. `plan` says so on that table:
