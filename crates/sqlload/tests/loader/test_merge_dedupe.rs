@@ -8,13 +8,14 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
-use crate::helpers::run_async;
+use crate::helpers::{run_async, words};
 use crate::merge_helpers::{
-    READINGS_SETUP, run_dedupe_case, run_dedupe_rules, run_null_key_loads, run_replace_key_loads,
+    READINGS_SETUP, replace_key_outcome, run_dedupe_case, run_dedupe_rules, run_null_key_loads,
+    run_replace_key_loads,
 };
 use crate::test_types::{
     DedupeRefusalTestCase, DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase,
-    ReplaceKeyTargetTestCase,
+    ReplaceKeyRefusalTestCase, ReplaceKeyTargetTestCase,
 };
 
 /// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value, and the empty key (`/`) apart from the NULL one.
@@ -31,14 +32,13 @@ const POSTGRES_NULL_KEY_ROWS: [&str; 3] = [
     "/:24,bolt/s1:21,bolt/NULL:22,NULL/NULL:23 | CREATE UNIQUE INDEX app__stock_sqlload_key ON nullkeys.app__stock USING btree (company, item, site) NULLS NOT DISTINCT",
 ];
 
-/// What `delete_insert` on `updated_at` with `replace_key = ["le_version"]` holds after each load: P01 replaced whole (line C gone, though its rows lie below the cursor), P02 read again, P00 untouched, and the line without a version replaced by the new one, a NULL matching a NULL.
+/// What `delete_insert` with `replace_key = ["le_version"]` and no cursor holds after each load, each reading the whole source: P01 replaced whole (line C gone), P00 and P02 replaced by the same rows, and the line without a version replaced by the new one, a NULL matching a NULL.
 const REPLACE_KEY_ROWS: [&str; 2] = [
     "LE-FY27-P00/Z:0,LE-FY27-P01/A:1,LE-FY27-P01/B:2,LE-FY27-P01/C:3,LE-FY27-P02/X:10,NULL/N:7",
     "LE-FY27-P00/Z:0,LE-FY27-P01/A:100,LE-FY27-P01/B:200,LE-FY27-P02/X:10,NULL/M:9",
 ];
 
-const REPLACE_KEY_PLAN: &str =
-    "delete_insert (cursor: updated_at, replace_key: le_version; NULLs in keys match)";
+const REPLACE_KEY_PLAN: &str = "delete_insert (replace_key: le_version; NULLs in keys match)";
 
 #[test]
 fn given_a_merge_key_with_null_parts_when_loading_three_times_into_each_target_then_each_key_keeps_one_row_with_the_latest_values()
@@ -261,7 +261,7 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
 }
 
 #[test]
-fn given_a_database_source_with_a_cursor_and_a_replace_key_when_loading_into_each_target_then_the_cursor_range_and_every_row_of_the_read_versions_are_replaced()
+fn given_a_database_source_with_a_replace_key_and_no_cursor_when_loading_into_each_target_then_every_row_of_the_read_versions_is_replaced()
 -> Result<(), String> {
     run_async(async {
         let source = start_postgres().await?;
@@ -291,7 +291,7 @@ fn given_a_database_source_with_a_cursor_and_a_replace_key_when_loading_into_eac
                 expected_rows: REPLACE_KEY_ROWS,
             },
             ReplaceKeyTargetTestCase {
-                description: "ClickHouse, through its delta displacing the range's rows and those of the delta's keys",
+                description: "ClickHouse, through its delta displacing the rows of the delta's keys",
                 connection: format!(
                     "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
                     clickhouse.port
@@ -306,6 +306,51 @@ fn given_a_database_source_with_a_cursor_and_a_replace_key_when_loading_into_eac
         for test_case in &test_cases {
             let rows = run_replace_key_loads(test_case, (&client, source.port)).await?;
             assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_cursor_column_with_a_replace_key_on_a_database_source_when_planning_then_plan_refuses_it_naming_the_full_read()
+-> Result<(), String> {
+    run_async(async {
+        let source = start_postgres().await?;
+        let client = connect(&source).await?;
+        let test_cases = [
+            ReplaceKeyRefusalTestCase {
+                description: "a cursor would read part of a version's rows while the commit deletes all of them, so plan refuses it and creates no table",
+                settings: "cursor_column = \"updated_at\"",
+                expected_error: "cursor_column updated_at does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost",
+                expected_fix: "drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
+                expected_tables: "0",
+            },
+            ReplaceKeyRefusalTestCase {
+                description: "without a cursor the table is read whole and loads",
+                settings: "",
+                expected_error: "",
+                expected_fix: "",
+                expected_tables: "1",
+            },
+        ];
+        for test_case in &test_cases {
+            let (error, tables) =
+                replace_key_outcome((&client, source.port), test_case.settings).await?;
+            assert_eq!(
+                (
+                    words(&error).contains(&words(test_case.expected_error))
+                        && words(&error).contains(&words(test_case.expected_fix)),
+                    error.is_empty(),
+                    tables.as_deref(),
+                ),
+                (
+                    true,
+                    test_case.expected_error.is_empty(),
+                    Some(test_case.expected_tables)
+                ),
+                "{}: {error}",
+                test_case.description
+            );
         }
         Ok(())
     })

@@ -181,22 +181,30 @@ INSERT INTO public.estimates VALUES
   ('LE-FY27-P02', 'X', 10, '2026-03-01');
 ";
 
-/// P01 sent again after the first load, without line C and with new amounts, and the line without a version replaced by another: all newer than P02, so the cursor reads them, but the rows they replace lie below it.
+/// P01 sent again after the first load, without line C and with new amounts, and the line without a version replaced by another.
 const ESTIMATES_CHANGE: &str = "
 DELETE FROM public.estimates WHERE line IN ('C', 'N');
 UPDATE public.estimates SET amount = amount * 100, updated_at = '2026-04-01' WHERE le_version = 'LE-FY27-P01';
 INSERT INTO public.estimates VALUES (NULL, 'M', 9, '2026-04-01');
 ";
 
-/// Load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into `target` by `delete_insert` on the cursor `updated_at` and `replace_key = ["le_version"]`, then again after [`ESTIMATES_CHANGE`]: what `target.check_query` returns after each load, or the first error; each load's plan must show `target.expected_plan`.
+/// A project loading `public.estimates` from Postgres on `postgres_port` into the target `connection` (schema `schema`) by `delete_insert` with `replace_key = ["le_version"]` and `settings` added.
+pub(crate) fn estimates_project(
+    (connection, schema): (&str, &str),
+    postgres_port: u16,
+    settings: &str,
+) -> String {
+    format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{connection}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.estimates\"]\n\n[sources.app.tables.\"public.estimates\"]\nwrite_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\n{settings}\n"
+    )
+}
+
+/// Load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into `target` by `delete_insert` with `replace_key = ["le_version"]` and no cursor, so each load reads the whole table, then again after [`ESTIMATES_CHANGE`]: what `target.check_query` returns after each load, or the first error; each load's plan must show `target.expected_plan`.
 pub(crate) async fn run_replace_key_loads(
     target: &ReplaceKeyTargetTestCase,
     (source, postgres_port): (&tokio_postgres::Client, u16),
 ) -> Result<Vec<String>, String> {
-    let text = format!(
-        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.estimates\"]\n\n[sources.app.tables.\"public.estimates\"]\nwrite_strategy = \"delete_insert\"\ncursor_column = \"updated_at\"\nreplace_key = [\"le_version\"]\n",
-        target.connection, target.schema
-    );
+    let text = estimates_project((&target.connection, target.schema), postgres_port, "");
     let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
         .await
@@ -238,6 +246,44 @@ pub(crate) async fn run_replace_key_loads(
         .await
         .map_err(|error| error.to_string())?;
     Ok(rows)
+}
+
+/// Plan and load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into an in-memory DuckDB with `settings` added to its `delete_insert` by `replace_key`: the load's error, empty when it loads, and how many tables named `app__estimates` the target holds afterwards.
+pub(crate) async fn replace_key_outcome(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    settings: &str,
+) -> Result<(String, Option<String>), String> {
+    let text = estimates_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        settings,
+    );
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let error = load_selected(&project, &destinations, &[])
+        .await
+        .err()
+        .unwrap_or_default();
+    let tables = single_text(
+        destination,
+        "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__estimates'".to_owned(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((error, tables))
 }
 
 /// The rows `target.check_query` returns after each rule of `RULES`, loaded from Postgres on `postgres_port` into `target`, each from a fresh table; `""` where it returns none.

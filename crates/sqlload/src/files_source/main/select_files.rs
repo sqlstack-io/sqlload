@@ -1,14 +1,15 @@
 //! Choose which files a load reads.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::files_source::_helpers::plan::window::in_window;
 use crate::files_source::constants::SOURCE_VERSION_COLUMN;
 use crate::files_source::models::{DataFile, FileSelection, LoadedFile};
 
-/// The files of `request` not loaded yet (a loaded file that changed, or whose loaded version is unknown, is an error, unless loaded files leave the folder, when a changed one is a new file) whose partition cursor (if any) lies in `from <= value < to`; a file the table holds (`held`) at another version whose cursor lies below `from` is an error too, naming the fixes, as skipping it would keep its old rows.
+/// The files of `request` not loaded yet (a loaded file that changed, or whose loaded version is unknown, is an error, unless loaded files leave the folder, when a changed one is a new file) whose partition cursor (if any) lies in `from <= value < to`; a file whose cursor lies below `from` is an error too, naming the fixes, as skipping it would keep its partition's old rows: one the table holds (`held`) at another version, or one it doesn't hold in a partition whose other files it does.
 pub fn select_files(request: &FileSelection<'_>) -> Result<Vec<DataFile>, String> {
     let (loaded, held) = (by_name(request.loaded), by_name(request.held));
+    let held_values = held_values(request, &held);
     let mut chosen: Vec<DataFile> = Vec::new();
     for data in request.files {
         let name = format!("{}{}", request.location, data.file.relative_key);
@@ -50,13 +51,46 @@ pub fn select_files(request: &FileSelection<'_>) -> Result<Vec<DataFile>, String
             .get(name.as_str())
             .filter(|versions| !versions.contains(&version.as_str()) && !versions.contains(&""))
             .and_then(|versions| versions.last());
-        if let (true, Some(was), Some(from)) = (below, was, request.from) {
-            return Err(format!(
-                "{name} changed since it was loaded (version {was} is now {version}), but its {column} {value} is below this load's range, which starts at {from}, so delete_insert would skip it and keep its old rows. Fix: set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor {value}, or rebuild the table with --reload"
-            ));
+        let fixes = format!(
+            "Fix: set replace_key to replace rows by a column the files hold (and drop cursor_column), load from it with --start-cursor {value}, or rebuild the table with --reload"
+        );
+        match (below, was, request.from) {
+            (true, Some(was), Some(from)) => {
+                return Err(format!(
+                    "{name} changed since it was loaded (version {was} is now {version}), but its {column} {value} is below this load's range, which starts at {from}, so delete_insert would skip it and keep its old rows. {fixes}"
+                ));
+            }
+            (true, None, Some(from))
+                if !held.contains_key(name.as_str()) && held_values.contains(value) =>
+            {
+                return Err(format!(
+                    "{name} is new, but its {column} {value} is below this load's range, which starts at {from}, and the table holds other files of {column} {value}, so delete_insert would skip it and never load its rows. {fixes}"
+                ));
+            }
+            _ => {}
         }
     }
     Ok(chosen)
+}
+
+/// The partition cursor values of the listed files of `request` the table holds (`held`, by name).
+fn held_values<'a>(
+    request: &FileSelection<'a>,
+    held: &HashMap<&str, Vec<&str>>,
+) -> HashSet<&'a str> {
+    let mut values: HashSet<&'a str> = HashSet::new();
+    let Some((column, _)) = request.cursor else {
+        return values;
+    };
+    for data in request.files {
+        let name = format!("{}{}", request.location, data.file.relative_key);
+        if !held.contains_key(name.as_str()) {
+            continue;
+        }
+        let value = data.partitions.iter().find(|(key, _)| key == column);
+        values.extend(value.map(|(_, value)| value.as_str()));
+    }
+    values
 }
 
 /// The versions of each file of `files`, by name.

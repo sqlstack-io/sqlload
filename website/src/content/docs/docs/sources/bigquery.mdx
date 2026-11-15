@@ -126,8 +126,16 @@ Read sessions bill the bytes of the columns and rows they read; the first 300 TB
 Views and query tables also bill their query job. Listing tables, describing them and dry runs
 bill nothing.
 
+From 0.51.0, a table read from a cursor with `null_cursor = "fail"` (the default) and a cursor column
+that is `NULLABLE` first counts its rows with a NULL cursor in a query job, which bills a scan of the
+cursor column, even for a table otherwise read through a read session. `null_cursor = "ignore"` or
+`"include"` skips the count, as does a `REQUIRED` cursor column. See
+[NULL cursor values](/docs/concepts/cursors/#null-cursor-values).
+
 ## Permissions
 
 The service account needs `bigquery.readSessionUser` on the connection's project, and
 `bigquery.dataViewer` on the datasets it reads. Views and query tables also need
-`bigquery.jobUser` on the connection's project.
+`bigquery.jobUser` on the connection's project. From 0.51.0, so does a table read from a
+`NULLABLE` cursor column under the default `null_cursor = "fail"`, whose count of NULL cursors
+runs as a query job (`bigquery.jobs.create`).

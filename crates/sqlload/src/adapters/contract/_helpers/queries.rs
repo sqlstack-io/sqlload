@@ -288,6 +288,20 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
             "SELECT DISTINCT {} AS example FROM {from} ORDER BY 1 LIMIT {limit}",
             examples(&names_of(columns), true)
         ),
+        CheckQuery::KeySources {
+            key,
+            staged,
+            file_column,
+            file,
+        } => {
+            let values = examples(&names_of(key), true);
+            let column = adapter.render_identifier(file_column);
+            format!(
+                "SELECT DISTINCT {column} AS example FROM {from} WHERE {values} IN (SELECT {values} FROM {}) AND {column} <> {} ORDER BY 1",
+                adapter.render_qualified_name(staged),
+                adapter.render_loader_value_literal(file)
+            )
+        }
         CheckQuery::NullKeyExamples(columns) => {
             let names = names_of(columns);
             let missing: Vec<String> = names.iter().map(|name| format!("{name} IS NULL")).collect();

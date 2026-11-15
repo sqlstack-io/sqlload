@@ -52,7 +52,7 @@ use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::OpenFolder;
 use crate::file_store::models::OpenFolder as StoreFolder;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
 use crate::files_source::main::after_load::after_load;
 use crate::files_source::main::batch_columns::batch_columns;
@@ -80,12 +80,16 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::merged_record;
+use crate::loader::_helpers::run_log::{
+    in_file, listed_sources, merged_file_text, merged_name, with_file_keys,
+};
 use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_read_as;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::nanosecond_columns;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unload_source;
+use crate::loader::_helpers::specs::checked_key;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
     cursor_binding, source_cursor, source_filter, with_null_cursors,
@@ -113,6 +117,7 @@ use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
+use crate::publish_checks::main::key_sources::key_sources;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
@@ -648,6 +653,7 @@ impl Publisher {
             files,
             merged_file: None,
             replaced: None,
+            run_keys: Default::default(),
             fed_files: Vec::new(),
             settled_files: Vec::new(),
         })
@@ -1089,6 +1095,7 @@ impl Publisher {
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
+        let file = self.merged_file.clone();
         let merged = self.merged_file.take().map(|file| {
             merged_record(
                 spec,
@@ -1127,7 +1134,7 @@ impl Publisher {
             columns: &self.table.schema.write_columns,
             committed: self.committed_rows,
         };
-        if let (Some((key, setting)), NullKeys::Fail) = (mode.staged_key(), spec.null_keys) {
+        if let (Some((key, setting)), NullKeys::Fail) = (checked_key(spec, &mode), spec.null_keys) {
             refuse_null_keys(&checked, (key, setting), merging_file).await?;
         }
         if let WriteMode::Merge {
@@ -1143,8 +1150,24 @@ impl Publisher {
         }
         let replaced = match &mode {
             WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
-                let shown = (replace_key.as_slice(), REPLACED_KEYS_SHOWN as u64 + 1);
-                Some((replace_key.clone(), staged_keys(&checked, shown).await?))
+                let limit = file
+                    .as_ref()
+                    .map_or(REPLACED_KEYS_SHOWN as u64 + 1, |_| i64::MAX as u64);
+                let mut values = staged_keys(&checked, (replace_key.as_slice(), limit)).await?;
+                if let Some(file) = file.as_deref() {
+                    let earlier = std::mem::take(&mut self.run_keys);
+                    self.run_keys = with_file_keys(&self.table, (file, &values), earlier)
+                        .map_err(LoaderError::Invalid)?;
+                    let named = (
+                        replace_key.as_slice(),
+                        SOURCE_FILE_COLUMN,
+                        merged_name(file),
+                    );
+                    let sources = key_sources(&checked, named).await?;
+                    listed_sources(&self.table, file, &sources).map_err(LoaderError::Invalid)?;
+                }
+                values.truncate(REPLACED_KEYS_SHOWN + 1);
+                Some((replace_key.clone(), values))
             }
             _ => None,
         };
@@ -1626,39 +1649,6 @@ async fn feed(
 /// Whether `table` loads a files source's files one commit and run record per file: a merge, or `delete_insert` by `replace_key` (see [`logs_files`]).
 pub(crate) fn records_files(table: &TablePlan) -> bool {
     table.files.is_some() && logs_files(&table.spec)
-}
-
-/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
-fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
-    let location = table
-        .spec
-        .files
-        .as_ref()
-        .map(|files| files.location.to_string())
-        .unwrap_or_default();
-    files
-        .iter()
-        .map(|data| {
-            format!(
-                "{location}{}{VERSION_SEPARATOR}{}",
-                data.file.relative_key,
-                data.file.version()
-            )
-        })
-        .collect::<Vec<String>>()
-        .join(", ")
-}
-
-/// `error` naming the merged file (`name|version`) it happened in, as retryable as it was.
-fn in_file(merged: &str, error: LoaderError) -> LoaderError {
-    let name = merged
-        .rsplit_once(VERSION_SEPARATOR)
-        .map_or(merged, |(name, _)| name);
-    let text = format!("{name}: {error}");
-    match error.is_retryable() {
-        true => LoaderError::Transient(text),
-        false => LoaderError::Invalid(text),
-    }
 }
 
 async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), LoaderError> {

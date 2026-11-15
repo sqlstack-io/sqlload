@@ -251,7 +251,7 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
-    plan.schema.warnings.extend(reload_range(options));
+    plan.schema.warnings.extend(reload_range(spec, options));
     plan.schema.warnings.extend(split_ranking(&plan));
     with_run_log(plan, destination, options).await
 }
@@ -274,7 +274,7 @@ fn unwritten_column(
         .replace_key
         .iter()
         .filter(|_| spec.python.is_none())
-        .find(|key| !writes_column(schema, key))
+        .find(|key| !writes(schema, key))
     {
         return Some(format!(
             "replace_key column {key} is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change). Fix: name a column the table loads in replace_key, such as the version column every row holds"
@@ -294,14 +294,6 @@ fn unwritten_column(
         )),
         Some(_) => None,
     }
-}
-
-/// Whether `schema` writes the column `name`, ignoring case.
-fn writes_column(schema: &SchemaPlan, name: &str) -> bool {
-    schema
-        .write_columns
-        .iter()
-        .any(|column| column.name.eq_ignore_ascii_case(name))
 }
 
 /// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
@@ -385,8 +377,8 @@ fn split_ranking(plan: &TablePlan) -> Option<String> {
     ))
 }
 
-/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped.
-fn reload_range(options: &PlanOptions) -> Option<String> {
+/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped; rows with a NULL cursor are kept under `null_cursor = "include"`, which reads them with the first window, and dropped under `"ignore"` (under `"fail"`, the load fails on them).
+fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
     let (start, end) = (
         options.start_cursor.as_deref().filter(|_| options.reload),
         options.end_cursor.as_deref().filter(|_| options.reload),
@@ -406,8 +398,13 @@ fn reload_range(options: &PlanOptions) -> Option<String> {
         ),
         (None, None) => return None,
     };
+    let nulls = match spec.cursor.as_ref().map(|cursor| cursor.null_cursor) {
+        Some(NullCursor::Include) => "; rows with a NULL cursor are kept",
+        Some(NullCursor::Ignore) => "; rows with a NULL cursor are dropped",
+        Some(NullCursor::Fail) | None => "",
+    };
     Some(format!(
-        "--reload rebuilds the table with only the rows {kept}: {dropped}"
+        "--reload rebuilds the table with only the rows {kept}: {dropped}{nulls}"
     ))
 }
 

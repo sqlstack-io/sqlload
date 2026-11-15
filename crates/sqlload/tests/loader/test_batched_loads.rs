@@ -1,7 +1,8 @@
 use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 
-use crate::helpers::{run_async, run_batched};
+use crate::batched_helpers::run_batched;
+use crate::helpers::run_async;
 use crate::test_types::{BatchedRun, BatchedScenarioTestCase};
 
 const IDS: &str = "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.app__events";

@@ -1034,6 +1034,8 @@ pub(crate) struct MergeStep {
     /// SQL run on the target before the step, such as a `DROP TABLE`.
     pub(crate) before: &'static [&'static str],
     pub(crate) files: &'static [MergeFile],
+    /// Files removed from the folder before the step, by key below it.
+    pub(crate) removed: &'static [&'static str],
     /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
     pub(crate) loads: bool,
     /// Text the load's error must contain; empty when it must succeed.
@@ -1122,6 +1124,18 @@ pub(crate) struct DedupeTargetTestCase {
     pub(crate) check_query: &'static str,
     /// What `check_query` returns after each repeated-key rule, in their order: last row, highest, lowest, fail.
     pub(crate) expected_rows: [&'static str; 4],
+}
+
+/// A `delete_insert` by `replace_key` on a database source with `settings` added, and what plan says of it.
+pub(crate) struct ReplaceKeyRefusalTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// Text the load's error must contain; empty when it must load.
+    pub(crate) expected_error: &'static str,
+    /// Text the error's fix must contain.
+    pub(crate) expected_fix: &'static str,
+    /// How many tables named `app__estimates` the target holds afterwards.
+    pub(crate) expected_tables: &'static str,
 }
 
 /// A target that `delete_insert` with a cursor and a `replace_key` loads Postgres rows into twice.

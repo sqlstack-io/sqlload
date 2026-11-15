@@ -47,7 +47,10 @@ use crate::loader::_helpers::resolve::{
     NameRule, display_name, resolve_tables, source_target, spec_names, target_display_name,
     unread_source,
 };
-use crate::loader::_helpers::run_log::{logs_files, merged_files, unchanged_files};
+use crate::loader::_helpers::run_log::{
+    file_column_problem, logs_files, merged_files, unchanged_files,
+};
+use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::{
     flattened_object_problems, missing_description, referenced_columns, table_name, table_naming,
@@ -1135,7 +1138,7 @@ pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
 }
 
 /// Whether the live table has `column`.
-fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
+pub(crate) fn live_has(live: Option<&[LiveColumn]>, column: &str) -> bool {
     match live {
         Some(live) => live
             .iter()
@@ -1273,35 +1276,14 @@ pub(crate) async fn plan_files(
         false => None,
     };
     let skips_loaded = spec.strategy == WriteStrategy::Append;
-    let append_columns = [
-        (
-            SOURCE_FILE_COLUMN,
-            "which files are loaded and would load them all again",
-            "skip files already loaded",
-        ),
-        (
-            SOURCE_VERSION_COLUMN,
-            "a file rewritten in place, or a new file under a loaded name, from one already loaded",
-            "tell a file rewritten in place, or a new file under a loaded name, from one already loaded; stop excluding it",
-        ),
-    ];
-    for (column, missing, needed) in append_columns.into_iter().filter(|_| skips_loaded) {
-        if request.live.is_some() && !live_has(request.live, column) && !request.options.reload {
-            return Ok(Err(format!(
-                "the table has no {column} column, so append cannot tell {missing}; {}",
-                column_fix(spec.warehouse)
-            )));
-        }
-        if !request.written.iter().any(|name| name == column) {
-            return Ok(Err(format!(
-                "{column} must be loaded: append uses it to {needed}"
-            )));
-        }
-    }
-    let live_has = |column: &str| live_has(request.live, column);
     let guards_window = spec.strategy == WriteStrategy::DeleteInsert
         && cursor.is_some()
-        && request.options.start_cursor.is_none();
+        && request.options.start_cursor.is_none()
+        && !request.options.reload;
+    if let Some(problem) = file_column_problem(request, guards_window) {
+        return Ok(Err(problem));
+    }
+    let live_has = |column: &str| live_has(request.live, column);
     let recorded: Vec<LoadedFile> = match (skips_loaded || guards_window)
         && live_has(SOURCE_FILE_COLUMN)
         && !request.options.reload
@@ -1533,31 +1515,6 @@ fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRe
         filter,
         batch_rows: SOURCE_BATCH_ROWS,
     }
-}
-
-/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
-fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
-    let mut columns: Vec<String> = Vec::new();
-    for name in spec.cursor.as_ref()?.columns() {
-        let column = spec
-            .source_table
-            .columns
-            .iter()
-            .find(|column| column.name == name)?;
-        if !matches!(
-            column.column_type,
-            Ok(ColumnType::Int | ColumnType::SmallInt)
-        ) {
-            return None;
-        }
-        columns.push(
-            column
-                .source_spelling
-                .clone()
-                .unwrap_or_else(|| column.name.clone()),
-        );
-    }
-    Some(columns)
 }
 
 /// `specs` with `source_end` filled for the selected Postgres tables whose integer `batch_size` has no `--end-cursor` to end its windows: the cursor's current maximum, read once at plan; the source is connected only when one needs it.

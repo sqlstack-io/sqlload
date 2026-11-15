@@ -1,4 +1,4 @@
-use crate::adapters::contract::models::{ChangeApply, TableName};
+use crate::adapters::contract::models::{ChangeApply, TableName, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
@@ -30,9 +30,9 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys, OnDuplicateKeys,
-    SortDirection, SourceConfig, SourceKind, StateMode, TableOverride, TableSettings, UnloadStage,
-    UnnestSetting, WriteStrategy,
+    CdcDeletes, CdcMode, CursorBounds, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    OnDuplicateKeys, SortDirection, SourceConfig, SourceKind, StateMode, TableOverride,
+    TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::routing::models::Store;
@@ -1055,7 +1055,7 @@ fn key_nulls(
     (null_keys, not_null, problems)
 }
 
-/// Why a `delete_insert` by `replace_key` (`keyed`) cannot load where `context` puts it: a files target replaces whole partition folders, and a files source picks its files from the run log, not by a cursor.
+/// Why a `delete_insert` by `replace_key` (`keyed`) cannot load where `context` puts it: a files target replaces whole partition folders; a files source picks its files from the run log, not by a cursor; and on any other source a cursor would read part of a key value's rows while the commit deletes all of them, losing those the read never returned.
 fn replace_key_problems(
     context: &SourceContext<'_>,
     cursor: Option<&CursorSpec>,
@@ -1068,11 +1068,16 @@ fn replace_key_problems(
     if context.target.path.is_some() {
         problems.push("replace_key deletes rows by key in a database table, and a files target replaces whole partition folders. Fix: load into a database target, or drop replace_key and use a partition cursor_column".to_owned());
     }
-    if let Some(cursor) = cursor.filter(|_| context.source.kind == SourceKind::Files) {
-        problems.push(format!(
+    match (cursor, context.source.kind) {
+        (Some(cursor), SourceKind::Files) => problems.push(format!(
             "cursor_column {} does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log. Fix: remove cursor_column, or drop replace_key to replace partitions by the cursor",
             cursor.column
-        ));
+        )),
+        (Some(cursor), _) => problems.push(format!(
+            "cursor_column {} does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost. Fix: drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
+            cursor.column
+        )),
+        (None, _) => {}
     }
     problems
 }
@@ -1585,4 +1590,43 @@ pub(crate) fn flattened_object_problems(
         }
     }
     Ok(problems)
+}
+
+/// The source spellings of `spec`'s cursor columns when every one is an integer; `None` otherwise.
+pub(crate) fn integer_cursor(spec: &TableSpec) -> Option<Vec<String>> {
+    let mut columns: Vec<String> = Vec::new();
+    for name in spec.cursor.as_ref()?.columns() {
+        let column = spec
+            .source_table
+            .columns
+            .iter()
+            .find(|column| column.name == name)?;
+        if !matches!(
+            column.column_type,
+            Ok(ColumnType::Int | ColumnType::SmallInt)
+        ) {
+            return None;
+        }
+        columns.push(
+            column
+                .source_spelling
+                .clone()
+                .unwrap_or_else(|| column.name.clone()),
+        );
+    }
+    Some(columns)
+}
+
+/// The key a commit by `mode` refuses a NULL in under `null_keys = "fail"`, and the setting naming it: the key the mode matches rows on, or, under `--reload` (which builds the table anew and matches nothing), the key `spec`'s strategy matches on, so a reload never lets in a row its loads refuse.
+pub(crate) fn checked_key<'a>(
+    spec: &'a TableSpec,
+    mode: &'a WriteMode,
+) -> Option<(&'a [String], &'static str)> {
+    match (mode, spec.strategy) {
+        (WriteMode::Recreate, WriteStrategy::Merge) => Some((&spec.unique_key, "unique_key")),
+        (WriteMode::Recreate, WriteStrategy::DeleteInsert) if !spec.replace_key.is_empty() => {
+            Some((&spec.replace_key, "replace_key"))
+        }
+        _ => mode.staged_key(),
+    }
 }

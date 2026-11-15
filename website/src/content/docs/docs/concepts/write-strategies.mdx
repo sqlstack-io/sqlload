@@ -11,7 +11,7 @@ SQLLoad doesn't choose a strategy for you.
 |----------|--------|-------|
 | `append` | Inserts the rows read. | Nothing. |
 | `merge` | Updates rows whose `unique_key` matches, inserts the rest. | A `unique_key`: columns, or `"{primary_key}"`. |
-| `delete_insert` | Deletes the cursor range it read, or the rows holding a `replace_key` value it read, then inserts the rows. | A `cursor_column`, a `replace_key`, or both. |
+| `delete_insert` | Deletes the cursor range it read, or the rows holding a `replace_key` value it read, then inserts the rows. | A `cursor_column` or a `replace_key`, not both. |
 | `replace` | Builds a new table from the whole source, and swaps it in at the end. | No `cursor_column`. |
 
 A strategy set on a source covers every table it matches, including those `include` patterns
@@ -273,8 +273,11 @@ P02, leaves P01 with A and B at the new amounts, and P02 as it was.
 - Without a `cursor_column`, a database or Python source reads every row on each run. A files
   source reads only new or changed files; see
   [Replacing rows by a key](/docs/sources/files/#replacing-rows-by-a-key).
-- With a `cursor_column`, the cursor decides what a run reads. Each commit deletes its cursor range
-  and also the rows of the `replace_key` values it read, wherever their cursor lies.
+- A `cursor_column` is refused with `replace_key`: a run would read only the rows of a value inside
+  its cursor range, while its commit deletes every row of that value, so the rows outside the range
+  would be lost. Drop `cursor_column`, so each run reads the whole source, or use `merge`. A
+  `cursor_column` set on the source applies to its `replace_key` tables too, and is refused there:
+  set the cursor on each table that uses it instead.
 - A NULL in a `replace_key` column matches a NULL, as in [NULLs in keys](#nulls-in-keys).
   `null_keys = "fail"` refuses a commit holding one instead.
 - `load --json` lists the values each table replaced in
@@ -287,6 +290,7 @@ P02, leaves P01 with A and B at the new amounts, and P02 as it was.
 | `replace_key` with `merge`, `append` or `replace` | Only `delete_insert` deletes by it. |
 | A `replace_key` column the table doesn't load | It names no column of the table. |
 | `delete_insert` with neither `cursor_column` nor `replace_key` | It has nothing to replace. |
+| `replace_key` with a `cursor_column` | The cursor reads part of a value's rows, and the commit deletes all of them. |
 | `replace_key` on a files target | A files target replaces partition folders, not rows. |
 | `replace_key` with `unnest` | Child tables aren't replaced with their rows yet. |
 
