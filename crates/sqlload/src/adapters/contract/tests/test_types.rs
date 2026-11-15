@@ -32,6 +32,8 @@ pub(crate) struct CursorTextTestCase {
     pub(crate) description: &'static str,
     pub(crate) text: &'static str,
     pub(crate) column_type: ColumnType,
+    /// The table's `timezone`, which text without an offset on a `timestamp_tz` cursor is read in.
+    pub(crate) zone: chrono_tz::Tz,
     pub(crate) expected_text: Result<&'static str, &'static str>,
 }
 

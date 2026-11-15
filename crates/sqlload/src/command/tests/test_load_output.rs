@@ -43,6 +43,7 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
                     changes: vec!["created  raw.a__items  6 columns".to_owned()],
                     transforms: Vec::new(),
                     names: Vec::new(),
+                    warnings: Vec::new(),
                     peak_memory_bytes: None,
                 },
             )],
@@ -113,6 +114,7 @@ loaded  raw.b      1 row  18.0s
                         changes: Vec::new(),
                         transforms: Vec::new(),
                         names: Vec::new(),
+                        warnings: Vec::new(),
                         peak_memory_bytes: Some(85 * 1024 * 1024),
                     },
                 ),
@@ -270,6 +272,7 @@ fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_
                 position: None,
                 changes: Vec::new(),
                 names: Vec::new(),
+                warnings: Vec::new(),
                 transforms: test_case
                     .transforms
                     .iter()

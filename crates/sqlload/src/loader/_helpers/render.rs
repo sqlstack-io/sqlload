@@ -17,6 +17,7 @@ use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::batch_plan::main::cursor_rules::cursor_rules;
 use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
@@ -40,7 +41,6 @@ use crate::loader::models::{
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
-use crate::project::models::NullCursor;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::main::flatten_lines::flatten_lines;
@@ -742,13 +742,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
-    details.extend(table.cursor_note.iter().map(|note| {
-        let text = match null_cursor_rule(table) {
-            Some(rule) => format!("{note} ({rule})"),
-            None => note.clone(),
-        };
-        detail("cursor", text)
-    }));
+    details.extend(
+        (table.cursor_note.iter()).map(|note| detail("cursor", cursor_rules(table, note, true))),
+    );
     details.extend(table.logged.as_ref().map(|logged| {
         detail(
             "state",
@@ -1490,6 +1486,10 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.names.clone(),
             Err(_) => Vec::new(),
         },
+        warnings: match &outcome.loaded {
+            Ok(loaded) => loaded.warnings.clone(),
+            Err(_) => Vec::new(),
+        },
         peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
@@ -1698,32 +1698,10 @@ fn key_line(table: &TablePlan) -> Option<String> {
     })
 }
 
-/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by what it does with rows whose cursor is NULL, when [`null_cursor_rule`] says.
+/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by its rules (see [`cursor_rules`]).
 pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     let line = reads_text(table, precise)?;
-    Some(
-        match null_cursor_rule(table).filter(|_| table.logged.is_none()) {
-            Some(rule) => format!("{line} ({rule})"),
-            None => line,
-        },
-    )
-}
-
-/// What a cursor read does with source rows whose cursor is NULL, for `plan`: `NULL cursors: included` or `skipped` as `null_cursor` says, and by default `fail the load` when the source reports a cursor column nullable; `None` when it reports one NOT NULL or reports nothing (a Python table), and for a files source, whose cursor comes from each file's path.
-pub(crate) fn null_cursor_rule(table: &TablePlan) -> Option<&'static str> {
-    let spec = &table.spec;
-    let cursor = spec.cursor.as_ref().filter(|_| spec.files.is_none())?;
-    let nullable = cursor.columns().all(|name| {
-        spec.source_table
-            .column(name)
-            .is_some_and(|column| column.nullable)
-    });
-    match cursor.null_cursor {
-        NullCursor::Include => Some("NULL cursors: included"),
-        NullCursor::Ignore => Some("NULL cursors: skipped"),
-        NullCursor::Fail if nullable => Some("NULL cursors: fail the load"),
-        NullCursor::Fail => None,
-    }
+    Some(cursor_rules(table, &line, table.logged.is_none()))
 }
 
 /// [`reads_line`] without the NULL cursor rule.

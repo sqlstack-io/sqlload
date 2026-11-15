@@ -858,6 +858,12 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
         null_cursor: layered(&table.null_cursor, &source.null_cursor)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        out_of_range: layered(
+            &table.on_cursor_out_of_range,
+            &source.on_cursor_out_of_range,
+        )
+        .map(|(value, _)| value)
+        .unwrap_or_default(),
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
         lookback: match layered(&table.lookback, &source.lookback) {
             Some((Lookback::Duration(duration), _)) => Some(duration),
@@ -1232,6 +1238,19 @@ fn cursor_problems(
         && cursor.is_none()
     {
         problems.push("null_cursor says what a cursor read does with rows whose cursor is NULL, but the table has no cursor_column; remove it".to_owned());
+    }
+    let out_of_range = layered(
+        &settings.on_cursor_out_of_range,
+        &defaults.on_cursor_out_of_range,
+    );
+    match (out_of_range, context.source.kind) {
+        (None, _) => {}
+        (Some(_), SourceKind::Python) if cursor.is_none() => problems.push("on_cursor_out_of_range says what a load does with rows outside the cursor window, but the table has no cursor_column; remove it".to_owned()),
+        (Some(_), SourceKind::Python) => {}
+        (Some(_), kind) => problems.push(format!(
+            "on_cursor_out_of_range checks the rows a Python table's function returns against its cursor window; SQLLoad filters a {} source's reads itself, so remove it",
+            kind.name()
+        )),
     }
     let Some(cursor) = cursor else {
         return problems;

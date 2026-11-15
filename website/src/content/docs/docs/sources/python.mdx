@@ -49,7 +49,7 @@ Unknown settings raise `TypeError` when the module is imported.
 
 | Setting | On | Meaning |
 |---------|----|---------|
-| `write_strategy`, `unique_key`, `on_duplicate_keys`, `null_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0, `null_keys` from 0.51.0, and `lookback=1` on an integer cursor from 0.52.0. Python tables don't take `lookahead` or `lookback_from`. Every table needs a `write_strategy`, from its source or its own decorator, and a `merge` table names its `unique_key` columns: a Python source reports no primary key, so `"{primary_key}"` is refused. |
+| `write_strategy`, `unique_key`, `on_duplicate_keys`, `null_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size`, `on_cursor_out_of_range` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0, `null_keys` from 0.51.0, `lookback=1` on an integer cursor from 0.52.0, and `on_cursor_out_of_range` from 0.53.0. Python tables don't take `lookahead` or `lookback_from`. Every table needs a `write_strategy`, from its source or its own decorator, and a `merge` table names its `unique_key` columns: a Python source reports no primary key, so `"{primary_key}"` is refused. |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
 | `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | source or table | From 0.37.0. Columns with the same value in every row, such as `{"tenant_id": "acme"}` or `{"shard": {"value": "7", "type": "int"}}`; a table's replace its source's. A yielded field of the same name, ignoring case, fails the table before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
@@ -302,8 +302,17 @@ A table function receives a `sl.Context`:
 | `ctx.client` | The source's `@source.client`, built on first use. |
 | `ctx.table`, `ctx.source`, `ctx.logger` | The table and source names, and a logger. |
 
-Rows outside the cursor window are skipped with a warning, so a function that ignores
-`ctx.cursor_value` still loads correctly, only slower.
+From 0.53.0, on a cursor of times, `ctx.cursor_value` and `ctx.cursor_end` arrive in the table's
+`timezone`, such as `datetime(2026, 3, 1, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/Paris'))`.
+Without it, a `timestamp_tz` cursor's arrive in UTC and a `timestamp_ntz` cursor's arrive naive.
+With it, a `timestamp_ntz` cursor's carry the zone too, keeping their wall-clock time. Python can't
+compare those with naive datetimes, so a function that does must make one side match, such as
+`since = ctx.cursor_value.replace(tzinfo=None)`. See
+[Times without an offset](/docs/concepts/cursors/#times-without-an-offset).
+
+From 0.53.0, rows the function returns outside the window it was asked for fail the table, naming
+how many and their likely cause. `on_cursor_out_of_range="skip"` drops them and `"warn"` loads them.
+See [Rows outside the window](/docs/concepts/cursors/#rows-outside-the-window).
 
 Table functions never get credentials of a connection a `[targets]` entry writes to: a source using
 such a connection fails at `plan`.

@@ -773,6 +773,9 @@ pub struct TableSettings {
     /// What an incremental read does with source rows whose cursor is NULL: fail the load (default), read them on every run (`merge` only), or skip them.
     #[serde(default)]
     pub null_cursor: Option<NullCursor>,
+    /// What a Python table's load does with the rows its function returns outside the cursor window it was asked for: fail the table (default), skip them, or load them with a warning.
+    #[serde(default)]
+    pub on_cursor_out_of_range: Option<OnCursorOutOfRange>,
     #[serde(default)]
     pub contract: Option<Contract>,
     #[serde(default)]
@@ -976,6 +979,19 @@ pub enum NullCursor {
     Include,
     /// Skip them, as a cursor filter does.
     Ignore,
+}
+
+/// What a Python table's load does with the rows its function returns outside the cursor window it was asked for (a NULL cursor is `null_cursor`'s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnCursorOutOfRange {
+    /// The window does not commit, and the table fails naming the rows and their likely cause.
+    #[default]
+    Fail,
+    /// Drop them: a later window reads the rows past its end, and an earlier one read those before its start.
+    Skip,
+    /// Load them, with a warning in the load report.
+    Warn,
 }
 
 /// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).

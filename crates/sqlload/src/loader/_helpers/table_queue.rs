@@ -140,6 +140,7 @@ pub(crate) fn emit_outcome(outcome: &TableOutcome) {
             changes: loaded.changes.clone(),
             transforms: loaded.transforms.clone(),
             names: loaded.names.clone(),
+            warnings: loaded.warnings.clone(),
             peak_memory_bytes: outcome.peak_memory_bytes,
         },
         Err(reason) if outcome.skipped => EventKind::TableNotStarted {

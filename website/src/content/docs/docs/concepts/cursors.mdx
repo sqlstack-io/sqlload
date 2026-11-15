@@ -25,6 +25,8 @@ $ sqlload plan app__orders
 | `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. Date and timestamp cursors only. |
 | `append_cursor_inclusive` | `false` (default) reads strictly after the maximum; `true` reads from the maximum itself, inserting its rows again on every run. See [append](/docs/concepts/write-strategies/#append). |
+| `on_cursor_out_of_range` | From 0.53.0, Python tables only. `fail` (default), `skip` or `warn`: what a load does with rows the function returns outside the window it was asked for. See [Rows outside the window](#rows-outside-the-window). |
+| `timezone` | From 0.53.0. The IANA zone, such as `"Europe/Paris"`, that `cursor_start`, `--start-cursor` and `--end-cursor` without an offset are read in on a cursor of times, and that a Python table's `ctx.cursor_value` and `ctx.cursor_end` arrive in; UTC when unset. See [Times without an offset](#times-without-an-offset). |
 
 Where the read starts, in order:
 
@@ -283,6 +285,100 @@ loaded  raw.app__orders  1,000 rows 0.1s
 
 A Python table with `batch_size` is called once per window, with `ctx.cursor_value` and
 `ctx.cursor_end` set to it.
+
+## Rows outside the window
+
+From 0.53.0. A Python table's function is asked for one window at a time, from `ctx.cursor_value`
+to `ctx.cursor_end`, and SQLLoad checks the rows it returns against that window by the read's own
+rule: from its start, or after it when `ctx.cursor_inclusive` is `False`, and before its end. The
+start that `lookback` or `append_cursor_inclusive = true` gives is part of the window, so the rows
+they read again aren't outside it. A row whose cursor is NULL follows [`null_cursor`](#null-cursor-values).
+
+Rows outside the window mean the request didn't ask for what the function was given. Loading rows
+after the window's end would move the cursor past rows not read yet, and loading rows before its
+start would load again rows an earlier window read. `on_cursor_out_of_range` decides what happens:
+
+| `on_cursor_out_of_range` | Rows outside a window |
+|--------------------------|-----------------------|
+| `fail` (default) | The window doesn't commit, and the table fails. The message gives how many rows, the window, the range of their cursor values, the first of them and the likely cause. |
+| `skip` | Dropped. The next window reads the rows after the end, and an earlier one read those before the start. The load report says how many each window dropped. |
+| `warn` | Loaded, with a line in the load report. |
+
+`plan` shows the rule on the table's `reads` line. This API takes whole days and returns both of
+them:
+
+```python
+@shop.table(description="Orders.", cursor_column="updated_at", cursor_start="2026-09-01 00:00:00", batch_size="7d")
+def orders(ctx):
+    yield fetch(since=ctx.cursor_value.date(), until=ctx.cursor_end.date())
+```
+
+```console
+$ sqlload plan
+…
+    ├── reads   updated_at >= 2026-09-01 00:00:00 (first run, from cursor_start); rows outside a window fail the table; times without an offset in UTC (the default, as timezone is not set)
+…
+$ sqlload load --end-cursor "2026-09-15 00:00:00"
+…
+failed  raw.shop__orders  the function returned 24 rows outside the window it was asked for, updated_at >= 2026-09-01 00:00:00+00:00 and < 2026-09-08 00:00:00+00:00: 24 after its end, 2026-09-08 00:00:00+00:00 → 2026-09-08 23:00:00+00:00, the first at row 169 (updated_at 2026-09-08 00:00:00+00:00); all on 2026-09-08, the day the window ends: the API may filter by whole days. Loading them would move the cursor past rows not read yet. If it does, set on_cursor_out_of_range = "skip": the next window reads them.
+```
+
+The cause is the first of these that fits the rows outside, with days counted in the table's
+`timezone`:
+
+| Rows outside | Likely cause |
+|--------------|--------------|
+| Before the start on the day it starts, and after the end on the day it ends | The API filters by whole days. |
+| All at the window's end, or at a start it leaves out (`ctx.cursor_inclusive` is `False`) | The API includes that end. |
+| All on the day the window ends, or all on the day it starts, before a start after midnight | The API filters by whole days. |
+| All within 14 hours of one end of a window of times | The window is sent in another time zone than the API reads it in. |
+| Only after the end | The function doesn't send `ctx.cursor_end`, or the API ignores it. |
+| Otherwise | The API ignores the filter. |
+
+An API that filters by whole days is correct to return the boundary day, so `skip` suits it: each
+window keeps its own rows, and the boundary day loads once, in the window it belongs to.
+
+```console
+$ sqlload load --end-cursor "2026-09-15 00:00:00"
+…
+loaded  raw.shop__orders    336 rows 0.0s
+                          ⚠ 24 rows outside the window updated_at >= 2026-09-01 00:00:00+00:00 and < 2026-09-08 00:00:00+00:00: 24 after its end, 2026-09-08 00:00:00+00:00 → 2026-09-08 23:00:00+00:00; all on 2026-09-08, the day the window ends: the API may filter by whole days; skipped (on_cursor_out_of_range = "skip")
+                          ⚠ 24 rows outside the window updated_at >= 2026-09-08 00:00:00+00:00 and < 2026-09-15 00:00:00+00:00: 24 after its end, 2026-09-15 00:00:00+00:00 → 2026-09-15 23:00:00+00:00; all on 2026-09-15, the day the window ends: the API may filter by whole days; skipped (on_cursor_out_of_range = "skip")
+…
+```
+
+The report has a line for each of the first three windows with rows outside, and sums the rest
+into one, such as `⚠ 1,152 more rows outside 2 later windows`. `load --json` lists the same lines
+in each table's `warnings`.
+
+Other sources filter their reads themselves, so the check is for Python tables only. `plan` refuses
+`on_cursor_out_of_range` on a table without a cursor and on other sources.
+
+### Times without an offset
+
+From 0.53.0. On a cursor of times with a time zone, `timezone` sets the zone that a `cursor_start`,
+`--start-cursor` or `--end-cursor` without an offset is read in. A Python table's
+`ctx.cursor_value` and `ctx.cursor_end` arrive in that zone, as `datetime` values with a
+`zoneinfo.ZoneInfo`, so a function can send them to an API that reads times in it. Without
+`timezone`, both are UTC. `plan` names the zone, and where it came from, on the `reads` line:
+
+```console
+$ sqlload plan --start-cursor "2026-09-03 00:00:00" --end-cursor "2026-09-05 00:00:00"
+…
+    ├── reads   updated_at from 2026-09-03 00:00:00 (--start-cursor), below 2026-09-05 00:00:00 (--end-cursor); rows outside a window fail the table; times without an offset in Europe/Paris (the table's timezone)
+…
+```
+
+A cursor of times without a time zone (`timestamp_ntz`) gets the zone in `ctx` too. With
+`timezone = "Europe/Paris"`, a `cursor_start` of `2026-03-01 00:00:00` arrives as
+`datetime(2026, 3, 1, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/Paris'))`: the same wall-clock
+time, now aware. Without `timezone`, it arrives naive. Python can't compare an aware `datetime` with
+a naive one, so a function that compares `ctx.cursor_value` with naive times from the API must make
+them alike itself, such as `since = ctx.cursor_value.replace(tzinfo=None)`.
+
+A time that doesn't exist in the zone, because its clocks go forward past it, fails `plan`. A time
+the zone has twice, when its clocks go back, is the earlier of the two. A date cursor has no zone,
+and `lookahead`, `lookback_from = "now"` and the end of today are counted in UTC.
 
 ## Logged state
 

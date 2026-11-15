@@ -105,7 +105,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         let Some(value) = value else {
             continue;
         };
-        if cursor_text(value, column_type).is_err() {
+        if cursor_text(value, column_type, chrono_tz::Tz::UTC).is_err() {
             return Err(match column_type {
                 ColumnType::Int => format!("{flag} value '{value}' is not a whole number"),
                 _ => format!("{flag} value '{value}' is not an RFC 3339 timestamp or a date"),

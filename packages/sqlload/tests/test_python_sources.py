@@ -141,7 +141,7 @@ def seen(project: Path, table: str) -> dict[str, Any]:
 		),
 		("write_strategy='replace'", [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}], [{"id": 3, "v": "c"}], [(3, "c")]),
 		(
-			"write_strategy='delete_insert', cursor_column='day'",
+			"write_strategy='delete_insert', cursor_column='day', on_cursor_out_of_range='skip'",
 			[{"id": 1, "v": "a", "day": "2026-01-01T00:00:00Z"}, {"id": 2, "v": "b", "day": "2026-01-02T00:00:00Z"}],
 			[
 				{"id": 1, "v": "stale", "day": "2026-01-01T00:00:00Z"},
@@ -499,7 +499,7 @@ def test_given_single_file_csv_when_columns_appear_partway_through_a_load_then_i
 
 def test_given_a_files_target_with_day_partitions_when_delete_insert_reloads_a_day_then_it_is_replaced(tmp_path: Path) -> None:
 	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
-	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'})(rows)\n")
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'}, on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a", "day": "2026-01-01"}, {"id": 2, "v": "b", "day": "2026-01-02"}])
 	load(project)
 	give(project, "rows", [{"id": 1, "v": "stale", "day": "2026-01-01"}, {"id": 2, "v": "B", "day": "2026-01-02"}, {"id": 3, "v": "c", "day": "2026-01-03"}])
@@ -776,7 +776,7 @@ def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_ask
 def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_rows_load(
 	tmp_path: Path, column_type: str, first: list[Any], second: list[Any], expected: list[Any]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', columns={{'v': '{column_type}'}})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', columns={{'v': '{column_type}'}}, on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [{"v": value} for value in first])
 	load(project)
 	give(project, "rows", [{"v": value} for value in second])
@@ -805,7 +805,7 @@ def test_given_a_pinned_narrower_type_when_a_value_would_lose_digits_then_the_lo
 
 
 def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_the_same_type_on_every_run(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z', on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [])
 	load(project)
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
