@@ -1,6 +1,6 @@
 //! Paging through one endpoint with its named paginator.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
@@ -20,13 +20,14 @@ use crate::http_source::_helpers::selector::{
     missing_path, pointer_text, pointer_value, selected_node, selector,
 };
 use crate::http_source::_helpers::urls::{redacted, request_url};
+use crate::http_source::constants::REPORTED_ERROR_CHARS;
 use crate::http_source::models::{
     AheadPage, Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request,
     RowContext, SelectMissing, Selector,
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested that many at a time, each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up, and is aborted when the run ends), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes; a page read twice, or a response repeating the previous one, is an error rather than a loop.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested that many at a time, each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up, and is aborted when the run ends), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
 pub(crate) async fn paginate(
     calls: &Calls,
     (request, context): (&Request, &RowContext),
@@ -43,7 +44,7 @@ pub(crate) async fn paginate(
     let rows_path = Some(rows.rows.join(".")).filter(|path| !path.is_empty());
     let first = request_url(&calls.endpoint.base_url, path)?;
     let mut call = page_call(request, &first, start_values(&request.paginator))?;
-    let mut seen: HashSet<(Url, Option<String>)> = HashSet::new();
+    let mut seen: HashMap<(Url, Option<String>), u64> = HashMap::from([(seen_key(&call), 1)]);
     let mut previous: Option<u64> = None;
     let mut names: Option<CellNames> = None;
     let ahead = read_ahead(&request.paginator);
@@ -54,13 +55,6 @@ pub(crate) async fn paginate(
             &format!("{} {}", call.method.as_str(), call.url),
             &calls.endpoint.current_secrets(),
         );
-        let body_text = call.body.as_ref().map(Value::to_string);
-        if !seen.insert((call.url.clone(), body_text)) {
-            return Err(format!(
-                "{shown}: the paginator came back to a page it already read; check its pointer or parameter"
-            )
-            .into());
-        }
         let fetched = match (step, ahead) {
             (1, _) | (_, 1) => fetch(calls, &call).await?,
             _ => {
@@ -108,6 +102,7 @@ pub(crate) async fn paginate(
         let document = parsed(request, &rows, &fetched.bytes)
             .map_err(|error| format!("{shown}: the response is not JSON: {error}"))?;
         if let Some(document) = &document {
+            reported_error(request, document, (&shown, calls))?;
             selected_or_allowed(request, (&rows, document), &shown)?;
         }
         let next = next_call(
@@ -116,6 +111,15 @@ pub(crate) async fn paginate(
             (&fetched, document.as_ref(), step),
         )
         .map_err(|error| format!("{shown}: {error}"))?;
+        if let Some((next, position)) = &next
+            && let Some(earlier) = seen.insert(seen_key(next), step + 1)
+        {
+            let position = redacted(position, &calls.endpoint.current_secrets());
+            return Err(format!(
+                "{shown}: {position} repeated after page {step}, so paging would read page {earlier} again; check the paginator's pointer"
+            )
+            .into());
+        }
         match (step, &next, &document) {
             (1, None, Some(document)) => {
                 capped_pages(calls, request, (&first, document), &shown).await?
@@ -155,11 +159,42 @@ pub(crate) async fn paginate(
             return Ok(());
         }
         match next {
-            Some(next) => call = next,
+            Some((next, _)) => call = next,
             None => return Ok(()),
         }
     }
     Ok(())
+}
+
+/// What identifies a request among those a paginator sent: its URL and body.
+fn seen_key(call: &PageCall) -> (Url, Option<String>) {
+    (call.url.clone(), call.body.as_ref().map(Value::to_string))
+}
+
+/// Fails when the response `document` to `shown` holds an error at the request's `error_path`: any value there but null, false, `""`, `[]` or `{}`, shown as text (a string as itself, else as JSON), its secrets hidden, cut short.
+fn reported_error(
+    request: &Request,
+    document: &Value,
+    (shown, calls): (&str, &Calls),
+) -> Result<(), ReadError> {
+    let Some(path) = &request.error_path else {
+        return Ok(());
+    };
+    let text = match selected_node(document, &selector(Some(path))?) {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Null | Value::Bool(false)) | None => String::new(),
+        Some(Value::Array(items)) if items.is_empty() => String::new(),
+        Some(Value::Object(fields)) if fields.is_empty() => String::new(),
+        Some(other) => other.to_string(),
+    };
+    if text.is_empty() {
+        return Ok(());
+    }
+    let text: String = redacted(&text, &calls.endpoint.current_secrets())
+        .chars()
+        .take(REPORTED_ERROR_CHARS)
+        .collect();
+    Err(format!("{shown}: the API reported an error at {path}: {text}").into())
 }
 
 /// For offset paging whose first page (`document`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so are the first page's rows again, from an API that rounds the offset down to a page boundary. Skipped once a page of the request held its whole limit in this job, which shows the API does not cap it (see `Calls::full_page_seen`).
@@ -203,6 +238,7 @@ async fn capped_pages(
     {
         Some(next) if selected_node(&next, &rows) == selected_node(document, &rows) => 0,
         Some(next) => {
+            reported_error(request, &next, (&probed, calls))?;
             selected_or_allowed(request, (&rows, &next), &probed)?;
             page_rows(&next, request).map_err(|error| format!("{probed}: {error}"))?
         }
@@ -250,7 +286,7 @@ fn top_level(document: &Value) -> String {
     }
 }
 
-/// The response as JSON when the selector or the paginator reads it, else `None`.
+/// The response as JSON when the selector, the paginator, the cells or `error_path` read it, else `None`.
 fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Value>, String> {
     let reads_body = match &request.paginator {
         Paginator::Single | Paginator::LinkHeader => !rows.rows.is_empty(),
@@ -259,6 +295,7 @@ fn parsed(request: &Request, rows: &Selector, bytes: &[u8]) -> Result<Option<Val
         | Paginator::Offset { .. }
         | Paginator::PageNumber { .. } => true,
     } || request.cells.is_some()
+        || request.error_path.is_some()
         || reshapes(request, rows);
     match reads_body {
         true => serde_json::from_slice(bytes)
@@ -413,35 +450,45 @@ fn param_text(value: &Value) -> String {
     }
 }
 
-/// The request after `fetched` (the `step`th page, sent as `current`), or `None` at the end; links resolve against the URL the response came from, after any redirect, and keep the current body; `document` is the parsed response whenever the paginator reads the body.
+/// The request after `fetched` (the `step`th page, sent as `current`) with the position it goes to, such as `cursor abc`, or `None` at the end; links resolve against the URL the response came from, after any redirect, and keep the current body; `document` is the parsed response whenever the paginator reads the body.
 fn next_call(
     request: &Request,
     (first, current): (&Url, &PageCall),
     (fetched, document, step): (&Fetched, Option<&Value>, u64),
-) -> Result<Option<PageCall>, String> {
+) -> Result<Option<(PageCall, String)>, String> {
     let body = || document.ok_or_else(|| "the paginator needs a JSON response".to_owned());
-    let joined = |link: String| {
+    let joined = |link: String, what: &str| {
         fetched
             .url
             .join(&link)
             .map(|url| {
-                Some(PageCall {
-                    url,
-                    ..current.clone()
-                })
+                Some((
+                    PageCall {
+                        url,
+                        ..current.clone()
+                    },
+                    format!("{what} {link}"),
+                ))
             })
             .map_err(|error| format!("next page {link} is not a URL: {error}"))
     };
-    let next = |values: Vec<(String, Value)>| page_call(request, first, values).map(Some);
+    let next = |values: Vec<(String, Value)>, position: String| {
+        page_call(request, first, values).map(|call| Some((call, position)))
+    };
     match &request.paginator {
         Paginator::Single => Ok(None),
-        Paginator::LinkHeader => fetched.next_link.clone().map_or(Ok(None), joined),
-        Paginator::NextLink { pointer } => {
-            pointer_text(body()?, &selector(Some(pointer))?).map_or(Ok(None), joined)
-        }
+        Paginator::LinkHeader => fetched
+            .next_link
+            .clone()
+            .map_or(Ok(None), |link| joined(link, "Link header next")),
+        Paginator::NextLink { pointer } => pointer_text(body()?, &selector(Some(pointer))?)
+            .map_or(Ok(None), |link| joined(link, "next link")),
         Paginator::Cursor { pointer, param, .. } => {
             match pointer_value(body()?, &selector(Some(pointer))?) {
-                Some(token) => next(vec![(param.clone(), token)]),
+                Some(token) => {
+                    let position = format!("cursor {}", param_text(&token));
+                    next(vec![(param.clone(), token)], position)
+                }
                 None => Ok(None),
             }
         }
@@ -451,14 +498,20 @@ fn next_call(
             limit,
             ..
         } => match page_rows(body()?, request)? >= *limit {
-            true => next(vec![
-                (param.clone(), Value::from(step * limit)),
-                (limit_param.clone(), Value::from(*limit)),
-            ]),
+            true => next(
+                vec![
+                    (param.clone(), Value::from(step * limit)),
+                    (limit_param.clone(), Value::from(*limit)),
+                ],
+                format!("offset {}", step * limit),
+            ),
             false => Ok(None),
         },
         Paginator::PageNumber { param, start, .. } => match page_rows(body()?, request)? > 0 {
-            true => next(vec![(param.clone(), Value::from(start + step))]),
+            true => next(
+                vec![(param.clone(), Value::from(start + step))],
+                format!("page number {}", start + step),
+            ),
             false => Ok(None),
         },
     }

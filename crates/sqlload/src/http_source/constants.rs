@@ -21,6 +21,9 @@ pub const SKIPPED_REFUSAL_RENEWAL_AGE: Duration = Duration::from_secs(30);
 /// Characters of a failed response's body shown in its error.
 pub const ERROR_EXCERPT_CHARS: usize = 300;
 
+/// Characters of the error an API reports at a job's `error_path` shown in the table's error.
+pub const REPORTED_ERROR_CHARS: usize = 200;
+
 /// Pages fetched ahead of the parser before a job waits.
 pub const PAGES_AHEAD: usize = 4;
 

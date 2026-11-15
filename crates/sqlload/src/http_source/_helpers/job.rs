@@ -179,6 +179,7 @@ fn request_problems(request: &Request) -> Vec<String> {
     problems.extend(paginator_problem(&request.paginator));
     problems.extend(body_problems(request));
     problems.extend(request.cells.as_ref().and_then(cells_problem));
+    problems.extend(request.error_path.as_deref().and_then(error_path_problem));
     problems.extend(match &request.client.auth {
         Auth::Oauth2ClientCredentials(spec)
         | Auth::Oauth2RefreshToken(spec)
@@ -209,6 +210,20 @@ fn request_problems(request: &Request) -> Vec<String> {
             }),
     );
     problems
+}
+
+/// Why `error_path` can't be read, if it can't: it names one value below `$`, such as `$.errors` or `$.Result.ErrorAlert`.
+fn error_path_problem(path: &str) -> Option<String> {
+    match selector(Some(path)) {
+        Ok(parsed)
+            if parsed.field.is_none() && parsed.within.is_empty() && !parsed.rows.is_empty() =>
+        {
+            None
+        }
+        Ok(_) | Err(_) => Some(format!(
+            "error_path {path:?} is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]"
+        )),
+    }
 }
 
 /// Why the paginator cannot work, if it cannot: a pointer that is not a plain path, or an offset limit of 0.
