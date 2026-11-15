@@ -305,10 +305,18 @@ pub(crate) fn reload_keys(test_case: &ReloadOrderTestCase) -> Vec<String> {
         },
         prefix: "done/".to_owned(),
     };
-    crate::loader::_helpers::run_log::reload_order(files, "drop/", &merged, Some(&archive))
-        .into_iter()
-        .map(|data| data.file.path.to_string())
-        .collect()
+    crate::loader::_helpers::run_log::reload_order(
+        files,
+        "drop/",
+        &merged,
+        (
+            Some(&archive),
+            crate::files_source::models::FilesOrder::Modified,
+        ),
+    )
+    .into_iter()
+    .map(|data| data.file.path.to_string())
+    .collect()
 }
 
 /// A two-row batch with an `id` column and schema metadata through `with_constants`: whether the result equals the batch given, and each of its columns as `name:Arrow type=value,value`; or the error.

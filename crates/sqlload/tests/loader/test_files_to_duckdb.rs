@@ -613,6 +613,56 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:b|2",
             },
             FilesMergeTestCase {
+                description: "with order = \"path\" files merge in name order whatever their modified times, so a key repeated across files ends with the last name's value",
+                settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\norder = \"path\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[
+                        MergeFile {
+                            key: "export_2026-11-12.csv",
+                            contents: "id,v\n1,mon\n2,mon\n",
+                            modified_secs: 3_000,
+                        },
+                        MergeFile {
+                            key: "export_2026-11-13.csv",
+                            contents: "id,v\n1,tue\n",
+                            modified_secs: 2_000,
+                        },
+                        MergeFile {
+                            key: "export_2026-11-14.csv",
+                            contents: "id,v\n1,wed\n3,wed\n",
+                            modified_secs: 1_000,
+                        },
+                    ],
+                    expected_error: "",
+                    removed: &[],
+                    loads: true,
+                    reload: false,
+                    expected_plan: "3 files, one commit each, in path order",
+                }],
+                check_query: MERGE_CHECK,
+                expected_result: "1:wed,2:mon,3:wed|3",
+            },
+            FilesMergeTestCase {
+                description: "order = \"path\" on an append table, which loads files without an order, is refused at plan",
+                settings: "write_strategy = \"append\"\norder = \"path\"\n",
+                steps: &[MergeStep {
+                    before: &[],
+                    files: &[MergeFile {
+                        key: "a.csv",
+                        contents: "id,v\n1,a\n",
+                        modified_secs: 1_000,
+                    }],
+                    removed: &[],
+                    loads: true,
+                    reload: false,
+                    expected_error: "order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; append loads them without an order, so remove it",
+                    expected_plan: "",
+                }],
+                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
+                expected_result: "0",
+            },
+            FilesMergeTestCase {
                 description: "by default a file repeating a key merges its last row of that key",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {

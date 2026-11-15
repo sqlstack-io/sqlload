@@ -233,6 +233,8 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | files | From 0.26.0. A path template whose captures load as typed columns, such as `"{region}/{day:date}/*"`. See [Columns from paths](/docs/sources/files/#columns-from-paths). |
 | `unmatched_paths` | files | From 0.26.0. `fail` (default) or `skip`: what a file whose path doesn't match `path_columns` does. |
+| `order` | files | From 0.54.0. `modified` (default) or `path`: the order a `merge` or `delete_insert` by `replace_key` applies files in, one commit each. See [Merging files](/docs/sources/files/#merging-files). |
+| `on_empty` | files | From 0.54.0. `fail` (default) or `skip`: what a load does when the folder exists and holds no files. See [Empty folders](/docs/sources/files/#empty-folders). |
 | `copy_to_internal_stage` | files into Snowflake | Upload files no external stage covers to `@~`. Much slower. |
 | `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
 

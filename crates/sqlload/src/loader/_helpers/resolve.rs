@@ -5,7 +5,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::models::AfterLoad;
+use crate::files_source::models::{AfterLoad, OnEmpty};
 use crate::load_events::main::begin_step::begin_step;
 use crate::load_events::main::end_step::end_step;
 use crate::load_events::models::StepEnd;
@@ -1424,8 +1424,8 @@ pub(crate) async fn found_sources<'a>(
         };
         let path = source.source.path.as_deref().unwrap_or_default();
         let problem = match (exists, shared, options.reload) {
-            (false, _, _) => Some(drained.problem),
-            (true, true, _) => Some(format!(
+            (false, _, _) if source.source.on_empty == OnEmpty::Fail => Some(drained.problem),
+            (_, true, _) => Some(format!(
                 "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
                 source.name, drained.table.table, source.name
             )),
@@ -1433,7 +1433,7 @@ pub(crate) async fn found_sources<'a>(
                 "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
                 source.name
             )),
-            (true, false, _) => None,
+            _ => None,
         };
         match problem {
             Some(problem) => source.resolved.problems.push(problem),

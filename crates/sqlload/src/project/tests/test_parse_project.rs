@@ -352,7 +352,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "after_load is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\nafter_load = \"delete\"\n",
-            expected_message: "copy_to_internal_stage and after_load are for kind = \"files\"",
+            expected_message: "copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "an unknown after_load is refused",
@@ -477,7 +477,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
-            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\"",
+            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "a postgres_cdc source refuses constant_columns, at source level",

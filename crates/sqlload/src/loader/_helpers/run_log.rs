@@ -24,7 +24,7 @@ use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
 use crate::files_source::main::merge_order::merge_order;
-use crate::files_source::models::{DataFile, LoadedFile};
+use crate::files_source::models::{DataFile, FilesOrder, LoadedFile};
 use crate::load_naming::models::NumberedName;
 use crate::loader::_helpers::python::batch_cursor_max;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, column_fix, live_has};
@@ -1030,13 +1030,16 @@ pub(crate) async fn merge_ledger(
     Ok(merged.map(|merged| (unchanged_files(merged, &listed), Vec::new())))
 }
 
-/// `files` in the order a merge `--reload` applies them: those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else, for a file read from `archive` (where `after_load` moved it, so it may have a new version), by name; then the others oldest modified first, as a load merges new files. A file in the source's folder that matches only by name is a newer file under a merged name, so it merges after the recorded ones, as a load would merge it.
+/// `files` in the order a merge `--reload` applies them: under `order = "path"`, by path, as names carry the order; otherwise those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else, for a file read from `archive` (where `after_load` moved it, so it may have a new version), by name; then the others oldest modified first, as a load merges new files. A file in the source's folder that matches only by name is a newer file under a merged name, so it merges after the recorded ones, as a load would merge it.
 pub(crate) fn reload_order(
     files: Vec<DataFile>,
     location: &str,
     merged: &[LoadedFile],
-    archive: Option<&Location>,
+    (archive, order): (Option<&Location>, FilesOrder),
 ) -> Vec<DataFile> {
+    if order == FilesOrder::Path {
+        return merge_order(files, order);
+    }
     let mut by_version: HashMap<(&str, &str), usize> = HashMap::new();
     let mut by_name: HashMap<&str, usize> = HashMap::new();
     for (index, file) in merged.iter().enumerate() {
@@ -1064,7 +1067,7 @@ pub(crate) fn reload_order(
     recorded
         .into_iter()
         .map(|(_, data)| data)
-        .chain(merge_order(others))
+        .chain(merge_order(others, order))
         .collect()
 }
 

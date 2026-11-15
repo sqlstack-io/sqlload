@@ -7,8 +7,8 @@ use serde::Deserialize;
 use crate::config::models::{AuthConfig, ByteSize};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
-    XlsxOptions, XmlOptions,
+    AfterLoad, Compression, CsvOptions, FilesEncoding, FilesOrder, OnEmpty, RecordShape,
+    SourceFormat, UnmatchedPaths, XlsxOptions, XmlOptions,
 };
 use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
@@ -459,6 +459,12 @@ pub struct SourceConfig {
     /// What to do with each file once its rows commit (files sources).
     #[serde(default)]
     pub after_load: AfterLoad,
+    /// The order a merge applies files in: oldest modified first (default) or by path (files sources).
+    #[serde(default)]
+    pub order: FilesOrder,
+    /// What a load does when the folder exists and holds no files: fail (default) or skip the table (files sources).
+    #[serde(default)]
+    pub on_empty: OnEmpty,
     /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
     #[serde(default)]
     pub shape: RecordShape,

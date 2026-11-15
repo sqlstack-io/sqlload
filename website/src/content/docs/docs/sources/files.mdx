@@ -498,6 +498,13 @@ unique_key = ["sku"]
 
 - A merged file whose version changed, even back to one merged before, is merged again, as the
   newest file.
+- From 0.54.0, `order = "path"` orders files by their path below `path` instead (a ZIP member's
+  as `<archive>.zip/<member>`), in code point order as text cursors compare, so the file whose name
+  sorts last wins a repeated key whatever the modified times. Landing steps often rewrite modified
+  times: unzipping (Python's `zipfile` stamps the time it extracts), `cp`, `gsutil` and sync tools
+  all do. Use it when names carry a sortable date, such as `export_2026-11-14.csv`; dates need ISO
+  order and zero padding (`2026-11-09`, not `2026-11-9`). `plan` names it: `3 files, one commit
+  each, in path order`. It applies to `delete_insert` by `replace_key` too, and to `--reload`.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
 - From 0.39.0, a file that holds one `unique_key` value in more than one row
@@ -566,9 +573,38 @@ after_load = { move_to = "loaded" }
   source loads too. Added in 0.42: while the folder is empty, a source sharing its destination table
   still can't replace or `delete_insert` into it, even when it runs alone. On S3 a prefix exists only while it holds files, and an unmounted share is an
   empty folder, so after the first load those look empty: watch the `skipped` reason. Without
-  `after_load`, an empty folder always fails.
+  `after_load`, an empty folder fails unless `on_empty = "skip"`; see [Empty folders](#empty-folders).
 - It isn't for SFTP connections, which SQLLoad only reads, ZIP archives, whose members another
   source may still read, or files targets.
+
+### Empty folders
+
+By default a folder that exists but holds no files fails the load, as it can mean a broken mount or
+a wrong `path`: `no .csv, .csv.gz, .csv.zst files found; ... where an empty folder is normal, set
+on_empty = "skip"`. From 0.54.0, a pipeline that clears its landing folder itself, so some days
+bring no files, sets `on_empty = "skip"`:
+
+```toml
+[sources.orders]
+kind = "files"
+connection = "landing"
+path = "orders/"
+format = "csv"
+description = "Orders unzipped into the landing folder by the download step."
+write_strategy = "merge"
+unique_key = ["order_id"]
+order = "path"
+on_empty = "skip"
+```
+
+- The table is skipped and the load exits 0, with the table under `skipped` in `plan` and in
+  `load --json`'s `plan.skipped`: `no files to load in orders/ (on_empty = "skip")`. The table is
+  left as it is, even before its first load.
+- Only an existing folder holding no file at all (hidden ones aside) counts as empty. A missing
+  folder, one that can't be read, and one holding files of another format or that don't match
+  `path_columns` still fail. On S3 a prefix exists only while it holds files, so an empty one
+  skips too.
+- `after_load` already skips a folder it emptied once its table exists, without `on_empty`.
 
 ## Columns
 
