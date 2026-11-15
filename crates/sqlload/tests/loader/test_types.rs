@@ -1474,3 +1474,21 @@ pub(crate) struct OdbcCatalogTestCase {
     /// Text it must not show.
     pub(crate) absent: &'static [&'static str],
 }
+
+/// A project whose `plan` runs piped, with `RUNNING` rows every 300 ms: what its stderr must and must not hold, and at least how many `RUNNING` rows.
+pub(crate) struct PlanProgressTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) config: String,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) expected_stderr: &'static [&'static str],
+    pub(crate) unexpected_stderr: &'static [&'static str],
+    pub(crate) least_running_rows: usize,
+}
+
+/// A run under `--json`, where in its report the phase times are (a JSON pointer), and each phase expected there: role, name, phase, ok, and whether `elapsed_ms` is a whole number.
+pub(crate) struct PhaseTimesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) pointer: &'static str,
+    pub(crate) expected_phases: Vec<(String, String, String, bool, bool)>,
+}

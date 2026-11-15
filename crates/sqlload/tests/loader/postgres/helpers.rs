@@ -323,3 +323,21 @@ pub(crate) const FOLLOW_REFUSED: [CdcStep; 6] = [
         (false, "--follow"),
     ),
 ];
+
+/// A Postgres server that accepts each connection and answers nothing, closing it after `held`: a source whose connection is slow, then fails. Returns its port.
+pub(crate) fn silent_server(held: std::time::Duration) -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|error| error.to_string())?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| error.to_string())?
+        .port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                std::thread::sleep(held);
+                drop(stream);
+            });
+        }
+    });
+    Ok(port)
+}

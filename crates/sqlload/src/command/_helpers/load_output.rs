@@ -1,17 +1,18 @@
 //! What `load` writes as it runs, rendered from its load events: a line per table as it finishes, `--events` as JSON lines, the summary it ends with, and on a terminal the block it redraws in place while tables load: how many are done, each running table and what it is doing, what waits, and the rate limits in use.
 
 use std::collections::BTreeMap;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::PoisonError;
 use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::command::_helpers::logging::LIVE_BLOCK;
-use crate::command::_helpers::output::print_lines;
+use crate::command::_helpers::output::{paint, print_lines};
 use crate::command::constants::PLAN_TREE_HINT;
 use crate::load_events::main::event_line::event_line;
-use crate::load_events::models::{EventKind, LoadEvent};
+use crate::load_events::main::progress_view::progress_view;
+use crate::load_events::models::{EventKind, LoadEvent, ProgressView, StepView};
 use crate::loader::constants::{
     BOLD, CYAN, DICT_HINT_MILLISECONDS, DICT_HINT_ROWS, DIM, INVERSE, RED, RESET, YELLOW,
 };
@@ -49,6 +50,12 @@ const NAME_COLUMN: usize = 28;
 
 /// The widest the block draws, however wide the terminal.
 const MAX_WIDTH: usize = 112;
+
+/// How long a step before the plan runs before its spinner shows, so fast runs stay clean.
+const SPINNER_DELAY: Duration = Duration::from_millis(300);
+
+/// How often a step before the plan that is still running prints a `RUNNING` row.
+const RUNNING_EVERY: Duration = Duration::from_secs(30);
 
 /// How long after a wait a connection's rate limit still shows as in use.
 const RATE_RECENT: Duration = Duration::from_millis(1500);
@@ -242,7 +249,10 @@ impl LiveState {
             EventKind::TableNotStarted { .. } => {
                 self.waiting.retain(|waiting| *waiting != table);
             }
-            EventKind::RunStarted { .. } | EventKind::RunFinished { .. } => {}
+            EventKind::RunStarted { .. }
+            | EventKind::RunFinished { .. }
+            | EventKind::Connected { .. }
+            | EventKind::Discovered { .. } => {}
         }
     }
 
@@ -560,47 +570,149 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
     lines
 }
 
-/// `work`, a plan of a project with `sources` sources, with one line on stderr while it runs when `draws`: a spinner, `Planning` and how many sources are done, redrawn by a thread of its own (planning may hold up the async runtime) and cleared before anything else prints.
+/// `work`, a plan of a project with `sources` sources, with its progress on stderr, watched by a thread of its own (planning may hold up the async runtime): when `prints`, each connection's and discovery's phase line as it ends, and a `RUNNING` row for a step every [`running_every`] it runs, which logs that are no terminal show too; when `draws`, a spinner for the step running once it has run [`SPINNER_DELAY`] (or `Planning` and how many sources are done between steps), cleared before anything else prints.
 pub(crate) async fn planning<T>(
     work: impl std::future::Future<Output = T>,
     sources: usize,
-    (draws, no_color): (bool, bool),
+    (draws, prints, no_color): (bool, bool, bool),
 ) -> T {
-    if !draws {
-        return work.await;
+    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let done = done.clone();
+        std::thread::spawn(move || watch_steps(&done, sources, (draws, prints, no_color)))
+    };
+    let output = work.await;
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    let _ = watcher.join();
+    output
+}
+
+/// What [`planning`] shows, until `done`: its phase lines and `RUNNING` rows (when `prints`), and its spinner (when `draws`), which it clears at the end.
+fn watch_steps(
+    done: &std::sync::atomic::AtomicBool,
+    sources: usize,
+    (draws, prints, no_color): (bool, bool, bool),
+) {
+    let started = std::time::Instant::now();
+    let every = running_every();
+    let coloured =
+        !no_color && std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal();
+    let mut bar: Option<indicatif::ProgressBar> = None;
+    let mut reported: (u64, u128) = (0, 0);
+    loop {
+        let finished = done.load(std::sync::atomic::Ordering::Relaxed);
+        let ProgressView { mut lines, step } = progress_view();
+        let row;
+        (reported, row) = running_row(step.as_ref(), every, reported);
+        lines.extend(row);
+        if prints && !lines.is_empty() {
+            let write = || {
+                let mut stderr = std::io::stderr().lock();
+                for line in lines {
+                    let line = match coloured {
+                        true => paint(line),
+                        false => line,
+                    };
+                    let _ = writeln!(stderr, "{line}");
+                }
+                let _ = stderr.flush();
+            };
+            match &bar {
+                Some(bar) => bar.suspend(write),
+                None => write(),
+            }
+        }
+        if finished {
+            break;
+        }
+        let shown = spinner_message(
+            step.as_ref(),
+            started.elapsed(),
+            (ProjectPlan::planned_sources(), sources),
+        );
+        if let Some(message) = shown.filter(|_| draws) {
+            bar.get_or_insert_with(|| spinner(no_color))
+                .set_message(message);
+        }
+        if let Some(bar) = &bar {
+            bar.tick();
+        }
+        std::thread::sleep(LIVE_REDRAW);
     }
+    if let Some(bar) = bar {
+        bar.finish_and_clear();
+    }
+}
+
+/// The `RUNNING` row due for `step`, if any: one each time it has run another `every`. `reported` is the step the rows so far were for and how many; returned as it stands after this row, so each prints once.
+pub(crate) fn running_row(
+    step: Option<&StepView>,
+    every: Duration,
+    reported: (u64, u128),
+) -> ((u64, u128), Option<String>) {
+    let Some(step) = step else {
+        return (reported, None);
+    };
+    let before = match step.id == reported.0 {
+        true => reported.1,
+        false => 0,
+    };
+    let due = step.elapsed.as_millis() / every.as_millis().max(1);
+    let row = (due > before).then(|| {
+        format!(
+            "  {}  {}  RUNNING {:.1}s",
+            step.subject,
+            step.doing,
+            step.elapsed.as_secs_f64()
+        )
+    });
+    ((step.id, due.max(before)), row)
+}
+
+/// What the spinner says, `waited` into the plan, with `planned` of `sources` sources checked: the step running once it has run [`SPINNER_DELAY`], else, between steps once the plan has, how many sources are done; `None` before then, so fast runs draw nothing.
+pub(crate) fn spinner_message(
+    step: Option<&StepView>,
+    waited: Duration,
+    (planned, sources): (usize, usize),
+) -> Option<String> {
+    match step {
+        Some(step) => (step.elapsed >= SPINNER_DELAY).then(|| {
+            format!(
+                "{}  {}… {}s",
+                step.subject,
+                step.doing,
+                step.elapsed.as_secs()
+            )
+        }),
+        None => (waited >= SPINNER_DELAY)
+            .then(|| format!("Planning  checking sources, {planned} of {sources} done")),
+    }
+}
+
+/// The spinner [`planning`] draws on stderr.
+fn spinner(no_color: bool) -> indicatif::ProgressBar {
     let bar = indicatif::ProgressBar::with_draw_target(
         None,
         indicatif::ProgressDrawTarget::stderr_with_hz(LIVE_HZ),
     );
     let template = match no_color {
-        true => "{spinner} Planning  {msg}",
-        false => "{spinner:.cyan} Planning  {msg:.dim}",
+        true => "{spinner} {msg}",
+        false => "{spinner:.cyan} {msg:.dim}",
     };
     if let Ok(style) = indicatif::ProgressStyle::with_template(template) {
         bar.set_style(style.tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ "));
     }
-    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let drawer = {
-        let (bar, done) = (bar.clone(), done.clone());
-        std::thread::spawn(move || {
-            while !done.load(std::sync::atomic::Ordering::Relaxed) {
-                bar.set_message(format!(
-                    "checking sources, {} of {sources} done",
-                    ProjectPlan::planned_sources()
-                ));
-                bar.tick();
-                std::thread::sleep(LIVE_REDRAW);
-            }
-        })
-    };
-    let output = work.await;
-    done.store(true, std::sync::atomic::Ordering::Relaxed);
-    if drawer.join().is_err() {
-        bar.abandon();
+    bar
+}
+
+/// How often a step still running prints a `RUNNING` row: [`RUNNING_EVERY`], or the milliseconds `SQLLOAD_RUNNING_EVERY_MS` names, which tests shorten it to.
+fn running_every() -> Duration {
+    let set = std::env::var_os("SQLLOAD_RUNNING_EVERY_MS")
+        .map(|millis| millis.to_string_lossy().parse::<u64>());
+    match set {
+        Some(Ok(millis)) => Duration::from_millis(millis),
+        _ => RUNNING_EVERY,
     }
-    bar.finish_and_clear();
-    output
 }
 
 /// The block's lines, after a blank one that parts it from the finished tables' lines, for `state`, `elapsed` into the load, at redraw `frame`, for a terminal `width` columns wide; `coloured` as the mock has it: cyan for what runs, red only for a failure, yellow for waits and fail-fast, dim for notes.

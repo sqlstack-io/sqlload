@@ -1,6 +1,7 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
 use crate::column_parse::models::ColumnParse;
+use crate::load_events::models::PhaseTiming;
 use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
 use crate::row_batches::models::{Flatten, Unnest};
 use std::collections::BTreeMap;
@@ -569,6 +570,8 @@ pub struct ProjectPlan {
     pub unread_sources: BTreeMap<String, UnreadSource>,
     /// Each warning that a source could not be read so tables may share a destination with it, and what it is about.
     pub unread_sharing: Vec<UnreadSharing>,
+    /// How long each target's and source's connection and each source's discovery took, when the command line timed them.
+    pub phases: Vec<PhaseTiming>,
 }
 
 /// The tables a source that could not be read would load, as far as its settings name them.
@@ -1216,6 +1219,8 @@ pub struct PlanView {
     pub skipped: Vec<PlanItem>,
     pub errors: Vec<PlanItem>,
     pub warnings: Vec<PlanItem>,
+    /// How long each connection and discovery took before the plan.
+    pub phases: Vec<PhaseTiming>,
 }
 
 /// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.

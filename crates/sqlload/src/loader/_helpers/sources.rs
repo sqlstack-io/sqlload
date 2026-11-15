@@ -39,6 +39,9 @@ use crate::files_source::models::{
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::load_events::main::end_step::end_step;
+use crate::load_events::main::step_doing::step_doing;
+use crate::load_events::models::{Role, StepEnd};
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
 use crate::loader::_helpers::destination::nanosecond_columns;
@@ -246,9 +249,24 @@ pub(crate) async fn source_tables(
                 Ok(address) => address,
                 Err(problem) => return Ok(Err(problem.into())),
             };
-            let (client, encryption) = match connect_postgres(address.clone()).await {
-                Ok(connected) => connected,
-                Err(error) => return Ok(Err(LoaderError::from(error).into())),
+            step_doing("connecting");
+            let connected = connect_postgres(address.clone()).await;
+            let ended = |ok| {
+                end_step(StepEnd::Connected {
+                    role: Role::Source,
+                    label: "POSTGRES".to_owned(),
+                    ok,
+                });
+            };
+            let (client, encryption) = match connected {
+                Ok(connected) => {
+                    ended(true);
+                    connected
+                }
+                Err(error) => {
+                    ended(false);
+                    return Ok(Err(LoaderError::from(error).into()));
+                }
             };
             let warnings: Vec<String> =
                 plain_text_warning((source_name, &source.connection), &address, encryption)

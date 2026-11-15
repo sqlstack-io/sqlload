@@ -1263,6 +1263,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         summary: summary.join(", "),
         selected,
         destinations: named,
+        phases: plan.phases.clone(),
         objects: stages
             .iter()
             .map(|stage| stage_item(stage))

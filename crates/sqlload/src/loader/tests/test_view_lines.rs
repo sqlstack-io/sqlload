@@ -115,6 +115,7 @@ fn given_a_plan_view_when_printing_it_then_it_follows_the_sqb_plan_layout() {
             skipped: Vec::new(),
             errors: plan_items(test_case.errors),
             warnings: plan_items(test_case.warnings),
+            phases: Vec::new(),
         };
         assert_eq!(
             view_lines(&view).join("\n"),

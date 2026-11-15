@@ -1,5 +1,8 @@
 //! Discover an ODBC source's tables: catalog tables matching `include`, and query tables described without reading rows.
 
+use crate::load_events::main::end_step::end_step;
+use crate::load_events::main::step_doing::step_doing;
+use crate::load_events::models::{Role, StepEnd};
 use crate::odbc_source::_helpers::catalog::{catalog_tables, described, source_table};
 use crate::odbc_source::_helpers::connect::connect;
 use crate::odbc_source::_helpers::query::from_item;
@@ -26,7 +29,29 @@ fn catalog(
     (include, exclude, keys): &(Vec<String>, Vec<String>, KeyUses),
     queries: &[(String, String)],
 ) -> Result<Vec<SourceTable>, OdbcSourceError> {
-    let connection = connect(reader)?;
+    step_doing("connecting");
+    let connection = match connect(reader) {
+        Ok(connection) => {
+            let label = match connection.database_management_system_name() {
+                Ok(dbms) => format!("{} through ODBC", dbms.to_uppercase()),
+                Err(_) => "ODBC".to_owned(),
+            };
+            end_step(StepEnd::Connected {
+                role: Role::Source,
+                label,
+                ok: true,
+            });
+            connection
+        }
+        Err(error) => {
+            end_step(StepEnd::Connected {
+                role: Role::Source,
+                label: "ODBC".to_owned(),
+                ok: false,
+            });
+            return Err(error);
+        }
+    };
     let mut tables: Vec<SourceTable> = match include.is_empty() {
         true => Vec::new(),
         false => catalog_tables(&connection, (include, exclude), keys)?,

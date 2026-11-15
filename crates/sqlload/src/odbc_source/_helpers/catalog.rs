@@ -7,6 +7,7 @@ use arrow_schema::{Field, Schema};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::column_types::main::portable_type::portable_type;
+use crate::load_events::main::step_doing::step_doing;
 use crate::odbc_source::_helpers::query::from_item;
 use crate::odbc_source::constants::{ANY_NAME, LISTED_KEYS_QUERY, TABLE_TYPES};
 use crate::odbc_source::errors::OdbcSourceError;
@@ -96,17 +97,29 @@ pub(crate) fn catalog_tables(
             listed_tables(connection, (ANY_NAME, ANY_NAME), true)?.0
         }
     };
+    let kept: Vec<(ListedTable, String)> = listed
+        .into_iter()
+        .map(|listed| {
+            let qualified = qualified_name(&listed.schema, &listed.name);
+            (listed, qualified)
+        })
+        .filter(|(_, qualified)| included.is_match(qualified) && !exclude.is_match(qualified))
+        .collect();
+    let count = kept.len();
     let mut tables: Vec<SourceTable> = Vec::new();
-    for ListedTable {
-        catalog,
-        schema,
-        name: table,
-    } in listed
+    for (
+        index,
+        (
+            ListedTable {
+                catalog,
+                schema,
+                name: table,
+            },
+            qualified,
+        ),
+    ) in kept.into_iter().enumerate()
     {
-        let qualified = qualified_name(&schema, &table);
-        if !included.is_match(&qualified) || exclude.is_match(&qualified) {
-            continue;
-        }
+        step_doing(&format!("describing {qualified} ({}/{count})", index + 1));
         let columns = described(connection, &from_item(&schema, &table, None))?;
         let used = keys.tables.get(&qualified).copied().unwrap_or(keys.source);
         let key = match used {

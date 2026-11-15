@@ -6,6 +6,9 @@ use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::models::AfterLoad;
+use crate::load_events::main::begin_step::begin_step;
+use crate::load_events::main::end_step::end_step;
+use crate::load_events::models::StepEnd;
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::load_naming::main::loaded_columns::loaded_columns;
@@ -1331,7 +1334,7 @@ pub(crate) async fn with_kept_names(
     Box::pin(plan_table(&kept_spec, destination, options)).await
 }
 
-/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.
+/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan. Each source's discovery is a step, timed from its connection when it opens one.
 pub(crate) async fn found_sources<'a>(
     project: &'a ProjectConfig,
     destinations: &BTreeMap<String, Destination>,
@@ -1340,25 +1343,33 @@ pub(crate) async fn found_sources<'a>(
     let mut found = FoundSources::default();
     let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
     for (source_name, source) in &project.sources {
-        let (mut resolved, files) =
-            match scoped_tables((project, options), (source_name, source)).await? {
-                Ok(tables) => tables,
-                Err(problem) => {
-                    found.unresolved.push(source_name.clone());
-                    if let Some(problem) = problem {
-                        found.plan.unread_sources.insert(
-                            source_name.clone(),
-                            unread_source(project, (source_name, source)),
-                        );
-                        if problem.retryable {
-                            found.plan.retryable_problems.push(problem.message.clone());
-                        }
-                        found.plan.failed_sources.insert(source_name.clone());
-                        found.plan.problems.push(problem.message);
+        begin_step(source_name, "listing tables");
+        let scoped = scoped_tables((project, options), (source_name, source)).await;
+        end_step(match &scoped {
+            Ok(Ok((resolved, _))) => StepEnd::Discovered {
+                tables: Some(resolved.specs.len()),
+            },
+            Ok(Err(None)) => StepEnd::Quiet,
+            Ok(Err(Some(_))) | Err(_) => StepEnd::Discovered { tables: None },
+        });
+        let (mut resolved, files) = match scoped? {
+            Ok(tables) => tables,
+            Err(problem) => {
+                found.unresolved.push(source_name.clone());
+                if let Some(problem) = problem {
+                    found.plan.unread_sources.insert(
+                        source_name.clone(),
+                        unread_source(project, (source_name, source)),
+                    );
+                    if problem.retryable {
+                        found.plan.retryable_problems.push(problem.message.clone());
                     }
-                    continue;
+                    found.plan.failed_sources.insert(source_name.clone());
+                    found.plan.problems.push(problem.message);
                 }
-            };
+                continue;
+            }
+        };
         if let Some(drained) = resolved.drained.take() {
             drained_sources.push((found.sources.len(), drained));
         }
