@@ -397,6 +397,7 @@ async fn run_command(
                 (vec![text], exit_code(false, retryable))
             }
             false => {
+                let mut lines = start_lines(lines);
                 lines.extend([String::new(), follow_refused(project, &plan)]);
                 (lines, exit_code(false, plan_retryable))
             }
@@ -441,11 +442,12 @@ async fn run_command(
         host,
         options: &options,
     };
-    if loads && follow.is_none() {
+    if loads {
         let streamed = StreamedLoad {
             run: &run,
             plan: &plan,
             applied: &applied,
+            stop: follow.map(follow_stop),
             output: LoadOutput {
                 name_width: name_width(&plan, &applied),
                 rows_width: rows_width(&plan),
@@ -459,7 +461,11 @@ async fn run_command(
                         .filter(|table| table.schema.blocked.is_none())
                         .map(TablePlan::outcome_name)
                         .collect();
-                    LiveState::new(tables, options.fail_fast)
+                    let state = LiveState::new(tables, options.fail_fast);
+                    match follow {
+                        Some(_) => state.following(),
+                        None => state,
+                    }
                 }),
             },
             started,
@@ -485,16 +491,11 @@ async fn run_command(
         lines.extend(ended.lines);
         return Ok((lines, ended.exit_code));
     }
-    let stop = follow.map(follow_stop);
-    let outcomes = match loads {
-        true => load_tables(&run, &plan, stop.as_ref()).await,
-        false => Vec::new(),
-    };
     if json {
         let run = RunReport {
-            command: if loads { "load" } else { "apply" },
+            command: "apply",
             applied: &applied,
-            outcomes: &outcomes,
+            outcomes: &[],
             started: started.0,
             elapsed: started.1.elapsed(),
             peak_memory_bytes: run_peak_bytes(&[]),
@@ -502,25 +503,17 @@ async fn run_command(
         let (text, ok, retryable) = json_report(&plan, Some(&run));
         return Ok((vec![text], exit_code(ok, retryable)));
     }
-    let (tallied, completed) = render_tally(
-        &applied,
-        &outcomes,
-        started.1.elapsed(),
-        loads.then(|| run_peak_bytes(&[])).flatten(),
-    );
+    let (tallied, completed) = render_tally(&applied, &[], started.1.elapsed(), None);
     lines.extend(tallied);
-    let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
-    Ok((
-        lines,
-        exit_code(planned && completed, plan_retryable && retryable),
-    ))
+    Ok((lines, exit_code(planned && completed, plan_retryable)))
 }
 
-/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
+/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, what stops a `load --follow`, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
 struct StreamedLoad<'a> {
     run: &'a LoadRun<'a>,
     plan: &'a ProjectPlan,
     applied: &'a [String],
+    stop: Option<CancellationToken>,
     output: LoadOutput,
     started: (chrono::DateTime<chrono::Utc>, std::time::Instant),
     planned: (bool, bool),
@@ -564,7 +557,7 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
     let writer = tokio::spawn(write_events(load.output, receiver));
     emit(None, EventKind::RunStarted { selected, to_load });
     let before = run_peak_bytes(&[]);
-    let outcomes = load_tables(load.run, load.plan, None).await;
+    let outcomes = load_tables(load.run, load.plan, load.stop.as_ref()).await;
     let measured: Vec<Option<u64>> = std::iter::once(before)
         .chain(outcomes.iter().map(|outcome| outcome.peak_memory_bytes))
         .collect();
