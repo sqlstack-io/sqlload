@@ -110,6 +110,13 @@ same name, ignoring case, fails `plan`.
   only its first column; the rest count as blank. Cells right of the last named header cell are not
   loaded, with a warning.
 - Rows with nothing in the header's columns are skipped; a short row is padded with NULLs.
+- From 0.54.0, each row has `_sqlload_source_row`, its row number in the sheet, so row 7 in the
+  table is row 7 in Google Sheets and a skipped row leaves a gap. Unlike a file's, it doesn't start
+  at 1. It gives the rows an order, so a value a hand-made sheet writes only on a block's first row
+  (a merged cell) can be filled down in SQL:
+  `last_value(metric_id ignore nulls) over (order by _sqlload_source_row)`. Leave it out with
+  `exclude_columns`. A header column with the same name fails `plan`. A table with a
+  `transform` doesn't get it.
 - Each column's type comes from every cell in it: TRUE/FALSE as `bool`; whole numbers in a plain
   format as `int`, other numbers as `float` (currency, percentages and scientific numbers always,
   even when whole; a percentage as its fraction); cells formatted as dates, dates with times, or
@@ -123,6 +130,9 @@ same name, ignoring case, fails `plan`.
   with no values, such as every column of a header-only tab, is `text`; to type it once rows arrive,
   pin a type in `columns` or run `load --reload`. A whole-number column that later gets a fraction
   is refused at `plan`, so pin `float` up front where fractions may appear.
+- An empty text, such as a formula's `IFERROR(K9/K8, "")` for a month with no data yet, is an empty
+  cell, as the sheet shows it: it loads NULL and doesn't type its column, so a column of numbers
+  stays numeric.
 - A formula error (`#DIV/0!`, `#N/A`) fails the load naming the cell, rather than loading NULL.
 
 ## Transforming each range
@@ -178,10 +188,9 @@ def kpi_sheet(rows: pa.Table, ctx: sl.TransformContext):
   cell must still name every column; when it doesn't, use `header = false` with `column_names`.
 - A merged cell's value is in its first cell only; the others arrive empty, so fill them down in the
   function, as `ffill()` does above.
-- The rows the function gets differ from a table's without one in two ways: an empty text, as a
-  formula's `IFERROR(..., "")` returns, is NULL and doesn't type its column; and a number in a
-  column typed `text` (one mixing numbers and notes) is its value, `0.9`, not the text the sheet
-  shows, `90.0%`. A formula error still fails the load, naming the cell.
+- The rows the function gets differ from a table's without one in one way: a number in a column
+  typed `text` (one mixing numbers and notes) is its value, `0.9`, not the text the sheet shows,
+  `90.0%`. A formula error still fails the load, naming the cell.
 - A function that raises, or returns or yields something else, fails the table, naming the function
   and the range; the table stays as it was. The load report gives each range's transform time.
 - With `merge` or `append`, `plan` shows `transform  changed: 1 range loaded under an earlier

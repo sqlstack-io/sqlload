@@ -158,7 +158,10 @@ pub(crate) async fn listed_files(
         unreadable(&folder.location),
     ) {
         (false, _, _) => Ok(listed),
-        (true, 0, None) => Err(FilesError::NoFiles { key, reason }),
+        (true, 0, None) => Err(FilesError::NoFiles {
+            key,
+            reason: format!("{reason}; where an empty folder is normal, set on_empty = \"skip\""),
+        }),
         (true, _, None) => Err(FilesError::File { key, reason }),
         (true, _, Some(error)) => Err(FilesError::File {
             key,

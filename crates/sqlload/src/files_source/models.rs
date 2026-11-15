@@ -221,6 +221,28 @@ pub enum AfterLoad {
     MoveTo(String),
 }
 
+/// The order a files source's merge applies its files in, and commits them one each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesOrder {
+    /// Oldest modified first, files modified at the same time in path order.
+    #[default]
+    Modified,
+    /// By full path below the source's `path` (a ZIP member's as `<archive>.zip/<member>`), in code point order, as text cursors compare.
+    Path,
+}
+
+/// What a load does when a files source's folder exists and holds no files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnEmpty {
+    /// Fail, as an empty folder can mean a broken mount (`after_load` still skips a folder it emptied).
+    #[default]
+    Fail,
+    /// Skip the table, leaving it as it is.
+    Skip,
+}
+
 /// How the files of a text format are compressed; Parquet compresses inside the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]

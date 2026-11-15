@@ -21,7 +21,7 @@ use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
 use crate::files_source::models::{
-    AfterLoad, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
+    AfterLoad, FilesOrder, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::Naming;
@@ -277,6 +277,12 @@ pub(crate) fn build_spec(
         overrides,
     );
     problems.extend(found);
+    if context.source.order == FilesOrder::Path
+        && !(strategy == WriteStrategy::Merge
+            || (strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty()))
+    {
+        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
+    }
     let matched_key = match keyed {
         true => &replace_key,
         false => &unique_key,
@@ -424,6 +430,7 @@ pub(crate) fn build_spec(
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
         after_load: context.source.after_load.clone(),
+        files_order: context.source.order,
         approved: false,
         tunnel: None,
         new_tables: context.source.new_tables,

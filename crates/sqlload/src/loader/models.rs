@@ -17,8 +17,8 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
-    AfterLoad, AfterLoadReport, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile,
-    TextChecks,
+    AfterLoad, AfterLoadReport, FilesEncoding, FilesOrder, FilesRead, FilesTable, Footer,
+    LoadedFile, TextChecks,
 };
 use crate::loader::_helpers::render::problem_item;
 use crate::loader::_helpers::sources::PLANNED_SOURCES;
@@ -171,6 +171,8 @@ pub struct TableSpec {
     pub logged: bool,
     /// What a files source does with each file once its rows commit.
     pub after_load: AfterLoad,
+    /// The order a files source's merge applies its files in.
+    pub files_order: FilesOrder,
     /// Approved for loading as soon as it appears: named exactly in `include`, or declared (files and Python tables); a `[sources.*.tables]` entry alone never approves.
     pub approved: bool,
     pub new_tables: NewTables,

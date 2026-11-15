@@ -55,6 +55,8 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "xml",
     "members",
     "after_load",
+    "order",
+    "on_empty",
     "shape",
     "record_column",
     "destination_path",

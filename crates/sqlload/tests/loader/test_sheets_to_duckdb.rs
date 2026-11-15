@@ -29,12 +29,12 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
                 expected_result: "L1:North:2026-01-15:true:120:2026-11-08 09:30:00:00123,L2:South, Upper:2025-12-31:false:::|Code VARCHAR,Name VARCHAR,Opened DATE,Active BOOLEAN,Capacity BIGINT,Updated At TIMESTAMP,Ref VARCHAR",
             },
             SheetsLoadTestCase {
-                description: "a range below title rows takes its header from header_row and stops at the range's last column; the header-only tab is an empty table",
+                description: "a range below title rows takes its header from header_row and stops at the range's last column; the header-only tab is an empty table; each row's _sqlload_source_row is its row in the sheet, skipped blank rows leaving gaps",
                 tabs: first_tabs,
                 refused_reads: 0,
                 expected_output: "",
-                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'Note') || '|' || (SELECT count(*) FROM raw.reference__header_only) FROM raw.report__items",
-                expected_result: "alpha:1.0,beta:2.5|0|0",
+                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR) || ':' || CAST(_sqlload_source_row AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'Note') || '|' || (SELECT count(*) FROM raw.reference__header_only) || '|' || (SELECT string_agg(Code || ':' || CAST(_sqlload_source_row AS VARCHAR), ',' ORDER BY Code) FROM raw.reference__locations) FROM raw.report__items",
+                expected_result: "alpha:1.0:4,beta:2.5:5|0|0|L1:2,L2:4",
             },
             SheetsLoadTestCase {
                 description: "after the sheet is edited, the next load replaces the table with the sheet as it is now, reading again with a new token when the old one is refused",

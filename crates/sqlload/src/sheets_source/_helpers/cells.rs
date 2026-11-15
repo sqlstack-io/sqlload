@@ -7,7 +7,7 @@ use crate::column_types::models::ColumnType;
 use crate::sheets_source::constants::{DAY_MS, UNIX_EPOCH_SERIAL, WHOLE_TEXT_LIMIT};
 use crate::sheets_source::models::{Cell, Grid, NumberKind};
 
-/// A cell of a `rowData` entry: its effective value, with a number's format type and displayed text.
+/// A cell of a `rowData` entry: its effective value, with a number's format type and displayed text. An empty text, such as a formula's `""`, is an empty cell, as the sheet shows it.
 pub(crate) fn parse_cell(cell: &Value) -> Cell {
     let value = &cell["effectiveValue"];
     let shown = cell["formattedValue"].as_str().unwrap_or_default();
@@ -30,6 +30,7 @@ pub(crate) fn parse_cell(cell: &Value) -> Cell {
             kind,
             shown: shown.to_owned(),
         },
+        (_, _, Some(""), _) => Cell::Empty,
         (_, _, Some(text), _) => Cell::Text(text.to_owned()),
         (_, _, _, Some(_)) => Cell::Error(shown.to_owned()),
         _ => Cell::Empty,
