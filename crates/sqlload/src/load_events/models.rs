@@ -34,6 +34,12 @@ pub enum EventKind {
     },
     /// A table's rows are read and its last commit begins.
     TableCommitting { rows: u64 },
+    /// Under `load --follow`, a batch of the followed source's changes was written: this table's rows in it, and how long ago the batch's newest change committed, in seconds.
+    TableBatchWritten {
+        rows: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        behind_secs: Option<u64>,
+    },
     /// A table loaded: its rows, how long it took, and its new position when it keeps one.
     TableDone {
         rows: u64,

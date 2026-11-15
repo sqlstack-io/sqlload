@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use tokio::task::{Id, JoinError};
+use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::WriteMode;
+use crate::cdc::main::follow_cdc::follow_cdc;
 use crate::cdc::main::load_cdc::load_cdc;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
@@ -69,6 +71,29 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
             peak_memory_bytes,
         },
     }
+}
+
+/// Follow the plan's one `postgres_cdc` source until `stop` is cancelled (see [`follow_cdc`]), its unblocked tables reported started at once and their outcomes at the end.
+pub(crate) async fn follow_tables(
+    run: &LoadRun<'_>,
+    plan: &ProjectPlan,
+    stop: &CancellationToken,
+) -> Vec<TableOutcome> {
+    for table in plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_none())
+    {
+        emit(
+            Some(&table.outcome_name()),
+            EventKind::TableStarted {
+                strategy: strategy_name(table).to_owned(),
+            },
+        );
+    }
+    let outcomes = Box::pin(follow_cdc(run, plan.clone(), stop)).await;
+    outcomes.iter().for_each(emit_outcome);
+    outcomes
 }
 
 /// `table`'s write strategy as the load events name it.
