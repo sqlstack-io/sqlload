@@ -60,6 +60,9 @@ mod test_mixed_cursors;
 #[path = "loader/test_null_cursors.rs"]
 mod test_null_cursors;
 #[cfg(feature = "odbc")]
+#[path = "loader/test_odbc_catalog.rs"]
+mod test_odbc_catalog;
+#[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_drivers.rs"]
 mod test_odbc_drivers;
 #[cfg(feature = "odbc")]

@@ -464,7 +464,11 @@ async fn discover_odbc(
     let reader = odbc_source_reader(project, source).map_err(|error| error.to_string())?;
     crate::odbc_source::main::read_catalog::read_catalog(
         &reader,
-        (&source.include, &source.exclude),
+        (
+            &source.include,
+            &source.exclude,
+            &crate::loader::_helpers::resolve::key_uses(project, source),
+        ),
         queries,
     )
     .await
