@@ -142,6 +142,8 @@ pub(crate) struct ReloadOrderTestCase {
     pub(crate) description: &'static str,
     /// The files listed now below `drop/`, by key and modified time (their version is `1-{time}`).
     pub(crate) files: &'static [(&'static str, i64)],
+    /// The positions in `files` of those read from `done/`, where `after_load` moved them, rather than `drop/`; they show as `done/{key}`.
+    pub(crate) archived: &'static [usize],
     /// The table's merge records, oldest first, as name (`drop/{key}`) and version.
     pub(crate) merged: &'static [(&'static str, &'static str)],
     pub(crate) expected_keys: &'static [&'static str],

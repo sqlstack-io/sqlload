@@ -1300,7 +1300,9 @@ pub(crate) async fn plan_files(
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
     let ordered = select_files(&selection).map(|files| match &merged {
-        Some((_, recorded)) if request.options.reload => reload_order(files, &location, recorded),
+        Some((_, recorded)) if request.options.reload => {
+            reload_order(files, &location, recorded, request.files.archive.as_ref())
+        }
         Some(_) => merge_order(files),
         None => files,
     });

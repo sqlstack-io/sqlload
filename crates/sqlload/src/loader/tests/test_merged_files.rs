@@ -48,13 +48,15 @@ fn given_a_merge_ledger_when_reloading_then_files_go_in_the_order_they_merged_an
                 ("drop/b.csv", "1-1000"),
                 ("drop/c.csv", "1-2000"),
             ],
+            archived: &[],
             expected_keys: &["a.csv", "b.csv", "c.csv"],
         },
         ReloadOrderTestCase {
             description: "a file whose version changed (moved, so copied) keeps its place by name",
             files: &[("a.csv", 9_000), ("b.csv", 1_000)],
             merged: &[("drop/a.csv", "1-500"), ("drop/b.csv", "1-1000")],
-            expected_keys: &["a.csv", "b.csv"],
+            archived: &[0],
+            expected_keys: &["done/a.csv", "b.csv"],
         },
         ReloadOrderTestCase {
             description: "a file merged at two versions goes where its current version merged",
@@ -64,12 +66,21 @@ fn given_a_merge_ledger_when_reloading_then_files_go_in_the_order_they_merged_an
                 ("drop/b.csv", "1-2000"),
                 ("drop/a.csv", "1-4000"),
             ],
+            archived: &[],
             expected_keys: &["b.csv", "a.csv"],
+        },
+        ReloadOrderTestCase {
+            description: "a file in the folder under a merged name, at a version never merged, is a newer file: it follows the archived copy",
+            files: &[("export.csv", 2_000), ("export.csv", 1_000)],
+            merged: &[("drop/export.csv", "1-1000")],
+            archived: &[1],
+            expected_keys: &["done/export.csv", "export.csv"],
         },
         ReloadOrderTestCase {
             description: "files never merged follow, oldest modified first",
             files: &[("new2.csv", 5_000), ("new1.csv", 4_000), ("old.csv", 9_000)],
             merged: &[("drop/old.csv", "1-9000")],
+            archived: &[],
             expected_keys: &["old.csv", "new1.csv", "new2.csv"],
         },
     ];

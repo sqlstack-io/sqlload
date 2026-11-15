@@ -34,6 +34,14 @@ impl StoredFile {
             None => format!("{}-{}", self.size, self.modified_ms),
         }
     }
+
+    /// The file's store path, and its ZIP member: unique within a load, where two folders (such as the source's and `after_load`'s `move_to`) can hold files with the same relative key.
+    pub fn store_key(&self) -> String {
+        match &self.member {
+            Some(member) => format!("{}/{member}", self.path),
+            None => self.path.to_string(),
+        }
+    }
 }
 
 /// The files on an SFTP server, read over one SFTP session opened on first use: `root` is `/`, or empty for the user's login folder. Reads only: SQLLoad never writes to, renames or deletes from an SFTP server.

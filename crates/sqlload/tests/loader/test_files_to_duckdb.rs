@@ -1070,6 +1070,40 @@ fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_orde
                 check_query: RELOAD_CHECK,
                 expected_result: "1:b,2:a|reset,run:a.csv,run:b.csv|0",
             },
+            FilesMergeTestCase {
+                description: "a new file named as one move_to archived merges after the archived copy, so its newer rows win",
+                settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nafter_load = { move_to = \"done\" }\n",
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "export.csv",
+                            contents: "id,v\n1,a\n",
+                            modified_secs: 1_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "export.csv",
+                            contents: "id,v\n1,b\n",
+                            modified_secs: 2_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: true,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                ],
+                check_query: RELOAD_CHECK,
+                expected_result: "1:b|reset,run:export.csv,reset,run:export.csv,run:export.csv|0",
+            },
         ];
         for test_case in &test_cases {
             let result = run_merge_case(

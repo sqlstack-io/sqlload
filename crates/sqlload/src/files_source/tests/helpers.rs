@@ -469,6 +469,56 @@ async fn break_footer_and_read(folder: &OpenFolder, reuse: bool) -> Result<Strin
         .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
 }
 
+/// Parquet files `x.parquet` of three rows and `done/x.parquet` of one, listed with one relative key as `--reload` lists a file and its copy that `move_to` archived, their footers read and reused: the rows read, or `failed`.
+pub(crate) async fn read_same_key_files() -> Result<String, String> {
+    let (folder, root) = folder_with(&[]).await?;
+    let result = write_and_read_same_key(&folder).await;
+    let _ = std::fs::remove_dir_all(&root);
+    result
+}
+
+async fn write_and_read_same_key(folder: &OpenFolder) -> Result<String, String> {
+    for (key, ids) in [("x.parquet", vec![1, 2, 3]), ("done/x.parquet", vec![4])] {
+        let values: arrow_array::ArrayRef = Arc::new(arrow_array::Int64Array::from(ids));
+        let batch =
+            RecordBatch::try_from_iter([("id", values)]).map_err(|error| error.to_string())?;
+        let mut body: Vec<u8> = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut body, batch.schema(), None)
+            .map_err(|error| error.to_string())?;
+        writer.write(&batch).map_err(|error| error.to_string())?;
+        writer.close().map_err(|error| error.to_string())?;
+        write_file(folder, key, Bytes::from(body))
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    let encoding = encoding(SourceFormat::Parquet);
+    let mut files = discover_files(folder, &PathValues::default(), &encoding)
+        .await
+        .map_err(|error| error.to_string())?
+        .files;
+    for data in &mut files {
+        data.file.relative_key = "x.parquet".to_owned();
+    }
+    let footers = crate::files_source::main::batch_footers::batch_footers(folder, &files)
+        .await
+        .map_err(|error| error.to_string())?;
+    let request = FilesRead {
+        nanos: Vec::new(),
+        files,
+        encoding,
+        checks: TextChecks::default(),
+        columns: vec![DesiredColumn {
+            name: "id".to_owned(),
+            column_type: ColumnType::Int,
+            origin: ColumnOrigin::Source,
+        }],
+        batch_rows: 10,
+    };
+    Ok(read_files(folder, &request, &footers, async |_| Ok(()))
+        .await
+        .map_or_else(|_| "failed".to_owned(), |rows| rows.to_string()))
+}
+
 /// One Parquet file of three rows with nested columns, discovered and read: column `name`'s planned type, and its values `|`-separated (`NULL` for NULL).
 pub(crate) async fn nested_parquet_column(name: &str) -> Result<(String, String), String> {
     let (folder, root) = folder_with(&[]).await?;

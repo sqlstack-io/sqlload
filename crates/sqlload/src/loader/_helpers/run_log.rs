@@ -839,11 +839,12 @@ pub(crate) async fn merge_ledger(
     Ok(merged.map(|merged| (unchanged_files(merged, &listed), Vec::new())))
 }
 
-/// `files` in the order a merge `--reload` applies them: those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else by name (a file moved by `after_load` may have a new version); then the others oldest modified first, as a load merges new files.
+/// `files` in the order a merge `--reload` applies them: those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else, for a file read from `archive` (where `after_load` moved it, so it may have a new version), by name; then the others oldest modified first, as a load merges new files. A file in the source's folder that matches only by name is a newer file under a merged name, so it merges after the recorded ones, as a load would merge it.
 pub(crate) fn reload_order(
     files: Vec<DataFile>,
     location: &str,
     merged: &[LoadedFile],
+    archive: Option<&Location>,
 ) -> Vec<DataFile> {
     let mut by_version: HashMap<(&str, &str), usize> = HashMap::new();
     let mut by_name: HashMap<&str, usize> = HashMap::new();
@@ -858,9 +859,11 @@ pub(crate) fn reload_order(
     for data in files {
         let name = format!("{location}{}", data.file.relative_key);
         let version = data.file.version();
+        let archived =
+            archive.is_some_and(|archive| data.file.path.as_ref().starts_with(&archive.prefix));
         match by_version
             .get(&(name.as_str(), version.as_str()))
-            .or_else(|| by_name.get(name.as_str()))
+            .or_else(|| by_name.get(name.as_str()).filter(|_| archived))
         {
             Some(index) => recorded.push((*index, data)),
             None => others.push(data),
