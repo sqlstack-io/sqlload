@@ -79,6 +79,8 @@ use crate::postgres_source::models::{
     SslMode,
 };
 use crate::project::main::postgres_address::postgres_address;
+use crate::project::main::reader_flatten::reader_flatten;
+use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
     BatchStep, ConnectionConfig, OnDuplicateKeys, ProjectConfig, SourceConfig, SourceKind,
     TableOverride, TableSettings, WriteStrategy,
@@ -721,6 +723,11 @@ async fn transformed_sheet(
         masked: Vec::new(),
         arrays: Vec::new(),
         naming: (Naming::default(), None),
+        flatten: table_flatten(
+            (source, source.tables.get(name)),
+            (Compat::default(), Naming::default(), true),
+        )
+        .0,
     };
     let (batches, _) = transform_range(host, call, input).await?;
     let columns: Vec<SourceColumn> = returned_columns(&batches)
@@ -918,7 +925,7 @@ pub(crate) async fn discover_files_table(
     let folder = open_folder(&location)?;
     let (values, _) = path_values((source_name, source), warehouse)?;
     let encoding = FilesEncoding {
-        flatten_objects: compat == Compat::Dlt,
+        flatten: reader_flatten(source, source_name, (naming, compat)),
         ..source.files_encoding()
     };
     let archive = match &source.after_load {
@@ -961,6 +968,7 @@ pub(crate) async fn discover_files_table(
                 masked: Vec::new(),
                 arrays: Vec::new(),
                 naming: (naming, sql_adapter(warehouse).max_identifier_length()),
+                flatten: table_flatten((source, overrides), (compat, naming, true)).0,
             };
             let (table, input) =
                 transform_sample((&folder, host, call), (input, &encoding), table).await?;
@@ -1054,7 +1062,7 @@ pub(crate) fn files_source_parts(
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = FilesEncoding {
-        flatten_objects: compat == Compat::Dlt,
+        flatten: reader_flatten(source, source_name, (naming, compat)),
         ..source.files_encoding()
     };
     let (values, partition_types) = path_values((source_name, source), warehouse)?;
@@ -1066,9 +1074,9 @@ pub(crate) fn files_source_parts(
     let overrides = source.tables.get(source_name);
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
     let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
-    if encoding.flatten_objects {
+    if !table.objects.is_empty() {
         let problems =
-            flattened_object_problems((source, overrides), (&table.columns, &table.objects), rule)
+            flattened_object_problems((source, overrides), (&table.columns, &table.objects))
                 .map_err(LoaderError::Invalid)?;
         if !problems.is_empty() {
             return Err(LoaderError::Invalid(problems.join("; ")));
@@ -1595,6 +1603,7 @@ fn transform_call<'a>(
             spec.naming,
             sql_adapter(spec.warehouse).max_identifier_length(),
         ),
+        flatten: spec.flatten.clone(),
     };
     Ok((call, run))
 }

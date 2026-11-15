@@ -1,4 +1,5 @@
 pub(crate) mod defaults;
+pub(crate) mod flatten_rules;
 pub(crate) mod python_checks;
 pub(crate) mod references;
 pub(crate) mod serde_values;

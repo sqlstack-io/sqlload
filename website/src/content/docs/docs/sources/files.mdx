@@ -586,6 +586,9 @@ conversion differs. In Snowflake, where files under an external stage or copied 
 `copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
 `exclude_columns`.
 
+A JSON or NDJSON object loads as one `json` column unless the table's `flatten` loads its keys as
+`<object>__<key>` columns. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects).
+
 From 0.27.0, pin a list column, or a JSON array in a CSV or JSON file, as
 [`array(T)`](/docs/concepts/types/#arrays) to load it as an array instead, such as
 `columns = { tags = "array(text)" }`.

@@ -5,3 +5,5 @@ pub mod motherduck_path;
 pub mod parse_project;
 pub mod parse_python_project;
 pub mod postgres_address;
+pub mod reader_flatten;
+pub mod table_flatten;

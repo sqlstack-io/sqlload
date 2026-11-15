@@ -5,6 +5,7 @@ use crate::row_batches::models::JsonLayout;
 use crate::row_batches::models::ProjectionRules;
 use crate::row_batches::models::{BadValue, FieldFrom, FieldSpec};
 use crate::row_batches::tests::helpers::read_projected;
+use crate::row_batches::tests::helpers::{flatten_rule, paths};
 use crate::row_batches::tests::test_types::{ProjectionProblemTestCase, ProjectionTestCase};
 
 #[test]
@@ -529,11 +530,11 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
                 from: FieldFrom::Row,
             })
             .collect();
-        let flatten: Vec<String> = test_case
-            .flatten
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect();
+        let flatten = flatten_rule(
+            paths(test_case.flatten),
+            (&[], &[]),
+            (1000, test_case.naming),
+        );
         let masked: Vec<String> = test_case
             .masked
             .iter()
@@ -541,7 +542,7 @@ fn given_a_tables_rules_when_checking_its_projection_then_the_cursor_must_load_a
             .collect();
         let rules = ProjectionRules {
             cursor_column: test_case.cursor_column,
-            flatten: &flatten,
+            flatten: Some(&flatten),
             masked: &masked,
             naming: (test_case.naming, None),
         };

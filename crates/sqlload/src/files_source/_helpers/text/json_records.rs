@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use crate::files_source::_helpers::text::bytes_reader::too_long;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
+use crate::row_batches::models::Flatten;
 
 /// One JSON object from a file: its keys and values in file order, and the line it starts on; a nested object or array is an empty placeholder value with its compact source text (keys in file order) beside it.
 #[derive(Debug, Clone, PartialEq)]
@@ -61,15 +62,20 @@ impl<'de> Visitor<'de> for ObjectVisitor {
 /// One field of a JSON record: its key, its value (an empty placeholder for an object or array) and the nested value's compact text.
 type JsonField = (String, Value, Option<String>);
 
-/// `record` with each field holding an object replaced where it stands, and recursively, by one field per key named `<field>__<key>`, as dlt flattens objects (an empty object, or a NULL inside an object, leaves none); with each name flattening made and each field it replaced, and those replaced fields alone (the objects: a key holding `__` is not one). A made name the record already has is an error naming it.
+/// `record` with each field holding an object that `flatten` flattens replaced where it stands, and recursively, by one field per key named `<field>__<key>` (an empty object, or a NULL inside an object, leaves none); with each name flattening made and each field it replaced, and those replaced fields alone (the objects, by their names: a key holding `__` is not one). A made name the record already has, or a pin `flatten` refuses, is an error naming it.
 pub(crate) fn flattened_record(
     record: JsonRecord,
+    flatten: &Flatten,
 ) -> Result<(JsonRecord, BTreeSet<String>, BTreeSet<String>), String> {
     let mut fields: Vec<JsonField> = Vec::with_capacity(record.fields.len());
     let mut flattened: BTreeSet<String> = BTreeSet::new();
     let mut objects: BTreeSet<String> = BTreeSet::new();
     for field in record.fields {
-        flatten_field(field, "", (&mut fields, &mut flattened, &mut objects))?;
+        flatten_field(
+            field,
+            (&[], flatten),
+            (&mut fields, &mut flattened, &mut objects),
+        )?;
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     if let Some((name, _, _)) = fields
@@ -77,7 +83,7 @@ pub(crate) fn flattened_record(
         .find(|(name, _, _)| !seen.insert(name.as_str()))
     {
         return Err(format!(
-            "line {}: compat = \"dlt\" flattens an object into the column {name}, which the record already has as a key; rename one of them",
+            "line {}: flatten makes the column {name} from an object, which the record already has as a key; rename one of them",
             record.line
         ));
     }
@@ -91,31 +97,31 @@ pub(crate) fn flattened_record(
     ))
 }
 
-/// Push `field`, named below `prefix` when an object holds it, onto `fields`, or its keys in its place when it holds an object (a NULL below a prefix leaves nothing); the object's name and names below a prefix join `flattened`, and the object's name `objects`.
+/// Push `field`, at `path` below the record when objects hold it, onto `fields`, or its keys in its place when it holds an object `flatten` flattens (a NULL inside a flattened object leaves nothing); the object's name and names made below it join `flattened`, and the object's name `objects`.
 fn flatten_field(
     (key, value, nested): JsonField,
-    prefix: &str,
+    (path, flatten): (&[&str], &Flatten),
     (fields, flattened, objects): (
         &mut Vec<JsonField>,
         &mut BTreeSet<String>,
         &mut BTreeSet<String>,
     ),
 ) -> Result<(), String> {
-    let name = match prefix.is_empty() {
-        true => key,
-        false => format!("{prefix}{FLATTEN_SEPARATOR}{key}"),
-    };
-    if let (Value::Object(_), Some(text)) = (&value, &nested) {
+    let here: Vec<&str> = path.iter().copied().chain([key.as_str()]).collect();
+    let name = here.join(FLATTEN_SEPARATOR);
+    if let (Value::Object(_), Some(text)) = (&value, &nested)
+        && flatten.flattens(&here)?
+    {
         let object: OrderedObject =
             serde_json::from_str(text).map_err(|error| format!("{name}: {error}"))?;
         flattened.insert(name.clone());
-        objects.insert(name.clone());
+        objects.insert(name);
         for inner in object.0 {
-            flatten_field(inner, &name, (fields, flattened, objects))?;
+            flatten_field(inner, (&here, flatten), (fields, flattened, objects))?;
         }
         return Ok(());
     }
-    if !prefix.is_empty() {
+    if !path.is_empty() {
         if value.is_null() {
             return Ok(());
         }

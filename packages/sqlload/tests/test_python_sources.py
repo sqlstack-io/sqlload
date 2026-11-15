@@ -1068,7 +1068,8 @@ def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_leve
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten=['customer'])(rows)\n")
 	give(project, "rows", first)
 	planned = sqlload(project, "plan")
-	assert "columns inferred on first load, customer flattened one level" in planned.stdout, planned.stdout
+	assert "columns inferred on first load" in planned.stdout, planned.stdout
+	assert "flatten customer; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
 	load(project)
 	give(project, "rows", second)
 	done = sqlload(project, "load")
@@ -1132,10 +1133,11 @@ def test_given_flatten_when_a_later_batch_has_a_field_of_a_flattened_name_then_t
 	("settings", "expected_problem"),
 	[
 		("exclude_columns=['customer']", "flatten customer: exclude_columns customer also names customer, which flattening replaces with customer__<key> columns"),
-		("mask={'customer': 'hash'}", "flatten customer: mask also names customer"),
-		("columns={'customer': 'json'}", "flatten customer: columns also names customer"),
+		("mask={'customer': 'hash'}", "flatten customer: a json pin, a mask or an allow_columns entry names customer, which keeps it whole"),
+		("columns={'customer': 'json'}", "flatten customer: a json pin, a mask or an allow_columns entry names customer, which keeps it whole"),
+		("columns={'customer': 'text'}", 'columns customer = "text": flatten replaces customer with its keys\' columns; pin it "json" to keep it whole'),
 	],
-	ids=["exclude", "mask", "pin"],
+	ids=["exclude", "mask", "json-pin", "text-pin"],
 )
 def test_given_flatten_and_a_setting_on_the_same_object_when_planning_then_it_is_refused(tmp_path: Path, settings: str, expected_problem: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', flatten=['customer'], {settings})(rows)\n")
@@ -1179,22 +1181,33 @@ def test_given_an_exclude_glob_covering_the_key_columns_when_loading_then_they_s
 	assert columns == [("id",), ("_sqlload_load_id",), ("_sqlload_loaded_at",)]
 
 
-def test_given_flatten_with_a_path_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer.address'])(rows)\n")
-	give(project, "rows", [{"id": 1}])
-	done = sqlload(project, "plan")
-	assert done.returncode == 1
-	assert "flatten customer.address: flatten names top-level objects, not paths; list customer instead" in done.stdout, done.stdout + done.stderr
+def test_given_a_dotted_flatten_path_two_levels_deep_when_loading_then_the_inner_object_flattens_too(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer', 'customer.address'])(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds", "geo": {"lat": 1}}}}])
+	load(project)
+	assert query(project, 'SELECT id, customer__name, customer__address__city, customer__address__geo::VARCHAR FROM "RAW".shop__rows') == [(1, "Ann", "Leeds", '{"lat":1}')]
 
 
-def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+def test_given_flatten_all_when_a_later_load_adds_an_object_field_then_it_becomes_columns(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten='all')(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"name": "Ann"}}])
+	planned = sqlload(project, "plan")
+	assert "flatten every object, 1000 levels down at most; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
+	load(project)
+	give(project, "rows", [{"id": 2, "customer": {"name": "Bo", "address": {"city": "Leeds"}}, "tags": ["x"]}])
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT id, customer__name, customer__address__city, tags::VARCHAR FROM "RAW".shop__rows ORDER BY id') == [(1, "Ann", None, None), (2, "Bo", "Leeds", '["x"]')]
+
+
+def test_given_flatten_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
+	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
 	project = make_project(tmp_path, toml, "")
 	(project / "lake" / "events").mkdir()
-	(project / "lake" / "events" / "a.ndjson").write_text('{"customer": {"country": "GB"}}\n')
+	(project / "lake" / "events" / "a.csv").write_text("id\n1\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "flatten applies to Python tables; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
+	assert "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
 
 
 DATE_CURSOR_MODULE = '''

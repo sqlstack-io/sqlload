@@ -702,10 +702,7 @@ impl Publisher {
                         naming: spec.naming,
                         compat: spec.compat,
                         name_limit: sql_adapter(spec.warehouse).max_identifier_length(),
-                        flatten_objects: spec
-                            .files
-                            .as_ref()
-                            .is_some_and(|files| files.encoding.flatten_objects),
+                        flatten: &spec.flatten,
                         live: &children.live,
                         ids: given,
                         roots: rooted.then_some(given),

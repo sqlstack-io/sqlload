@@ -32,6 +32,10 @@ each file`, and `plan_route` takes the same path as for `hmac`. Without a `trans
 changes, and the route test below still checks that only `hmac` reaches SQLLoad's reader among the
 settings it plans.
 
+A JSON or NDJSON table whose `flatten` flattens objects is read by SQLLoad, as a table with `unnest`
+or `row_id` is: its rows change shape before they load, and `reader_offer` gives the reason `the
+table flattens objects into columns, which SQLLoad does`.
+
 A column that loads under another name than its files give it (`naming`, `rename` or numbering) is
 no reason to read the files: each direct route selects it by its name in the files and loads it
 under its own (`f."Order ID"` into `order_id`; a repeated CSV header by its place).

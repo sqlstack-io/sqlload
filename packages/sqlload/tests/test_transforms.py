@@ -285,6 +285,28 @@ def metric_rows(rows, ctx):
 	assert route == ["route   read parquet into Arrow -> DuckDB takes Arrow"], planned.stdout
 
 
+@pytest.mark.parametrize("compat", ["sqlload", "dlt"])
+def test_a_transform_sees_objects_as_read_and_flatten_applies_to_what_it_returns(tmp_path: Path, compat: str) -> None:
+	module = """
+import json
+import sqlload as sl
+
+@sl.transform
+def metric_rows(rows, ctx):
+    listed = rows.to_pylist()
+    assert all(isinstance(row["customer"], str) for row in listed), listed
+    return [{"id": int(row["id"]), "customer": json.loads(row["customer"])} for row in listed]
+"""
+	table = 'flatten = ["customer", "customer.address"]\n' if compat == "sqlload" else ""
+	project = make_project(tmp_path, module, format="ndjson", settings=f'write_strategy = "append"\ncompat = "{compat}"\n', table=table)
+	give(project, "a.ndjson", '{"id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds"}}}\n')
+	planned = sqlload(project, "plan")
+	assert planned.returncode == 0, planned.stdout + planned.stderr
+	assert "customer__address__city" in planned.stdout, planned.stdout
+	load(project)
+	assert query(project, 'SELECT id, customer__name, customer__address__city FROM "RAW".metrics') == [(1, "Ann", "Leeds")]
+
+
 def test_a_column_the_plan_did_not_see_fails_the_file_and_a_missing_one_loads_null(tmp_path: Path) -> None:
 	module = """
 import sqlload as sl

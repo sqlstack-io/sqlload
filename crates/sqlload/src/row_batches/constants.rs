@@ -27,3 +27,12 @@ pub const PROJECTION_ROOT: &str = "$";
 
 /// Separates the keys of a projection's path, `$.address.city`.
 pub const PROJECTION_SEPARATOR: char = '.';
+
+/// How many of a flattened object's keys `plan` shows.
+pub const SHOWN_OBJECT_KEYS: usize = 2;
+
+/// More keys than this make a flattened object look like a map whose keys are data.
+pub const MANY_KEYS: usize = 20;
+
+/// The percentage of a flattened object's keys that, holding a digit or not a plain name, make it look like a map whose keys are data.
+pub const DATA_KEYS_SHARE: usize = 50;

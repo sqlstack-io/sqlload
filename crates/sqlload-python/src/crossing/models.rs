@@ -1,5 +1,5 @@
 use sqlload::load_naming::models::Naming;
-use sqlload::row_batches::models::ProjectionRules;
+use sqlload::row_batches::models::{Flatten, ProjectionRules};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Condvar, Mutex};
@@ -44,7 +44,7 @@ pub struct CrossingOptions {
 pub struct ReadContext {
     /// The table's name in its source, for a page `transform`'s `ctx.table`.
     pub table: String,
-    pub flatten: Vec<String>,
+    pub flatten: Flatten,
     pub connections: serde_json::Map<String, serde_json::Value>,
     /// The table's cursor column, which projected JSON rows must keep.
     pub cursor_column: Option<String>,
@@ -61,7 +61,7 @@ impl ReadContext {
     pub fn rules(&self) -> ProjectionRules<'_> {
         ProjectionRules {
             cursor_column: self.cursor_column.as_deref(),
-            flatten: &self.flatten,
+            flatten: Some(&self.flatten),
             masked: &self.masked,
             naming: self.naming,
         }
@@ -102,8 +102,8 @@ pub(crate) struct Dispatch {
     pub(crate) jobs: Sender<ParseJob>,
     /// Holds the byte budget the generator waits on.
     pub(crate) stats: Arc<CrossingStats>,
-    /// Top-level objects expanded one level into `<object>__<key>` columns.
-    pub(crate) flatten: Arc<Vec<String>>,
+    /// The objects expanded into `<object>__<key>` columns.
+    pub(crate) flatten: Arc<Flatten>,
 }
 
 /// One piece of yielded data, crossed into Rust and waiting to be parsed.

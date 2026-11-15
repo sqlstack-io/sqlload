@@ -98,6 +98,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/cursor": self.cursor,
 			"/v1/link": self.link,
 			"/v1/flaky": self.flaky,
+			"/v1/nested": lambda query: self.reply(200, {"items": [{"order_id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds", "geo": {"lat": 1}}}}]}),
 			"/v1/broken": lambda query: self.reply(500, {"message": f"down, token {TOKEN}"}),
 			"/v1/long": lambda query: self.reply(400, {"message": "x" * 280 + f" token {TOKEN} and {TOKEN}"}),
 			"/v1/redir": lambda query: self.reply(302, {}, {"Location": f"{self.server.other}/steal"}),  # type: ignore[attr-defined]
@@ -487,6 +488,15 @@ def test_given_a_paginated_endpoint_when_a_table_returns_its_job_then_every_page
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__orders ORDER BY order_id') == expected_rows
 	assert all(auth == f"Bearer {TOKEN}" for _, _, auth in api.log)  # type: ignore[attr-defined]
+
+
+def test_given_a_dotted_flatten_path_two_levels_deep_when_a_job_loads_then_the_inner_object_flattens_too(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(
+		tmp_path, api, "@shop.table(description='Orders.', flatten=['customer', 'customer.address'])\ndef orders(ctx):\n    return api.paginate('/nested', paginator=sl.single(), select='$.items')\n"
+	)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, customer__name, customer__address__city, customer__address__geo::VARCHAR FROM "RAW".shop__orders') == [(1, "Ann", "Leeds", '{"lat":1}')]
 
 
 @pytest.mark.parametrize(

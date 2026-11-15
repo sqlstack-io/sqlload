@@ -3,6 +3,7 @@ pub mod columns_batch;
 pub mod conform_batch;
 pub mod field_path;
 pub mod flatten_batch;
+pub mod flatten_lines;
 pub mod flattened_columns;
 pub mod item_position;
 pub mod json_lists;

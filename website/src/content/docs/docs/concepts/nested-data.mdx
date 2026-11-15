@@ -1,6 +1,6 @@
 ---
 title: "Nested data"
-description: "List fields as child tables with unnest: how child rows link to their parents, what each write strategy does with them, and what unnest = \"all\" chooses."
+description: "List fields as child tables with unnest, objects as columns with flatten: how child rows link to their parents, what each write strategy does with them, what unnest = \"all\" and flatten = \"all\" choose, and how names load."
 ---
 
 From 0.40.0, `unnest` turns list fields into child tables, the way dlt does. A
@@ -30,7 +30,7 @@ Set in a table entry:
 - `unnest`: the dotted paths of the list fields, each with its parent's path also listed (`items`
   before `items.parts`). Or `"all"`, described below.
 - `max_depth`: how many levels of child tables to make at most, 1000 by default. A list deeper than
-  that stays JSON in its parent.
+  that stays JSON in its parent. It limits [`flatten`](#flattening-objects) too.
 - `columns` (added in 0.42.0): a child table's column is named by its dotted path, such as
   `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
   only the columns named so, with its id and link columns, and leaves out the rest. These keys
@@ -122,6 +122,74 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.
 
+## Flattening objects
+
+`flatten` loads an object's keys as columns of their own, named `<object>__<key>`. An object it
+doesn't flatten stays one JSON column (`VARIANT` on Snowflake). It works on every source whose rows
+hold objects: Python tables and their `sl.http` jobs, JSON and NDJSON files, and a files or Google
+Sheets table with a [`transform`](/docs/sources/files/#transforming-each-file), whose output it
+flattens. Any other source fails `plan`.
+
+`flatten` takes the same shape as `unnest`: dotted paths, or `"all"`.
+
+```toml
+[sources.orders.tables.orders]
+unnest  = ["items"]
+flatten = ["customer", "customer.address", "items.dimensions"]   # paths reach inside unnested items
+```
+
+- A path's parent must be flattened or unnested too (`customer` before `customer.address`).
+- `"all"` flattens every object at every level, down to `max_depth`. An object field that a later
+  load brings becomes new columns, which `on_schema_change` decides.
+- A path or name may use the source's spelling or the loaded one (`LineTotals` or `line_totals`).
+- A NULL or missing object leaves its columns NULL. Lists are never flattened; `unnest` makes them
+  child tables.
+- Flattened names keep the `parent__key` form, and then go through [`naming`](#naming)
+  (`customer__address__city`).
+
+Under `"all"`, `plan` lists each object it flattens, with its column count and first keys, and the
+nested columns it keeps as JSON. It warns once when an object looks like a map whose keys are data
+(more than 20 keys, or most of them holding a digit or not a plain name):
+
+```text
+    ├── flatten every object, 1000 levels down at most
+    │           customer          → 3 columns (name, address__city, …)
+    │           customer.address  → 2 columns (city, zip)
+    │           line_totals       → 3 columns (sku_14, sku_99, …)
+    │           ⚠ an object whose keys are data adds a column per key on every load;
+    │             keep it as one column with columns = { line_totals = "json" }
+```
+
+A list of paths names its objects with no warning. On a Python table, `plan` can't see the rows, so
+it says the objects flatten as rows arrive at load.
+
+### Keeping an object whole
+
+A map whose keys are data (`"line_totals": {"sku-14": 12.5}`) makes one column per key. Pin it as
+`json` to keep it, and everything under it, as one column:
+
+```toml
+[sources.orders.tables.orders]
+flatten = "all"
+columns = { line_totals = "json" }
+```
+
+The pinned object leaves the list, and `plan` shows `kept as JSON: line_totals`. An object a `mask`,
+or an `exclude_columns` or `allow_columns` name (not a pattern) names is kept whole too, so the
+setting applies to all of it. Pinning a flattened object as any other type fails `plan`:
+
+```console
+columns line_totals = "text": flatten replaces line_totals with its keys' columns; pin it "json" to keep it whole
+```
+
+`plan` also fails on a listed path that a json pin, mask or name keeps whole, and on an
+`exclude_columns` or `allow_columns` pattern that matches an object but none of its columns. The
+load fails when a listed path holds a scalar or a list, or when a key's column is also a field of
+the rows or comes from another object.
+
+Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
+NULL from then on, next to the new key columns.
+
 ## Naming
 
 From 0.53.0, every table and column loads under a name the warehouse takes without quoting.
@@ -171,8 +239,8 @@ columns' order. `load` prints the same `names` lines under each table, and its
   from a `table_name` template are in lower case.
 
 Settings may name a column either way (`unique_key = ["OrderID"]` or `["order_id"]`), and `plan`
-shows the loaded name. `exclude_columns`, `allow_columns` and `skip_tables_with_columns` match the
-source's own names, and `flatten` the names a Python table yields. A Python table's
+shows the loaded name, and so may `flatten` paths. `exclude_columns`, `allow_columns` and
+`skip_tables_with_columns` match the source's own names. A Python table's
 `ctx.cursor_column` is the cursor's loaded name (`updated_at` for a field yielded as `UpdatedAt`).
 The target schema keeps the name it is given.
 
@@ -290,16 +358,12 @@ Where SQLLoad and dlt still differ under `compat = "dlt"`:
   the same names too, its snapshot and change stream matching each column by the source's
   spelling.
 
-- A JSON or NDJSON files source flattens objects into `parent__key` columns as dlt does, at every
-  level and inside unnested items, and a list inside an object becomes a child table such as
-  `orders__customer__tags`. An object from a Python table or a database's JSON column stays a JSON
-  column; a Python table's `flatten` expands objects one level.
-  - An object's keys are columns like any other: a key first seen after the sampled rows fails
-    the load, naming its column (`customer__vip`); pin it in `columns` to load it. An object that
-    is NULL in a row loads as NULLs in its columns.
-  - `columns`, `mask`, `exclude_columns` and `allow_columns` name the flattened columns
-    (`customer__email`, or `customer__*`); a setting naming only the object fails the plan,
-    listing its columns.
+- JSON and NDJSON files default to dlt's shape: `flatten = "all"` and, on a warehouse,
+  `unnest = "all"`. A table's own `flatten` or `unnest` replaces the default; `[]` turns it off. An object from a
+  Python table or a database's JSON column stays a JSON column unless its table sets
+  [`flatten`](#flattening-objects).
+  - A flattened object's keys are columns like any other: a key first seen after the sampled
+    rows fails the load, naming its column (`customer__vip`); pin it in `columns` to load it.
 - A field that is only NULL in the sampled rows is a text column, beside the `parent__key`
   columns of its objects; dlt makes no column for it.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears

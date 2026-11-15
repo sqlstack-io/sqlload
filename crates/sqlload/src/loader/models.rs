@@ -1,7 +1,7 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
 use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
-use crate::row_batches::models::Unnest;
+use crate::row_batches::models::{Flatten, Unnest};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -178,8 +178,8 @@ pub struct TableSpec {
     pub files: Option<FilesSource>,
     /// The table's folder template in a files target; `None` for warehouse targets.
     pub destination_path: Option<String>,
-    /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
-    pub flatten: Vec<String>,
+    /// The objects whose keys load as `<object>__<key>` columns.
+    pub flatten: Flatten,
     /// Every row gets a unique id column.
     pub row_id: bool,
     /// A child table of a merge: always staged, never written straight to the table, its staged rows carrying their root row's ordinal (`_sqlload_root_row`, staging only), so the rows of roots the merge drops leave before the commit.
