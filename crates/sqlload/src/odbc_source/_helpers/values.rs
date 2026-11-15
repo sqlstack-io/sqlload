@@ -9,6 +9,8 @@ use arrow_array::builder::{
     Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampNanosecondBuilder, UInt8Builder,
 };
 use arrow_array::{ArrayRef, RecordBatch};
+use arrow_odbc::odbc_api::buffers::Indicator;
+use arrow_odbc::odbc_api::parameter::{Binary, Text, VarCell, VarKind, WideText};
 use arrow_odbc::odbc_api::sys::{Date, Time, Timestamp};
 use arrow_odbc::odbc_api::{Bit, Cursor, CursorRow, Nullable, Pod};
 use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
@@ -262,7 +264,7 @@ impl ValueColumn {
         Ok((row, size))
     }
 
-    /// The current row's text value of column `number`, as UTF-16 on Windows and UTF-8 elsewhere (as arrow-odbc reads text), appended as UTF-8; fails when it is longer than `cap` or isn't valid text.
+    /// The current row's text value of column `number`, as UTF-16 on Windows and UTF-8 elsewhere (as arrow-odbc reads text), appended as UTF-8; fails when it is longer than `cap` bytes of UTF-8 (on Windows too) or isn't valid text. The read stops as soon as the pieces read pass `cap`: a UTF-16 unit is at least one byte of UTF-8.
     fn read_text(
         &mut self,
         row: &mut CursorRow<'_>,
@@ -273,27 +275,26 @@ impl ValueColumn {
             return Ok(0);
         };
         let name = self.name.as_str();
-        let failed = |error: arrow_odbc::odbc_api::Error| {
-            OdbcSourceError::Invalid(format!("column {name}: ODBC: {error}"))
-        };
         let size = match cfg!(target_os = "windows") {
             true => {
-                if !row.get_wide_text(number, &mut self.wide).map_err(failed)? {
+                let capped = (cap, "max_text_size");
+                if !read_capped::<WideText>(row, number, &mut self.wide, (name, capped))? {
                     builder.append_null();
                     return Ok(0);
                 }
-                over_cap(name, self.wide.len(), cap, "max_text_size")?;
                 let text = String::from_utf16(&self.wide).map_err(|_| invalid(name, "text"))?;
+                over_cap(name, (text.len(), true), cap, "max_text_size")?;
                 builder.append_value(&text);
                 self.wide = kept(std::mem::take(&mut self.wide));
                 text.len()
             }
             false => {
-                if !row.get_text(number, &mut self.bytes).map_err(failed)? {
+                let capped = (cap, "max_text_size");
+                if !read_capped::<Text>(row, number, &mut self.bytes, (name, capped))? {
                     builder.append_null();
                     return Ok(0);
                 }
-                over_cap(name, self.bytes.len(), cap, "max_text_size")?;
+                over_cap(name, (self.bytes.len(), true), cap, "max_text_size")?;
                 let text = std::str::from_utf8(&self.bytes).map_err(|_| {
                     OdbcSourceError::Invalid(format!("column {name} holds text that is not UTF-8"))
                 })?;
@@ -306,7 +307,7 @@ impl ValueColumn {
         Ok(size)
     }
 
-    /// The current row's binary value of column `number`, appended; fails when it is longer than `cap`, or than a fixed-size column's width.
+    /// The current row's binary value of column `number`, appended; fails when it is longer than `cap` (stopping as soon as the pieces read pass it), or than a fixed-size column's width.
     fn read_binary(
         &mut self,
         row: &mut CursorRow<'_>,
@@ -314,10 +315,9 @@ impl ValueColumn {
         cap: Option<usize>,
     ) -> Result<usize, OdbcSourceError> {
         let name = self.name.as_str();
-        let present = row
-            .get_binary(number, &mut self.bytes)
-            .map_err(|error| OdbcSourceError::Invalid(format!("column {name}: ODBC: {error}")))?;
-        over_cap(name, self.bytes.len(), cap, "max_binary_size")?;
+        let capped = (cap, "max_binary_size");
+        let present = read_capped::<Binary>(row, number, &mut self.bytes, (name, capped))?;
+        over_cap(name, (self.bytes.len(), true), cap, "max_binary_size")?;
         let size = self.bytes.len();
         match (&mut self.values, present) {
             (Values::Binary(builder), true) => builder.append_value(&self.bytes),
@@ -436,15 +436,63 @@ fn invalid(name: &str, what: &str) -> OdbcSourceError {
 /// Fails when a value of `length` passes `cap`, naming the setting: SQLLoad never cuts a value.
 fn over_cap(
     name: &str,
-    length: usize,
+    (length, exact): (usize, bool),
     cap: Option<usize>,
     setting: &str,
 ) -> Result<(), OdbcSourceError> {
+    let at_least = match exact {
+        true => "",
+        false => "at least ",
+    };
     match cap {
         Some(cap) if length > cap => Err(OdbcSourceError::Invalid(format!(
-            "column {name} holds a value of {length} bytes, longer than {setting} = {cap}; a value longer than its cap fails the read rather than being cut, so raise {setting} on the source, or remove it"
+            "column {name} holds a value of {at_least}{length} bytes, longer than {setting} = {cap}; a value longer than its cap fails the read rather than being cut, so raise {setting} on the source, or remove it"
         ))),
         _ => Ok(()),
+    }
+}
+
+/// Read the current row's value of column `number` into `buffer` piece by piece with `SQLGetData`, as odbc-api's `get_text` does, but stop with `over_cap`'s error as soon as the value is known to be longer than the cap (in `K`'s elements): once the driver reports the length still to come, or the pieces read pass it. `false` for NULL, with `buffer` empty.
+fn read_capped<K: VarKind>(
+    row: &mut CursorRow<'_>,
+    number: u16,
+    buffer: &mut Vec<K::Element>,
+    (name, (cap, setting)): (&str, (Option<usize>, &str)),
+) -> Result<bool, OdbcSourceError> {
+    let failed = |error: arrow_odbc::odbc_api::Error| {
+        OdbcSourceError::Invalid(format!("column {name}: ODBC: {error}"))
+    };
+    let element = size_of::<K::Element>();
+    if buffer.capacity() == 0 {
+        buffer.reserve(256);
+    }
+    buffer.resize(buffer.capacity(), K::ZERO);
+    let mut start = 0;
+    loop {
+        let mut piece =
+            VarCell::<&mut [K::Element], K>::from_buffer(&mut buffer[start..], Indicator::NoTotal);
+        row.get_data(number, &mut piece).map_err(failed)?;
+        let (complete, indicator) = (piece.is_complete(), piece.indicator());
+        let Some(fetched) = piece.len_in_bytes() else {
+            buffer.clear();
+            return Ok(false);
+        };
+        if complete {
+            buffer.truncate(start + fetched / element);
+            return Ok(true);
+        }
+        let known = match indicator {
+            Indicator::Length(length) => (start + length / element, true),
+            _ => (start + fetched / element, false),
+        };
+        over_cap(name, known, cap, setting)?;
+        let old = buffer.len();
+        let grown = match indicator {
+            Indicator::Length(length) => old + (length - fetched) / element,
+            _ => old * 2,
+        };
+        buffer.resize(grown, K::ZERO);
+        start = old - K::TERMINATING_ZEROES;
     }
 }
 

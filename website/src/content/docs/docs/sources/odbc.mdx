@@ -286,7 +286,9 @@ pieces for a long one, and never cut. A table without one is read in bulk, many 
 `max_text_size` (bytes) caps every text column, and `max_binary_size` every binary column. They are
 optional. A capped column counts as long only when the cap is over the threshold. A value longer than
 its cap, even in a `VARCHAR(10000)` column capped at 8000 bytes, fails the read, naming the setting
-to raise; it's never cut short.
+to raise; it's never cut short. In a long column, the read stops as soon as the driver reports the
+value's length or the pieces read pass the cap, so a 2 GB value over the cap isn't read first. Text
+is compared as UTF-8 bytes, on Windows too, where drivers send it as UTF-16.
 
 From 0.47.0, the driver's own notes on the buffer size it chose for each column are no longer
 logged; set `RUST_LOG=info` to see them again.
