@@ -1022,10 +1022,15 @@ pub(crate) fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
-    let nesting = match (spec.unnest == Unnest::None, spec.row_id) {
-        (false, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
-        (true, true) => Some("the table gives each row an id, which SQLLoad makes"),
-        (true, false) => None,
+    let flattens = spec
+        .files
+        .as_ref()
+        .is_some_and(|files| !files.table.objects.is_empty());
+    let nesting = match (spec.unnest == Unnest::None, spec.row_id, flattens) {
+        (false, _, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
+        (true, true, _) => Some("the table gives each row an id, which SQLLoad makes"),
+        (true, false, true) => Some("the table flattens objects into columns, which SQLLoad does"),
+        (true, false, false) => None,
     };
     let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
         (false, _, _) => Some(format!(

@@ -35,7 +35,13 @@ pub(crate) struct TextRowsTestCase {
 pub(crate) struct FlattenBatchTestCase {
     pub(crate) description: &'static str,
     pub(crate) rows: &'static str,
-    pub(crate) flatten: &'static [&'static str],
+    /// The objects to flatten.
+    pub(crate) flatten: fn() -> crate::row_batches::models::FlattenObjects,
+    /// Objects kept whole (pinned `json`).
+    pub(crate) keep: &'static [&'static str],
+    /// Columns pinned as another type.
+    pub(crate) pinned: &'static [(&'static str, &'static str)],
+    pub(crate) max_depth: u32,
     pub(crate) expected_batch: Result<&'static str, &'static str>,
 }
 

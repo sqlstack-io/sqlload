@@ -14,6 +14,7 @@ use crate::files_source::_helpers::text::json_records::{
     JsonRecord, JsonSplitter, flattened_record,
 };
 use crate::files_source::constants::MAX_RECORD_BYTES;
+use crate::row_batches::models::Flatten;
 
 /// Reads a JSON file's objects in order, a chunk of bytes at a time.
 pub(crate) struct JsonReader {
@@ -21,8 +22,8 @@ pub(crate) struct JsonReader {
     splitter: JsonSplitter,
     ready: VecDeque<JsonRecord>,
     finished: bool,
-    /// Whether objects flatten into `<field>__<key>` fields (see [`flattened_record`]).
-    flatten_objects: bool,
+    /// Which objects flatten into `<field>__<key>` fields (see [`flattened_record`]).
+    flatten: Flatten,
     /// The fields flattening has made, and the object fields it replaced, so far.
     flattened: BTreeSet<String>,
     /// The object fields flattening has replaced so far.
@@ -37,21 +38,21 @@ impl JsonReader {
             splitter: JsonSplitter::new(by_line, MAX_RECORD_BYTES),
             ready: VecDeque::new(),
             finished: false,
-            flatten_objects: false,
+            flatten: Flatten::default(),
             flattened: BTreeSet::new(),
             objects: BTreeSet::new(),
         }
     }
 
-    /// This reader flattening objects when `flatten_objects` says so.
-    pub(crate) fn flattening(mut self, flatten_objects: bool) -> Self {
-        self.flatten_objects = flatten_objects;
+    /// This reader flattening the objects `flatten` names.
+    pub(crate) fn flattening(mut self, flatten: &Flatten) -> Self {
+        self.flatten = flatten.clone();
         self
     }
 
     /// Whether this reader flattens objects.
     pub(crate) fn flattens(&self) -> bool {
-        self.flatten_objects
+        !self.flatten.is_none()
     }
 
     /// The fields flattening has made, and the object fields it replaced, in the records read so far.
@@ -77,12 +78,12 @@ impl JsonReader {
         }
         let take = limit.min(self.ready.len());
         let records: Vec<JsonRecord> = self.ready.drain(..take).collect();
-        if !self.flatten_objects {
+        if self.flatten.is_none() {
             return Ok(records);
         }
         let mut flat: Vec<JsonRecord> = Vec::with_capacity(records.len());
         for record in records {
-            let (record, made, objects) = flattened_record(record)?;
+            let (record, made, objects) = flattened_record(record, &self.flatten)?;
             self.flattened.extend(made);
             self.objects.extend(objects);
             flat.push(record);

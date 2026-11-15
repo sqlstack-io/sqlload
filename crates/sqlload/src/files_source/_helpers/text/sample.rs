@@ -44,7 +44,7 @@ pub(crate) async fn sample_file(
         }
         format => {
             let mut reader = JsonReader::new(bytes, format == SourceFormat::Ndjson)
-                .flattening(encoding.flatten_objects);
+                .flattening(&encoding.flatten);
             let mut columns = json_columns(&reader.next_records(SAMPLE_ROWS).await?);
             for column in &mut columns {
                 if reader.flattened().contains(&column.name) {

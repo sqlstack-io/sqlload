@@ -7,16 +7,17 @@ use pyo3::exceptions::PyValueError;
 use pyo3::types::PyAnyMethods;
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
 use sqlload::python_sources::models::TransformCall;
+use sqlload::row_batches::models::Flatten;
 
 use crate::crossing::main::table_batches::table_batches;
 use crate::crossing::models::{CrossingOptions, ReadContext, TableBatches};
 use crate::host::constants::RUNTIME_MODULE;
 
-/// Call `call`'s transform on `rows` (in `schema`) and start crossing what it returned or yielded with `options`, as a table function's yields cross, expanding the objects `flatten` lists: the batches, and what it returned (whose `dicts` says whether any item was dicts); or why it failed, or what it returned cannot load.
+/// Call `call`'s transform on `rows` (in `schema`) and start crossing what it returned or yielded with `options`, as a table function's yields cross, expanding the objects `flatten` flattens: the batches, and what it returned (whose `dicts` says whether any item was dicts); or why it failed, or what it returned cannot load.
 pub fn returned_batches(
     call: &TransformCall,
     (rows, schema): (Vec<RecordBatch>, SchemaRef),
-    (options, flatten): (CrossingOptions, Vec<String>),
+    (options, flatten): (CrossingOptions, Flatten),
 ) -> Result<(TableBatches, Py<PyAny>), String> {
     let context = serde_json::to_string(&call.context).map_err(|error| error.to_string())?;
     Python::attach(

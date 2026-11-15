@@ -35,8 +35,8 @@ use crate::postgres_source::models::SourceTable;
 use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, ProjectConfig,
-    RenameSetting, SourceConfig, SourceKind, TableOverride, TableSettings, UnnestSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, PathsSetting,
+    ProjectConfig, RenameSetting, SourceConfig, SourceKind, TableOverride, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
 use crate::schema_plan::models::SchemaPlan;
@@ -677,9 +677,9 @@ fn is_plain_name(expression: &str) -> bool {
 }
 
 /// `unnest` with each part of each dotted path renamed by `name`; `"all"` as it is.
-fn loaded_unnest(unnest: &UnnestSetting, name: &impl Fn(&str) -> String) -> UnnestSetting {
+fn loaded_unnest(unnest: &PathsSetting, name: &impl Fn(&str) -> String) -> PathsSetting {
     let mut loaded = unnest.clone();
-    if let UnnestSetting::Paths(paths) = &mut loaded {
+    if let PathsSetting::Paths(paths) = &mut loaded {
         for path in paths {
             *path = path.split('.').map(name).collect::<Vec<_>>().join(".");
         }

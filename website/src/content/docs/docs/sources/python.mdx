@@ -56,7 +56,7 @@ Unknown settings raise `TypeError` when the module is imported.
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
-| `flatten` | table | Top-level objects to expand one level into `<object>__<key>` columns. |
+| `flatten` | table | Objects whose keys load as `<object>__<key>` columns: dotted paths, or `"all"`. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects). |
 | `naming`, `compat`, `on_duplicate_names` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). A field yielded as `rowNumber` loads as `row_number`; `naming="source"` keeps it. See [Naming](/docs/concepts/nested-data/#naming). |
 | `rename` | source or table | From 0.53.0. A map such as `{"orderId": "order_ref"}`, the name an `@sl.rename` function was registered under, or the function itself (`rename=erp_names`). See [rename](/docs/concepts/nested-data/#rename). |
 | `unnest`, `max_depth` | table | As in [`sqlload.toml`](/docs/configuration/#table-settings): the list fields whose items become child tables, such as `unnest=["items"]` or `"all"`, and how many levels deep. See [Nested data](/docs/concepts/nested-data/). |
@@ -100,11 +100,9 @@ declared. Inferred columns don't change type by themselves; see
 
 ### Flattening objects
 
-Nested values stay one JSON column (`VARIANT` on Snowflake) unless the table lists top-level objects
-in `flatten`:
+Nested values stay one JSON column (`VARIANT` on Snowflake) unless the table sets `flatten`:
 
 ```python
-from datetime import date
 from decimal import Decimal
 
 import sqlload as sl
@@ -114,38 +112,22 @@ store = sl.source("store", write_strategy="replace")
 
 @store.table(
     description="Orders",
-    flatten=["customer"],
+    flatten=["customer", "customer.address"],
     columns={"total": "decimal(18,2)"},
 )
 def store_orders(ctx):
     yield {
         "order_id": 7,
         "total": Decimal("12.50"),
-        "placed_on": date(2026, 11, 1),
         "customer": {"country": "GB", "address": {"city": "Leeds"}},
         "line_totals": {"sku-14": 12.5},
     }
 ```
 
-That loads these DuckDB columns: `order_id BIGINT`, `total DECIMAL(18,2)`, `placed_on DATE`,
-`customer__country VARCHAR`, `customer__address JSON`, `line_totals JSON`.
-
-Each listed object is expanded exactly one level. Objects not listed, such as `line_totals`, stay
-JSON; never flatten maps whose keys are data. Lists are never expanded. A missing or null object
-leaves its columns NULL, and new keys become new columns under `on_schema_change`. Dicts,
-`sl.json` bytes and Arrow structs flatten the same way, and a typed child of an Arrow struct keeps
-its type.
-
-The load fails when a listed value arrives as a scalar or a list, or when a key's column name is
-also a field of the rows or comes from flattening another object. `plan` refuses:
-
-- `flatten` on tables that aren't Python tables;
-- a dotted path, such as `customer.address`: list `customer`, and its nested values stay JSON;
-- an object that `exclude_columns`, `mask` or `columns` also names. After flattening no column
-  carries the object's own name, so name the `<object>__<key>` columns instead.
-
-Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
-NULL from then on, next to the new key columns.
+That loads `customer__country` and `customer__address__city`, and `line_totals` as JSON. Dicts,
+`sl.json` bytes and Arrow structs flatten the same way, and a typed child of an Arrow struct or a
+`Decimal` or `date` in a dict keeps its type. Paths, `"all"`, json pins and what `plan` shows are in
+[Flattening objects](/docs/concepts/nested-data/#flattening-objects).
 
 ### Fields
 
@@ -330,7 +312,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 `sl.http` describes REST jobs that run entirely in Rust. For worked examples, see
 [HTTP APIs](/docs/guides/python/#http-apis) in the guide. The connection is an
-[`http` connection](/docs/configuration/#http).
+[`http` connection](/docs/configuration/#http). The table's
+[`flatten`](/docs/concepts/nested-data/#flattening-objects) applies to the rows a job reads.
 
 | Function | Meaning |
 |----------|---------|

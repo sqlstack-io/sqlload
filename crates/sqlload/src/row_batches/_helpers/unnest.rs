@@ -20,7 +20,7 @@ use crate::row_batches::_helpers::arrow_json::normalise_column;
 use crate::row_batches::_helpers::json_seed::raw_cell;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::columns_batch::columns_batch;
-use crate::row_batches::models::{ChildBatch, RowColumns, Unnest, UnnestRequest};
+use crate::row_batches::models::{ChildBatch, Flatten, RowColumns, Unnest, UnnestRequest};
 use crate::row_batches::types::ListChoices;
 use crate::row_ids::main::child_row_id::child_row_id;
 
@@ -48,8 +48,8 @@ pub(crate) struct Split<'a> {
     pub(crate) compat: Compat,
     /// The longest name the destination takes.
     pub(crate) name_limit: Option<usize>,
-    /// Whether an object inside an item flattens into `<key>__<inner>` fields.
-    pub(crate) flatten_objects: bool,
+    /// Which objects inside an item flatten into `<key>__<inner>` fields, by their path from the table's row.
+    pub(crate) flatten: &'a Flatten,
     /// Under `"all"`, the child tables the destination already has, whose fields are list fields.
     pub(crate) live: &'a [String],
     /// The paths [`Self::choose_live`] has looked up in `live`.
@@ -238,9 +238,12 @@ impl Split<'_> {
                 let object = serde_json::from_str::<OrderedObject>(item)
                     .map_err(|error| format!("{}: {error}", place.path))?
                     .0;
-                let entries = match self.flatten_objects {
-                    true => flatten_entries(object, ("", place.path))?,
-                    false => object,
+                let entries = match self.flatten.is_none() {
+                    true => object,
+                    false => {
+                        let path: Vec<&str> = place.path.split('.').collect();
+                        flatten_entries(object, (&path, place.path), self.flatten)?
+                    }
                 };
                 self.loaded_keys(entries, place.path)?
             }
@@ -341,22 +344,27 @@ impl Split<'_> {
     }
 }
 
-/// `entries`, named below `prefix` when an object holds them, with each object's keys in its place as `<key>__<inner>`, recursively, as dlt flattens an item's objects (an empty object, or a NULL inside an object, leaves nothing); an error names the item's `path`.
+/// `entries`, at `parts` below the table's row (an item of the list at `parts`, then each object holding them), with each object `flatten` flattens replaced by its keys as `<key>__<inner>`, recursively (an empty object, or a NULL inside a flattened object, leaves nothing); an error names the item's `path`.
 fn flatten_entries(
     entries: Vec<(String, Box<RawValue>)>,
-    (prefix, path): (&str, &str),
+    (parts, path): (&[&str], &str),
+    flatten: &Flatten,
 ) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    let prefix = &parts[path.split('.').count()..];
     let mut flat: Vec<(String, Box<RawValue>)> = Vec::with_capacity(entries.len());
     for (key, value) in entries {
-        let name = match prefix.is_empty() {
-            true => key,
-            false => format!("{prefix}{FLATTEN_SEPARATOR}{key}"),
-        };
+        let here: Vec<&str> = parts.iter().copied().chain([key.as_str()]).collect();
+        let name = prefix
+            .iter()
+            .copied()
+            .chain([key.as_str()])
+            .collect::<Vec<&str>>()
+            .join(FLATTEN_SEPARATOR);
         match value.get().trim_start().as_bytes().first() {
-            Some(b'{') => {
+            Some(b'{') if flatten.flattens(&here)? => {
                 let object = serde_json::from_str::<OrderedObject>(value.get())
                     .map_err(|error| format!("{path}.{name}: {error}"))?;
-                flat.extend(flatten_entries(object.0, (&name, path))?);
+                flat.extend(flatten_entries(object.0, (&here, path), flatten)?);
             }
             Some(b'n') if !prefix.is_empty() => {}
             _ => flat.push((name, value)),

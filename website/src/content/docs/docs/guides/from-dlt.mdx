@@ -170,7 +170,9 @@ them keep working:
   `_dlt_id`, `_dlt_parent_id`, `_dlt_list_idx`, `_dlt_root_id`). Tables, columns and child tables
   already take dlt's default `snake_case` names (`OrderID` is `order_id`), as `naming` defaults to
   `snake_case`.
-- `unnest = "all"` makes a child table of every list field, as dlt does.
+- `unnest = "all"` makes a child table of every list field, and `flatten = "all"` loads every
+  object's keys as `parent__key` columns, as dlt does. Under `compat = "dlt"`, JSON and NDJSON
+  files default to both (`unnest` on a warehouse); a Python table sets them itself.
 - `max_depth` is dlt's `max_table_nesting`.
 
 For the files example above, after its second file, dlt 1.32.0 (with the `upsert` merge) and SQLLoad
@@ -246,11 +248,10 @@ kept between runs, so it can run on workers whose disks are thrown away.
 
 Under `compat = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
 
-- An object from a Python table or a database's JSON column stays a JSON column, where dlt
-  flattens it into `parent__key` columns
-  ([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L154-L186)). A Python table's
-  `flatten` expands objects one level. A JSON or NDJSON files source flattens them as dlt does
-  (added in 0.42).
+- An object from a Python table stays a JSON column unless the table sets `flatten = "all"`, and
+  one from a database's JSON column always does, where dlt flattens it into `parent__key` columns
+  ([relational.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/relational.py#L154-L186)).
+  See [Flattening objects](/docs/concepts/nested-data/#flattening-objects).
 - A value that doesn't fit its column's type fails the load, or widens the column as the table's
   [contract](/docs/concepts/contracts/) allows. dlt adds a variant column such as `amount__v_text`
   ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
