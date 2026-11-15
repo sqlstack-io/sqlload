@@ -2,6 +2,8 @@
 mod helpers;
 #[path = "tests/test_job_problems.rs"]
 mod job_problems;
+#[path = "tests/test_limiter.rs"]
+mod limiter;
 #[path = "tests/test_oauth.rs"]
 mod oauth;
 #[path = "tests/test_types.rs"]

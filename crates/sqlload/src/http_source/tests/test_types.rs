@@ -15,3 +15,11 @@ pub(crate) struct RenewalTestCase {
     pub(crate) expires_in: &'static str,
     pub(crate) expected_delay: Result<Option<std::time::Duration>, &'static str>,
 }
+
+pub(crate) struct LimiterTestCase {
+    pub(crate) description: &'static str,
+    /// Which of the first four waiting requests are aborted while they wait.
+    pub(crate) aborted: &'static [usize],
+    /// How many requests went.
+    pub(crate) expected_turns: usize,
+}

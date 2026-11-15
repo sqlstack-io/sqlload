@@ -917,11 +917,14 @@ def test_given_read_ahead_when_later_pages_answer_first_and_one_is_retried_then_
 def test_given_read_ahead_and_a_rate_limit_when_loading_then_every_request_waits_its_turn(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	tables = "limited = sl.http(shop, auth=sl.bearer(), rate_limit='10/s')\n\n@shop.table(description='T.')\ndef t(ctx):\n    return limited.paginate('/ahead', paginator=sl.offset(limit=1, read_ahead=4))\n"
 	project = make_project(tmp_path, api, tables)
-	done = sqlload(project, "load")
+	done = sqlload(project, "load", "--events", "jsonl")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
-	arrivals = sorted(at for _, at in api.ahead)  # type: ignore[attr-defined]
-	assert api.most_open >= 2 and min(later - earlier for earlier, later in zip(arrivals, arrivals[1:])) >= 0.08, arrivals  # type: ignore[attr-defined]
+	events = [json.loads(line) for line in done.stderr.splitlines() if line.startswith("{")]
+	waits = [event for event in events if event["event"] == "rate_limited"]
+	# Read ahead, every page after the first goes in a task of its own, so pages that waited for their turn show the tasks take turns
+	# from the limiter; the limiter's spacing of turns is checked on tokio's paused clock (test_limiter.rs), not by the wall clock here.
+	assert api.most_open >= 2 and waits and {event["rate"] for event in waits} == {"10/s"}, done.stderr  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("paginator", ["sl.cursor('$.meta.next', 'after', read_ahead=2)", "sl.next_link('$.next', read_ahead=2)", "sl.link_header(read_ahead=2)"])

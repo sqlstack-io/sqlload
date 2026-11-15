@@ -4,7 +4,7 @@ use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Map, Value};
@@ -194,7 +194,7 @@ pub(crate) fn shared_limiter(connection: &str, rate: &str) -> Result<Arc<Limiter
                 connection: connection.to_owned(),
                 rate: rate.to_owned(),
                 interval,
-                next: Mutex::new(Instant::now()),
+                next: Mutex::new(tokio::time::Instant::now()),
             })
         });
     Ok(limiter.clone())
@@ -219,11 +219,11 @@ pub(crate) fn interval(rate: &str) -> Result<Duration, String> {
 }
 
 impl Limiter {
-    /// Wait for this request's turn.
+    /// Wait for this request's turn: the next free one, taken as the wait starts, so a request aborted while it waits leaves its turn unused rather than letting a later one go early.
     pub(crate) async fn wait(&self) {
         let wait = match self.next.lock() {
             Ok(mut next) => {
-                let now = Instant::now();
+                let now = tokio::time::Instant::now();
                 let turn = (*next).max(now);
                 *next = turn + self.interval;
                 turn - now

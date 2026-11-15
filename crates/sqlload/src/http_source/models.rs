@@ -434,7 +434,8 @@ pub struct Limiter {
     /// The limit as configured, such as `5/s`.
     pub rate: String,
     pub interval: Duration,
-    pub next: Mutex<Instant>,
+    /// The next free turn, on tokio's clock, which the waits sleep on.
+    pub next: Mutex<tokio::time::Instant>,
 }
 
 /// What one request needs: the pooled client, the endpoint, the shared rate limit and the retry budget.
