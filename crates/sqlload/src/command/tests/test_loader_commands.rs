@@ -20,6 +20,11 @@ fn given_the_standalone_executable_when_a_project_has_python_paths_then_it_says_
             expected_error: "install it (for example `uv tool install sqlload`)",
         },
         LoaderCommandTestCase {
+            description: "a transform needs the Python package, named before python_paths are",
+            project: "python_paths = [\"transforms\"]\n[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.metrics]\nkind = \"files\"\nconnection = \"lake\"\npath = \"drop/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n[sources.metrics.tables.metrics]\ntransform = \"metrics\"\n",
+            expected_error: "table metrics.metrics sets transform, which runs only in the sqlload Python package's command",
+        },
+        LoaderCommandTestCase {
             description: "a project without python_paths runs",
             project: TARGET,
             expected_error: "",
@@ -73,6 +78,14 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             argv: &["plan"],
             expected_output: "Plan ready  0 selected",
             expected_exit: "exit 0",
+        },
+        #[cfg(not(target_os = "linux"))]
+        PlanFailureTestCase {
+            description: "--memory-per-table resets Linux's high-water mark, so plan refuses it elsewhere",
+            project: TARGET,
+            argv: &["plan", "--memory-per-table"],
+            expected_output: "--memory-per-table needs Linux; the run's peak is in every report",
+            expected_exit: "exit 1",
         },
     ];
     for test_case in test_cases {

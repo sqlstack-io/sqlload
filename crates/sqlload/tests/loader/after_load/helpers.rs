@@ -6,7 +6,8 @@ use sqlload::files_source::main::after_load::after_load;
 use sqlload::store_paths::models::{Location, StoreKind};
 use sqlload_testkit::seaweedfs::constants::REGION;
 
-use crate::test_types::{AfterLoadTestCase, S3AfterLoadTestCase};
+use crate::helpers::{duckdb_text, parquet_bytes, run_sqlload};
+use crate::test_types::{AfterLoadTestCase, ArchivedReloadTestCase, S3AfterLoadTestCase};
 
 /// Run `test_case`'s steps through the `sqlload` executable (`load --json`), asserting each step's exit code and report; returns the files left below the root as `path=contents`, sorted.
 pub(crate) async fn run_after_load_case(
@@ -186,4 +187,41 @@ pub(crate) async fn run_s3_after_load(
     }
     files.sort();
     Ok((report, files))
+}
+
+/// Run `test_case` through the executable: load its first files (moved to `done/`), write its later ones, then `--reload`; the reload's plan and the table's rows as `id:score`, in order.
+pub(crate) fn run_archived_reload(
+    test_case: &ArchivedReloadTestCase,
+) -> Result<(String, String), String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let database = root.path().join("out.duckdb");
+    let config = root.path().join("sqlload.toml");
+    let text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[sources.scores]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\nformat = \"parquet\"\nwrite_strategy = \"append\"\nafter_load = {{ move_to = \"done\" }}\n",
+        database.display(),
+        root.path().display()
+    );
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+    let write = |files: &[crate::test_types::ParquetFile]| {
+        files.iter().try_for_each(|file| {
+            std::fs::write(
+                root.path().join("drop").join(file.key),
+                parquet_bytes(file)?,
+            )
+            .map_err(|error| error.to_string())
+        })
+    };
+    write(test_case.first)?;
+    let (loaded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+    assert!(loaded, "{} first load:\n{output}", test_case.description);
+    write(test_case.later)?;
+    let (_, plan) = run_sqlload(&config, &["plan", "--reload"], ("", ""))?;
+    let (reloaded, output) = run_sqlload(&config, &["load", "--reload", "--yes"], ("", ""))?;
+    assert!(reloaded, "{} reload:\n{output}", test_case.description);
+    let rows = duckdb_text(
+        &database,
+        "SELECT string_agg(id || ':' || score, ',' ORDER BY id, score) FROM raw.scores",
+    )?;
+    Ok((plan, rows))
 }

@@ -87,3 +87,10 @@ pub(crate) struct WrapTestCase {
     pub(crate) width: usize,
     pub(crate) expected_lines: &'static str,
 }
+
+pub(crate) struct TransformTallyTestCase {
+    pub(crate) description: &'static str,
+    /// Each file the table's transform ran on: its name, milliseconds, rows given and whether it returned dicts.
+    pub(crate) transforms: &'static [(&'static str, u64, u64, bool)],
+    pub(crate) expected_lines: &'static str,
+}

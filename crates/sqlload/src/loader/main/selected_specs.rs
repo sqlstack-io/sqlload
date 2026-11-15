@@ -1,8 +1,8 @@
 //! The settings of every selected table, without reading any destination.
 
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::resolve::spec_names;
-use crate::loader::_helpers::sources::{scoped_tables, selected, unmatched_selectors};
+use crate::loader::_helpers::resolve::{spec_names, unmatched_selectors};
+use crate::loader::_helpers::sources::{scoped_tables, selected};
 use crate::loader::_helpers::table_plan::{desired_columns, read_columns};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{PlanOptions, SelectedTable, SelectedTables};
@@ -27,6 +27,7 @@ pub async fn selected_specs(
                 }
             };
         let module = project.python_modules.get(source_name);
+        let paths = project.python_http_paths.get(source_name);
         chosen.problems.extend(resolved.problems);
         chosen
             .problems
@@ -36,7 +37,7 @@ pub async fn selected_specs(
             )));
         for mut spec in resolved.specs {
             spec.files = files.clone();
-            spec.python = module.map(|module| python_table(module, &spec.source_table));
+            spec.python = module.map(|module| python_table(module, &spec.source_table, paths));
             let picked = spec_names(&spec);
             names.extend(picked.iter().cloned());
             if selected(options, (source_name, &picked)) {

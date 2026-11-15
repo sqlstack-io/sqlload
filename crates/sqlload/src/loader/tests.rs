@@ -4,6 +4,8 @@ mod constant_batches;
 mod helpers;
 #[path = "tests/test_key_nulls.rs"]
 mod key_nulls;
+#[path = "tests/test_lookback_start.rs"]
+mod lookback_start;
 #[path = "tests/test_merged_files.rs"]
 mod merged_files;
 #[path = "tests/test_python_columns.rs"]
@@ -19,5 +21,9 @@ mod retryable_errors;
 mod source_filter;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_transform_reader.rs"]
+mod transform_reader;
+#[path = "tests/test_transform_versions.rs"]
+mod transform_versions;
 #[path = "tests/test_view_lines.rs"]
 mod view_lines;

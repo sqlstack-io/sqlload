@@ -126,11 +126,11 @@ pub struct FilesRead {
     pub batch_rows: usize,
 }
 
-/// One batch's Parquet footers by relative key, read once; a file missing here has its footer read when it is.
+/// One batch's Parquet footers by store key (`StoredFile::store_key`), read once; a file missing here has its footer read when it is.
 #[derive(Debug, Clone, Default)]
 pub struct BatchFooters {
     pub parquet: std::collections::BTreeMap<String, ArrowReaderMetadata>,
-    /// CSV files' column names by relative key, read once where the destination reads the files itself (by position).
+    /// CSV files' column names by store key, read once where the destination reads the files itself (by position).
     pub headers: std::collections::BTreeMap<String, Vec<String>>,
 }
 

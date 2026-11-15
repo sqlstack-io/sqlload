@@ -124,6 +124,8 @@ pub(crate) struct BatchFootersTestCase {
     pub(crate) description: &'static str,
     /// Read the footer before the file's own footer is broken, and reuse it.
     pub(crate) reuse: bool,
+    /// Instead, read a batch of two files with one relative key from two folders (as `--reload` with `move_to` does), of three rows and one, with their footers read first.
+    pub(crate) same_key: bool,
     /// The rows read, or `failed`.
     pub(crate) expected_outcome: &'static str,
 }

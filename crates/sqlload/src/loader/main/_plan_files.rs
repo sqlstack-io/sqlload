@@ -7,6 +7,7 @@ use crate::adapters::files::models::FilesDestination;
 use crate::file_store::main::open_folder::open_folder;
 use crate::files_source::models::{FilesRead, LoadedFile};
 use crate::loader::_helpers::destination::{live_schema, table_folder};
+use crate::loader::_helpers::resolve::table_range;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, plan_files};
 use crate::loader::_helpers::table_plan::{CommitRequest, Window, commit_rule};
 use crate::loader::_helpers::table_plan::{
@@ -106,6 +107,7 @@ pub(in crate::loader) async fn plan_files_table(
         commits,
         stage: None,
         planned_stage: None,
+        fetch_memory: None,
         output: Some(FilesOutput {
             path,
             encoding: destination.encoding.clone(),
@@ -118,7 +120,7 @@ pub(in crate::loader) async fn plan_files_table(
     })
 }
 
-/// The window `request` reads in (from the target's newest partition or files), and for a files source the files it reads, skipping those the target's records hold (`loaded`), with no source filter, as the files are chosen instead; a problem in either blocks `schema` instead. Nothing is planned for a plan already blocked.
+/// The window `request` reads in (from the target's newest partition or files, over the range of the cursor's family when typed range flags are given), and for a files source the files it reads, skipping those the target's records hold (`loaded`), with no source filter, as the files are chosen instead; a problem in either blocks `schema` instead. Nothing is planned for a plan already blocked.
 async fn planned_read(
     request: &FilesWindowRequest<'_>,
     (loaded, live): (&[LoadedFile], Option<&[LiveColumn]>),
@@ -127,6 +129,14 @@ async fn planned_read(
     if schema.blocked.is_some() {
         return Ok((schema, None, None));
     }
+    let ranged = match table_range(request.options, request.spec, request.cursor_type, true) {
+        Ok(ranged) => ranged,
+        Err(problem) => return Ok((blocked_plan(vec![problem]), None, None)),
+    };
+    let request = &FilesWindowRequest {
+        options: &ranged,
+        ..*request
+    };
     let window = match files_window(request) {
         Ok(window) => window,
         Err(problem) => return Ok((blocked_plan(vec![problem]), None, None)),

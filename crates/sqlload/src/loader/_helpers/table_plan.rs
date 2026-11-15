@@ -41,20 +41,23 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::destination::truncated_nanoseconds;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
+use crate::loader::_helpers::python::python_problems;
 use crate::loader::_helpers::python::with_live_children;
 use crate::loader::_helpers::python::with_live_columns;
 use crate::loader::_helpers::render::up_to_date;
 use crate::loader::_helpers::resolve::display_name;
+use crate::loader::_helpers::resolve::ranged_table;
+use crate::loader::_helpers::run_log::with_transform_version;
 use crate::loader::_helpers::sources::column_fix;
-use crate::loader::_helpers::sources::files_read_columns;
 use crate::loader::_helpers::sources::plan_files;
-use crate::loader::_helpers::sources::truncated_nanoseconds;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, with_live_types};
+use crate::loader::_helpers::specs::files_read_columns;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
-use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
+use crate::loader::constants::RANGE_NEEDS_CURSOR;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_files_schema::files_schema;
 use crate::loader::main::_logged_plan::with_run_log;
@@ -75,7 +78,6 @@ use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::SourceTable;
 use crate::postgres_source::models::{PgType, ReadColumn};
 use crate::project::models::BatchStep;
-use crate::project::models::Contract;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
@@ -219,6 +221,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
         commits: CommitRule::Whole(WholeReason::Blocked),
         stage: None,
         planned_stage: None,
+        fetch_memory: None,
     }
 }
 
@@ -228,15 +231,9 @@ pub(crate) async fn plan_table(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
-    let undeclared = spec
-        .python
-        .as_ref()
-        .is_some_and(|python| python.declared.is_empty());
-    if undeclared && spec.contract == Contract::Enforced {
-        return Ok(blocked_table(
-            spec,
-            vec![ENFORCED_UNDECLARED_PROBLEM.to_owned()],
-        ));
+    let problems = python_problems(spec);
+    if !problems.is_empty() {
+        return Ok(blocked_table(spec, problems));
     }
     let children = match spec.unnest {
         Unnest::All => live_child_tables(destination, spec).await?,
@@ -251,9 +248,9 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
-    plan.schema.warnings.extend(reload_range(spec, options));
     plan.schema.warnings.extend(split_ranking(&plan));
-    with_run_log(plan, destination, options).await
+    let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
+    with_transform_version(plan, destination).await
 }
 
 /// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
@@ -374,37 +371,6 @@ fn split_ranking(plan: &TablePlan) -> Option<String> {
     };
     Some(format!(
         "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
-    ))
-}
-
-/// What a `--reload` with `--start-cursor` or `--end-cursor` leaves out of the rebuilt table: the rows outside that range are dropped; rows with a NULL cursor are kept under `null_cursor = "include"`, which reads them with the first window, and dropped under `"ignore"` (under `"fail"`, the load fails on them).
-fn reload_range(spec: &TableSpec, options: &PlanOptions) -> Option<String> {
-    let (start, end) = (
-        options.start_cursor.as_deref().filter(|_| options.reload),
-        options.end_cursor.as_deref().filter(|_| options.reload),
-    );
-    let (kept, dropped) = match (start, end) {
-        (Some(start), Some(end)) => (
-            format!("from {start} (--start-cursor), below {end} (--end-cursor)"),
-            format!("rows before {start} and from {end} on are dropped"),
-        ),
-        (Some(start), None) => (
-            format!("from {start} (--start-cursor)"),
-            format!("rows before {start} are dropped"),
-        ),
-        (None, Some(end)) => (
-            format!("below {end} (--end-cursor)"),
-            format!("rows from {end} on are dropped"),
-        ),
-        (None, None) => return None,
-    };
-    let nulls = match spec.cursor.as_ref().map(|cursor| cursor.null_cursor) {
-        Some(NullCursor::Include) => "; rows with a NULL cursor are kept",
-        Some(NullCursor::Ignore) => "; rows with a NULL cursor are dropped",
-        Some(NullCursor::Fail) | None => "",
-    };
-    Some(format!(
-        "--reload rebuilds the table with only the rows {kept}: {dropped}{nulls}"
     ))
 }
 
@@ -787,6 +753,7 @@ async fn plan_table_once(
                 commits: CommitRule::Whole(WholeReason::Blocked),
                 stage: None,
                 planned_stage: None,
+                fetch_memory: None,
             });
         }
     };
@@ -822,7 +789,13 @@ async fn plan_table_once(
         false => cursor_type,
     };
     let cursor_name = spec.cursor.as_ref().map(|cursor| cursor.column.as_str());
-    schema = checked_cursor(spec, schema, (&desired, unseen_python_cursor));
+    let (ranged, mut schema) = ranged_table(
+        options,
+        spec,
+        cursor_type.filter(|_| !unseen_python_cursor),
+        checked_cursor(spec, schema, (&desired, unseen_python_cursor)),
+    );
+    let options = &ranged;
     let cursor_in_table = has_cursor(spec, live.as_deref());
     let cursor_expression = source_cursor(spec, &read_columns, cursor_type);
     let lacks_cursor =
@@ -979,6 +952,7 @@ async fn plan_table_once(
         commits,
         stage,
         planned_stage,
+        fetch_memory: None,
     })
 }
 
@@ -1019,8 +993,18 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     }
 }
 
+/// Why SQLLoad reads a `--reload`'s files itself when some come from `after_load`'s `move_to` folder: a destination reading the files addresses each by the source's folder and its key, which would read `done/a.parquet` as `drop/a.parquet`.
+pub(crate) fn archived_reason(spec: &TableSpec, read: Option<&FilesRead>) -> Option<String> {
+    let archive = spec.files.as_ref()?.archive.as_ref()?;
+    read?
+        .files
+        .iter()
+        .any(|data| data.file.path.as_ref().starts_with(&archive.prefix))
+        .then(|| format!("--reload also reads the files after_load moved to {archive}"))
+}
+
 /// What a table's source offers: rows as Arrow, plus the files themselves for a files source, with why the destination must not read them itself.
-fn reader_offer(
+pub(crate) fn reader_offer(
     spec: &TableSpec,
     read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
@@ -1081,7 +1065,13 @@ fn reader_offer(
                 _ => None,
             }
         }),
-    };
+    }
+    .or_else(|| {
+        spec.transform
+            .as_ref()
+            .map(|transform| format!("transform {} runs on each file", transform.function))
+    })
+    .or_else(|| archived_reason(spec, read));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },
@@ -1249,13 +1239,15 @@ pub(crate) struct Window {
     pub(crate) maximum: Option<String>,
 }
 
+/// The write mode of `spec`'s table: `--reload` rebuilds it, except that a files source's merge keeps merging, file by file, into the table it swaps in at the end.
 fn write_mode(
     spec: &TableSpec,
     reload: bool,
     from: Option<String>,
     to: Option<String>,
 ) -> WriteMode {
-    match (reload, spec.strategy) {
+    let merges_files = spec.files.is_some() && spec.strategy == WriteStrategy::Merge;
+    match (reload && !merges_files, spec.strategy) {
         (true, _) => WriteMode::Recreate,
         (false, WriteStrategy::Append) => WriteMode::Append,
         (false, WriteStrategy::Replace) => WriteMode::Replace,
@@ -1432,6 +1424,24 @@ fn is_number(value: &str) -> bool {
         && digits(exponent)
 }
 
+/// Where an integer cursor's read starts under `lookback = units`: the destination's `maximum` minus `units`, but never below the smallest value `cursor_type` holds (`smallint` is 16-bit, `int` 64-bit), which the read's bound must fit.
+pub(crate) fn lookback_start(
+    maximum: &str,
+    units: i64,
+    cursor_type: &ColumnType,
+) -> Result<String, String> {
+    let lowest = match cursor_type {
+        ColumnType::SmallInt => i64::from(i16::MIN),
+        _ => i64::MIN,
+    };
+    match maximum.trim().parse::<i64>() {
+        Ok(value) => Ok(value.saturating_sub(units).max(lowest).to_string()),
+        Err(_) => Err(format!(
+            "cursor maximum {maximum:?} is not an integer, so lookback = {units} can't count back from it"
+        )),
+    }
+}
+
 /// Where the read starts, and why: a `--start-cursor`, the destination's maximum (read after it by `append` from a database or Python source, unless `append_cursor_inclusive`; a files source reads from it, skipping files already loaded), `cursor_start`, or nothing; with the destination's maximum (without lookback) when it was read.
 async fn lower_bound(
     request: &WindowRequest<'_>,
@@ -1443,7 +1453,11 @@ async fn lower_bound(
     if let Some(start) = start_flag {
         return Ok(Ok((
             Some(start.to_owned()),
-            format!("{} from {start} (--start-cursor)", cursor.label()),
+            format!(
+                "{} from {start} ({})",
+                cursor.label(),
+                options.range_flags.start
+            ),
             None,
         )));
     }
@@ -1523,6 +1537,13 @@ async fn lower_bound(
         Some(Err(problem)) => return Ok(Err(problem)),
         None => (None, None),
     };
+    let (maximum, lookback) = match (maximum, cursor.lookback_units) {
+        (Some(maximum), Some(units)) => match lookback_start(&maximum, units, cursor_type) {
+            Ok(start) => (Some(start), format!(" {maximum} minus lookback {units}")),
+            Err(problem) => return Ok(Err(problem)),
+        },
+        (maximum, _) => (maximum, lookback),
+    };
     Ok(Ok(match (maximum, &cursor_start) {
         (Some(maximum), _) => {
             let bound = match request.spec.strategy == WriteStrategy::Append
@@ -1557,12 +1578,9 @@ pub(crate) async fn cursor_window(
 ) -> Result<Result<Window, String>, LoaderError> {
     let spec = request.spec;
     let options = request.options;
-    let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
     let (Some(cursor), Some(cursor_type)) = (&spec.cursor, request.cursor_type) else {
-        if backfill {
-            return Ok(Err(
-                "--start-cursor/--end-cursor need a cursor_column".to_owned()
-            ));
+        if options.ranged() {
+            return Ok(Err(RANGE_NEEDS_CURSOR.to_owned()));
         }
         return Ok(Ok(Window {
             filter: None,
@@ -1609,7 +1627,7 @@ pub(crate) async fn cursor_window(
     let (to, note) = match (to, ahead) {
         (Some(end), _) => (
             Some(end.clone()),
-            format!("{note}, below {end} (--end-cursor)"),
+            format!("{note}, below {end} ({})", options.range_flags.end),
         ),
         (None, Some((end, lookahead))) => (
             Some(end.clone()),
@@ -1866,6 +1884,7 @@ pub(crate) async fn block_refused_bounds(
                 filter: Some(&filter),
                 parameters: &parameters,
                 batch_rows: 1,
+                memory_budget: crate::odbc_source::constants::DEFAULT_BATCH_MEMORY,
             };
             crate::odbc_source::main::run_query::run_query(&reader, &request)
                 .await

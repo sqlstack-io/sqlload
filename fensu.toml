@@ -41,6 +41,21 @@ reason = "SftpLink holds russh-sftp's session and russh's session handle, which 
 
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSL303"
+path = "Cargo.toml"
+reason = "unsafe_code is deny, not forbid, so that the one Windows call reading the process's peak working set (GetProcessMemoryInfo, crates/sqlload/src/peak_memory/_helpers/windows.rs) may allow it; no maintained crate wraps it safely. Every crate root but sqlload's still forbids unsafe code."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSH012"
+path = "crates/sqlload/src/lib.rs"
+reason = "The library denies unsafe code rather than forbidding it, as forbid cannot be lifted for the Windows peak-memory helper below it; deny still refuses unsafe everywhere else."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSH013"
+path = "crates/sqlload/src/peak_memory/_helpers/windows.rs"
+reason = "Reading the process's peak working set on Windows needs GetProcessMemoryInfo, an unsafe FFI call no maintained crate wraps safely; this Windows-only module of one function is the crate's only unsafe."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSH005"
 path = "crates/sqlload/src/odbc_source/_helpers/catalog.rs"
 symbols = ["listed_keys"]

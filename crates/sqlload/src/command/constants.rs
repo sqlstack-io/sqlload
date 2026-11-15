@@ -23,3 +23,7 @@ pub const WRAP_ROOM: usize = 20;
 
 /// The narrowest terminal a line is wrapped for; a narrower one gets each line as it is.
 pub const MIN_WRAP_WIDTH: usize = 2;
+
+/// Why `--start-cursor`/`--end-cursor` and the typed cursor flags are refused together, in SQLBuild's words.
+pub const CURSOR_FLAGS_MIXED: &str =
+    "--start-cursor/--end-cursor cannot be combined with the -ts or -int cursor flags";

@@ -4,6 +4,8 @@ mod connect;
 mod converted;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_memory.rs"]
+mod memory;
 #[path = "tests/test_odbc_reader.rs"]
 mod odbc_reader;
 #[path = "tests/test_select_query.rs"]

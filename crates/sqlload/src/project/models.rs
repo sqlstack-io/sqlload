@@ -4,17 +4,18 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::config::models::AuthConfig;
+use crate::config::models::{AuthConfig, ByteSize};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
     AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
     XlsxOptions, XmlOptions,
 };
+use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::Naming;
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
-    deserialize_optional_percent,
+    deserialize_optional_lookback, deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -46,12 +47,21 @@ pub struct ProjectConfig {
     /// The file declaring each Python source, by source name.
     #[serde(skip)]
     pub python_modules: BTreeMap<String, String>,
+    /// The `sl.http` paths each Python table writes as literals, by source name and table name.
+    #[serde(skip)]
+    pub python_http_paths: BTreeMap<String, BTreeMap<String, LiteralPaths>>,
     /// The `${ENV:NAME}` variables each connection's settings read, by connection name, for hints.
     #[serde(skip)]
     pub connection_variables: BTreeMap<String, Vec<String>>,
     /// Where settings are written in the project's file, for hints; empty for a project parsed from text alone.
     #[serde(skip)]
     pub config_lines: ConfigLines,
+    /// The Python host that imported `python_paths`, which runs `transform` functions; `None` in the standalone executable.
+    #[serde(skip)]
+    pub python_host: Option<std::sync::Arc<dyn crate::python_sources::types::PythonHost>>,
+    /// Each `transform` named in the project: its version (a hash of the file it is defined in), or why it cannot run.
+    #[serde(skip)]
+    pub transforms: BTreeMap<String, Result<String, String>>,
 }
 
 /// The lines of a project file's sources, tables and their `unique_key` (see [`crate::project::main::config_lines::config_lines`]).
@@ -495,6 +505,12 @@ pub struct SourceConfig {
     /// The largest binary value an `odbc` source's reads hold, in bytes.
     #[serde(default)]
     pub max_binary_size: Option<usize>,
+    /// The size over which an `odbc` source's text or binary column is read value by value rather than into a buffer per row; 4 KiB when omitted.
+    #[serde(default)]
+    pub long_column_threshold: Option<ByteSize>,
+    /// The memory one fetch of an `odbc` source's table holds; worked out from the machine's memory and `concurrency` when omitted.
+    #[serde(default)]
+    pub max_batch_memory: Option<ByteSize>,
     /// The project a `bigquery` source's tables live in; the connection's when omitted.
     #[serde(default)]
     pub project: Option<String>,
@@ -734,8 +750,8 @@ pub struct TableSettings {
     pub cursor_column: Option<Vec<String>>,
     #[serde(default)]
     pub cursor_start: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_duration")]
-    pub lookback: Option<Duration>,
+    #[serde(default, deserialize_with = "deserialize_optional_lookback")]
+    pub lookback: Option<Lookback>,
     /// Read only cursor values before now plus this (a date cursor: up to and including today plus this many days).
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub lookahead: Option<Duration>,
@@ -819,6 +835,9 @@ pub struct TableSettings {
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
+    /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
+    #[serde(default)]
+    pub transform: Option<String>,
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.
@@ -930,6 +949,13 @@ pub enum NullCursor {
     Include,
     /// Skip them, as a cursor filter does.
     Ignore,
+}
+
+/// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lookback {
+    Duration(Duration),
+    Units(i64),
 }
 
 /// What a cursor's `lookback` counts back from.

@@ -10,10 +10,12 @@ use crate::loader::_helpers::destination::{
     block_shared_destinations, mark_shared_destinations, unknown_sharing,
 };
 use crate::loader::_helpers::python::python_table;
-use crate::loader::_helpers::resolve::{destination_names, spec_names};
-use crate::loader::_helpers::sources::{
-    PLANNED_SOURCES, admit_tables, found_sources, selected, source_ends, unmatched_selectors,
+use crate::loader::_helpers::resolve::{
+    admit_tables, destination_names, spec_names, unmatched_selectors,
 };
+#[cfg(feature = "odbc")]
+use crate::loader::_helpers::sources::with_fetch_memory;
+use crate::loader::_helpers::sources::{PLANNED_SOURCES, found_sources, selected, source_ends};
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table, skip_up_to_date};
@@ -77,7 +79,7 @@ pub async fn plan_project(
         .await?;
         PLANNED_SOURCES.fetch_add(1, Ordering::Relaxed);
     }
-    let ranged = options.start_cursor.is_some() || options.end_cursor.is_some();
+    let ranged = options.ranged();
     Ok(skip_up_to_date(
         block_conflicts(plan, (&claims, &configured, &drained), (project, options)),
         ranged,
@@ -92,11 +94,12 @@ async fn planned_tables(
     (destinations, options): (&BTreeMap<String, Destination>, &PlanOptions),
 ) -> Result<(Vec<TablePlan>, Vec<TableSpec>), LoaderError> {
     let module = project.python_modules.get(source_name);
+    let paths = project.python_http_paths.get(source_name);
     let mut planned: Vec<TablePlan> = Vec::new();
     let mut unselected: Vec<TableSpec> = Vec::new();
     for mut spec in specs {
         spec.files = files.clone();
-        spec.python = module.map(|module| python_table(module, &spec.source_table));
+        spec.python = module.map(|module| python_table(module, &spec.source_table, paths));
         if !selected(options, (source_name, &spec_names(&spec))) {
             unselected.push(spec);
             continue;
@@ -109,6 +112,10 @@ async fn planned_tables(
     if source.kind == SourceKind::Odbc {
         #[cfg(feature = "odbc")]
         block_refused_bounds(project, (source_name, source), &mut planned).await?;
+    }
+    #[cfg(feature = "odbc")]
+    if source.kind == SourceKind::Odbc {
+        planned = with_fetch_memory(project, source, planned, options).await?;
     }
     Ok((planned, unselected))
 }
@@ -123,6 +130,28 @@ fn block_conflicts(
     names.extend(drained.iter().cloned());
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));
+    #[cfg(feature = "odbc")]
+    {
+        let fetches: Vec<(usize, &str, Option<u64>)> = plan
+            .tables
+            .iter()
+            .filter(|table| table.schema.blocked.is_none())
+            .filter_map(|table| {
+                let fetch = table.fetch_memory.as_ref()?;
+                Some((
+                    fetch.estimate?,
+                    table.spec.source_name.as_str(),
+                    fetch.limit,
+                ))
+            })
+            .collect();
+        let concurrency = options.concurrency.or(project.concurrency);
+        plan.warnings
+            .extend(crate::odbc_source::main::memory_warning::memory_warning(
+                &fetches,
+                concurrency.unwrap_or(crate::loader::constants::DEFAULT_THREADS),
+            ));
+    }
     let mut plan = block_shared_destinations(plan, configured);
     for table in plan
         .tables

@@ -2,17 +2,23 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use crate::command::_helpers::logging::LIVE_BLOCK;
 use crate::command::_helpers::output::print_lines;
 use crate::command::constants::PLAN_TREE_HINT;
 use crate::load_events::main::event_line::event_line;
 use crate::load_events::models::{EventKind, LoadEvent};
-use crate::loader::constants::{BOLD, CYAN, DIM, INVERSE, RED, RESET, YELLOW};
+use crate::loader::constants::{
+    BOLD, CYAN, DICT_HINT_MILLISECONDS, DICT_HINT_ROWS, DIM, INVERSE, RED, RESET, YELLOW,
+};
 use crate::loader::models::ProjectPlan;
+use crate::number_text::main::memory_text::memory_text;
 use crate::number_text::main::thousands::thousands;
+use crate::python_sources::models::TransformTime;
 
 /// The width of a tally line's verb column: `loaded` or `failed` and two spaces.
 const VERB_COLUMN: usize = 8;
@@ -47,8 +53,8 @@ const MAX_WIDTH: usize = 112;
 /// How long after a wait a connection's rate limit still shows as in use.
 const RATE_RECENT: Duration = Duration::from_millis(1500);
 
-/// The columns of the live block's bar line besides the bar and its counts: the badge, a space before the bar, two spaces before the counts, and one short of the edge so the line never wraps.
-const BAR_LINE_GAPS: usize = " LOADING ".len() + 3 + 1;
+/// The columns of the live block's bar line besides the badge, the bar and its counts: a space before the bar, two spaces before the counts, and one short of the edge so the line never wraps.
+const BAR_LINE_GAPS: usize = 3 + 1;
 
 /// Where a load's lines go: printed as they come (`print`), or kept to return with the rest.
 #[derive(Debug)]
@@ -94,6 +100,8 @@ pub(crate) struct Tally {
     pub(crate) rows: u64,
     /// The table that took longest to load, and how long.
     pub(crate) slowest: Option<(String, u64)>,
+    /// The most memory the whole process held at once, in bytes, as the run's end reported it.
+    pub(crate) peak_memory_bytes: Option<u64>,
 }
 
 impl Tally {
@@ -116,6 +124,9 @@ impl Tally {
             }
             EventKind::TableFailed { .. } => self.failed += 1,
             EventKind::TableNotStarted { .. } => self.not_started.push(table),
+            EventKind::RunFinished {
+                peak_memory_bytes, ..
+            } => self.peak_memory_bytes = *peak_memory_bytes,
             _ => {}
         }
     }
@@ -130,6 +141,8 @@ struct Running {
     /// What it is doing: `batch 3`, `committing`, or empty before its first progress.
     doing: String,
     committing: bool,
+    /// Under `load --follow`, the rows of the batches written so far, which the rows of the one being written add to, and how many.
+    written: (u64, u64),
 }
 
 /// What the block shows, as the events left it.
@@ -147,6 +160,8 @@ pub(crate) struct LiveState {
     stopped_after: Option<String>,
     /// Each connection with a `rate_limit`: its limit and when a request last waited, as time since the load started.
     rates: BTreeMap<String, (String, Option<Duration>)>,
+    /// `load --follow`: the tables stream until it stops.
+    follow: bool,
 }
 
 impl LiveState {
@@ -157,6 +172,14 @@ impl LiveState {
             waiting: tables,
             fail_fast,
             ..Self::default()
+        }
+    }
+
+    /// The state of `load --follow`, whose tables stream until it stops.
+    pub(crate) fn following(self) -> Self {
+        Self {
+            follow: true,
+            ..self
         }
     }
 
@@ -172,19 +195,31 @@ impl LiveState {
                     rows: 0,
                     doing: String::new(),
                     committing: false,
+                    written: (0, 0),
                 });
             }
             EventKind::TableProgress { unit, count, rows } => {
                 if let Some(running) = self.running_mut(&table) {
-                    running.rows = *rows;
+                    running.rows = running.written.0 + rows;
                     running.doing = format!("{unit} {count}");
                 }
             }
             EventKind::TableCommitting { rows } => {
                 if let Some(running) = self.running_mut(&table) {
-                    running.rows = *rows;
+                    running.rows = running.written.0 + rows;
                     running.doing = "committing".to_owned();
                     running.committing = true;
+                }
+            }
+            EventKind::TableBatchWritten { rows, .. } => {
+                if let Some(running) = self.running_mut(&table) {
+                    running.written = (running.written.0 + rows, running.written.1 + 1);
+                    running.rows = running.written.0;
+                    running.doing = match running.written.1 {
+                        1 => "1 batch written".to_owned(),
+                        batches => format!("{batches} batches written"),
+                    };
+                    running.committing = false;
                 }
             }
             EventKind::RateLimited {
@@ -231,16 +266,28 @@ pub(crate) fn event_lines(
             elapsed_ms,
             position,
             changes,
+            transforms,
+            peak_memory_bytes,
         } => {
             let word = match rows {
                 1 => "row",
                 _ => "rows",
             };
             let seconds = format!("{:.1}s", *elapsed_ms as f64 / 1000.0);
+            let note: Vec<String> = position
+                .iter()
+                .cloned()
+                .chain(peak_memory_bytes.map(peak_note))
+                .collect();
             let detail = format!(
-                "{:>rows_width$} {word:<5}{seconds:<6}{}",
-                thousands(*rows),
-                position.as_deref().unwrap_or_default()
+                "{}{}",
+                format!(
+                    "{:>rows_width$} {word:<5}{seconds:<6}{}",
+                    thousands(*rows),
+                    note.join("  ")
+                )
+                .trim_end(),
+                transform_lines(transforms)
             );
             let mut lines: Vec<String> = changes
                 .iter()
@@ -249,10 +296,64 @@ pub(crate) fn event_lines(
             lines.push(tally_line(("loaded", name), &detail, name_width));
             return lines;
         }
-        EventKind::TableFailed { reason, .. } => ("failed", reason.clone()),
+        EventKind::TableBatchWritten { rows, behind_secs } => {
+            let word = match rows {
+                1 => "row",
+                _ => "rows",
+            };
+            let behind = behind_secs
+                .map(|secs| format!("{secs}s behind"))
+                .unwrap_or_default();
+            (
+                "written",
+                format!("{:>rows_width$} {word:<5}{behind}", thousands(*rows))
+                    .trim_end()
+                    .to_owned(),
+            )
+        }
+        EventKind::TableFailed {
+            reason,
+            peak_memory_bytes,
+            ..
+        } => (
+            "failed",
+            match peak_memory_bytes {
+                Some(bytes) => format!("{reason}\n{}", peak_note(*bytes)),
+                None => reason.clone(),
+            },
+        ),
         _ => return Vec::new(),
     };
     vec![tally_line((verb, name), &detail, name_width)]
+}
+
+/// A table's peak memory under `--memory-per-table`, as its tally line notes it: `peak memory 85 MiB`.
+fn peak_note(bytes: u64) -> String {
+    format!("peak memory {}", memory_text(bytes))
+}
+
+/// A line per file or range a `transform` ran on, with its time, each after a line break; then, when it returned dicts for a large one and took a while, one hint naming the slowest such that Arrow or a DataFrame is faster.
+fn transform_lines(times: &[TransformTime]) -> String {
+    let seconds = |time: &TransformTime| time.milliseconds as f64 / 1000.0;
+    let mut lines: String = times
+        .iter()
+        .map(|time| format!("\ntransform  {}  {:.2}s", time.file, seconds(time)))
+        .collect();
+    let slow = times
+        .iter()
+        .filter(|time| {
+            time.dicts && time.rows >= DICT_HINT_ROWS && time.milliseconds >= DICT_HINT_MILLISECONDS
+        })
+        .max_by_key(|time| time.milliseconds);
+    if let Some(time) = slow {
+        lines.push_str(&format!(
+            "\nhint: the transform returned dicts for {} ({} rows, {:.1}s); a pyarrow Table or a DataFrame transforms faster",
+            time.file,
+            thousands(time.rows),
+            seconds(time)
+        ));
+    }
+    lines
 }
 
 /// `verb  name  detail` in the tally's columns, a detail's further lines under its first; a verb longer than `loaded` (`created`, `altered`), or a name wider than the column (a child table made as its parent loads), keeps two spaces after it.
@@ -307,6 +408,9 @@ pub(crate) async fn write_events(
     let mut tally = Tally::default();
     let started = std::time::Instant::now();
     let block = output.live.as_ref().map(|_| live_bar());
+    if let Some(bar) = &block {
+        *LIVE_BLOCK.lock().unwrap_or_else(PoisonError::into_inner) = Some(bar.clone());
+    }
     let width = console::Term::stderr()
         .size_checked()
         .map_or(MAX_LIVE_WIDTH, |(_, columns)| usize::from(columns));
@@ -343,9 +447,22 @@ pub(crate) async fn write_events(
         }
     }
     if let Some(bar) = block {
+        *LIVE_BLOCK.lock().unwrap_or_else(PoisonError::into_inner) = None;
         bar.finish_and_clear();
     }
     (kept, tally)
+}
+
+/// Run `write`, which writes to stderr, with the live block, when one is drawn, lifted off the screen for it and redrawn under what it wrote.
+pub(crate) fn above_live_block<T>(write: impl FnOnce() -> T) -> T {
+    let drawn = LIVE_BLOCK
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    match drawn {
+        Some(bar) => bar.suspend(write),
+        None => write(),
+    }
 }
 
 /// The live block's one bar on stderr: a message of several lines, redrawn in place.
@@ -360,7 +477,7 @@ fn live_bar() -> indicatif::ProgressBar {
     bar
 }
 
-/// The line a load ends with, and the branches under it: what never started, the slowest table, and after failures whether running it again helps and what it would do.
+/// The line a load ends with, and the branches under it: what never started, the slowest table, the run's peak memory, and after failures whether running it again helps and what it would do.
 pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Vec<String> {
     let mut clauses: Vec<String> = Vec::new();
     clauses.extend((tally.loaded > 0).then(|| format!("{} loaded", tally.loaded)));
@@ -396,6 +513,9 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
             "slowest",
             format!("{table} {:.1}s", *elapsed_ms as f64 / 1000.0),
         ));
+    }
+    if let Some(bytes) = tally.peak_memory_bytes {
+        branches.push(("peak memory", memory_text(bytes)));
     }
     if failures && exit_code == crate::command::constants::RETRYABLE_EXIT {
         branches.push((
@@ -503,8 +623,12 @@ pub(crate) fn live_lines(
         seconds / 60,
         seconds % 60
     );
+    let badge = match state.follow {
+        true => " FOLLOWING ",
+        false => " LOADING ",
+    };
     let bar_width = width
-        .saturating_sub(BAR_LINE_GAPS + counts.chars().count())
+        .saturating_sub(badge.len() + BAR_LINE_GAPS + counts.chars().count())
         .max(10);
     let filled = match state.total {
         0 => bar_width,
@@ -514,7 +638,7 @@ pub(crate) fn live_lines(
         String::new(),
         format!(
             "{} {}{}  {counts}",
-            paint(&format!("{BOLD}{INVERSE}{CYAN}"), " LOADING ".to_owned()),
+            paint(&format!("{BOLD}{INVERSE}{CYAN}"), badge.to_owned()),
             paint(
                 match state.stopped_after {
                     Some(_) => RED,
@@ -599,7 +723,11 @@ pub(crate) fn live_lines(
     }
     lines.push(paint(
         DIM,
-        "  ctrl-c finishes running tables and stops · a second ctrl-c stops at once".to_owned(),
+        match state.follow {
+            true => "  ctrl-c writes what it read and stops · a second ctrl-c stops at once",
+            false => "  ctrl-c finishes running tables and stops · a second ctrl-c stops at once",
+        }
+        .to_owned(),
     ));
     lines
 }

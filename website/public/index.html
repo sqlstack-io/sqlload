@@ -204,8 +204,12 @@ Errors (1)
     ├── files   2 new of 3 listed
     └── route   <span class="ok">DuckDB reads directly from lake/events/</span>
 <span class="dim">…</span>
-loaded   raw.events      6 rows  0.0s
-<span class="ok">✓ Completed  2 loaded, 7 rows, 0.1s</span></pre>
+loaded  raw.refunds      1 row  0.0s
+loaded  raw.events       8 rows 0.1s
+
+<span class="ok">✓ Completed  2 loaded, 9 rows, 0.2s</span>
+├── slowest      raw.events 0.1s
+└── peak memory  78 MiB</pre>
 						</div>
 
 						<div class="step">
@@ -221,8 +225,11 @@ loaded   raw.events      6 rows  0.0s
     └── cursor  updated_at from 2026-10-12 16:00:00+00
                 <span class="ok">(destination maximum)</span>
 
-loaded   raw.app__orders  3 rows  0.0s
-<span class="ok">✓ Completed  1 loaded, 3 rows, 0.1s</span></pre>
+loaded  raw.app__orders      4 rows 0.0s
+
+<span class="ok">✓ Completed  1 loaded, 4 rows, 0.1s</span>
+├── slowest      raw.app__orders 0.0s
+└── peak memory  81.4 MiB</pre>
 						</div>
 
 						<div class="step">
@@ -303,9 +310,12 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 <span class="cmd">sqlload copy 'postgresql://postgres:${ENV:PGPASSWORD}@localhost/postgres#public.orders' \
     duckdb://shop.duckdb#raw.orders --cursor-column updated_at</span>
 <span class="dim">…</span>
-created  raw.orders  8 columns
-loaded   raw.orders  1,001 rows  0.0s
-<span class="ok strong">✓ Completed  1 loaded, 1,001 rows, 0.1s</span></pre>
+created  raw.orders  7 columns
+loaded  raw.orders  1,000 rows 0.1s
+
+<span class="ok strong">✓ Completed  1 loaded, 1,000 rows, 0.3s</span>
+├── slowest      raw.orders 0.1s
+└── peak memory  80.1 MiB</pre>
 				</div>
 			</section>
 

@@ -3,8 +3,10 @@ use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
+use crate::column_types::models::ColumnType;
 use crate::command::_helpers::load_output::{
     EventsTarget, LiveState, LoadOutput, change_tally_line, planning, start_lines, summary_lines,
     write_events,
@@ -12,7 +14,9 @@ use crate::command::_helpers::load_output::{
 use crate::command::_helpers::output::{confirm_reload, print_lines};
 use crate::command::_helpers::project_file::replace_file;
 use crate::command::_helpers::signals::wait_for_signal;
-use crate::command::constants::{FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT};
+use crate::command::constants::{
+    CURSOR_FLAGS_MIXED, FORCED_STOP_EXIT, RELOAD_DECLINED, RETRYABLE_EXIT,
+};
 use crate::command::errors::CommandError;
 use crate::command::models::{
     Command, ContractAction, EventsFormat, LoaderArgs, LoaderRequest, Progress, StateAction,
@@ -25,7 +29,7 @@ use crate::load_events::main::close::close;
 use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::models::EventKind;
-use crate::loader::constants::NO_PYTHON_HOST;
+use crate::loader::constants::{NO_PYTHON_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
@@ -36,9 +40,12 @@ use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
 use crate::loader::models::{
-    LoadRun, PlanOptions, ProjectPlan, RunReport, StateKind, StateRequest, TableOutcome, TablePlan,
+    LoadRun, PlanOptions, ProjectPlan, RangeFlags, RunReport, StateKind, StateRequest,
+    TableOutcome, TablePlan, TypedCursors,
 };
 use crate::number_text::main::thousands::thousands;
+use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
+use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
@@ -63,16 +70,61 @@ fn variable(variables: &BTreeMap<String, String>, name: &str) -> Option<String> 
 
 /// The plan options `args` give.
 pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
+    if args.memory_per_table && !cfg!(target_os = "linux") {
+        return Err(MEMORY_PER_TABLE_NEEDS_LINUX.to_owned());
+    }
+    let typed_cursors = TypedCursors {
+        start_ts: args.start_cursor_ts,
+        end_ts: args.end_cursor_ts,
+        start_int: args.start_cursor_int,
+        end_int: args.end_cursor_int,
+    };
+    let typed = [
+        (
+            "--start-cursor-ts",
+            &typed_cursors.start_ts,
+            ColumnType::TimestampTz,
+        ),
+        (
+            "--end-cursor-ts",
+            &typed_cursors.end_ts,
+            ColumnType::TimestampTz,
+        ),
+        (
+            "--start-cursor-int",
+            &typed_cursors.start_int,
+            ColumnType::Int,
+        ),
+        ("--end-cursor-int", &typed_cursors.end_int, ColumnType::Int),
+    ];
+    let untyped = args.start_cursor.is_some() || args.end_cursor.is_some();
+    if untyped && typed.iter().any(|(_, value, _)| value.is_some()) {
+        return Err(CURSOR_FLAGS_MIXED.to_owned());
+    }
+    for (flag, value, column_type) in &typed {
+        let Some(value) = value else {
+            continue;
+        };
+        if cursor_text(value, column_type).is_err() {
+            return Err(match column_type {
+                ColumnType::Int => format!("{flag} value '{value}' is not a whole number"),
+                _ => format!("{flag} value '{value}' is not an RFC 3339 timestamp or a date"),
+            });
+        }
+    }
     Ok(PlanOptions {
+        typed_cursors,
         select: [args.positional_select, args.select].concat(),
         exclude: args.exclude,
         rebuild_allowed: args.allow_type_change_rebuild,
         reload: args.reload,
         start_cursor: args.start_cursor,
         end_cursor: args.end_cursor,
+        range_flags: RangeFlags::default(),
         concurrency: args.concurrency.map(usize::from),
         resnapshot: args.resnapshot,
         fail_fast: args.fail_fast,
+        memory_per_table: args.memory_per_table,
         batch_bytes: args
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
@@ -98,6 +150,10 @@ async fn load_project_config(request: &LoaderRequest<'_>) -> Result<ProjectConfi
 async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, String> {
     let lookup = |name: &str| variable(&request.variables, name);
     let project = parse_project(request.text, &lookup).map_err(|error| error.to_string())?;
+    let transforms = transform_places(&project);
+    if let (None, Some((place, _))) = (&request.host, transforms.first()) {
+        return Err(NO_TRANSFORM_HOST.replace("{place}", place));
+    }
     if project.python_paths.is_empty() {
         return Ok(project);
     }
@@ -110,10 +166,41 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
         .map(Path::to_path_buf)
         .unwrap_or_default();
     let paths = project.python_paths.clone();
-    let found = tokio::task::spawn_blocking(move || host.discover(&root, &paths))
+    let discovering = Arc::clone(&host);
+    let found = tokio::task::spawn_blocking(move || discovering.discover(&root, &paths))
         .await
         .map_err(|error| format!("Python discovery failed: {error}"))??;
-    parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())
+    let mut project =
+        parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())?;
+    for (_, function) in transforms {
+        if project.transforms.contains_key(&function) {
+            continue;
+        }
+        let checking = Arc::clone(&host);
+        let called = function.clone();
+        let version = tokio::task::spawn_blocking(move || checking.transform_version(&called))
+            .await
+            .map_err(|error| format!("Python transform check failed: {error}"))?;
+        project.transforms.insert(function, version);
+    }
+    project.python_host = Some(host);
+    Ok(project)
+}
+
+/// Each source or table in `project` that sets `transform` (`source x` or `table x.y`), with its function.
+fn transform_places(project: &ProjectConfig) -> Vec<(String, String)> {
+    let mut places: Vec<(String, String)> = Vec::new();
+    for (name, source) in &project.sources {
+        if let Some(function) = &source.defaults.transform {
+            places.push((format!("source {name}"), function.clone()));
+        }
+        for (table, overrides) in &source.tables {
+            if let Some(function) = &overrides.settings.transform {
+                places.push((format!("table {name}.{table}"), function.clone()));
+            }
+        }
+    }
+    places
 }
 
 /// The exit code of a command that succeeded (`ok`), or failed only in `retryable` ways, or failed otherwise.
@@ -310,6 +397,7 @@ async fn run_command(
                 (vec![text], exit_code(false, retryable))
             }
             false => {
+                let mut lines = start_lines(lines);
                 lines.extend([String::new(), follow_refused(project, &plan)]);
                 (lines, exit_code(false, plan_retryable))
             }
@@ -354,11 +442,12 @@ async fn run_command(
         host,
         options: &options,
     };
-    if loads && follow.is_none() {
+    if loads {
         let streamed = StreamedLoad {
             run: &run,
             plan: &plan,
             applied: &applied,
+            stop: follow.map(follow_stop),
             output: LoadOutput {
                 name_width: name_width(&plan, &applied),
                 rows_width: rows_width(&plan),
@@ -372,7 +461,11 @@ async fn run_command(
                         .filter(|table| table.schema.blocked.is_none())
                         .map(TablePlan::outcome_name)
                         .collect();
-                    LiveState::new(tables, options.fail_fast)
+                    let state = LiveState::new(tables, options.fail_fast);
+                    match follow {
+                        Some(_) => state.following(),
+                        None => state,
+                    }
                 }),
             },
             started,
@@ -382,58 +475,60 @@ async fn run_command(
         if streamed.output.print {
             print_lines(std::mem::take(&mut lines), no_color);
         }
-        let (outcomes, kept, code) = Box::pin(streamed_load(streamed)).await;
+        let ended = Box::pin(streamed_load(streamed)).await;
         if json {
             let run = RunReport {
                 command: "load",
                 applied: &applied,
-                outcomes: &outcomes,
+                outcomes: &ended.outcomes,
                 started: started.0,
                 elapsed: started.1.elapsed(),
+                peak_memory_bytes: ended.peak_memory_bytes,
             };
             let (text, ok, retryable) = json_report(&plan, Some(&run));
             return Ok((vec![text], exit_code(ok, retryable)));
         }
-        lines.extend(kept);
-        return Ok((lines, code));
+        lines.extend(ended.lines);
+        return Ok((lines, ended.exit_code));
     }
-    let stop = follow.map(follow_stop);
-    let outcomes = match loads {
-        true => load_tables(&run, &plan, stop.as_ref()).await,
-        false => Vec::new(),
-    };
     if json {
         let run = RunReport {
-            command: if loads { "load" } else { "apply" },
+            command: "apply",
             applied: &applied,
-            outcomes: &outcomes,
+            outcomes: &[],
             started: started.0,
             elapsed: started.1.elapsed(),
+            peak_memory_bytes: run_peak_bytes(&[]),
         };
         let (text, ok, retryable) = json_report(&plan, Some(&run));
         return Ok((vec![text], exit_code(ok, retryable)));
     }
-    let (tallied, completed) = render_tally(&applied, &outcomes, started.1.elapsed());
+    let (tallied, completed) = render_tally(&applied, &[], started.1.elapsed(), None);
     lines.extend(tallied);
-    let retryable = outcomes.iter().all(TableOutcome::passes_on_rerun);
-    Ok((
-        lines,
-        exit_code(planned && completed, plan_retryable && retryable),
-    ))
+    Ok((lines, exit_code(planned && completed, plan_retryable)))
 }
 
-/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
+/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, what stops a `load --follow`, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
 struct StreamedLoad<'a> {
     run: &'a LoadRun<'a>,
     plan: &'a ProjectPlan,
     applied: &'a [String],
+    stop: Option<CancellationToken>,
     output: LoadOutput,
     started: (chrono::DateTime<chrono::Utc>, std::time::Instant),
     planned: (bool, bool),
 }
 
-/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), and the exit code, the same as a load without events.
-async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String>, u8) {
+/// How a streamed load ended: each table's outcome, the lines not printed yet, the exit code, and the run's peak memory in bytes.
+struct StreamedEnd {
+    outcomes: Vec<TableOutcome>,
+    lines: Vec<String>,
+    exit_code: u8,
+    peak_memory_bytes: Option<u64>,
+}
+
+/// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), the exit code, the same as a load without events, and the run's peak memory (the most of the process's before the tables loaded, after, and each table's under `--memory-per-table`, whose resets the process's own figure may miss).
+async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let width = load.output.name_width;
     let selected = load.plan.tables.len();
@@ -461,7 +556,12 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
     }
     let writer = tokio::spawn(write_events(load.output, receiver));
     emit(None, EventKind::RunStarted { selected, to_load });
-    let outcomes = load_tables(load.run, load.plan, None).await;
+    let before = run_peak_bytes(&[]);
+    let outcomes = load_tables(load.run, load.plan, load.stop.as_ref()).await;
+    let measured: Vec<Option<u64>> = std::iter::once(before)
+        .chain(outcomes.iter().map(|outcome| outcome.peak_memory_bytes))
+        .collect();
+    let peak_memory_bytes = run_peak_bytes(&measured);
     let (mut loaded, mut failed, mut not_started, mut rows) = (0, 0, 0, 0);
     for outcome in &outcomes {
         match (&outcome.loaded, outcome.skipped) {
@@ -484,6 +584,7 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
             rows,
             elapsed_ms,
             exit_code: code,
+            peak_memory_bytes,
         },
     );
     close();
@@ -493,7 +594,12 @@ async fn streamed_load(load: StreamedLoad<'_>) -> (Vec<TableOutcome>, Vec<String
         kept.push(String::new());
         kept.extend(summary_lines(&tally, elapsed_ms, code));
     }
-    (outcomes, kept, code)
+    StreamedEnd {
+        outcomes,
+        lines: kept,
+        exit_code: code,
+        peak_memory_bytes,
+    }
 }
 
 /// The width of the tally's name column: the widest name of a table the plan loads, or of an object `applied` changed, and two spaces.

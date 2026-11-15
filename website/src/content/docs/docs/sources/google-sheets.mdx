@@ -125,6 +125,71 @@ same name, ignoring case, fails `plan`.
   is refused at `plan`, so pin `float` up front where fractions may appear.
 - A formula error (`#DIV/0!`, `#N/A`) fails the load naming the cell, rather than loading NULL.
 
+## Transforming each range
+
+From 0.52.0. A table can take a [`transform`](/docs/sources/files/#transforming-each-file), as a
+files table does: the name of an `@sl.transform` function on `python_paths`, called as
+`f(rows, ctx)` with the range's rows as a `pyarrow.Table`. It returns or yields the rows to load, as
+dicts, lists of dicts, a `pyarrow.Table`, or a polars or pandas DataFrame. It runs once for each
+range at `plan`, which takes the table's columns from what it returns, and once at each load.
+`ctx.unit` is `"range"`, and `ctx` has `spreadsheet_id`, `sheet` (the tab), `range` (as in
+`ranges`) and `table`.
+
+A report with title rows above its header, a KPI per block and months across, becomes tidy rows:
+
+```toml
+python_paths = ["transforms"]
+
+[sources.kpis]
+kind = "google_sheets"
+connection = "sheets"
+spreadsheet_id = "1AbC..."
+ranges = { metrics = "KPIs" }
+header_row = 2
+description = "Service KPIs, one row per KPI or measure and month."
+write_strategy = "replace"
+transform = "kpi_sheet"
+```
+
+```python title="transforms/kpis.py"
+import pandas as pd
+import pyarrow as pa
+import sqlload as sl
+
+MONTHS = ["Period 1", "Period 2", "Jan", "Feb", "Mar"]
+
+@sl.transform
+def kpi_sheet(rows: pa.Table, ctx: sl.TransformContext):
+    df = rows.to_pandas()
+    kpi = df["ID"].notna()
+    df["metric_id"] = df["ID"].ffill()
+    df["metric"] = df["KPI"].where(kpi).ffill()
+    df["label"] = df["KPI"]
+    df["row_kind"] = kpi.map({True: "kpi", False: "measure"})
+    df = df[df["metric_id"].notna()]
+    tidy = df.melt(id_vars=["metric_id", "metric", "label", "row_kind"], value_vars=MONTHS,
+                   var_name="month", value_name="value")
+    tidy["value"] = pd.to_numeric(tidy["value"], errors="coerce")
+    return tidy.dropna(subset=["value"]).reset_index(drop=True)
+```
+
+- `header_row` names the header's row, so title rows above it, such as a merged group title, never
+  reach the function; a range starting at the header row (`"KPIs!A2:G"`) does the same. A header
+  cell must still name every column; when it doesn't, use `header = false` with `column_names`.
+- A merged cell's value is in its first cell only; the others arrive empty, so fill them down in the
+  function, as `ffill()` does above.
+- The rows the function gets differ from a table's without one in two ways: an empty text, as a
+  formula's `IFERROR(..., "")` returns, is NULL and doesn't type its column; and a number in a
+  column typed `text` (one mixing numbers and notes) is its value, `0.9`, not the text the sheet
+  shows, `90.0%`. A formula error still fails the load, naming the cell.
+- A function that raises, or returns or yields something else, fails the table, naming the function
+  and the range; the table stays as it was. The load report gives each range's transform time.
+- With `merge` or `append`, `plan` shows `transform  changed: 1 range loaded under an earlier
+  version (--reload transforms every range again)` while the table holds rows a range loaded before the file
+  the function is defined in changed; `replace` tables load every row again each run. The version
+  is recorded in `_sqlload_runs`, which `apply` creates, as for
+  [files](/docs/sources/files/#changing-a-transform).
+
 ## Writing
 
 A sheet has no column to read after, so its tables usually take `write_strategy = "replace"` and

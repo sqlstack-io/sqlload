@@ -34,6 +34,12 @@ pub enum EventKind {
     },
     /// A table's rows are read and its last commit begins.
     TableCommitting { rows: u64 },
+    /// Under `load --follow`, a batch of the followed source's changes was written: this table's rows in it, and how long ago the batch's newest change committed, in seconds.
+    TableBatchWritten {
+        rows: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        behind_secs: Option<u64>,
+    },
     /// A table loaded: its rows, how long it took, and its new position when it keeps one.
     TableDone {
         rows: u64,
@@ -43,16 +49,25 @@ pub enum EventKind {
         /// The `created` and `altered` lines of a table that made or widened its columns as it loaded (a Python table, or a nested one's child tables).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         changes: Vec<String>,
+        /// How long a files or Sheets table's `transform` took on each file or range.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transforms: Vec<crate::python_sources::models::TransformTime>,
+        /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peak_memory_bytes: Option<u64>,
     },
     /// A table failed, and whether running the load again may get past it.
     TableFailed {
         reason: String,
         retryable: bool,
         elapsed_ms: u64,
+        /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peak_memory_bytes: Option<u64>,
     },
     /// A table the load never started, and why.
     TableNotStarted { reason: String },
-    /// The load ended: its counts and the exit code.
+    /// The load ended: its counts, the exit code, and the most memory the whole process held at once.
     RunFinished {
         loaded: usize,
         failed: usize,
@@ -60,5 +75,8 @@ pub enum EventKind {
         rows: u64,
         elapsed_ms: u64,
         exit_code: u8,
+        /// In bytes; absent where the OS gives no figure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        peak_memory_bytes: Option<u64>,
     },
 }

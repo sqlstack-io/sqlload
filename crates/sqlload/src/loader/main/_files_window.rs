@@ -41,7 +41,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
     };
     if backfill && options.reload {
         return Err(
-            "--reload rewrites every file, so it takes no --start-cursor/--end-cursor".to_owned(),
+            "--reload rewrites every file, so it takes no --start-cursor/--end-cursor, nor their -ts and -int forms".to_owned(),
         );
     }
     if cursor.lookahead.is_some() || cursor.from_now {
@@ -76,6 +76,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 newest,
                 lookback: cursor.lookback,
                 start: start.as_deref(),
+                start_flag: options.range_flags.start,
                 end: end.as_deref(),
                 cursor_start: cursor.start.as_deref(),
                 reload: options.reload,
@@ -99,7 +100,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             let (from, note, operator) = match (start, maximum, &cursor.start) {
                 (Some(start), _, _) => (
                     Some(start.clone()),
-                    format!("{column} from {start} (--start-cursor)"),
+                    format!("{column} from {start} ({})", options.range_flags.start),
                     INCLUSIVE_BOUND,
                 ),
                 (None, Some((maximum, note)), _) => {

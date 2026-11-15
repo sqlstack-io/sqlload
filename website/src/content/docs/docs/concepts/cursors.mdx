@@ -21,14 +21,15 @@ $ sqlload plan app__orders
 | `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. From 0.51.0, a list of columns of one type family, such as `["updated_at", "created_at"]`, reads the first non-NULL of them in each row. See [NULL cursor values](#null-cursor-values). |
 | `null_cursor` | From 0.51.0. `fail` (default), `include` or `ignore`: what a read does with source rows whose cursor is NULL. See [NULL cursor values](#null-cursor-values). |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
-| `lookback` | Read this far before the maximum, such as `"1h"` or `"2d"`, to pick up late rows. Date and timestamp cursors only; a date cursor moves back by whole days. Not with `append`. |
+| `lookback` | Read this far before the maximum, to pick up late rows: a duration on a date or timestamp cursor, such as `"1h"` or `"2d"` (a date cursor moves back by whole days); from 0.52.0, a number of cursor units on an integer cursor, such as `1`. See [Fiscal year tables](#fiscal-year-tables). Not with `append`. |
 | `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. Date and timestamp cursors only. |
 | `append_cursor_inclusive` | `false` (default) reads strictly after the maximum; `true` reads from the maximum itself, inserting its rows again on every run. See [append](/docs/concepts/write-strategies/#append). |
 
 Where the read starts, in order:
 
-1. `--start-cursor`, when given.
+1. `--start-cursor`, or the typed flag of the table's cursor (`--start-cursor-ts` or
+   `--start-cursor-int`), when given.
 2. With `lookback_from = "now"`, now minus `lookback`, on every run, the first one too.
    Otherwise the destination's maximum of `cursor_column`, minus `lookback`. `append` reads
    strictly after it, which `plan` shows as `>` rather than `>=`.
@@ -145,6 +146,79 @@ $ sqlload plan app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
 ```
 
 Every selected table must have the same kind of cursor. Select tables of one cursor type per run.
+
+From 0.52.0, the typed flags range a selection with both kinds, as in SQLBuild. `--start-cursor-ts`
+and `--end-cursor-ts` take an RFC 3339 timestamp or a date, and apply to date and timestamp cursors.
+`--start-cursor-int` and `--end-cursor-int` take an integer, and apply to integer cursors. Give
+both kinds in one run, and each table takes the flags of its cursor's kind:
+
+```console
+$ sqlload plan --start-cursor-ts 2026-10-01 --end-cursor-ts 2026-10-08 --start-cursor-int 2024
+…
+├── raw.erp__gl_balances                            delete_insert (cursor: fiscal_year)
+│   ├── source  postgres  erp  public.gl_balances
+│   ├── route   read as Arrow -> DuckDB takes Arrow
+│   └── reads   fiscal_year >= 2024 (--start-cursor-int)
+└── raw.erp__orders                                 merge (unique_key: order_id ← {primary_key})
+    ├── source  postgres  erp  public.orders
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── reads   updated_at from 2026-10-01 00:00:00.000000+00 (--start-cursor-ts), below 2026-10-08 00:00:00.000000+00 (--end-cursor-ts)
+    └── commits once, at the end of the read (updated_at isn't read in order)
+…
+```
+
+A selected table whose cursor gets only the other kind's flags fails `plan`:
+
+```console
+$ sqlload plan --start-cursor-int 2024 erp__orders
+…
+└── raw.erp__orders
+    └── reason  --start-cursor-int is for integer cursors, but cursor updated_at is timestamp_tz; give this table --start-cursor-ts/--end-cursor-ts, or leave it out of the selection
+…
+```
+
+A date cursor refuses a `-ts` value with a time of day. A text cursor takes only `--start-cursor`
+and `--end-cursor`, and those can't be combined with the typed flags: "--start-cursor/--end-cursor
+cannot be combined with the -ts or -int cursor flags". A Python table whose cursor has no type yet,
+before its first load, takes one kind of typed flag only.
+
+## Fiscal year tables
+
+From 0.52.0, `lookback` on an integer cursor counts back that many cursor units. An ERP table
+with no timestamp, only `fiscal_year` and `fiscal_period`, can reload from the destination's
+latest year with `delete_insert`. With `lookback = 1` it reloads the year before too, so late
+adjustments to last year still land after the year-end close:
+
+```toml
+[sources.erp.tables."public.gl_balances"]
+description = "General ledger balances, one row per account and fiscal period."
+write_strategy = "delete_insert"
+cursor_column = "fiscal_year"
+lookback = 1
+```
+
+```console
+$ sqlload plan erp__gl_balances
+…
+└── raw.erp__gl_balances                            delete_insert (cursor: fiscal_year)
+    ├── source  postgres  erp  public.gl_balances
+    ├── route   read as Arrow -> DuckDB takes Arrow
+    ├── reads   fiscal_year >= 2025 (warehouse maximum 2026 minus lookback 1)
+    ├── columns 4
+    └── commits about every 1 GB, in fiscal_year order (an index leads with it, NULLs first), between distinct values; each commit replaces its own cursor range
+…
+```
+
+Each run deletes and reloads fiscal years 2025 and 2026. Without `lookback`, it reads from 2026 only,
+and a change to FY2025 period 12 stays stale until a run with `--start-cursor-int 2025`.
+
+`plan` refuses a lookback that doesn't fit the cursor, naming the table and the fix: a number on a
+date or timestamp cursor (use a duration, such as `lookback = "1d"`), a duration on an integer
+cursor (use a number of cursor units, such as `lookback = 1`), any lookback on a text cursor, and 0
+or less. As with a duration, `append` takes none, and `lookback_from = "now"` and `lookahead` stay for
+date and timestamp cursors. `--start-cursor` and the typed flags win over it. With an integer
+`batch_size`, the windows start at the looked-back value. A Python table takes it the same way:
+`lookback=1`.
 
 ## Batches
 

@@ -6,8 +6,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
+use arrow_schema::Schema;
 use sqlload::http_source::main::run_http_job::run_http_job;
+use sqlload::http_source::models::{HttpJob, HttpPage, PageTransform};
 use sqlload::load_naming::main::loaded_name::loaded_name;
+use sqlload::python_sources::models::{TransformCall, TransformContext};
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
@@ -15,9 +18,13 @@ use sqlload::row_batches::main::normalise_batch::normalise_batch;
 use sqlload::row_batches::main::projection_problem::projection_problem;
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
+use crate::crossing::constants::PAGE_POLL;
 use crate::crossing::errors::CrossError;
+use crate::crossing::main::crossing_options::crossing_options;
+use crate::crossing::main::returned_batches::returned_batches;
 use crate::crossing::models::{
-    Crossed, CrossingOptions, CrossingStats, Dispatch, PanicSite, ParseJob, Parsed, ReadContext,
+    Crossed, CrossingOptions, CrossingStats, Dispatch, PanicSite, ParseJob, Parsed, Polled,
+    ReadContext,
 };
 
 /// Where one piece's batches go, and the read's counters.
@@ -256,8 +263,16 @@ impl Output {
         normalise_batch(&flattened, &arrays).map_err(CrossError::Data)
     }
 
-    /// Run an `sl.http` job, parsing each page into batches as it arrives; `Ok(false)` once the consumer has gone, which cancels the requests in flight.
+    /// Run an `sl.http` job, parsing each page into batches as it arrives, through the job's `transform` when it has one; `Ok(false)` once the consumer has gone, which cancels the requests in flight.
     fn http(&self, definition: &str) -> Result<bool, CrossError> {
+        let transform = match serde_json::from_str::<HttpJob>(definition) {
+            Ok(job) => job.transform().cloned(),
+            Err(error) => {
+                return Err(CrossError::Http(
+                    format!("cannot read the sl.http job: {error}").into(),
+                ));
+            }
+        };
         let mut open = true;
         let mut failed: Option<String> = None;
         run_http_job(
@@ -265,22 +280,9 @@ impl Output {
             &self.context.connections,
             self.context.rules(),
             |page| {
-                let read = JsonRead {
-                    layout: JsonLayout::Document,
-                    path: page.path.clone(),
-                    batch_rows: usize::MAX,
-                    projection: page.projection.clone(),
-                };
-                let parsed = json_rows(&page.bytes, &read, &mut |columns| {
-                    let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
-                    open = open && self.send(batch, Instant::now());
-                    match open {
-                        true => Ok(()),
-                        false => Err("the consumer stopped reading".to_owned()),
-                    }
-                });
-                if let (Err(reason), true) = (parsed, open) {
-                    failed = Some(format!("{}: {reason}", page.source));
+                match self.page_rows(&page, transform.as_ref()) {
+                    Ok(still) => open = still,
+                    Err(reason) => failed = Some(format!("{}: {reason}", page.source)),
                 }
                 open && failed.is_none()
             },
@@ -289,6 +291,87 @@ impl Output {
         match failed {
             Some(reason) => Err(CrossError::Data(reason)),
             None => Ok(open),
+        }
+    }
+
+    /// Parse `page` into batches and pass them on, or, given a `transform`, pass on what it returns or yields for the page's rows; `Ok(false)` once the consumer has gone.
+    fn page_rows(
+        &self,
+        page: &HttpPage,
+        transform: Option<&PageTransform>,
+    ) -> Result<bool, String> {
+        let read = JsonRead {
+            layout: JsonLayout::Document,
+            path: page.path.clone(),
+            batch_rows: usize::MAX,
+            projection: page.projection.clone(),
+        };
+        let mut open = true;
+        let mut held: Vec<RecordBatch> = Vec::new();
+        let parsed = json_rows(&page.bytes, &read, &mut |columns| {
+            let batch = columns_batch(columns)?;
+            if transform.is_some() {
+                held.push(batch);
+                return Ok(());
+            }
+            let batch = flatten_batch(&batch, &self.context.flatten)?;
+            open = open && self.send(batch, Instant::now());
+            match open {
+                true => Ok(()),
+                false => Err("the consumer stopped reading".to_owned()),
+            }
+        });
+        match (parsed, open, transform) {
+            (Err(reason), true, _) => Err(reason),
+            (_, false, _) | (Ok(()), true, None) => Ok(open),
+            (Ok(()), true, Some(transform)) => self
+                .transformed_page((transform, page), held)
+                .map_err(|reason| format!("transform {} failed: {reason}", transform.name)),
+        }
+    }
+
+    /// Call `transform` once on one page's `rows`, with the page's number and fan-out key as its `ctx`, and pass on what it returns or yields as it crosses; `Ok(false)` once the consumer has gone.
+    fn transformed_page(
+        &self,
+        (transform, page): (&PageTransform, &HttpPage),
+        rows: Vec<RecordBatch>,
+    ) -> Result<bool, String> {
+        let schema = rows
+            .first()
+            .map_or_else(|| Arc::new(Schema::empty()), RecordBatch::schema);
+        let call = TransformCall {
+            function: transform.function.clone(),
+            context: TransformContext {
+                unit: "page",
+                table: self.context.table.clone(),
+                page: Some(page.number),
+                key: (!page.key.is_empty()).then(|| page.key.clone()),
+                ..TransformContext::default()
+            },
+            masked: self.context.masked.clone(),
+            arrays: self.context.arrays.clone(),
+            naming: self.context.naming,
+        };
+        let options = CrossingOptions {
+            parse_threads: 1,
+            ..crossing_options()
+        };
+        let (mut batches, _returned) = returned_batches(
+            &call,
+            (rows, schema),
+            (options, self.context.flatten.clone()),
+        )?;
+        loop {
+            match batches.poll(PAGE_POLL) {
+                Polled::Batch(batch) => {
+                    if !self.send(batch, Instant::now()) {
+                        return Ok(false);
+                    }
+                }
+                Polled::Finished => return Ok(true),
+                Polled::Failed(error) => return Err(error.to_string()),
+                Polled::State(_) | Polled::Pending => {}
+            }
         }
     }
 

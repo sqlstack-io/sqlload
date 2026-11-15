@@ -22,6 +22,8 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::main::exact_cast::exact_cast;
 use crate::column_types::models::ColumnType;
+use crate::http_source::main::literal_path_problems::literal_path_problems;
+use crate::http_source::models::LiteralPaths;
 use crate::load_naming::constants::CHILD_TABLE_SEPARATOR;
 use crate::load_naming::main::child_table_name::child_table_name;
 use crate::load_naming::main::loaded_name::loaded_name;
@@ -39,6 +41,7 @@ use crate::loader::_helpers::table_plan::replan_columns;
 use crate::loader::_helpers::table_plan::schema_statements;
 use crate::loader::constants::DROPPED_CHUNK;
 use crate::loader::constants::EMPTY_REPLACE_PROBLEM;
+use crate::loader::constants::ENFORCED_UNDECLARED_PROBLEM;
 use crate::loader::constants::NO_DATA_NOTE;
 use crate::loader::constants::NO_STATE;
 use crate::loader::constants::PYTHON_COLUMN_TYPE;
@@ -67,6 +70,7 @@ use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
 use crate::project::constants::FILES_CONNECTION_KINDS;
 use crate::project::models::CheckName;
+use crate::project::models::Contract;
 use crate::project::models::NullCursor;
 use crate::project::models::OnSchemaChange;
 use crate::project::models::ProjectConfig;
@@ -151,8 +155,12 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
     tables
 }
 
-/// What a Python table's spec records about it.
-pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
+/// What a Python table's spec records about it, with the `sl.http` paths its function writes as literals among `paths`, by table name.
+pub(crate) fn python_table(
+    module: &str,
+    table: &SourceTable,
+    paths: Option<&BTreeMap<String, LiteralPaths>>,
+) -> PythonTable {
     PythonTable {
         module: module.to_owned(),
         declared: table
@@ -161,7 +169,21 @@ pub(crate) fn python_table(module: &str, table: &SourceTable) -> PythonTable {
             .map(|column| column.name.clone())
             .collect(),
         lists: ListChoices::new(),
+        literal_paths: paths.and_then(|paths| paths.get(&table.name)).cloned(),
     }
+}
+
+/// Why a Python table can't load, found before it is planned: an enforced contract with no declared columns, or an `sl.http` path its function writes as a literal that load would refuse.
+pub(crate) fn python_problems(spec: &TableSpec) -> Vec<String> {
+    let Some(python) = &spec.python else {
+        return Vec::new();
+    };
+    let mut problems: Vec<String> = Vec::new();
+    if python.declared.is_empty() && spec.contract == Contract::Enforced {
+        problems.push(ENFORCED_UNDECLARED_PROBLEM.to_owned());
+    }
+    problems.extend(python.literal_paths.iter().flat_map(literal_path_problems));
+    problems
 }
 
 /// The child tables `spec`'s table has in the destination (tables named `<table>__...` that have a parent-id column, staging tables and the swap tables named after them, in any case, left out); none without `unnest`. A table named so without that column is another table, and so are the child tables of such a table (`orders__notes__items` beside a table `orders__notes`).
@@ -686,7 +708,7 @@ pub(crate) fn typed_batch(
 }
 
 /// The batches' target schema: each read column in its planned type.
-fn read_schema(table: &TablePlan) -> SchemaRef {
+pub(crate) fn read_schema(table: &TablePlan) -> SchemaRef {
     let fields: Vec<Field> = table
         .read_columns
         .iter()
@@ -699,7 +721,10 @@ fn read_schema(table: &TablePlan) -> SchemaRef {
 }
 
 /// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the list, or from the JSON text a list arrives as); a value that does not convert is an error naming the column.
-fn read_types(batch: &RecordBatch, target: &SchemaRef) -> Result<RecordBatch, LoaderError> {
+pub(crate) fn read_types(
+    batch: &RecordBatch,
+    target: &SchemaRef,
+) -> Result<RecordBatch, LoaderError> {
     let arrays: Vec<ArrayRef> = target
         .fields()
         .iter()
@@ -902,6 +927,7 @@ impl PythonFeed {
                 note: Some(NO_DATA_NOTE.to_owned()),
                 after_load: None,
                 replaced_keys: None,
+                transforms: Vec::new(),
             });
         }
         let unsettled = self.publisher.is_none()
@@ -925,6 +951,7 @@ impl PythonFeed {
             note: None,
             after_load: None,
             replaced_keys,
+            transforms: Vec::new(),
         })
     }
 
@@ -1353,8 +1380,10 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
             module: String::new(),
             declared: Vec::new(),
             lists: ListChoices::new(),
+            literal_paths: None,
         }),
         sheet: None,
+        transform: None,
         cdc: None,
         checks: None,
         warehouse_source: None,
@@ -1388,6 +1417,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         commits: CommitRule::Size,
         stage: parent.stage.clone(),
         planned_stage: None,
+        fetch_memory: None,
     }
 }
 

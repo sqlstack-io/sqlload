@@ -76,9 +76,9 @@ fn given_a_full_project_when_parsing_then_sources_and_table_settings_are_read() 
             expected_value: "Some([\"id\"])",
         },
         ParseProjectTestCase {
-            description: "lookback is a duration",
+            description: "lookback written as text is a duration",
             read: |project| format!("{:?}", project.sources["app"].defaults.lookback),
-            expected_value: "Some(3600s)",
+            expected_value: "Some(Duration(3600s))",
         },
         ParseProjectTestCase {
             description: "the table name template defaults to source and table",
@@ -325,6 +325,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] format = \"xml\" needs xml.record_path",
         },
         ParseProjectErrorTestCase {
+            description: "a transform is for files and google_sheets tables",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\ntransform = \"fix_rows\"\n",
+            expected_message: "[sources.app] transform is for kind = \"files\" and kind = \"google_sheets\" tables",
+        },
+        ParseProjectErrorTestCase {
+            description: "a transform names the function it runs",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ntransform = \" \"\n",
+            expected_message: "[sources.raw] transform is empty; give the name @sl.transform registered the function under",
+        },
+        ParseProjectErrorTestCase {
+            description: "a transform is found on python_paths",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\ntransform = \"metrics\"\n",
+            expected_message: "[sources.raw] transform needs python_paths, naming the folder that holds the @sl.transform function",
+        },
+        ParseProjectErrorTestCase {
             description: "xlsx options need format = xlsx",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nxlsx = { sheet = \"Orders\" }\n",
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
@@ -388,6 +403,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a source's project is for bigquery sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nproject = \"other\"\n",
             expected_message: "[sources.app] project is for kind = \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "an ODBC source's memory settings are refused on another kind, rather than ignored",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nmax_batch_memory = \"2GB\"\n",
+            expected_message: "[sources.app] long_column_threshold and max_batch_memory are for kind = \"odbc\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a fetch budget of nothing could read no row",
+            text: "[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\ninclude = [\"*\"]\nmax_batch_memory = 0\n",
+            expected_message: "[sources.erp] max_batch_memory must be more than 0",
         },
         ParseProjectErrorTestCase {
             description: "an empty AWS profile is never read as a profile named \"\"",

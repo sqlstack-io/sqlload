@@ -4,13 +4,15 @@ use std::time::Duration;
 
 use crate::loader::_helpers::render::change_line;
 use crate::loader::models::{TableOutcome, TallyLine};
+use crate::number_text::main::memory_text::memory_text;
 use crate::number_text::main::thousands::thousands;
 
-/// One aligned line per object `applied` created or altered and per table loaded, failed or skipped, then a final line counting them; and whether nothing failed.
+/// One aligned line per object `applied` created or altered and per table loaded, failed or skipped, then a final line counting them, and under it the run's peak memory when a load gives `peak_memory_bytes`; and whether nothing failed.
 pub fn render_tally(
     applied: &[String],
     outcomes: &[TableOutcome],
     elapsed: Duration,
+    peak_memory_bytes: Option<u64>,
 ) -> (Vec<String>, bool) {
     let mut lines: Vec<TallyLine> = applied.iter().map(|line| change_line(line)).collect();
     let mut rows: u64 = 0;
@@ -75,5 +77,6 @@ pub fn render_tally(
         0 => format!("✓ Completed  {}", clauses.join(", ")),
         _ => format!("✗ Completed with failures  {}", clauses.join(", ")),
     });
+    out.extend(peak_memory_bytes.map(|bytes| format!("└── peak memory  {}", memory_text(bytes))));
     (out, failed == 0)
 }

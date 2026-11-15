@@ -23,8 +23,10 @@ use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
-use crate::loader::_helpers::sources::source_readers;
-use crate::loader::_helpers::table_plan::{is_direct, publishes_once, pulls_unloaded};
+use crate::loader::_helpers::sources::{source_readers, unarchived};
+use crate::loader::_helpers::table_plan::{
+    archived_reason, is_direct, publishes_once, pulls_unloaded,
+};
 use crate::loader::constants::{
     CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS,
     PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
@@ -42,6 +44,7 @@ use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
+use crate::run_log::main::runs_table::runs_table;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, TableAction};
 use crate::store_paths::models::StoreKind;
 
@@ -326,6 +329,28 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
     details
 }
 
+/// The `_sqlload_runs` tables `apply` creates, one per schema, where the commits of tables with a `transform` record its version.
+fn run_log_items(tables: &[&TablePlan]) -> Vec<PlanItem> {
+    let mut items: Vec<PlanItem> = Vec::new();
+    for table in tables {
+        let spec = &table.spec;
+        let name = display_name(spec.warehouse, &runs_table(&spec.destination));
+        if spec
+            .transform
+            .as_ref()
+            .is_some_and(|transform| transform.creates_log)
+            && !items.iter().any(|item| item.name == name)
+        {
+            items.push(PlanItem {
+                name,
+                action: "create table (run log)".to_owned(),
+                details: Vec::new(),
+            });
+        }
+    }
+    items
+}
+
 pub(crate) fn stage_item(stage: &PlannedStage) -> PlanItem {
     PlanItem {
         name: stage.name.clone(),
@@ -366,8 +391,12 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 true => NULL_KEYS_NOTE,
                 false => "",
             };
+            let rebuilt = match table.schema.action {
+                TableAction::Recreate => " into a new table, swapped in at the end (--reload)",
+                _ => "",
+            };
             format!(
-                "merge (unique_key: {}{origin}{repeats}{nulls})",
+                "merge (unique_key: {}{origin}{repeats}{nulls}){rebuilt}",
                 unique_key.join(", ")
             )
         }
@@ -422,7 +451,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         }
     };
     let source = match (&spec.files, &spec.python) {
-        (Some(files), _) => format!("files  {}  {}", files.location, files.encoding),
+        (Some(files), _) => match &files.archive {
+            Some(archive) => format!(
+                "files  {} and {archive}  {}",
+                files.location, files.encoding
+            ),
+            None => format!("files  {}  {}", files.location, files.encoding),
+        },
         (None, Some(python)) => format!("python  {} ({})", python.module, spec.source_name),
         (None, None) if spec.warehouse_source.is_some() => {
             let read = spec
@@ -464,9 +499,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             ),
         },
     };
-    let source = match &spec.tunnel {
-        Some(route) => format!("{source}  via {route}"),
-        None => source,
+    let source = match (&spec.tunnel, &spec.transform) {
+        (Some(route), _) => format!("{source}  via {route}"),
+        (None, Some(transform)) => format!("{source}  transform {}", transform.function),
+        (None, None) => source,
     };
     let mut details = vec![detail("source", source)];
     details.extend(
@@ -522,14 +558,28 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                     0 => String::new(),
                     count => format!(", {count} skipped (paths that do not match path_columns)"),
                 };
-                let fresh = match table.mode {
-                    WriteMode::Recreate | WriteMode::Replace => "to read",
+                let fresh = match (&table.mode, &table.schema.action) {
+                    (WriteMode::Recreate | WriteMode::Replace, _) | (_, TableAction::Recreate) => {
+                        "to read"
+                    }
                     _ => "new",
+                };
+                let folders = match &source.archive {
+                    Some(archive) => {
+                        let archived = read.files.len() - unarchived(table, &read.files).len();
+                        format!(
+                            ": {} in {}, {} in {archive}",
+                            thousands((read.files.len() - archived) as u64),
+                            source.location,
+                            thousands(archived as u64)
+                        )
+                    }
+                    None => String::new(),
                 };
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{skipped}{unmatched}",
+                        "{} {fresh} of {} listed{folders}{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
                         thousands(source.table.files.len() as u64)
                     ),
@@ -581,12 +631,19 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             "changed columns move to the end of the column order",
         ));
     }
-    details.extend(
-        table
-            .route
-            .as_ref()
-            .map(|route| detail("route", route_text(table, route))),
-    );
+    let why_shown =
+        (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
+            || spec.warehouse_source.is_some();
+    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !why_shown);
+    details.extend(table.route.as_ref().map(|route| {
+        let text = route_text(table, route);
+        detail(
+            "route",
+            archived
+                .as_ref()
+                .map_or_else(|| text.clone(), |why| format!("{text} ({why})")),
+        )
+    }));
     if let Some(WarehouseSource {
         route: WarehouseRoute::Unload { stage, .. },
         ..
@@ -597,10 +654,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     if let Some(reason) = table
         .route
         .as_ref()
-        .filter(|_| {
-            (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
-                || spec.warehouse_source.is_some()
-        })
+        .filter(|_| why_shown)
         .map(|route| route.reason.clone())
     {
         details.push(detail("why", reason));
@@ -619,6 +673,16 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
+    details.extend(
+        spec.python
+            .iter()
+            .filter_map(|python| python.literal_paths.as_ref()?.checked_at_load())
+            .map(|text| detail("paths", text)),
+    );
+    if let Some(fetch) = &table.fetch_memory {
+        details.push(detail("fetch", fetch.memory.as_str()));
+        details.push(detail("buffer", fetch.budget_note.as_str()));
+    }
     if matches!(table.commits, CommitRule::Windows(_))
         && spec.python.is_none()
         && spec.files.is_none()
@@ -648,6 +712,20 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("logged: {}", describe_state(logged.current.as_ref())),
         )
     }));
+    details.extend(
+        spec.transform
+            .iter()
+            .filter(|transform| transform.older > 0)
+            .map(|transform| {
+                let unit = match spec.files.is_some() {
+                    true => ("file", "files"),
+                    false => ("range", "ranges"),
+                };
+                let older = counted(transform.older, unit);
+                let every = unit.0;
+                detail("", format!("transform  changed: {older} loaded under an earlier version (--reload transforms every {every} again)"))
+            }),
+    );
     details.extend(
         table
             .output
@@ -1016,7 +1094,7 @@ pub(crate) fn text_view(plan: &ProjectPlan) -> PlanView {
     sections(plan, true)
 }
 
-/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, for one with a schema change or an unfinished load to repair, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range (`ranged`), which clears that range even with no file in it.
+/// Why a files table that exists and has no new file to read is skipped, as `up to date: 0 new of 3 files in drop/stock_counts/ (csv in ZIP archives)`; `None` for any other table, for one with a schema change, an unfinished load to repair or a `transform` changed since its last load, and for a `delete_insert` over a `--start-cursor`/`--end-cursor` range (`ranged`), which clears that range even with no file in it.
 pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
     let (source, read) = table.spec.files.as_ref().zip(table.files.as_ref())?;
     let incremental =
@@ -1026,7 +1104,15 @@ pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
             .output
             .as_ref()
             .is_none_or(|output| output.pending.is_empty());
-    if !settled || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. }) {
+    let transform_changed = table
+        .spec
+        .transform
+        .as_ref()
+        .is_some_and(|transform| transform.older > 0);
+    if !settled
+        || transform_changed
+        || ranged && matches!(table.mode, WriteMode::DeleteInsert { .. })
+    {
         return None;
     }
     (incremental && read.files.is_empty()).then(|| {
@@ -1061,7 +1147,9 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         .iter()
         .filter(|table| table.schema.action != TableAction::Unchanged && table.output.is_none())
         .collect();
+    let logs = run_log_items(&ready);
     let creates = stages.len()
+        + logs.len()
         + changed
             .iter()
             .filter(|table| {
@@ -1071,7 +1159,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
                 )
             })
             .count();
-    let alters = stages.len() + changed.len() - creates;
+    let alters = stages.len() + logs.len() + changed.len() - creates;
     let mut errors: Vec<PlanItem> = plan
         .tables
         .iter()
@@ -1136,6 +1224,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
             .iter()
             .map(|stage| stage_item(stage))
             .chain(changed.iter().map(|table| object_item(table)))
+            .chain(logs)
             .collect(),
         loads: match text {
             false => ready.iter().map(|table| load_item(table)).collect(),
@@ -1258,6 +1347,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         outcomes,
         started,
         elapsed,
+        peak_memory_bytes,
     } = *run;
     let changes = outcomes
         .iter()
@@ -1294,6 +1384,7 @@ pub(crate) fn run_result(plan: &ProjectPlan, run: &RunReport<'_>) -> RunResult {
         failed: statuses("failed"),
         skipped: statuses("skipped"),
         rows: tables.iter().filter_map(|table| table.rows).sum(),
+        peak_memory_bytes,
     };
     let view = plan_view(plan);
     let finished = started + chrono::Duration::from_std(elapsed).unwrap_or_default();
@@ -1344,6 +1435,11 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.replaced_keys.clone(),
             Err(_) => None,
         },
+        transforms: match &outcome.loaded {
+            Ok(loaded) => loaded.transforms.clone(),
+            Err(_) => Vec::new(),
+        },
+        peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
 

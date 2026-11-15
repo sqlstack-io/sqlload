@@ -49,6 +49,7 @@ hmac = "0.12"
 humantime = "2"
 console = { version = "0.16", default-features = false }
 indicatif = { version = "0.18", default-features = false, features = ["unicode-width"] }
+nix = { version = "0.31", default-features = false, features = ["resource"] }
 object_store = { version = "0.14", default-features = false, features = ["aws-base", "reqwest", "ring", "fs"] }
 jsonwebtoken = { version = "11", default-features = false, features = ["use_pem", "rust_crypto"] }
 parquet = { version = "60", default-features = false, features = ["arrow", "zstd", "async", "object_store", "snap", "lz4", "flate2", "flate2-rust_backend"] }
@@ -92,11 +93,12 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"]
 unicode-properties = { version = "0.1.5", default-features = false, features = ["general-category"] }
 uuid = { version = "1", features = ["v4"] }
 webpki-roots = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 zstd = "0.14"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 unreachable_pub = "deny"
 unused_must_use = "deny"
 

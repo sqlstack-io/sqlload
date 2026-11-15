@@ -57,8 +57,16 @@ fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_
             expected_result: "3001:5000",
         },
         OdbcLoadTestCase {
+            description: "a 2 MB value over a cap that makes the column long (read value by value) fails as soon as the read passes the cap",
+            source_change: "INSERT INTO erp.items VALUES (9002, 'big', 1, true, DATE '2026-02-02', TIMESTAMP '2027-03-01', repeat('z', 2000000));",
+            max_text_size: 8000,
+            expected_output: (false, "bytes, longer than max_text_size = 8000"),
+            check_query: "SELECT count(*) || ':' || max(length(note)) FROM raw.erp__items",
+            expected_result: "3001:5000",
+        },
+        OdbcLoadTestCase {
             description: "an unbounded numeric, which the driver describes as numeric(28,6), fails on a value with more places instead of rounding it",
-            source_change: "INSERT INTO erp.amounts VALUES (3, 1.123456789);",
+            source_change: "DELETE FROM erp.items WHERE id = 9002; INSERT INTO erp.amounts VALUES (3, 1.123456789);",
             max_text_size: 8000,
             expected_output: (false, "n holds 1.123456789"),
             check_query: "SELECT count(*) || ':' || sum(n) FROM raw.erp__amounts",

@@ -210,6 +210,18 @@ pub struct LoaderArgs {
     /// Backfill only cursor values below this one, typed from each selected table's cursor.
     #[arg(long, value_name = "VALUE")]
     pub end_cursor: Option<String>,
+    /// Backfill the selected date and timestamp cursor tables from this RFC 3339 timestamp or date; not with --start-cursor/--end-cursor.
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub start_cursor_ts: Option<String>,
+    /// Backfill the selected date and timestamp cursor tables only below this RFC 3339 timestamp or date.
+    #[arg(long, value_name = "TIMESTAMP")]
+    pub end_cursor_ts: Option<String>,
+    /// Backfill the selected integer cursor tables from this integer; not with --start-cursor/--end-cursor.
+    #[arg(long, value_name = "INTEGER", allow_hyphen_values = true)]
+    pub start_cursor_int: Option<String>,
+    /// Backfill the selected integer cursor tables only below this integer.
+    #[arg(long, value_name = "INTEGER", allow_hyphen_values = true)]
+    pub end_cursor_int: Option<String>,
     /// `load`: once a table fails, start no other table; tables already loading finish, and the run exits 1, or 75 when the failure is retryable.
     #[arg(long, conflicts_with = "follow")]
     pub fail_fast: bool,
@@ -220,7 +232,7 @@ pub struct LoaderArgs {
     #[arg(long)]
     pub json: bool,
     /// `load` of one postgres_cdc source only: keep streaming after catching up, writing a batch every `batch_interval`, until --max-duration passes or Ctrl-C/SIGTERM (a second one stops at once).
-    #[arg(long, conflicts_with_all = ["reload", "start_cursor", "end_cursor"])]
+    #[arg(long, conflicts_with_all = ["reload", "start_cursor", "end_cursor", "start_cursor_ts", "end_cursor_ts", "start_cursor_int", "end_cursor_int"])]
     pub follow: bool,
     /// With --follow: stop after this long, e.g. `10m`, once the buffered changes are written.
     #[arg(long, requires = "follow", value_parser = humantime::parse_duration)]
@@ -234,6 +246,9 @@ pub struct LoaderArgs {
     /// `load`: draw the live block of running tables on stderr: on a terminal without --json or --log-format json (`auto`), always, or never.
     #[arg(long, value_enum, default_value_t = Progress::Auto)]
     pub progress: Progress,
+    /// `load`, Linux only: load one table at a time and report each table's peak memory (the run's peak is always reported).
+    #[arg(long, conflicts_with = "follow")]
+    pub memory_per_table: bool,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,

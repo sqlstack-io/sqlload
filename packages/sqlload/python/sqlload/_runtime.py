@@ -4,12 +4,14 @@ The native loader calls these functions through `sqlload._native` while running 
 `load` and the other commands; they are not a public API.
 """
 
+import hashlib
 import importlib
 import json
 import logging
 import sys
 import threading
 import traceback
+import types
 from collections.abc import Iterator
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -18,6 +20,8 @@ from typing import Any
 
 from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
+from sqlload._http_paths import literal_paths
+from sqlload._transform import TRANSFORMS, TransformContext, returned_items
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
@@ -25,7 +29,12 @@ SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-pack
 #: The destination name of a table declared without a source: its own name.
 STANDALONE_TABLE_NAME = "{table}"
 
+#: How long a transform's version hash is, in hex digits.
+VERSION_DIGITS = 16
+
 _tables: dict[str, Table] = {}
+#: The project folder `discover` imported from, which errors name files relative to.
+_root: list[Path] = []
 _contexts: dict[str, Context] = {}
 _clients: dict[str, Any] = {}
 #: Held while a client is built, since tables of one source load at the same time.
@@ -53,6 +62,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 				standalone.setdefault(id(value), (value, relative))
 			elif isinstance(value, Table) and value.source is not None:
 				sources.setdefault(id(value.source), (value.source, relative))
+	_root[:] = [root_path]
 	_tables.clear()
 	declared: list[dict[str, Any]] = []
 	for source, relative in sources.values():
@@ -63,6 +73,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 				"name": table.name,
 				"module": relative,
 				"settings": {"table_name": STANDALONE_TABLE_NAME, "tables": {table.name: _table_settings(table)}},
+				"http_paths": _http_paths([table]),
 			}
 		)
 	for source, _ in sources.values():
@@ -143,8 +154,43 @@ def table_state(table: str) -> str | None:
 	return final if final != ctx.started_state else None
 
 
+def transform_version(name: str) -> tuple[str | None, str | None]:
+	"""Look up the transform registered as `name` and check it can run.
+
+	Returns its version, `name@` and a hash of the file it is defined in (an edit to the file, not only to the function,
+	changes it; when the file can't be read, as for a function defined in a notebook, a hash of the function's code), or
+	why it cannot run: no function or two are registered as `name`, or pyarrow is missing.
+	"""
+	function, problem = TRANSFORMS.lookup(name, _root[0] if _root else None)
+	if function is None:
+		return None, problem
+	try:
+		importlib.import_module("pyarrow")
+	except ImportError:
+		return None, "transform needs pyarrow: pip install pyarrow"
+	source = TRANSFORMS.source_file(name) or ""
+	contents = Path(source).read_bytes() if source and Path(source).is_file() else _code_bytes(function)
+	return f"{name}@{hashlib.sha256(contents).hexdigest()[:VERSION_DIGITS]}", None
+
+
+def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None]:
+	"""Call the transform `name` on one unit's rows, a pyarrow Table, with its `ctx` (JSON).
+
+	Returns what crosses, item by item as a generator yields them (its `dicts` says whether any were dicts), or why the
+	returned value cannot load.
+	"""
+	function, problem = TRANSFORMS.lookup(name)
+	if function is None:
+		raise LookupError(problem)
+	fields: dict[str, Any] = json.loads(context)
+	modified_at = fields.get("modified_at")
+	ctx = TransformContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
+	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
+
+
 def finish_run() -> None:
 	"""Close every client the run built (their `close()`, when they have one)."""
+	TRANSFORMS.release()
 	clients = list(_clients.values())
 	_clients.clear()
 	for client in clients:
@@ -200,7 +246,13 @@ def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	if source.client_factory is not None:
 		settings["shared_client"] = True
 	settings["tables"] = {table.name: _table_settings(table) for table in source.tables}
-	return {"name": source.name, "module": relative, "settings": settings}
+	return {"name": source.name, "module": relative, "settings": settings, "http_paths": _http_paths(source.tables)}
+
+
+def _http_paths(tables: list[Table]) -> dict[str, Any]:
+	"""The `sl.http` paths each of `tables` writes as literals, for `plan` to check, by table name; tables that build no job left out."""
+	found = {table.name: literal_paths(table.function) for table in tables}
+	return {name: paths for name, paths in found.items() if paths is not None}
 
 
 def _table_settings(table: Table) -> dict[str, Any]:
@@ -285,3 +337,24 @@ def _timestamp(text: str, *, aware: bool) -> datetime:
 	if not aware:
 		return value.replace(tzinfo=None)
 	return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _code_bytes(function: Any) -> bytes:
+	"""What a function does, for its version when its file can't be read: its bytecode, constants (nested functions' code
+	included) and the names it uses, without its file name or line numbers. A callable without code, by its type's name."""
+	code = getattr(function, "__code__", None)
+	return _code_parts(code) if isinstance(code, types.CodeType) else type(function).__qualname__.encode()
+
+
+def _code_parts(code: types.CodeType) -> bytes:
+	constants = [_code_parts(constant) if isinstance(constant, types.CodeType) else _constant_text(constant) for constant in code.co_consts]
+	return b"\0".join([code.co_code, repr(code.co_names).encode(), *constants])
+
+
+def _constant_text(constant: Any) -> bytes:
+	"""A code constant as text that is the same in every process: a frozenset's items sorted, as its order follows string hashing."""
+	if isinstance(constant, frozenset):
+		return repr(sorted(repr(item) for item in constant)).encode()
+	if isinstance(constant, tuple):
+		return b"(" + b",".join(_constant_text(item) for item in constant) + b")"
+	return repr(constant).encode()

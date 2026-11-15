@@ -154,11 +154,12 @@ from [step 4](/docs/guides/postgres-cdc/#4-load-the-changes):
 $ sqlload load
 ✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
 
-loaded  lake/app/customers/     50 rows 0.2s
-loaded  lake/app/orders/     1,000 rows 0.2s
+loaded  lake/app/customers/     50 rows 0.3s
+loaded  lake/app/orders/     1,000 rows 0.3s
 
-✓ Completed  2 loaded, 1,050 rows, 0.2s
-└── slowest      lake/app/customers/ 0.2s
+✓ Completed  2 loaded, 1,050 rows, 0.3s
+├── slowest      lake/app/customers/ 0.3s
+└── peak memory  66.6 MiB
 $ sqlload load
 ✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
 
@@ -166,7 +167,8 @@ loaded  lake/app/customers/      0 rows 0.3s
 loaded  lake/app/orders/         3 rows 0.3s
 
 ✓ Completed  2 loaded, 3 rows, 0.3s
-└── slowest      lake/app/customers/ 0.3s
+├── slowest      lake/app/customers/ 0.3s
+└── peak memory  65.3 MiB
 ```
 
 Then read the folder with DuckDB:

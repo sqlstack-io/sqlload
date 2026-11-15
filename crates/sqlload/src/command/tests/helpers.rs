@@ -91,6 +91,8 @@ pub(crate) fn done(rows: u64, elapsed_ms: u64, position: Option<&str>) -> EventK
         elapsed_ms,
         position: position.map(str::to_owned),
         changes: Vec::new(),
+        transforms: Vec::new(),
+        peak_memory_bytes: None,
     }
 }
 

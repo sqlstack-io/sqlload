@@ -125,7 +125,7 @@ fn context_problems(job: &HttpJob) -> Vec<String> {
 }
 
 /// Why `key_path`'s `path` can't be read, if it can't: it is a field path below `$`, such as `$.issueId` or `$.keys[0]`.
-fn key_path_problem(text: &str) -> Option<String> {
+pub(crate) fn key_path_problem(text: &str) -> Option<String> {
     match field_path(text) {
         Ok(segments) if !segments.is_empty() => None,
         Ok(_) => Some(format!(

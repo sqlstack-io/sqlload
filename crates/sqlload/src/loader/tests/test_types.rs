@@ -62,6 +62,37 @@ pub(crate) struct RenderTallyTestCase {
     pub(crate) expected_output: &'static str,
 }
 
+pub(crate) struct TransformReaderTestCase {
+    pub(crate) description: &'static str,
+    /// The files table's `transform`, if any.
+    pub(crate) transform: Option<&'static str>,
+    /// Why SQLLoad must read the Parquet files itself, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}
+
+/// A table's run log records, oldest first, as event, note, files and `transform` version.
+pub(crate) type TransformRecord = (
+    crate::run_log::models::RunEvent,
+    &'static str,
+    &'static [&'static str],
+    Option<&'static str>,
+);
+
+pub(crate) struct OlderFilesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: &'static [TransformRecord],
+    /// How many files the table holds from a version other than `f@2`.
+    pub(crate) expected_older: usize,
+}
+
+pub(crate) struct LookbackStartTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) maximum: &'static str,
+    pub(crate) units: i64,
+    pub(crate) cursor_type: crate::column_types::models::ColumnType,
+    pub(crate) expected_start: Result<&'static str, &'static str>,
+}
+
 /// A plan item: its name, its action, and each detail's label and text.
 pub(crate) type ItemSpec = (
     &'static str,
@@ -128,6 +159,15 @@ pub(crate) struct MergedFileTestCase {
     pub(crate) file: (&'static str, &'static str),
     /// The name and version the ledger reads back.
     pub(crate) expected_file: (&'static str, &'static str),
+}
+
+pub(crate) struct ReloadOrderTestCase {
+    pub(crate) description: &'static str,
+    /// The files listed now, by folder (`drop/`, the source's, or `done/`, where `after_load` moved them), key and modified time (their version is `1-{time}`).
+    pub(crate) files: &'static [(&'static str, &'static str, i64)],
+    /// The table's merge records, oldest first, as name (`drop/{key}`) and version.
+    pub(crate) merged: &'static [(&'static str, &'static str)],
+    pub(crate) expected_keys: &'static [&'static str],
 }
 
 pub(crate) struct ConstantsAddedTestCase {

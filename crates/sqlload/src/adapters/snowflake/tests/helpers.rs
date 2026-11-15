@@ -231,16 +231,16 @@ pub(crate) fn direct_sql(
     from: &CopyFrom,
     (encoding, header): (&crate::files_source::models::FilesEncoding, &[&str]),
 ) -> Result<(usize, String), String> {
+    let files: Vec<DataFile> = files.iter().map(|(key, day)| data_file(key, day)).collect();
     let headers: std::collections::BTreeMap<String, Vec<String>> = files
         .iter()
-        .map(|(key, _)| {
+        .map(|data| {
             (
-                key.clone(),
+                data.file.store_key(),
                 header.iter().map(|name| (*name).to_owned()).collect(),
             )
         })
         .collect();
-    let files: Vec<DataFile> = files.iter().map(|(key, day)| data_file(key, day)).collect();
     let source = lake(from.source);
     let batches = crate::adapters::snowflake::main::copy::_direct_copies::direct_copies(
         &crate::adapters::snowflake::models::DirectCopy {

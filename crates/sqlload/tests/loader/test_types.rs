@@ -1038,6 +1038,8 @@ pub(crate) struct MergeStep {
     pub(crate) removed: &'static [&'static str],
     /// Whether the step loads; `false` plans and applies only, as `sqlload apply` does.
     pub(crate) loads: bool,
+    /// Whether the step plans and loads with `--reload`.
+    pub(crate) reload: bool,
     /// Text the load's error must contain; empty when it must succeed.
     pub(crate) expected_error: &'static str,
     /// Text the plan must contain when the load succeeds.
@@ -1306,4 +1308,117 @@ pub(crate) struct BigQueryNullCursorTestCase {
     pub(crate) expected_count_query: bool,
     /// The loaded labels, NULL as `NULL`.
     pub(crate) expected_values: &'static str,
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcValueReadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The driver name in the server's connection string and the one SQLLoad reads through instead; both empty to keep it.
+    pub(crate) driver: (&'static str, &'static str),
+    /// The table as the source's `include` names it, and as DuckDB holds it.
+    pub(crate) table: (&'static str, &'static str),
+    /// Statements creating the table, its long column second, and its rows.
+    pub(crate) setup: &'static [&'static str],
+    /// The loaded table's columns in order, then its rows, as `TYPED_ROWS` shows them.
+    pub(crate) expected_rows: &'static str,
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcWideTableTestCase {
+    pub(crate) description: &'static str,
+    /// The wide table's `TEXT` columns and rows of short values.
+    pub(crate) wide: (usize, usize),
+    /// Settings added to the source for the second load, and the warning its plan must show.
+    pub(crate) second_settings: &'static str,
+    pub(crate) expected_lines: &'static [&'static str],
+    pub(crate) expected_warning: &'static str,
+    /// The most the first load may hold, in KiB.
+    pub(crate) expected_max_peak_kib: u64,
+    /// The wide table's row count, one value, and some of its columns in order, as loaded.
+    pub(crate) expected_wide: &'static str,
+}
+
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcLargeValuesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) setup: &'static [&'static str],
+    pub(crate) source_settings: &'static str,
+    /// The rows of each fetch read value by value, in order.
+    pub(crate) expected_fetch_rows: &'static [usize],
+    /// The most any fetch's values may hold: the budget, passed by at most the row ending it.
+    pub(crate) expected_max_fetch_bytes: u64,
+    pub(crate) expected_log: &'static [&'static str],
+    /// The table's row count, longest body and count of 2 MB bodies, as loaded.
+    pub(crate) expected_values: &'static str,
+}
+
+/// A load of two small CSV tables into DuckDB through `sqlload load --json --events-file`, with `flags`.
+pub(crate) struct PeakMemoryTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) flags: &'static [&'static str],
+    /// For each table: whether the report and its `table_done` event both give its peak, at least 1 MB and at most the run's.
+    pub(crate) expected_tables: &'static [bool],
+}
+
+/// What a load reported about memory.
+#[derive(Debug)]
+pub(crate) struct PeakMemoryReport {
+    /// The report's `summary.peak_memory_bytes`, or 0.
+    pub(crate) run: u64,
+    /// The `run_finished` event's `peak_memory_bytes`, or 0.
+    pub(crate) finished: u64,
+    /// For each table: whether the report and its `table_done` event both give its peak, at least 1 MB and at most the run's.
+    pub(crate) tables: Vec<bool>,
+}
+
+/// One run of a [`TypedCursorTestCase`]: the source change, then plan, apply and load of the selected tables with the typed cursor flags.
+#[derive(Clone, Copy)]
+pub(crate) struct TypedCursorRun {
+    /// SQL run in Postgres first.
+    pub(crate) source_change: &'static str,
+    /// `--start-cursor-ts`, `--end-cursor-ts`, `--start-cursor-int` and `--end-cursor-int`.
+    pub(crate) typed: [Option<&'static str>; 4],
+    /// `--select`: the tables this run plans; empty plans every table.
+    pub(crate) select: &'static [&'static str],
+    /// Text the rendered plan must contain, each in turn.
+    pub(crate) expected_plan: &'static [&'static str],
+}
+
+/// Postgres tables loaded into DuckDB over several runs with typed cursor flags or an integer lookback.
+pub(crate) struct TypedCursorTestCase {
+    pub(crate) description: &'static str,
+    /// SQL creating the source tables in a fresh `public` schema.
+    pub(crate) setup: &'static str,
+    /// Project TOML appended after `[sources.app]`.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [TypedCursorRun],
+    /// A query on DuckDB after each run, and its single text result; empty for none.
+    pub(crate) check_query: &'static str,
+    /// For each run: `ok` when the plan has no errors and the load succeeds, `refused` when the plan has errors; then ` => ` and the check query's result.
+    pub(crate) expected_outcomes: &'static [&'static str],
+}
+
+/// A Parquet files source into DuckDB loaded once from a file set: the load's error and the rows it left.
+pub(crate) struct FileSetTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) file_set: SourceFiles,
+    /// Text the load's error must contain; empty when it must succeed.
+    pub(crate) expected_error: &'static str,
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// An append Parquet source under `drop/` with `after_load = { move_to = "done" }`, loaded into DuckDB by the executable, then given `later` files and loaded again with `--reload --yes`.
+pub(crate) struct ArchivedReloadTestCase {
+    pub(crate) description: &'static str,
+    /// The files the first load reads and moves to `done/`, by key below `drop/`.
+    pub(crate) first: &'static [ParquetFile],
+    /// The files written to `drop/` before the reload.
+    pub(crate) later: &'static [ParquetFile],
+    /// Text the reload's plan must contain.
+    pub(crate) expected_plan: &'static str,
+    /// Every row as `id:score`, in order, after the reload.
+    pub(crate) expected_rows: &'static str,
 }

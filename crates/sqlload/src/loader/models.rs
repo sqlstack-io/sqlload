@@ -59,7 +59,10 @@ impl std::fmt::Display for SettingOrigin {
 pub struct CursorSpec {
     pub column: String,
     pub start: Option<String>,
+    /// A duration `lookback`, on a date or timestamp cursor.
     pub lookback: Option<Duration>,
+    /// An integer `lookback`, in cursor units, on an integer cursor.
+    pub lookback_units: Option<i64>,
     /// Read only cursor values before now plus this (`lookahead`).
     pub lookahead: Option<Duration>,
     /// `lookback_from = "now"`: incremental runs read from now minus `lookback`, not from the destination's maximum minus it.
@@ -201,6 +204,21 @@ pub struct TableSpec {
     pub layout: TableLayout,
     /// How the load names the columns it adds, and under dlt's naming its tables and columns.
     pub naming: Naming,
+    /// The Python function each file's (or Sheets range's) rows go through before they load; `None` without `transform`.
+    pub transform: Option<TableTransform>,
+}
+
+/// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableTransform {
+    /// The name `@sl.transform` registered it under.
+    pub function: String,
+    /// Its name, `@` and a hash of the file it is defined in.
+    pub version: String,
+    /// How many of the files (or Sheets ranges) the table holds loaded under another version, since it was last rewritten.
+    pub older: usize,
+    /// `_sqlload_runs`, where each commit records the version, does not exist yet, so `apply` creates it (a load never does, once rows committed).
+    pub creates_log: bool,
 }
 
 /// A warehouse source's table: the query behind it, if any, and the route its warehouse reads it by.
@@ -263,6 +281,8 @@ pub struct PythonTable {
     pub declared: Vec<String>,
     /// Under `unnest = "all"`, the columns chosen from the yielded values as list fields or not so far.
     pub lists: crate::row_batches::types::ListChoices,
+    /// The `sl.http` paths its function writes as literals, which `plan` checks; `None` when it builds no job `plan` can see.
+    pub literal_paths: Option<crate::http_source::models::LiteralPaths>,
 }
 
 /// The cursor range a load reads: `from <= cursor < to` (`from < cursor` when not inclusive), each open when `None`.
@@ -292,6 +312,23 @@ pub struct FilesSource {
     pub notes: Vec<String>,
     /// `copy_to_internal_stage`: files no external stage reads are uploaded unchanged to an internal stage, and loaded from there by the warehouse.
     pub copy_to_internal_stage: bool,
+    /// How each file is read for its table's `transform`; `None` without one, when `table`'s columns are the files'.
+    pub transform: Option<FilesTransform>,
+    /// Under `--reload` with `after_load.move_to`, the folder the loaded files were moved to, whose files `table` lists too (keeping their keys, so their names); they stay there after the load.
+    pub archive: Option<Location>,
+}
+
+/// How a files table with a `transform` reads each file before the function runs; its source table's columns are then what the function returned for `sample` at plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesTransform {
+    /// The columns each file is read in: as stored (Parquet) or as the workbook holds them (xlsx), JSON's nested values as JSON and every other value as text.
+    pub input: Vec<DesiredColumn>,
+    /// Time and timestamp columns read at nanoseconds, as the files hold them.
+    pub nanos: Vec<String>,
+    /// What the files' keys and headers are checked against.
+    pub checks: TextChecks,
+    /// The file the function ran on at plan, as `_sqlload_source_file` names it.
+    pub sample: String,
 }
 
 /// A table that matched a source's selection but is not loaded.
@@ -404,6 +441,23 @@ pub struct TablePlan {
     pub stage: Option<StageRoute>,
     /// The stage `apply` must create.
     pub planned_stage: Option<PlannedStage>,
+    /// How an ODBC table's rows are fetched under its memory budget.
+    pub fetch_memory: Option<FetchMemory>,
+}
+
+/// How an ODBC table's rows are fetched, worked out at plan on the machine that loads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchMemory {
+    /// The bytes one fetch may hold.
+    pub budget: usize,
+    /// The bytes one fetch holds at most, as planned: its bound buffers, or the budget for a table read value by value; `None` when the driver couldn't describe the columns.
+    pub estimate: Option<usize>,
+    /// What `plan` says about the fetches, the `fetch` line.
+    pub memory: String,
+    /// The fetch buffer and why, `plan`'s `buffer` line.
+    pub budget_note: String,
+    /// The machine's memory limit the budget was worked out from, in bytes; `None` when it can't be read.
+    pub limit: Option<u64>,
 }
 
 /// A logged table's run log and what it means for this run.
@@ -604,10 +658,14 @@ pub struct PlanOptions {
     pub rebuild_allowed: bool,
     /// `--reload`: rebuild each selected table from the whole source, ignoring the destination's cursor.
     pub reload: bool,
-    /// `--start-cursor` (or `-ts`/`-int`): read from this cursor value instead of the destination's maximum.
+    /// `--start-cursor` (or, for one table, its family's `-ts`/`-int`): read from this cursor value instead of the destination's maximum.
     pub start_cursor: Option<String>,
-    /// `--end-cursor` (or `-ts`/`-int`): read only cursor values below this one.
+    /// `--end-cursor` (or, for one table, its family's `-ts`/`-int`): read only cursor values below this one.
     pub end_cursor: Option<String>,
+    /// `--start-cursor-ts`/`--end-cursor-ts` and `--start-cursor-int`/`--end-cursor-int`: each cursor table reads the range of its own family.
+    pub typed_cursors: TypedCursors,
+    /// The flags `start_cursor` and `end_cursor` came from, as `plan` names them: the untyped ones, or the typed ones of the family one table's options took.
+    pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
@@ -616,6 +674,50 @@ pub struct PlanOptions {
     pub resnapshot: bool,
     /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
     pub fail_fast: bool,
+    /// `--memory-per-table` (Linux): one table at a time, each table's peak memory measured.
+    pub memory_per_table: bool,
+}
+
+/// The typed cursor range flags, as given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TypedCursors {
+    pub start_ts: Option<String>,
+    pub end_ts: Option<String>,
+    pub start_int: Option<String>,
+    pub end_int: Option<String>,
+}
+
+impl PlanOptions {
+    /// Whether a cursor range is given, by `--start-cursor`/`--end-cursor` or a typed flag.
+    pub fn ranged(&self) -> bool {
+        let typed = &self.typed_cursors;
+        [
+            &self.start_cursor,
+            &self.end_cursor,
+            &typed.start_ts,
+            &typed.end_ts,
+            &typed.start_int,
+            &typed.end_int,
+        ]
+        .iter()
+        .any(|value| value.is_some())
+    }
+}
+
+/// The flags a cursor range came from, as `plan` names them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeFlags {
+    pub start: &'static str,
+    pub end: &'static str,
+}
+
+impl Default for RangeFlags {
+    fn default() -> Self {
+        Self {
+            start: "--start-cursor",
+            end: "--end-cursor",
+        }
+    }
 }
 
 /// What one Python table's load needs.
@@ -659,6 +761,8 @@ pub struct TableOutcome {
     pub elapsed: std::time::Duration,
     /// Never started, because `--fail-fast` stopped the load after another table failed; `loaded` holds why.
     pub skipped: bool,
+    /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+    pub peak_memory_bytes: Option<u64>,
 }
 
 impl TableOutcome {
@@ -673,6 +777,7 @@ impl TableOutcome {
             retryable: true,
             elapsed: std::time::Duration::ZERO,
             skipped: true,
+            peak_memory_bytes: None,
         }
     }
 
@@ -704,6 +809,25 @@ pub struct TableLoaded {
     pub after_load: Option<AfterLoadReport>,
     /// The `replace_key` values a `delete_insert` replaced; `None` without a `replace_key`.
     pub replaced_keys: Option<ReplacedKeys>,
+    /// How long the table's `transform` took on each file or range, in the order they loaded.
+    pub transforms: Vec<crate::python_sources::models::TransformTime>,
+}
+
+/// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
+#[derive(Debug, Clone)]
+pub struct TransformRun {
+    pub host: std::sync::Arc<dyn PythonHost>,
+    pub times: std::sync::Arc<std::sync::Mutex<Vec<crate::python_sources::models::TransformTime>>>,
+}
+
+impl TransformRun {
+    /// A run of `host`'s transforms, no call timed yet.
+    pub fn new(host: std::sync::Arc<dyn PythonHost>) -> Self {
+        Self {
+            host,
+            times: std::sync::Arc::default(),
+        }
+    }
 }
 
 /// The `replace_key` values whose rows a table's `delete_insert` replaced, as `load --json` reports them.
@@ -826,6 +950,13 @@ pub enum CommitRange {
     Values(Vec<String>),
 }
 
+/// A files source's merge under `--reload`: each file merges into `build`, which replaces the table once every file merged, with `records` (a reset, then one per file) in the swap's transaction, so a failed reload leaves the table and its run log as they were.
+#[derive(Debug)]
+pub struct MergeRebuild {
+    pub build: TableName,
+    pub records: Vec<RunRecord>,
+}
+
 /// One table's load as it commits batch by batch: where the batches go, and what is staged but not yet committed.
 #[derive(Debug)]
 pub struct Publisher {
@@ -886,6 +1017,10 @@ pub struct Publisher {
     pub settled_files: Vec<StoredFile>,
     /// The child tables `unnest` fills from the table's rows; `None` without `unnest`.
     pub children: Option<ChildTables>,
+    /// A files source's merge under `--reload`, which merges each file into a new table swapped in at the end.
+    pub rebuild: Option<MergeRebuild>,
+    /// The `transform`'s calls so far, and how many the commits recorded: each commit records the version with the files or ranges since.
+    pub transform: Option<(TransformRun, usize)>,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.
@@ -1089,6 +1224,8 @@ pub struct RunReport<'a> {
     pub outcomes: &'a [TableOutcome],
     pub started: chrono::DateTime<chrono::Utc>,
     pub elapsed: std::time::Duration,
+    /// The run's peak memory, in bytes, when the OS gives it.
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// What `apply --json` and `load --json` print, in this field order.
@@ -1122,6 +1259,9 @@ pub struct RunSummary {
     /// Tables `--fail-fast` never started.
     pub skipped: usize,
     pub rows: u64,
+    /// The most memory the whole process held at once during the run, in bytes; left out where the OS gives no figure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// An object a run created, altered or recreated.
@@ -1153,6 +1293,12 @@ pub struct TableResult {
     /// The `replace_key` values its `delete_insert` replaced; left out without a `replace_key`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaced_keys: Option<ReplacedKeys>,
+    /// How long the table's `transform` took on each file or range; left out without one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_memory_bytes: Option<u64>,
 }
 
 /// Why a source's tables could not be listed, and whether a rerun may get past it.

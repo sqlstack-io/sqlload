@@ -1,8 +1,11 @@
 use crate::command::_helpers::load_output::{Tally, event_lines, summary_lines};
 use crate::command::tests::helpers::{done, read_back};
-use crate::command::tests::test_types::{LoadEventsFileTestCase, LoadOutputTestCase};
+use crate::command::tests::test_types::{
+    LoadEventsFileTestCase, LoadOutputTestCase, TransformTallyTestCase,
+};
 use crate::load_events::constants::EVENTS_SCHEMA_VERSION;
 use crate::load_events::models::{EventKind, LoadEvent};
+use crate::python_sources::models::TransformTime;
 
 /// A `--fail-fast` run where every failure is retryable, as `--events jsonl` writes it.
 const FAIL_FAST_EVENTS: &str = include_str!("fixtures/fail_fast_retryable.jsonl");
@@ -38,6 +41,8 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
                     elapsed_ms: 300,
                     position: None,
                     changes: vec!["created  raw.a__items  6 columns".to_owned()],
+                    transforms: Vec::new(),
+                    peak_memory_bytes: None,
                 },
             )],
             name_width: 7,
@@ -63,6 +68,85 @@ loaded  raw.a      1 row  0.3s
 loaded  raw.b        1 row  0.1s
 ✓ Completed  2 loaded, 123,457 rows, 2.2s
 └── slowest      raw.a 2.0s",
+        },
+        LoadOutputTestCase {
+            description: "under --follow each table prints a line per batch written, with how far behind it is, then its total when following stops",
+            events: vec![
+                (
+                    Some("raw.a"),
+                    EventKind::TableBatchWritten {
+                        rows: 2,
+                        behind_secs: Some(6),
+                    },
+                ),
+                (
+                    Some("raw.b"),
+                    EventKind::TableBatchWritten {
+                        rows: 1,
+                        behind_secs: None,
+                    },
+                ),
+                (Some("raw.a"), done(2, 18_000, None)),
+                (Some("raw.b"), done(1, 18_000, None)),
+            ],
+            name_width: 7,
+            rows_width: 5,
+            elapsed_ms: 18_100,
+            exit_code: 0,
+            expected_lines: "written  raw.a      2 rows 6s behind
+written  raw.b      1 row
+loaded  raw.a      2 rows 18.0s
+loaded  raw.b      1 row  18.0s
+✓ Completed  2 loaded, 3 rows, 18.1s
+└── slowest      raw.a 18.0s",
+        },
+        LoadOutputTestCase {
+            description: "under --memory-per-table each table notes its peak memory, after its position or under its failure, and the run's peak closes the summary",
+            events: vec![
+                (
+                    Some("raw.a"),
+                    EventKind::TableDone {
+                        rows: 1,
+                        elapsed_ms: 300,
+                        position: Some("id now 7".to_owned()),
+                        changes: Vec::new(),
+                        transforms: Vec::new(),
+                        peak_memory_bytes: Some(85 * 1024 * 1024),
+                    },
+                ),
+                (
+                    Some("raw.b"),
+                    EventKind::TableFailed {
+                        reason: "HTTP 404 not found".to_owned(),
+                        retryable: false,
+                        elapsed_ms: 100,
+                        peak_memory_bytes: Some(1_932_735_283),
+                    },
+                ),
+                (
+                    None,
+                    EventKind::RunFinished {
+                        loaded: 1,
+                        failed: 1,
+                        not_started: 0,
+                        rows: 1,
+                        elapsed_ms: 500,
+                        exit_code: 1,
+                        peak_memory_bytes: Some(2_000_000_000),
+                    },
+                ),
+            ],
+            name_width: 7,
+            rows_width: 5,
+            elapsed_ms: 500,
+            exit_code: 1,
+            expected_lines: "loaded  raw.a      1 row  0.3s  id now 7  peak memory 85 MiB
+failed  raw.b  HTTP 404 not found
+               peak memory 1.8 GiB
+✗ Completed with failures  1 loaded, 1 failed, 1 row, 0.5s
+├── slowest      raw.a 0.3s
+├── peak memory  1.9 GiB
+└── next         the 1 unchanged table loads; the 1 that committed carries on from its position",
         },
     ];
     for test_case in test_cases {
@@ -131,4 +215,76 @@ loaded  workforce.people            304 rows 4.6s
         assert_eq!(lines, test_case.expected_lines, "{}", test_case.description);
     }
     Ok(())
+}
+
+#[test]
+fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_slow_dicts_a_hint()
+{
+    let indent = " ".repeat(15);
+    let test_cases = [
+        TransformTallyTestCase {
+            description: "each file's time on a line of its own, under the table's",
+            transforms: &[
+                ("./drop/a.csv", 120, 10, true),
+                ("./drop/b.csv", 4_560, 200_000, false),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  0.12s
+{indent}transform  ./drop/b.csv  4.56s",
+        },
+        TransformTallyTestCase {
+            description: "dicts for a large file that took a while get one hint, naming the slowest",
+            transforms: &[
+                ("./drop/a.csv", 6_000, 150_000, true),
+                ("./drop/b.csv", 8_000, 100_000, true),
+                ("./drop/c.csv", 9_000, 99_999, true),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  6.00s
+{indent}transform  ./drop/b.csv  8.00s
+{indent}transform  ./drop/c.csv  9.00s
+{indent}hint: the transform returned dicts for ./drop/b.csv (100,000 rows, 8.0s); a pyarrow Table or a DataFrame transforms faster",
+        },
+        TransformTallyTestCase {
+            description: "a large slow file that returned Arrow gets no hint, nor does a quick one that returned dicts",
+            transforms: &[
+                ("./drop/a.csv", 6_000, 150_000, false),
+                ("./drop/b.csv", 4_999, 150_000, true),
+            ],
+            expected_lines: "loaded  RAW.M      7 rows 9.0s
+{indent}transform  ./drop/a.csv  6.00s
+{indent}transform  ./drop/b.csv  5.00s",
+        },
+    ];
+    for test_case in test_cases {
+        let event = LoadEvent {
+            schema_version: EVENTS_SCHEMA_VERSION,
+            run_id: "run".to_owned(),
+            at: "2026-11-14T00:00:00.000Z".to_owned(),
+            table: Some("RAW.M".to_owned()),
+            kind: EventKind::TableDone {
+                rows: 7,
+                elapsed_ms: 9_000,
+                position: None,
+                changes: Vec::new(),
+                transforms: test_case
+                    .transforms
+                    .iter()
+                    .map(|(file, milliseconds, rows, dicts)| TransformTime {
+                        file: (*file).to_owned(),
+                        milliseconds: *milliseconds,
+                        rows: *rows,
+                        dicts: *dicts,
+                    })
+                    .collect(),
+                peak_memory_bytes: None,
+            },
+        };
+        assert_eq!(
+            event_lines(&event, (7, 5)).join("\n"),
+            test_case.expected_lines.replace("{indent}", &indent),
+            "{}",
+            test_case.description
+        );
+    }
 }

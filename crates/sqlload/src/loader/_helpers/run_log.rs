@@ -1,14 +1,16 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
 
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::staging_id::staging_id;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::ddl_guard::ddl_guard;
 use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
@@ -21,12 +23,17 @@ use crate::file_store::main::write_file::write_file;
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
+use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::loader::_helpers::python::batch_cursor_max;
-use crate::loader::_helpers::sources::{FilesPlanRequest, column_fix, live_has, loaded_file};
+use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, column_fix, live_has};
+use crate::loader::constants::TRANSFORM_REWROTE_NOTE;
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{PythonLoad, RunEntry, TablePlan, TableSpec};
+use crate::loader::models::{
+    MergeRebuild, ProjectPlan, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
+};
 use crate::project::models::WriteStrategy;
+use crate::row_batches::models::Unnest;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
 use crate::run_log::main::decode_runs::decode_runs;
@@ -41,6 +48,7 @@ use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{
     DecodedRuns, RecordTable, RunEvent, RunOutcome, RunRecord, StateEvent, UnreadableRecord,
 };
+use crate::schema_plan::models::TableAction;
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -283,7 +291,7 @@ pub(crate) fn run_entry(
     let logged = load.table.logged.as_ref()?;
     let spec = &table.spec;
     let options = load.options;
-    let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
+    let backfill = options.ranged();
     let previous = logged
         .current
         .as_ref()
@@ -318,6 +326,7 @@ pub(crate) fn run_entry(
             note: None,
             recorded_at: String::new(),
             batch: None,
+            transform: None,
         },
         cursor_type,
         before: window.and_then(|window| window.maximum.clone()),
@@ -437,6 +446,165 @@ pub(crate) fn merged_record(
         ),
         recorded_at: now_utc_text(),
         batch: Some(batch),
+        transform: None,
+    }
+}
+
+/// The time a load's `transform` took on each file or range, once the load succeeded. The calls no commit recorded (`recorded` are), as when batches commit straight into the table or into a files target, are recorded now: an insert into the run log `apply` made, never creating it, and only warned about when it fails, since the rows committed (a logged table's run log holds its runs only).
+pub(crate) async fn transformed(
+    table: &TablePlan,
+    (destination, run, recorded): (&Destination, Option<TransformRun>, usize),
+) -> Vec<crate::python_sources::models::TransformTime> {
+    let Some(run) = run else {
+        return Vec::new();
+    };
+    let times = std::mem::take(
+        &mut *run
+            .times
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let spec = &table.spec;
+    let record = spec
+        .transform
+        .as_ref()
+        .filter(|_| times.len() > recorded && !spec.logged)
+        .map(|transform| transform_record(table, &transform.version, &times[recorded..]));
+    let written = match (record, sql_adapter(spec.warehouse).runs_sql()) {
+        (None, _) => Ok(()),
+        (Some(record), false) => append_run(table, destination, &record).await,
+        (Some(record), true) => {
+            match insert_run(&runs_table(&spec.destination), &record, spec.warehouse) {
+                Ok(insert) => execute(destination, vec![insert]).await,
+                Err(error) => Err(LoaderError::Invalid(error)),
+            }
+        }
+    };
+    if let Err(error) = written {
+        tracing::warn!(table = %spec.destination.table, %error, "the rows loaded, but the run log did not record the transform's version, so plan cannot tell which files an earlier version loaded");
+    }
+    times
+}
+
+/// The record a commit writes with its rows for the `transform` calls since the last commit, which it counts as recorded; `None` without calls or a `transform`.
+pub(crate) fn commit_transform(
+    table: &TablePlan,
+    transform: Option<&mut (TransformRun, usize)>,
+) -> Option<RunRecord> {
+    let (run, recorded) = transform?;
+    let version = &table.spec.transform.as_ref()?.version;
+    let times = run
+        .times
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let since = times.get(*recorded..).filter(|since| !since.is_empty())?;
+    let record = transform_record(table, version, since);
+    *recorded = times.len();
+    Some(record)
+}
+
+/// `record` (a logged table's, or a merged file's) carrying the version of the table's `transform`, if it has one.
+pub(crate) fn with_transform(table: &TablePlan, record: RunRecord) -> RunRecord {
+    RunRecord {
+        transform: table
+            .spec
+            .transform
+            .as_ref()
+            .map(|transform| transform.version.clone()),
+        ..record
+    }
+}
+
+/// `plan` with what its `transform` needs from the run log: whether `apply` must create `_sqlload_runs`, and how many of the files or ranges the table holds loaded under another version; a table rewritten whole (`replace`, `--reload`) or a logged one is left as it is, and one blocked.
+pub(crate) async fn with_transform_version(
+    mut plan: TablePlan,
+    destination: &Destination,
+) -> Result<TablePlan, LoaderError> {
+    let rewritten = matches!(plan.mode, WriteMode::Replace | WriteMode::Recreate)
+        || plan.schema.action == TableAction::Recreate;
+    let runs_sql = sql_adapter(plan.spec.warehouse).runs_sql();
+    let compares = plan.exists && !rewritten;
+    let Some(current) = plan
+        .spec
+        .transform
+        .as_ref()
+        .map(|transform| transform.version.clone())
+    else {
+        return Ok(plan);
+    };
+    if plan.spec.logged || plan.schema.blocked.is_some() || !(compares || runs_sql) {
+        return Ok(plan);
+    }
+    let (log, exists) = read_run_log(&plan, destination).await?;
+    let older = match compares {
+        true => older_files(&log.records, &plan.spec, &current),
+        false => 0,
+    };
+    if let Some(transform) = plan.spec.transform.as_mut() {
+        transform.older = older;
+        transform.creates_log = runs_sql && !exists;
+    }
+    Ok(plan)
+}
+
+/// How many of the files or ranges the table of `spec` holds loaded under a `transform` version other than `current`: the version of each one's newest record (a merged file's by its name, whatever its version) since the last reset or load that rewrote the table whole.
+pub(crate) fn older_files(records: &[RunRecord], spec: &TableSpec, current: &str) -> usize {
+    let mut ordered: Vec<&RunRecord> = records
+        .iter()
+        .filter(|record| {
+            record.source == spec.source_name && record.source_table == spec.source_table.name
+        })
+        .collect();
+    ordered.sort_by(|left, right| left.recorded_at.cmp(&right.recorded_at));
+    let mut versions: BTreeMap<&str, &str> = BTreeMap::new();
+    for record in ordered {
+        if record.event == RunEvent::Reset || record.note.as_deref() == Some(TRANSFORM_REWROTE_NOTE)
+        {
+            versions.clear();
+        }
+        let merged = !record
+            .note
+            .as_deref()
+            .is_some_and(|note| note.starts_with("transform"));
+        if let Some(version) = &record.transform {
+            versions.extend(record.files.iter().map(|file| match merged {
+                true => (merged_name(file), version.as_str()),
+                false => (file.as_str(), version.as_str()),
+            }));
+        }
+    }
+    versions
+        .values()
+        .filter(|version| **version != current)
+        .count()
+}
+
+/// The record of a load of a table with a `transform`: the version it ran, and the files or ranges it ran on (`times`), which the next `plan` compares with.
+pub(crate) fn transform_record(
+    table: &TablePlan,
+    version: &str,
+    times: &[crate::python_sources::models::TransformTime],
+) -> RunRecord {
+    let rewrote = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
+    let record = event_record(
+        &record_table(&table.spec),
+        StateEvent {
+            event: RunEvent::Run,
+            cursor_before: None,
+            cursor_after: None,
+            state: None,
+            note: match rewrote {
+                true => TRANSFORM_REWROTE_NOTE,
+                false => "transform",
+            }
+            .to_owned(),
+            recorded_at: now_utc_text(),
+        },
+    );
+    RunRecord {
+        files: times.iter().map(|time| time.file.clone()).collect(),
+        transform: Some(version.to_owned()),
+        ..record
     }
 }
 
@@ -453,6 +621,31 @@ pub(crate) fn merge_reset_record(spec: &TableSpec) -> RunRecord {
             recorded_at: now_utc_text(),
         },
     )
+}
+
+/// Create the `_sqlload_runs` of each unblocked table with a `transform` whose plan found none, once per schema, before any load commits a record there; one `created` line each.
+pub(crate) async fn create_run_logs(
+    plan: &ProjectPlan,
+    destinations: &BTreeMap<String, Destination>,
+) -> Result<Vec<String>, LoaderError> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut created: BTreeSet<String> = BTreeSet::new();
+    for table in plan.tables.iter().filter(|table| {
+        let transform = table.spec.transform.as_ref();
+        table.schema.blocked.is_none() && transform.is_some_and(|transform| transform.creates_log)
+    }) {
+        let spec = &table.spec;
+        let name = sql_adapter(spec.warehouse).render_display_name(&runs_table(&spec.destination));
+        if !created.insert(name.clone()) {
+            continue;
+        }
+        let destination = destinations.get(&spec.target).ok_or_else(|| {
+            LoaderError::Invalid(format!("target {:?} is not connected", spec.target))
+        })?;
+        ensure_runs_table(table, destination).await?;
+        lines.push(format!("created  {name}  run log"));
+    }
+    Ok(lines)
 }
 
 /// Before a files source's merge creates its table: `_sqlload_runs` when it does not exist yet, and a reset, so records left from an earlier table of the name stop counting; written before the `CREATE TABLE`, so no table exists without it.
@@ -678,4 +871,168 @@ pub(crate) fn listed_sources(
     Err(format!(
         "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each ({columns}) value in one file, or remove the outdated file, {first} or {this}, from the folder"
     ))
+}
+
+/// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), and under `--reload` none, with every file the table's merges recorded instead (oldest first), whose order the reload keeps; or why a files source cannot load into it: only into a DuckDB or Postgres table, never with `state = "logged"`, nor `--reload` with `unnest` or of a `delete_insert` (one commit would lose the files' order); none while the table does not exist.
+pub(crate) async fn merge_ledger(
+    request: &FilesPlanRequest<'_>,
+) -> Result<Result<(Vec<LoadedFile>, Vec<LoadedFile>), String>, LoaderError> {
+    let spec = request.spec;
+    let destination = match request.loaded {
+        LoadedSource::Query(destination) => destination,
+        LoadedSource::Recorded(_) => {
+            return Ok(Err("merge is not supported for files targets".to_owned()));
+        }
+    };
+    let what = match spec.strategy {
+        WriteStrategy::Merge => "merge",
+        _ => "load",
+    };
+    if !sql_adapter(spec.warehouse).merges_files() {
+        return Ok(Err(format!(
+            "{} from a files source loads into DuckDB and Postgres targets so far, not {}; use append, or delete_insert on a partition cursor",
+            spec.strategy, spec.warehouse
+        )));
+    }
+    if request.options.reload && spec.strategy != WriteStrategy::Merge {
+        return Ok(Err(format!(
+            "--reload would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
+        )));
+    }
+    if request.options.reload && spec.unnest != Unnest::None {
+        return Ok(Err(
+            "--reload of a merge files table does not rebuild its child tables (unnest); drop the table and its child tables and load again to merge every file anew".to_owned(),
+        ));
+    }
+    if spec.logged {
+        return Ok(Err(format!(
+            "state = \"logged\" does not apply to a files source's {}, which records each file it loads",
+            spec.strategy
+        )));
+    }
+    if let Some(cursor) = &spec.cursor {
+        return Ok(Err(format!(
+            "cursor_column {} does not apply to a files source's merge, which picks the files it has not merged from the run log, whatever their partition; remove it and set write_strategy = \"merge\", or keep it and use delete_insert",
+            cursor.column
+        )));
+    }
+    let merged = match request.live {
+        None => return Ok(Ok((Vec::new(), Vec::new()))),
+        Some(_) => merged_files(spec, destination).await?,
+    };
+    if request.options.reload {
+        return Ok(merged.map(|merged| (Vec::new(), merged)));
+    }
+    let location = request.files.location.to_string();
+    let listed: HashMap<String, String> = request
+        .files
+        .table
+        .files
+        .iter()
+        .map(|data| {
+            (
+                format!("{location}{}", data.file.relative_key),
+                data.file.version(),
+            )
+        })
+        .collect();
+    Ok(merged.map(|merged| (unchanged_files(merged, &listed), Vec::new())))
+}
+
+/// `files` in the order a merge `--reload` applies them: those the table's merges recorded (`merged`, oldest first) in the order of their first record, matched by name and version, else, for a file read from `archive` (where `after_load` moved it, so it may have a new version), by name; then the others oldest modified first, as a load merges new files. A file in the source's folder that matches only by name is a newer file under a merged name, so it merges after the recorded ones, as a load would merge it.
+pub(crate) fn reload_order(
+    files: Vec<DataFile>,
+    location: &str,
+    merged: &[LoadedFile],
+    archive: Option<&Location>,
+) -> Vec<DataFile> {
+    let mut by_version: HashMap<(&str, &str), usize> = HashMap::new();
+    let mut by_name: HashMap<&str, usize> = HashMap::new();
+    for (index, file) in merged.iter().enumerate() {
+        by_version
+            .entry((file.name.as_str(), file.version.as_str()))
+            .or_insert(index);
+        by_name.entry(file.name.as_str()).or_insert(index);
+    }
+    let mut recorded: Vec<(usize, DataFile)> = Vec::new();
+    let mut others: Vec<DataFile> = Vec::new();
+    for data in files {
+        let name = format!("{location}{}", data.file.relative_key);
+        let version = data.file.version();
+        let archived =
+            archive.is_some_and(|archive| data.file.path.as_ref().starts_with(&archive.prefix));
+        match by_version
+            .get(&(name.as_str(), version.as_str()))
+            .or_else(|| by_name.get(name.as_str()).filter(|_| archived))
+        {
+            Some(index) => recorded.push((*index, data)),
+            None => others.push(data),
+        }
+    }
+    recorded.sort_by_key(|(index, _)| *index);
+    recorded
+        .into_iter()
+        .map(|(_, data)| data)
+        .chain(merge_order(others))
+        .collect()
+}
+
+/// Before a files source's merge or `delete_insert` by `replace_key` writes: `_sqlload_runs` when it does not exist yet; under a merge's `--reload` of an existing table, the table each file merges into, created beside it in its current columns, and the reset its swap commits first, stamped before any file's record, so the files merged into the old table stop counting.
+pub(crate) async fn merge_rebuild(
+    table: &TablePlan,
+    destination: &Destination,
+) -> Result<Option<MergeRebuild>, LoaderError> {
+    ensure_merge_log(table, destination).await?;
+    if table.schema.action != TableAction::Recreate || table.spec.strategy != WriteStrategy::Merge {
+        return Ok(None);
+    }
+    let spec = &table.spec;
+    let adapter = sql_adapter(spec.warehouse);
+    let id = staging_id(
+        &uuid::Uuid::new_v4().to_string(),
+        chrono::Utc::now().naive_utc(),
+    );
+    let build = adapter.staging_relation_name(&spec.destination, &id);
+    let create = adapter.render_create_build_table(
+        &build,
+        &spec.destination,
+        (&table.schema.write_columns, table.live.as_deref(), None),
+    );
+    execute_ddl(destination, create).await?;
+    Ok(Some(MergeRebuild {
+        build,
+        records: vec![merge_reset_record(spec)],
+    }))
+}
+
+/// Swap a merge `--reload`'s table in, with its run records in the same transaction.
+pub(crate) async fn swap_rebuild(
+    table: &TablePlan,
+    destination: &Destination,
+    rebuild: &MergeRebuild,
+) -> Result<(), LoaderError> {
+    let spec = &table.spec;
+    let adapter = sql_adapter(spec.warehouse);
+    let runs = runs_table(&spec.destination);
+    let mut statements = adapter.render_swap(&spec.destination, &rebuild.build, &[]);
+    for record in &rebuild.records {
+        let insert = insert_run(&runs, record, spec.warehouse).map_err(LoaderError::Invalid)?;
+        statements = adapter.render_logged(statements, insert);
+    }
+    let _held = ddl_guard(destination).await;
+    execute(destination, statements).await
+}
+
+/// A row of the loaded-files query: `file|version`, or just the file when `versioned` is false.
+pub(crate) fn loaded_file(text: String, versioned: bool) -> LoadedFile {
+    match (versioned, text.rsplit_once(VERSION_SEPARATOR)) {
+        (true, Some((name, version))) => LoadedFile {
+            name: name.to_owned(),
+            version: version.to_owned(),
+        },
+        _ => LoadedFile {
+            name: text,
+            version: String::new(),
+        },
+    }
 }

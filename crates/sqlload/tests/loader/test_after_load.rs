@@ -195,6 +195,105 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &[],
         },
         AfterLoadTestCase {
+            description: "--reload of an append table with move_to reads the files it moved too, in order; it moves only those read from path, and the archived ones stay",
+            settings: "write_strategy = \"append\"\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/a.csv", "id,v\n1,a\n"), ("drop/b.csv", "id,v\n2,b\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":2,"status":"done"},"problems":[],"rows":2,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &["--reload", "--yes"],
+                    files: &[("drop/c.csv", "id,v\n3,c\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":3,"skipped":[],"status":"loaded"}"#,
+                },
+            ],
+            expected_files: &[
+                "done/a.csv=id,v\\n1,a\\n",
+                "done/b.csv=id,v\\n2,b\\n",
+                "done/c.csv=id,v\\n3,c\\n",
+            ],
+        },
+        AfterLoadTestCase {
+            description: "--reload of a merge table with move_to merges the archived files and the new one, then moves only the new one",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/a.csv", "id,v\n1,a\n"), ("drop/b.csv", "id,v\n1,b\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":2,"status":"done"},"problems":[],"rows":2,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &["--reload", "--yes"],
+                    files: &[("drop/c.csv", "id,v\n2,c\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":3,"skipped":[],"status":"loaded"}"#,
+                },
+            ],
+            expected_files: &[
+                "done/a.csv=id,v\\n1,a\\n",
+                "done/b.csv=id,v\\n1,b\\n",
+                "done/c.csv=id,v\\n2,c\\n",
+            ],
+        },
+        AfterLoadTestCase {
+            description: "a failed --reload with move_to moves nothing",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/a.csv", "id,v\n1,a\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &["--reload", "--yes"],
+                    files: &[("drop/c.csv", "id,v\n3,c\n3,cc\n")],
+                    expected_exit: 1,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":[],"status":"failed"}"#,
+                },
+            ],
+            expected_files: &[
+                "done/a.csv=id,v\\n1,a\\n",
+                "drop/c.csv=id,v\\n3,c\\n3,cc\\n",
+            ],
+        },
+        AfterLoadTestCase {
+            description: "--reload with after_load = \"delete\" is still refused, deleting nothing",
+            settings: "write_strategy = \"append\"\nafter_load = \"delete\"\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[("drop/a.csv", "id,v\n1,a\n")],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &["--reload", "--yes"],
+                    files: &[("drop/b.csv", "id,v\n2,b\n")],
+                    expected_exit: 1,
+                    expected_report: r#"{"after_load":null,"problems":["--reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded"],"rows":null,"skipped":[],"status":null}"#,
+                },
+            ],
+            expected_files: &["drop/b.csv=id,v\\n2,b\\n"],
+        },
+        AfterLoadTestCase {
             description: "a failed load deletes nothing",
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_duplicate_keys = \"fail\"\nafter_load = \"delete\"\n",
             linked: &[],

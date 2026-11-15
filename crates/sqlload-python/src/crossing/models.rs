@@ -42,6 +42,8 @@ pub struct CrossingOptions {
 /// What the parser threads need from the table besides its data: the top-level objects to expand one level, and the connections its `sl.http` jobs may use.
 #[derive(Debug, Clone, Default)]
 pub struct ReadContext {
+    /// The table's name in its source, for a page `transform`'s `ctx.table`.
+    pub table: String,
     pub flatten: Vec<String>,
     pub connections: serde_json::Map<String, serde_json::Value>,
     /// The table's cursor column, which projected JSON rows must keep.

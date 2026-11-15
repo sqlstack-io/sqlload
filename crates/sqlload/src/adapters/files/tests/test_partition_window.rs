@@ -140,6 +140,7 @@ fn given_existing_partitions_when_choosing_the_window_then_it_covers_whole_parti
             newest: test_case.newest,
             lookback: test_case.lookback,
             start: test_case.flags.0,
+            start_flag: "--start-cursor",
             end: test_case.flags.1,
             cursor_start: test_case.cursor_start,
             reload: test_case.reload,
