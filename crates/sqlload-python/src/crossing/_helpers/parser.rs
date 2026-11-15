@@ -16,7 +16,7 @@ use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
 use sqlload::row_batches::main::normalise_batch::normalise_batch;
 use sqlload::row_batches::main::projection_problem::projection_problem;
-use sqlload::row_batches::models::{JsonLayout, JsonRead};
+use sqlload::row_batches::models::{JsonLayout, JsonRead, Projection};
 
 use crate::crossing::constants::PAGE_POLL;
 use crate::crossing::errors::CrossError;
@@ -185,6 +185,11 @@ fn collect(
     let _ = sender.send(Parsed::Failed(stopped("the generator's reader")));
 }
 
+/// `projection` with `zone`, the table's `timezone`, for its parses without their own `tz`.
+fn zoned(projection: Option<Projection>, zone: Option<chrono_tz::Tz>) -> Option<Projection> {
+    projection.map(|projection| Projection { zone, ..projection })
+}
+
 fn stopped(thread: &str) -> CrossError {
     CrossError::Data(format!("{thread} stopped before finishing its data"))
 }
@@ -200,6 +205,10 @@ impl Output {
                 open = self.send(batch, started);
             }
             Crossed::Json { bytes, read } => {
+                let read = JsonRead {
+                    projection: zoned(read.projection, self.context.zone),
+                    ..read
+                };
                 if let Some(problem) = read
                     .projection
                     .as_ref()
@@ -304,7 +313,7 @@ impl Output {
             layout: JsonLayout::Document,
             path: page.path.clone(),
             batch_rows: usize::MAX,
-            projection: page.projection.clone(),
+            projection: zoned(page.projection.clone(), self.context.zone),
         };
         let mut open = true;
         let mut held: Vec<RecordBatch> = Vec::new();

@@ -848,6 +848,9 @@ pub struct TableSettings {
     /// What the load does with columns that would load under one name: number them (default) or fail.
     #[serde(default)]
     pub on_duplicate_names: Option<OnDuplicateNames>,
+    /// The IANA time zone, such as `Europe/Paris`, of the times without an offset that `parse` reads in a column without its own `tz` (UTC when unset).
+    #[serde(default)]
+    pub timezone: Option<String>,
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
@@ -1028,6 +1031,9 @@ pub struct TableOverride {
     /// How many levels down `unnest` makes child tables and `flatten` flattens objects at most; deeper lists and objects stay JSON (default 1000, as dlt's).
     #[serde(default)]
     pub max_depth: Option<u32>,
+    /// Text columns read as times, by column name: `"epoch_ms"`, or `{ timestamp = ["iso", "%m/%d/%Y %H:%M"], tz = "Europe/Paris", on_error = "null" }` (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
+    #[serde(default)]
+    pub parse: BTreeMap<String, serde_json::Value>,
 }
 
 /// A table's `unnest` or `flatten` as written: a word (`"all"`) or a list of dotted paths.

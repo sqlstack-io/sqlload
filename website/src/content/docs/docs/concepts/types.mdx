@@ -169,3 +169,114 @@ naming the column and the value, on every source: `12.345` pinned `decimal(10,2)
 `int` fail rather than load as `12.35` and `1`. Before 0.45.0, Python, Parquet, CSV, JSON and
 BigQuery values were rounded or cut to fit. Pin a type that holds every value, such as a wider
 scale or `text`.
+
+## Parsing text into times
+
+From 0.53.0, a table's `parse` reads text columns as times, on every source: files, Google Sheets,
+databases, Python tables and `sl.http` jobs. Each column lists the formats its values may be in.
+Each value takes the first format that reads it.
+
+```toml
+[sources.orders]
+kind = "files"
+connection = "lake"
+path = "drop/orders/"
+format = "csv"
+description = "Orders, one file a month."
+write_strategy = "append"
+timezone = "Europe/Paris"
+
+[sources.orders.tables.orders]
+parse = { "Updated At" = { timestamp = ["iso", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y"] }, due = { date = "%d.%m.%Y", on_error = "null" } }
+```
+
+`plan` shows each parsed column, its formats in the order they're tried, and the zone that times
+without an offset are read in:
+
+```text
+Loads (1)                                           sqlload load
+└── raw.orders                                      append
+    ├── source  files  ./drop/orders/  csv, compression by file name
+    ├── route   read csv into Arrow -> DuckDB takes Arrow
+    ├── columns 3, 1 named by snake_case: Updated At -> updated_at
+    ├── parse   due         date from "%d.%m.%Y"; a value no format reads loads NULL
+    │           updated_at  timestamp_tz from iso, "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y"; times without an offset in Europe/Paris (the source's timezone)
+    …
+```
+
+These rows load as the UTC instants below. Paris moved its clocks from 02:00 to 03:00 on
+29 March 2026:
+
+| `Updated At` in the file | `updated_at` |
+| --- | --- |
+| `2026-03-29T01:30:00` | `2026-03-29 00:30:00+00` |
+| `03/29/2026 03:30:00` | `2026-03-29 01:30:00+00` |
+| `03/29/2026 12:00` | `2026-03-29 10:00:00+00` |
+| `03/30/2026` | `2026-03-29 22:00:00+00` |
+| `2026-03-29T09:00:00Z` | `2026-03-29 09:00:00+00` |
+
+Each entry takes one of these:
+
+| Key | Meaning |
+| --- | --- |
+| `timestamp` | A format, or a list of formats tried in turn. The column loads as `timestamp_tz`, stored as UTC. |
+| `date` | A format, or a list of formats tried in turn. The column loads as `date`. |
+| `tz` | With `timestamp`: the IANA zone, such as `"Europe/Paris"`, of times without an offset. |
+| `on_error` | `"fail"` (default) or `"null"`: what a value that no format reads does. |
+
+The whole entry may also be `"epoch_s"`, `"epoch_ms"` or `"epoch_us"`, such as
+`parse = { created = "epoch_ms" }`, for a number or numeric text counting from 1970-01-01 UTC.
+
+A format is one of these:
+
+- `"iso"` reads ISO 8601 text: a date, then optionally a `T` or a space and `HH:MM`,
+  `HH:MM:SS` or `HH:MM:SS.ffffff`, then optionally `Z` or an offset such as `+01:00`, `+0100` or
+  `+01`. A date alone is midnight. Under `date`, `"iso"` reads `YYYY-MM-DD` only.
+- A strftime format, such as `"%m/%d/%Y %H:%M"`. A fraction of a second is `%.f`, as in
+  `"%H:%M:%S%.f"`. Python's `%f` is refused. A format with an offset uses `%z`, or `%#z` to take
+  `Z` too.
+- `"epoch_s"`, `"epoch_ms"` or `"epoch_us"`, in a `timestamp` list.
+
+A time without an offset is read in the column's `tz`, else in the table's or source's `timezone`,
+else in UTC. `plan` names which one applies: `its tz`, `the table's timezone`,
+`the source's timezone`, or `the default, as neither tz nor timezone is set`. A value with an
+offset keeps its instant, whatever `tz` says. A date-only format gives midnight in the zone.
+
+Where the clocks change:
+
+- A time the clocks skip, such as 02:30 in Paris on 29 March 2026, doesn't convert. It fails, or
+  loads NULL with `on_error = "null"`.
+- A time that happens twice, when the clocks go back, takes the earlier instant.
+
+A value that no format reads fails the load, naming the row, the column and the value. In a files
+source, the row is named by its file and its row there:
+
+```text
+failed  raw.orders  2026-03.csv: ./drop/orders/2026-03.csv row 3: column due holds "soon", which is not a date in the format "%d.%m.%Y"; fix the value, or set on_error = "null" in its parse to load NULL
+```
+
+`parse` keys name a column by its loaded name or by its name in the source, as `columns` keys do.
+It runs after `transform`, `flatten`, [naming and `rename`](/docs/concepts/nested-data/#naming),
+on the columns as they load. `plan` fails on a key that names no column, on a column that is also
+pinned in `columns`, on a format it can't read, and on a zone that isn't an IANA zone:
+
+```text
+Errors (3)
+├── raw.orders
+│   └── reason  parse "updated" is not a column of the source table (names are case-sensitive); did you mean "updated_at"?
+├── raw.orders
+│   └── reason  parse due: format "%d.%m.%Q" has a directive that is not a strftime one such as %Y, %m, %d, %H, %M, %S or %z
+└── raw.orders
+    └── reason  timezone: "Europe/Pari" is not an IANA time zone such as "Europe/Paris" or "America/New_York"
+```
+
+`parse` reads text, and numbers with an epoch format. A column the source already types as a date
+or a time without a zone, such as a Python `datetime`, fails the load; drop its `parse`. Text with
+an offset that a Python table or an `sl.http` job yields arrives as `timestamp_tz` already, and
+keeps its instant. Number formats such as `1,234.5` belong in a
+[transform](/docs/sources/files/#transforming-each-file).
+
+A Python table takes the same entries, as `@source.table(parse={...}, timezone="Europe/Paris")`.
+An `sl.http` job's [`sl.field(parse=...)`](/docs/sources/python/#fields) takes them for one field.
+
+A files table with `parse` is read by SQLLoad, never by the destination itself.

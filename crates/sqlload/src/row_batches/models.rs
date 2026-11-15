@@ -4,6 +4,7 @@ use crate::row_batches::types::ListChoices;
 
 use arrow_array::RecordBatch;
 
+use crate::column_parse::models::{BadValue, ColumnParse};
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
@@ -157,6 +158,8 @@ pub struct JsonRead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
     pub fields: Vec<ProjectedField>,
+    /// The zone a parsed time without an offset is in when its field has no `tz`: the table's `timezone`, which the crossing sets; `None` is UTC.
+    pub zone: Option<chrono_tz::Tz>,
     /// A column holding the whole row object as JSON.
     pub keep_record: Option<String>,
     /// The fields' paths as a tree, so each row walks every object on them once.
@@ -189,8 +192,9 @@ pub struct FieldSpec {
     pub path: String,
     #[serde(default)]
     pub required: bool,
+    /// `sl.field(parse=...)` as written, as a table's `parse` entry is (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
     #[serde(default)]
-    pub parse: Option<Parse>,
+    pub parse: Option<serde_json::Value>,
     #[serde(default)]
     pub on_error: BadValue,
     /// What `path` starts from: the row, or, in an `sl.http` job, an object around it or the request's key.
@@ -212,26 +216,6 @@ pub enum FieldFrom {
     },
 }
 
-/// `sl.field(parse=...)`, a closed set of conversions: epoch seconds, milliseconds or microseconds (a number or numeric text) to a UTC timestamp, or text read with a strftime `format` as a timestamp or a date.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Parse {
-    EpochS,
-    EpochMs,
-    EpochUs,
-    Timestamp { format: String },
-    Date { format: String },
-}
-
-/// What a value that `parse` can't convert does: fail the read, naming the field and the value, or load NULL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BadValue {
-    #[default]
-    Fail,
-    Null,
-}
-
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedField {
@@ -241,8 +225,8 @@ pub struct ProjectedField {
     pub text: String,
     /// A row without a value at `path` fails the read rather than loading NULL.
     pub required: bool,
-    pub parse: Option<Parse>,
-    pub on_error: BadValue,
+    /// How its value converts, with what a value that doesn't convert does.
+    pub parse: Option<ColumnParse>,
 }
 
 /// Builds compact JSON text for nested values, escaping strings as serde_json does.

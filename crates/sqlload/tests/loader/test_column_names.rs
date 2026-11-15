@@ -1,5 +1,4 @@
-use crate::files_helpers::{text_bytes, workbook};
-use crate::helpers::{duckdb_text, run_sqlload, words};
+use crate::files_helpers::{names_case_outcome, text_bytes, workbook};
 use crate::test_types::{ColumnNamesTestCase, NamesRun};
 
 /// A CSV source appending each run's files.
@@ -139,50 +138,26 @@ fn given_files_whose_names_need_naming_when_loading_then_columns_take_snake_case
         },
     ];
     for test_case in &test_cases {
-        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
-        std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
-        let database = root.path().join("out.duckdb");
-        let config = root.path().join("sqlload.toml");
-        let text = format!(
-            "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.ShopOrders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\n{}",
-            database.display(),
-            root.path().display(),
-            test_case.settings
-        );
-        std::fs::write(&config, text).map_err(|error| error.to_string())?;
-        for run in test_case.runs {
-            std::fs::write(
-                root.path().join("drop").join(run.file),
-                (run.encode)(run.contents)?,
-            )
-            .map_err(|error| error.to_string())?;
-            let (planned, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
-            let (loaded, load) = run_sqlload(&config, &["load"], ("", ""))?;
-            assert_eq!(
-                (
-                    planned,
-                    loaded,
-                    words(&plan).contains(&words(run.expected_plan))
-                ),
-                (run.expected_ok, run.expected_ok, true),
-                "{}: {plan}\n{load}",
-                test_case.description
-            );
-        }
-        let (table, expected_columns) = test_case.expected_columns;
-        let columns = duckdb_text(
-            &database,
-            &format!(
-                "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = '{table}' AND NOT starts_with(column_name, '_')"
-            ),
-        )?;
-        assert_eq!(columns, expected_columns, "{}", test_case.description);
-        let (query, expected) = test_case.check;
+        let outcome = names_case_outcome(test_case)?;
+        let expected_runs: Vec<(bool, bool, bool)> = test_case
+            .runs
+            .iter()
+            .map(|run| (run.expected_ok, run.expected_ok, true))
+            .collect();
         assert_eq!(
-            duckdb_text(&database, query)?,
-            expected,
-            "{}",
-            test_case.description
+            (
+                outcome.runs,
+                outcome.columns.as_str(),
+                outcome.checked.as_str()
+            ),
+            (
+                expected_runs,
+                test_case.expected_columns.1,
+                test_case.check.1
+            ),
+            "{}: {}",
+            test_case.description,
+            outcome.output
         );
     }
     Ok(())

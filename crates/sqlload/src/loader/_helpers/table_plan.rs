@@ -118,7 +118,7 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
+/// The columns the table should have: the read columns (pinned, parsed, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
     let sampled = spec.python.is_some()
         || spec
@@ -137,10 +137,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
         .iter()
         .map(|column| DesiredColumn {
             name: column.name.clone(),
-            column_type: column.output.clone(),
+            column_type: match spec.parses.get(&column.name) {
+                Some(parse) => parse.kind.column_type(),
+                None => column.output.clone(),
+            },
             origin: match (
                 column.name == SOURCE_ROW_COLUMN,
-                spec.pinned.contains_key(&column.name),
+                spec.pinned.contains_key(&column.name) || spec.parses.contains_key(&column.name),
             ) {
                 (true, _) => ColumnOrigin::Metadata,
                 (false, true) => ColumnOrigin::Pinned,
@@ -1075,6 +1078,10 @@ pub(crate) fn reader_offer(
         spec.transform
             .as_ref()
             .map(|transform| format!("transform {} runs on each file", transform.function))
+    })
+    .or_else(|| {
+        let parsed: Vec<&str> = spec.parses.keys().map(String::as_str).collect();
+        (!parsed.is_empty()).then(|| format!("parse runs on {}", parsed.join(", ")))
     })
     .or_else(|| archived_reason(spec, read));
     let unload_to: Vec<Store> = match &spec.warehouse_source {

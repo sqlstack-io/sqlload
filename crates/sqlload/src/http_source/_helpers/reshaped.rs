@@ -2,11 +2,12 @@
 
 use serde_json::{Map, Value};
 
+use crate::column_parse::models::BadValue;
 use crate::http_source::_helpers::selector::{rows_with_parents, step};
 use crate::http_source::models::{KeyPath, Request, RowContext, Selector};
 use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::main::projection::projection;
-use crate::row_batches::models::{BadValue, FieldFrom, FieldSpec, Projection};
+use crate::row_batches::models::{FieldFrom, FieldSpec, Projection};
 
 /// The wrapper key holding the row itself.
 const ROW_KEY: &str = "\u{0}row";

@@ -2,6 +2,7 @@ use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use chrono_tz::Tz;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio_postgres::Client;
@@ -17,6 +18,7 @@ use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
+use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
@@ -1400,7 +1402,7 @@ pub(crate) struct ReadPart {
     pub(crate) transform: Option<TransformRun>,
 }
 
-/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch`; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
+/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch` with its `parse` columns parsed; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
 pub(crate) async fn read_source(
     reader: &SourceReader,
     table: &TablePlan,
@@ -1408,7 +1410,11 @@ pub(crate) async fn read_source(
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
 ) -> Result<u64, LoaderError> {
     let mut failed: Option<LoaderError> = None;
+    let zone = table.spec.timezone.map_or(Tz::UTC, |(zone, _)| zone);
+    let mut rows: u64 = 0;
     let read = Box::pin(read_each(reader, table, part, async |batch| {
+        let batch = parsed_batch(&batch, &table.spec.parses, zone, rows)?;
+        rows += batch.num_rows() as u64;
         on_batch(batch).await.map_err(|error| {
             let text = error.to_string();
             failed = Some(error);

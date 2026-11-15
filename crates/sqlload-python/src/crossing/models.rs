@@ -54,6 +54,8 @@ pub struct ReadContext {
     pub arrays: Vec<String>,
     /// How the table's columns load and the destination's name limit: `cursor_column` and `arrays` are loaded names, which yielded fields match as they load.
     pub naming: (Naming, Option<usize>),
+    /// The table's `timezone`, which an `sl.field` parse without its own `tz` reads times without an offset in; `None` is UTC.
+    pub zone: Option<chrono_tz::Tz>,
 }
 
 impl ReadContext {
