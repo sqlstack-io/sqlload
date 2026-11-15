@@ -673,6 +673,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
+    if let Some(fetch) = &table.fetch_memory {
+        details.push(detail("fetch", fetch.memory.as_str()));
+        details.push(detail("buffer", fetch.budget_note.as_str()));
+    }
     if matches!(table.commits, CommitRule::Windows(_))
         && spec.python.is_none()
         && spec.files.is_none()

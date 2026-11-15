@@ -3,25 +3,25 @@
 use std::sync::Arc;
 
 use arrow_odbc::odbc_api::Cursor;
-use arrow_odbc::{ColumnFailure, OdbcReaderBuilder, arrow_schema_from};
+use arrow_odbc::{ColumnFailure, OdbcReaderBuilder};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 
 use crate::odbc_source::constants::TOO_LARGE_VALUE;
 use crate::odbc_source::errors::OdbcSourceError;
 use crate::odbc_source::models::OdbcReader;
 
-/// The reader of `cursor`'s rows in batches of `batch_rows`, as `fetch_schema` fetches them, each buffer capped by the reader's limits; a column the driver gives no length for is refused, naming the setting that bounds it.
+/// The reader of `cursor`'s rows as `schema` (from `fetch_schema`) in batches of `batch_rows`, each buffer capped by the reader's limits; a column the driver gives no length for is refused, naming the setting that bounds it. The rows per batch are chosen by the caller from its memory budget, so arrow-odbc's own byte limit is lifted.
 pub(crate) fn batch_reader<C: Cursor>(
     reader: &OdbcReader,
-    mut cursor: C,
-    (dbms, batch_rows): (String, usize),
+    cursor: C,
+    (dbms, schema, batch_rows): (String, SchemaRef, usize),
 ) -> Result<arrow_odbc::OdbcReader<C>, OdbcSourceError> {
-    let schema = fetch_schema(&arrow_schema_from(&mut cursor, Some(&dbms), false)?);
     let mut builder = OdbcReaderBuilder::new();
     builder
         .with_schema(schema)
         .with_dbms_name(dbms)
-        .with_max_num_rows_per_batch(batch_rows)
+        .with_max_num_rows_per_batch(batch_rows.max(1))
+        .with_max_bytes_per_batch(usize::MAX)
         .with_fallibale_allocations(true);
     if let Some(size) = reader.limits.max_text_size {
         builder.with_max_text_size(size);

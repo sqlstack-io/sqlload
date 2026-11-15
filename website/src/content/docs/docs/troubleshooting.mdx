@@ -17,6 +17,8 @@ common ones; each message is copied from SQLLoad.
 | `public.events (kind = "postgres"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one` | From 0.46.0, every table needs a `write_strategy`. Add the line the error shows under the source, for all its tables, or under the table's entry. See [Write strategies](/docs/concepts/write-strategies/). |
 | `write_strategy = "merge" needs a unique_key: the key columns, such as unique_key = ["id"], or unique_key = "{primary_key}" ...` | From 0.46.0, a `merge` table names its key. Set `unique_key` to the columns, or to `"{primary_key}"` for the primary key the source reports. |
 | `items (kind = "odbc"): unique_key = "{primary_key}", but the source reports no primary key for the table. ...` | Name the key columns. An ODBC table whose error adds that `INFORMATION_SCHEMA` lists a primary key has one its driver didn't report; see [MariaDB Connector/ODBC 3.1](/docs/sources/odbc/#mariadb-connectorodbc-31). |
+| `the ODBC fetch buffers of 2 tables loading at once may hold 3.7 GiB together, more than half of this machine's 6 GiB memory limit; ...` | A warning from 0.52.0. It counts the fetch buffers only. Lower `max_batch_memory` on the named source, or `concurrency`. See [Memory](/docs/sources/odbc/#memory). |
+| `column body holds a value of 9000 bytes, longer than max_text_size = 8000; ...` | Raise `max_text_size` on the ODBC source, or remove it: from 0.52.0 a long column is read value by value without it. See [Value sizes](/docs/sources/odbc/#value-sizes). |
 | `write_strategy = "replace" reloads the whole table, so it takes no cursor_column` | Remove `cursor_column`, or choose `merge`, `delete_insert` or `append`. |
 | `lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge` | Change the strategy, or drop `lookback`. |
 | `merge needs a table format to update rows in place; a files target takes append, replace or delete_insert` | Use one of those strategies on a files target. |
@@ -60,6 +62,9 @@ common ones; each message is copied from SQLLoad.
 such as `copy_to_internal_stage`, `hmac`-masked files, or `load_method = { type = "insert" }`. For
 files into Snowflake, an external stage over the files' bucket lets Snowflake read them in place.
 See [Load methods](/docs/targets/).
+
+For an ODBC table, `plan`'s `fetch` line says when a table is read value by value, which is slower
+than bulk. See [Memory](/docs/sources/odbc/#memory).
 
 ## A large first load
 
