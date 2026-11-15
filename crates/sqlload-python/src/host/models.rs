@@ -63,6 +63,7 @@ impl PythonHost for ExtensionHost {
                     masked: request.masked.clone(),
                     arrays: request.arrays.clone(),
                     naming: request.naming,
+                    zone: request.zone,
                 },
             ))
         })

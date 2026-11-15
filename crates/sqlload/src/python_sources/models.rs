@@ -43,6 +43,9 @@ pub struct TableRead {
     /// How the table's columns load and the destination's name limit, which the crossing matches yielded fields to `cursor` and `arrays` by; not sent to the table function.
     #[serde(skip)]
     pub naming: (crate::load_naming::models::Naming, Option<usize>),
+    /// The table's `timezone`, which an `sl.field` parse without its own `tz` reads times without an offset in; `None` is UTC.
+    #[serde(skip)]
+    pub zone: Option<chrono_tz::Tz>,
 }
 
 /// The cursor window a table function may use to read only new data.

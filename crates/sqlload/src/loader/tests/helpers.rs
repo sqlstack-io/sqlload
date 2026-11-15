@@ -1,3 +1,4 @@
+use crate::column_parse::main::column_parse::column_parse;
 use std::collections::{BTreeSet, HashMap};
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -518,7 +519,7 @@ pub(crate) fn not_null_keys(
         .ok_or_else(|| resolved.problems.join("; "))
 }
 
-/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform`.
+/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform` and `parse`.
 pub(crate) fn transform_reader(
     test_case: &TransformReaderTestCase,
 ) -> Result<Option<String>, String> {
@@ -554,5 +555,8 @@ pub(crate) fn transform_reader(
         version: format!("{function}@0"),
         changed: false,
     });
+    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
+    spec.parses
+        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
     Ok(reader_offer(&spec, None, None).needs_loader)
 }

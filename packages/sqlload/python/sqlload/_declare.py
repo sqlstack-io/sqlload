@@ -40,6 +40,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"replace_key",
 		"row_id",
 		"state",
+		"timezone",
 		"type_change_rebuild",
 		"unique_key",
 		"write_strategy",
@@ -56,6 +57,7 @@ TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
 		"flatten",
 		"mask",
 		"max_depth",
+		"parse",
 		"table_name",
 		"unnest",
 	}

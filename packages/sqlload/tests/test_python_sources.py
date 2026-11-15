@@ -518,6 +518,27 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	assert "secret_note" not in columns
 
 
+#: Times as a CSV file or a dict gives them, in Paris around the change to summer time on 29 March 2026, and the UTC instant each loads as;
+#: the loader test `given_a_csv_column_of_mixed_formats_in_paris` reads the same values from a file.
+PARIS_TIMES = [
+	("2026-03-29T01:30:00", "2026-03-29 00:30:00"),
+	("03/29/2026 03:30:00", "2026-03-29 01:30:00"),
+	("03/29/2026 12:00", "2026-03-29 10:00:00"),
+	("03/30/2026", "2026-03-29 22:00:00"),
+	("2026-03-29T09:00:00Z", "2026-03-29 09:00:00"),
+]
+
+
+def test_given_a_dict_column_of_mixed_formats_in_paris_when_loading_with_parse_then_it_loads_the_instants_a_csv_column_does(tmp_path: Path) -> None:
+	parse = "{'Updated At': {'timestamp': ['iso', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%m/%d/%Y']}}"
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', timezone='Europe/Paris', parse={parse})(rows)\n")
+	give(project, "rows", [{"id": index, "Updated At": text} for index, (text, _) in enumerate(PARIS_TIMES, 1)])
+	load(project)
+	assert query(project, """SELECT CAST(timezone('UTC', updated_at) AS VARCHAR), typeof(updated_at) FROM "RAW".shop__rows ORDER BY id""") == [
+		(instant, "TIMESTAMP WITH TIME ZONE") for _, instant in PARIS_TIMES
+	]
+
+
 PRICED_TABLE = """
 import decimal
 

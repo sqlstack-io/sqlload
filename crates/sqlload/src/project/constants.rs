@@ -33,6 +33,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "compat",
     "rename",
     "on_duplicate_names",
+    "timezone",
     "row_id",
     "transform",
     #[cfg(feature = "container-tests")]
@@ -119,6 +120,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "flatten",
     "unnest",
     "max_depth",
+    "parse",
 ];
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.

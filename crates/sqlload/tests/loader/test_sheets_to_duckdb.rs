@@ -79,6 +79,48 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
 }
 
 #[test]
+fn given_a_sheet_s_date_time_column_when_loading_with_parse_and_tz_then_its_wall_clock_times_load_as_instants()
+-> Result<(), String> {
+    run_async(async {
+        let fake = start_fake_sheets().await?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        let project = project_text(&fake.key_json, &fake.base_url, &database);
+        let parsed = "[sources.reference.tables.locations]\nparse = { \"Updated At\" = { timestamp = \"iso\", tz = \"Europe/Paris\" } }\n";
+        std::fs::write(&config, format!("{project}\n{parsed}"))
+            .map_err(|error| error.to_string())?;
+        let test_cases = [SheetsLoadTestCase {
+            description: "the sheet's 09:30 in Paris loads as 08:30 UTC, typed timestamp_tz, and plan names the column's tz",
+            tabs: first_tabs,
+            refused_reads: 0,
+            expected_output: "",
+            query: "SELECT string_agg(Code || ':' || coalesce(CAST(timezone('UTC', updated_at) AS VARCHAR), ''), ',' ORDER BY Code) || '|' || (SELECT data_type FROM information_schema.columns WHERE table_name = 'reference__locations' AND column_name = 'updated_at') FROM raw.reference__locations",
+            expected_result: "L1:2026-11-08 08:30:00,L2:|TIMESTAMP WITH TIME ZONE",
+        }];
+        for test_case in test_cases {
+            fake.place("fake-sheet", (test_case.tabs)());
+            let (_, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (succeeded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(
+                succeeded
+                    && words(&output).contains(&words(test_case.expected_output))
+                    && words(&plan).contains(&words("updated_at timestamp_tz from iso; times without an offset in Europe/Paris (its tz)")),
+                "{}:\n{plan}\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                duckdb_text(&database, test_case.query)?,
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_repeated_merge_key_are_refused()
 -> Result<(), String> {
     run_async(async {
