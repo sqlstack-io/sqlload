@@ -10,6 +10,7 @@ use crate::files_source::models::{
     AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
     XlsxOptions, XmlOptions,
 };
+use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::Naming;
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
@@ -46,6 +47,9 @@ pub struct ProjectConfig {
     /// The file declaring each Python source, by source name.
     #[serde(skip)]
     pub python_modules: BTreeMap<String, String>,
+    /// The `sl.http` paths each Python table writes as literals, by source name and table name.
+    #[serde(skip)]
+    pub python_http_paths: BTreeMap<String, BTreeMap<String, LiteralPaths>>,
     /// The `${ENV:NAME}` variables each connection's settings read, by connection name, for hints.
     #[serde(skip)]
     pub connection_variables: BTreeMap<String, Vec<String>>,

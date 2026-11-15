@@ -673,6 +673,12 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
+    details.extend(
+        spec.python
+            .iter()
+            .filter_map(|python| python.literal_paths.as_ref()?.checked_at_load())
+            .map(|text| detail("paths", text)),
+    );
     if let Some(fetch) = &table.fetch_memory {
         details.push(detail("fetch", fetch.memory.as_str()));
         details.push(detail("buffer", fetch.budget_note.as_str()));

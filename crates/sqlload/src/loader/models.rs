@@ -281,6 +281,8 @@ pub struct PythonTable {
     pub declared: Vec<String>,
     /// Under `unnest = "all"`, the columns chosen from the yielded values as list fields or not so far.
     pub lists: crate::row_batches::types::ListChoices,
+    /// The `sl.http` paths its function writes as literals, which `plan` checks; `None` when it builds no job `plan` can see.
+    pub literal_paths: Option<crate::http_source::models::LiteralPaths>,
 }
 
 /// The cursor range a load reads: `from <= cursor < to` (`from < cursor` when not inclusive), each open when `None`.

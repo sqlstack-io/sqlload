@@ -82,7 +82,7 @@ pub(crate) fn python_spec(settings: &str, warehouse: Warehouse) -> Result<TableS
         r#"[{{"name": "s", "module": "src/s.py", "settings": {{"write_strategy": "replace", "tables": {{"t": {settings}}}}}}}]"#
     );
     let mut spec = first_spec((TARGET, &sources), "s", python_tables, warehouse)?;
-    spec.python = Some(python_table("src/s.py", &spec.source_table));
+    spec.python = Some(python_table("src/s.py", &spec.source_table, None));
     Ok(spec)
 }
 
