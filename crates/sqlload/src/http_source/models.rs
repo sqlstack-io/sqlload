@@ -455,3 +455,34 @@ pub enum Sink {
     Pages(Sender<HttpPage>),
     Keys(Sender<FanKey>),
 }
+
+/// The `sl.http` paths a Python table function writes as literals, which discovery reads from its source without calling it, for `plan` to check as load would.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LiteralPaths {
+    /// Each `fields=` entry of a job that loads rows, as its column name and path.
+    pub fields: Vec<(String, String)>,
+    /// Each `key_path=` of a job that loads rows.
+    pub key_paths: Vec<String>,
+    /// What `plan` can't read as a literal, such as `fields["sku"]` or `key_path`: load checks it.
+    pub computed: Vec<String>,
+    /// The table function's source can't be read, so load checks every path.
+    pub no_source: bool,
+}
+
+impl LiteralPaths {
+    /// The fact `plan` shows when load checks some of the paths: those that are computed, or all of them when the source can't be read.
+    pub fn checked_at_load(&self) -> Option<String> {
+        if self.no_source {
+            return Some(
+                "checked at load, as the table function's source can't be read".to_owned(),
+            );
+        }
+        (!self.computed.is_empty()).then(|| {
+            format!(
+                "checked at load, as they're computed: {}",
+                self.computed.join(", ")
+            )
+        })
+    }
+}

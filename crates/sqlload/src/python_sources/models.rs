@@ -9,6 +9,9 @@ pub struct PythonSource {
     pub module: String,
     /// The source's settings with TOML key names, its tables under `tables` keyed by table name.
     pub settings: serde_json::Map<String, serde_json::Value>,
+    /// The `sl.http` paths each table function writes as literals, by table name; tables that build no job are left out.
+    #[serde(default)]
+    pub http_paths: std::collections::BTreeMap<String, crate::http_source::models::LiteralPaths>,
 }
 
 /// What one table function is called with: its connection, the cursor window and the run.

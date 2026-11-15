@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlload._declare import Connection, Context, FileContext, Source, Table
 from sqlload._http import Job
+from sqlload._http_paths import literal_paths
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
@@ -70,6 +71,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 				"name": table.name,
 				"module": relative,
 				"settings": {"table_name": STANDALONE_TABLE_NAME, "tables": {table.name: _table_settings(table)}},
+				"http_paths": _http_paths([table]),
 			}
 		)
 	for source, _ in sources.values():
@@ -258,7 +260,13 @@ def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	if source.client_factory is not None:
 		settings["shared_client"] = True
 	settings["tables"] = {table.name: _table_settings(table) for table in source.tables}
-	return {"name": source.name, "module": relative, "settings": settings}
+	return {"name": source.name, "module": relative, "settings": settings, "http_paths": _http_paths(source.tables)}
+
+
+def _http_paths(tables: list[Table]) -> dict[str, Any]:
+	"""The `sl.http` paths each of `tables` writes as literals, for `plan` to check, by table name; tables that build no job left out."""
+	found = {table.name: literal_paths(table.function) for table in tables}
+	return {name: paths for name, paths in found.items() if paths is not None}
 
 
 def _table_settings(table: Table) -> dict[str, Any]:

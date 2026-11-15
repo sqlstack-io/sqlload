@@ -34,6 +34,10 @@ pub fn parse_python_project(
         .map_err(|error: toml::de::Error| ProjectError::Syntax(error.to_string()))?;
     project.connection_settings = settings;
     project.python_modules = modules;
+    project.python_http_paths = python
+        .iter()
+        .map(|source| (source.name.clone(), source.http_paths.clone()))
+        .collect();
     project.connection_variables = variables;
     let problems = reference_problems(&project);
     match problems.is_empty() {

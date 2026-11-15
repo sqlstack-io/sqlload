@@ -221,6 +221,44 @@ From 0.50.0, a path in `fields` (a plain string, `sl.field` or `sl.parent`), in 
   fails before any request, and `sl.json` when it is called. Before 0.50.0 these paths loaded NULL
   without a warning.
 
+From 0.52.0, `plan` checks the paths an `sl.http` job writes as literals, so a bad one fails `plan`
+instead of the load. It reads the table function's source and never calls it, so it sends no
+request. It checks the `fields=` values of `paginate` and `fan_out`, the paths in their `sl.field`
+and `sl.parent`, and `key_path=`, with the same checker as load:
+
+```console
+$ sqlload plan
+Plan ready  1 selected
+
+Errors (1)
+└── raw.shop__orders
+    └── reason  fields["sku"]: field path "$.lines[*].sku" uses the wildcard [*], which one column can't hold; take one item with [n] or [-1], or select the list's items as rows
+
+✗ Plan failed with errors  1 selected
+```
+
+- Only calls whose names lead to sqlload count, however it was imported (`import sqlload as sl`,
+  `from sqlload import parent`), on a client from `sl.http(...)` made at module level or in the
+  function. A `paginate` method of another library isn't checked.
+- A path `plan` can't read as a literal, such as a variable, an f-string or a `fields` dict built
+  elsewhere, is checked at load, before any request, as before. So is every path of a function
+  whose source can't be read. `plan` says so on that table:
+
+  ```console
+  $ sqlload plan
+  …
+  └── raw.shop__orders                                replace
+      ├── source  python  sources/shop.py (shop)
+      …
+      └── paths   checked at load, as they're computed: fields["sku"]
+  …
+  ```
+
+- A job built in another function that the table function calls isn't in the table function's
+  source, so only load checks it, and `plan` shows nothing for it.
+- A job passed as another job's `over=` takes no `fields` or `key_path`: load refuses them before
+  any request, whatever their paths, so `plan` leaves its paths alone.
+
 #### Values from around the row
 
 From 0.48.0, an `sl.http` job's fields can read beyond the row itself, all in Rust. This loads one
