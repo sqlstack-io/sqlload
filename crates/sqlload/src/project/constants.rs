@@ -38,6 +38,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "rename",
     "on_duplicate_names",
     "timezone",
+    "where",
     "row_id",
     "transform",
     "deletes",

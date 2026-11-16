@@ -441,3 +441,55 @@ fn trace_argument(block: &str, name: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
+
+/// The `[connections.erp]` settings reaching the test database over psqlODBC.
+pub(crate) fn odbc_connection(port: u16) -> String {
+    format!(
+        "kind = \"odbc\"\nconnection_string = \"Driver={{PostgreSQL Unicode}};Server=127.0.0.1;Port={port};Database=app;Uid=sqlload;Pwd=sqlload;\""
+    )
+}
+
+/// The `[connections.erp]` settings reaching the test database directly.
+pub(crate) fn postgres_connection(port: u16) -> String {
+    format!(
+        "kind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {port}\nuser = \"sqlload\"\npassword = \"sqlload\"\ndatabase = \"app\""
+    )
+}
+
+/// A project reading `erp.orders` and `erp.sites` from the test database over `connection` (its settings) through a `kind` source into DuckDB: the source narrows its tables to site BE01 with `where`, and orders, merged on their reported primary key after `updated_at`, replace it with `orders_filter`.
+pub(crate) fn filtered_project(
+    (connection, kind): (&str, &str),
+    database: &std::path::Path,
+    orders_filter: &str,
+) -> String {
+    format!(
+        r#"
+[connections.erp]
+{connection}
+
+[connections.local]
+kind = "duckdb"
+database = "{database}"
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.erp]
+kind = "{kind}"
+connection = "erp"
+description = "Orders and sites of a generic ERP, site BE01 only."
+include = ["erp.*"]
+write_strategy = "replace"
+where = "site = 'BE01'"
+
+[sources.erp.tables."erp.orders"]
+description = "Open BE01 orders, changed rows found by updated_at."
+cursor_column = "updated_at"
+unique_key = "{{primary_key}}"
+write_strategy = "merge"
+{orders_filter}
+"#,
+        database = database.display(),
+    )
+}

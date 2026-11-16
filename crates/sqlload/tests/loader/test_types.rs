@@ -1315,6 +1315,28 @@ pub(crate) struct NullCursorPlanTestCase {
     pub(crate) expected_plan: &'static str,
 }
 
+/// One load of `erp.orders` and `erp.sites`, narrowed by `where`, after a change at the source.
+#[cfg(feature = "odbc")]
+pub(crate) struct RowFilterTestCase {
+    pub(crate) description: &'static str,
+    /// The source's kind: `odbc` (over psqlODBC) or `postgres`, each loading into its own DuckDB file.
+    pub(crate) source_kind: &'static str,
+    /// The `[connections.erp]` settings for the test database's port.
+    pub(crate) connection: fn(u16) -> String,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The `where` line of the orders table.
+    pub(crate) orders_filter: &'static str,
+    /// Text `plan` prints, before the load.
+    pub(crate) expected_plan: &'static str,
+    /// The load's arguments.
+    pub(crate) load: &'static [&'static str],
+    /// Whether `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// The loaded orders as `id:status` and sites as codes, with the count of loads the orders came from.
+    pub(crate) expected_result: &'static str,
+}
+
 /// One load of `erp.t` over ODBC with a NULL cursor rule, after a change at the source.
 #[cfg(feature = "odbc")]
 pub(crate) struct OdbcNullCursorTestCase {

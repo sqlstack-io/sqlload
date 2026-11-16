@@ -27,13 +27,15 @@ use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, layered, pinned_types,
     table_compat, table_naming,
 };
+#[cfg(feature = "odbc")]
+use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, plan_table};
 use crate::loader::constants::{
     DATE_TEXT_LENGTH, NO_RENAME_HOST, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER,
     RANGE_NEEDS_CURSOR, TOMBSTONE_SUFFIX,
 };
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{DrainedFiles, FoundSource, FoundSources};
+use crate::loader::models::{DrainedFiles, FoundSource, FoundSources, SourceReader};
 use crate::loader::models::{
     PlanOptions, ProjectPlan, RangeFlags, ResolvedTables, SkippedTable, TablePlan, TableSpec,
     TableTransform, TypedCursors, UnreadSource,
@@ -1491,4 +1493,73 @@ pub(crate) async fn found_sources<'a>(
     }
     found.configured.extend(drained_specs);
     Ok(found)
+}
+
+/// `planned`, each table blocked whose `where` fails on source `source_name`: the table's read narrowed to no rows (`(<where>) AND (1 = 0)`, which a database answers without scanning the table) is counted, or dry-run on BigQuery, so nothing is billed; the source is opened only when an unblocked table has a `where`. Then, on an ODBC source, each table still unblocked whose cursor bounds its driver refuses (see `block_refused_bounds`).
+pub(crate) async fn block_failing_reads(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &SourceConfig),
+    mut planned: Vec<TablePlan>,
+) -> Result<Vec<TablePlan>, LoaderError> {
+    let filtered =
+        |table: &TablePlan| table.schema.blocked.is_none() && table.spec.row_filter.is_some();
+    let reader = match planned.iter().any(filtered) {
+        true => Some(crate::loader::_helpers::sources::open_source(project, source, 1).await?),
+        false => None,
+    };
+    for table in planned.iter_mut().filter(|table| filtered(table)) {
+        let spec = &table.spec;
+        let filter = spec
+            .read_filter(Some(crate::loader::constants::NO_ROWS.to_owned()))
+            .unwrap_or_default();
+        if let Some(error) = failed_count(reader.as_ref(), &spec.source_table, &filter).await {
+            let row_filter = spec.row_filter.clone().unwrap_or_default();
+            table.schema = blocked_plan(vec![format!(
+                "where {row_filter:?} fails on the source: {error}"
+            )]);
+        }
+    }
+    #[cfg(feature = "odbc")]
+    if source.kind == crate::project::models::SourceKind::Odbc {
+        block_refused_bounds(project, (source_name, source), &mut planned).await?;
+    }
+    #[cfg(not(feature = "odbc"))]
+    let _ = source_name;
+    Ok(planned)
+}
+
+/// Why counting the rows of `table` that `filter` selects fails on `reader`'s database (a dry run on BigQuery), or `None` when it runs, or there is no database to ask.
+async fn failed_count(
+    reader: Option<&SourceReader>,
+    table: &SourceTable,
+    filter: &str,
+) -> Option<String> {
+    match reader? {
+        SourceReader::Postgres(client, _) => {
+            crate::postgres_source::main::count_rows::count_rows(client, table, filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::Snowflake(snowflake) => {
+            crate::snowflake_source::main::count_rows::count_rows(snowflake, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::BigQuery(bigquery) => {
+            crate::bigquery_source::main::dry_count::dry_count(bigquery, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        #[cfg(feature = "odbc")]
+        SourceReader::Odbc(odbc) => {
+            crate::odbc_source::main::count_rows::count_rows(odbc, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::Files(_) | SourceReader::Sheets(..) => None,
+    }
 }

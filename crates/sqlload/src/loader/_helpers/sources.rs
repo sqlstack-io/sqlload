@@ -1500,7 +1500,9 @@ async fn read_each(
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),
-                filter: part.filter.or_else(|| table.source_filter.clone()),
+                filter: table
+                    .spec
+                    .read_filter(part.filter.or_else(|| table.source_filter.clone())),
                 order_by: part.order_by,
                 batch_rows: SOURCE_BATCH_ROWS,
                 batch_bytes: part
@@ -1537,7 +1539,9 @@ async fn read_each(
             Ok(read_files(folder, &read, &part.footers, loaded).await?)
         }
         (SourceReader::Snowflake(snowflake), _) => {
-            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
             let request = unload_request(table, filter.as_deref());
             Ok(unload_rows(snowflake, &request, on_batch).await?)
         }
@@ -1547,6 +1551,7 @@ async fn read_each(
                 Some(filter) => (Some(filter), &part.parameters[..]),
                 None => (table.source_filter.clone(), &table.source_parameters[..]),
             };
+            let filter = table.spec.read_filter(filter);
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &table.spec.source_table,
                 sql: table
@@ -1566,7 +1571,9 @@ async fn read_each(
             Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::BigQuery(reader), _) => {
-            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
             let request = BigQueryReadRequest {
                 table: &table.spec.source_table,
                 sql: table
@@ -1710,7 +1717,9 @@ pub(crate) async fn unload_source<T>(
             table.spec.source_table.qualified_name()
         )));
     };
-    let filter = part.filter.or_else(|| table.source_filter.clone());
+    let filter = table
+        .spec
+        .read_filter(part.filter.or_else(|| table.source_filter.clone()));
     unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
 }
 

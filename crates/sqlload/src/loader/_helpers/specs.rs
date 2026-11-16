@@ -540,6 +540,9 @@ pub(crate) fn build_spec(
             }),
             _ => warehouse_source(context.source, overrides),
         },
+        row_filter: layered(&settings.row_filter, &defaults.row_filter)
+            .filter(|_| overrides.sql.is_none() && overrides.tombstones_of.is_none())
+            .map(|(value, _)| value),
         layout,
         transform: None,
         parses,
@@ -1365,7 +1368,9 @@ pub(crate) async fn null_cursor_rows(
     let Some(expression) = source_cursor(spec, &table.read_columns, cursor_type) else {
         return Ok(None);
     };
-    let filter = format!("{expression} IS NULL");
+    let filter = spec
+        .read_filter(Some(format!("{expression} IS NULL")))
+        .unwrap_or_default();
     let sql = spec
         .warehouse_source
         .as_ref()

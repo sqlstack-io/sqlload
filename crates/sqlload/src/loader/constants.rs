@@ -37,6 +37,9 @@ pub const INCLUSIVE_BOUND: &str = ">=";
 /// The comparison reading only values after a cursor's lower bound.
 pub const EXCLUSIVE_BOUND: &str = ">";
 
+/// A condition no row meets, so a database checks a query without scanning the table.
+pub const NO_ROWS: &str = "1 = 0";
+
 /// The source type label Python columns carry.
 pub const PYTHON_COLUMN_TYPE: &str = "python";
 
