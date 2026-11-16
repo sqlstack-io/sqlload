@@ -1,4 +1,5 @@
 use sqlload_testkit::postgres::main::connect::connect;
+use sqlload_testkit::postgres::main::hold_slot::hold_slot;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
@@ -6,13 +7,13 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 use crate::helpers::{
     cdc_files_project, crashed_files_batch, delete_items_folder, download_out, duckdb_text,
     local_store, nothing_planted, plant_unfinished_commit, replace_items_with_unfinished_copy,
-    run_async, run_cdc_steps, seaweedfs_store, step,
+    run_async, run_cdc_steps, run_sqlload, seaweedfs_store, step,
 };
 use crate::test_postgres_cdc::{
     ADD_COLUMN, BACKFILL_CHANGELOG, CHANGELOG_RESULT, CHANGES, EXTRA_TABLE, LARGE_TRANSACTION, LOG,
     SETUP,
 };
-use crate::test_types::{CdcFilesTestCase, CdcStep};
+use crate::test_types::{CdcFilesTestCase, CdcStep, HeldSlotTestCase};
 
 const FILES_CHANGELOG_QUERY: &str = "SELECT (SELECT string_agg(_sqlload_seq || ':' || _sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/orders/*.parquet', union_by_name = true)) || ' | ' || (SELECT string_agg(_sqlload_op || ':' || id, ',' ORDER BY _sqlload_lsn, _sqlload_seq, id) FROM read_parquet('{root}/out/log/items/*.parquet', union_by_name = true)) || ' | ' || (SELECT string_agg(_sqlload_unchanged, ';') FROM read_parquet('{root}/out/log/orders/*.parquet', union_by_name = true) WHERE _sqlload_op = 'update')";
 
@@ -405,6 +406,69 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
                 duckdb_text(&folder.path().join("check.duckdb"), &query)?,
                 test_case.expected_result,
                 "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+/// A load started while a stopped load's session still holds the slot waits for the server to release it and reads on, and fails naming the server process when the slot stays held past the wait.
+#[test]
+fn given_a_postgres_cdc_slot_another_session_holds_when_a_load_starts_then_it_waits_for_the_release()
+-> Result<(), String> {
+    let test_cases = [
+        HeldSlotTestCase {
+            description: "a slot released a moment later is read on",
+            held_seconds: 3,
+            source_change: CHANGES,
+            expected_success: true,
+            expected_output: "Completed",
+        },
+        HeldSlotTestCase {
+            description: "a slot held past the wait fails naming its server process",
+            held_seconds: 40,
+            source_change: "",
+            expected_success: false,
+            expected_output: "slot sqlload_log is still in use by server process",
+        },
+    ];
+    run_async(|| async move {
+        for test_case in test_cases {
+            let postgres = start_postgres_version("17-alpine").await?;
+            let client = connect(&postgres).await?;
+            client
+                .batch_execute(SETUP)
+                .await
+                .map_err(|error| error.to_string())?;
+            let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let (_, connection) = local_store("", &folder.path().join("lake"));
+            let config = folder.path().join("sqlload.toml");
+            std::fs::write(&config, cdc_files_project(postgres.port, &connection))
+                .map_err(|error| error.to_string())?;
+            run_cdc_steps(
+                &client,
+                &config,
+                (&FILES_CAUGHT_UP[..1], 0, ""),
+                test_case.description,
+            )
+            .await?;
+            hold_slot(
+                &postgres,
+                &client,
+                ("sqlload_log", "sqlload_log"),
+                test_case.held_seconds,
+            )
+            .await?;
+            client
+                .batch_execute(test_case.source_change)
+                .await
+                .map_err(|error| error.to_string())?;
+            let (success, output) = run_sqlload(&config, LOG, ("", ""))?;
+            assert_eq!(
+                (success, output.contains(test_case.expected_output)),
+                (test_case.expected_success, true),
+                "{}\n{output}",
                 test_case.description
             );
         }

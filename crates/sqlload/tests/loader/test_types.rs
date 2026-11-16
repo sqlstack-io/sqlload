@@ -661,6 +661,18 @@ pub(crate) struct FollowTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A load started while another session still holds the source's slot.
+pub(crate) struct HeldSlotTestCase {
+    pub(crate) description: &'static str,
+    /// How long the other session holds the slot after the first load.
+    pub(crate) held_seconds: u64,
+    /// SQL run in Postgres before the next load.
+    pub(crate) source_change: &'static str,
+    pub(crate) expected_success: bool,
+    /// Text the next load's output must contain.
+    pub(crate) expected_output: &'static str,
+}
+
 /// A `postgres_cdc` scenario into a files target (see [`cdc_files_project`](crate::helpers::cdc_files_project)), with what is planted in the folders after its first step.
 pub(crate) struct CdcFilesTestCase {
     pub(crate) description: &'static str,

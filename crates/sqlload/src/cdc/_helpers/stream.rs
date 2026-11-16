@@ -27,7 +27,8 @@ use crate::cdc::_helpers::spill::SpillFile;
 use crate::cdc::constants::{
     BACKFILL_SLOT_SUFFIX, BATCH_CHANGES, COLUMN_LISTS_VERSION, GENERATED_COLUMNS_VERSION,
     LOST_WAL_STATUS, MICROS_PER_SECOND, POSTGRES_EPOCH_MICROS, REPLAN_ADVICE, REPLICATION_OPTIONS,
-    SLOT_NAME_BYTES, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS, SPILL_BYTES, STOP_MESSAGE_PREFIX,
+    SLOT_NAME_BYTES, SLOT_RELEASE_POLL, SLOT_RELEASE_WAIT, SLOTS_FULL_ERROR, SNAPSHOT_SETTINGS,
+    SPILL_BYTES, STOP_MESSAGE_PREFIX,
 };
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::cdc::models::{
@@ -380,6 +381,42 @@ impl CdcSource<'_> {
         }
     }
 
+    /// Wait until no session holds the slot or its backfill slot, up to [`SLOT_RELEASE_WAIT`]: a load that stopped leaves its walsender holding them until Postgres notices the client is gone. A slot still held after that is another load's, or a stopped one's the server hasn't noticed (a lost network connection lasts until `wal_sender_timeout`), and fails naming the server process.
+    async fn released_slot(&self, control: &Client) -> Result<(), LoaderError> {
+        let names = [self.cdc.slot.clone(), self.backfill_slot()];
+        let started = std::time::Instant::now();
+        loop {
+            let holder = control
+                .query_opt(
+                    "SELECT slot_name::text, active_pid FROM pg_replication_slots WHERE slot_name = ANY($1) AND database = current_database() AND active_pid IS NOT NULL LIMIT 1",
+                    &[&names.as_slice()],
+                )
+                .await
+                .map_err(postgres)?;
+            let Some(row) = holder else {
+                return Ok(());
+            };
+            if started.elapsed() >= SLOT_RELEASE_WAIT {
+                let (name, pid): (String, i32) = (row.get(0), row.get(1));
+                return Err(LoaderError::Invalid(format!(
+                    "slot {name} is still in use by server process {pid} after {} s: another load is reading it, or one that stopped hasn't been noticed by the server yet; let that load finish, or end the process with SELECT pg_terminate_backend({pid}) once no load is running",
+                    SLOT_RELEASE_WAIT.as_secs()
+                )));
+            }
+            tokio::time::sleep(SLOT_RELEASE_POLL).await;
+        }
+    }
+
+    /// The name of the temporary slot [`Self::backfill`] copies joining tables under: the slot's name, cut to fit, with [`BACKFILL_SLOT_SUFFIX`].
+    fn backfill_slot(&self) -> String {
+        self.cdc
+            .slot
+            .chars()
+            .take(SLOT_NAME_BYTES - BACKFILL_SLOT_SUFFIX.len())
+            .chain(BACKFILL_SLOT_SUFFIX.chars())
+            .collect()
+    }
+
     /// The slot's confirmed position and WAL status, or `None` when it does not exist.
     async fn slot_state(&self, control: &Client) -> Result<Option<(String, String)>, LoaderError> {
         Ok(control
@@ -519,6 +556,7 @@ impl CdcSource<'_> {
         let missing = self.ensure_publication(&control).await?;
         self.refuse_unstreamed(&control).await?;
         self.log()?.ensure().await?;
+        self.released_slot(&control).await?;
         let mut slot = self.slot_state(&control).await?;
         if self.run.options.resnapshot && slot.is_some() {
             control
@@ -638,13 +676,7 @@ impl CdcSource<'_> {
         let mut session = ReplicationClient::connect_gated(self.replication_config().await?)
             .await
             .map_err(|error| self.stream_failure(error))?;
-        let name: String = self
-            .cdc
-            .slot
-            .chars()
-            .take(SLOT_NAME_BYTES - BACKFILL_SLOT_SUFFIX.len())
-            .chain(BACKFILL_SLOT_SUFFIX.chars())
-            .collect();
+        let name = self.backfill_slot();
         let created = session
             .simple_query(&format!(
                 "CREATE_REPLICATION_SLOT {} TEMPORARY LOGICAL pgoutput (SNAPSHOT 'export')",
