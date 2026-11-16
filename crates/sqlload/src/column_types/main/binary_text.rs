@@ -16,6 +16,13 @@ pub fn binary_columns_as_text(
     target: &SchemaRef,
 ) -> Result<RecordBatch, String> {
     let schema = batch.schema();
+    if !schema
+        .fields()
+        .iter()
+        .any(|field| field.metadata().contains_key(PYTHON_BYTES_METADATA_KEY))
+    {
+        return Ok(batch.clone());
+    }
     let (fields, arrays): (Vec<Field>, Vec<ArrayRef>) = schema
         .fields()
         .iter()
@@ -34,7 +41,7 @@ fn as_text(field: &Field, column: &ArrayRef, target: &SchemaRef) -> (Field, Arra
         && target
             .field_with_name(field.name())
             .is_ok_and(|wanted| wanted.data_type() == &DataType::Utf8);
-    match binary_text(column).filter(|_| wants_text) {
+    match wants_text.then(|| binary_text(column)).flatten() {
         Some(text) => (Field::new(field.name(), DataType::Utf8, true), text),
         None => (field.clone(), column.clone()),
     }
