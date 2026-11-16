@@ -23,6 +23,7 @@ pub fn open_table_writer(
         Destination::DuckDb(duckdb) => Ok(Writer::DuckDb(DuckDbWriter {
             destination: duckdb.clone(),
             open_transaction: false,
+            uncommitted_bytes: 0,
         })),
         Destination::Snowflake(snowflake) => {
             let external_folder = match &route {

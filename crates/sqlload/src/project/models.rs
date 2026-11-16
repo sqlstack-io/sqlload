@@ -237,6 +237,9 @@ pub enum ConnectionConfig {
     DuckDb {
         /// The database file; `:memory:` for an in-memory database.
         database: String,
+        /// The most memory DuckDB's buffer pool may hold, such as `"512MB"`; DuckDB's own default (80% of the machine's memory) when unset.
+        #[serde(default)]
+        memory_limit: Option<ByteSize>,
     },
     /// A MotherDuck database, opened through DuckDB's `md:` connection.
     #[serde(rename = "motherduck")]

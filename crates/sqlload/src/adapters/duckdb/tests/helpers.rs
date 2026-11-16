@@ -127,6 +127,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             bridge_duckdb: String::new(),
         },
         open_transaction: false,
+        uncommitted_bytes: 0,
     };
     let files = UnloadedFiles {
         folder: Location {

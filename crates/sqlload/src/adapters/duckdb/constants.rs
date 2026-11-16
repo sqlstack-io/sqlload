@@ -20,3 +20,5 @@ pub const UNLOADED_FILE_ROWS: i64 = 1 << 32;
 pub const MOTHERDUCK_VERSION_QUERY: &str = "SELECT md_version()";
 /// The first DuckDB major version that shreds a VARIANT column's common fields into columns, so queries on them are fast.
 pub const SHREDDING_DUCKDB_MAJOR: u32 = 2;
+/// About how many bytes of Arrow rows a build table takes per commit. DuckDB keeps the rows of a commit that fill no whole row group in memory and copies them into its write-ahead log at commit, so few wide rows in one commit peak at several times their size; a build table is invisible until it is swapped in and is dropped when its load fails, so committing it in steps changes nothing a reader sees.
+pub const BUILD_COMMIT_BYTES: usize = 64 << 20;

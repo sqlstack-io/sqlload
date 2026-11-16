@@ -12,7 +12,10 @@ pub(in crate::adapters) fn open_destination(
     target_database: Option<&str>,
 ) -> Result<DuckDbDestination, DuckDbError> {
     match connection {
-        ConnectionConfig::DuckDb { database } => open_duckdb(database),
+        ConnectionConfig::DuckDb {
+            database,
+            memory_limit,
+        } => open_duckdb(database, memory_limit.map(|limit| limit.0)),
         ConnectionConfig::MotherDuck { .. } => open_motherduck(connection, target_database, None),
         other => Err(DuckDbError::Task(format!(
             "a {} connection is not a DuckDB one",

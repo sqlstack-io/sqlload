@@ -38,4 +38,6 @@ pub struct DuckDbWriter {
     pub destination: DuckDbDestination,
     /// A transaction is open on the table's connection.
     pub open_transaction: bool,
+    /// The Arrow bytes appended to a build table since its transaction began.
+    pub uncommitted_bytes: usize,
 }

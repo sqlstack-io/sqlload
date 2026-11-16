@@ -1,10 +1,11 @@
-//! DuckDB's write session: Arrow appends, in one transaction per batch when the batch goes straight into the table or a build table.
+//! DuckDB's write session: Arrow appends, in one transaction per batch when the batch goes straight into the table, and in one per [`BUILD_COMMIT_BYTES`] into a build table.
 
 use arrow_array::RecordBatch;
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
+use crate::adapters::duckdb::constants::BUILD_COMMIT_BYTES;
 use crate::adapters::duckdb::main::_append_batch::append_batch;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::models::DuckDbWriter;
@@ -22,6 +23,9 @@ impl TableWriter for DuckDbWriter {
         batch: RecordBatch,
     ) -> Result<(), LoaderError> {
         let into = target.staging.unwrap_or(target.table);
+        if target.builds && self.uncommitted_bytes >= BUILD_COMMIT_BYTES {
+            self.load_batch(target).await?;
+        }
         if (target.direct || target.builds) && !self.open_transaction {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
@@ -32,6 +36,7 @@ impl TableWriter for DuckDbWriter {
             .filter(|column| is_variant(&column.column_type))
             .map(|column| column.name.as_str())
             .collect();
+        self.uncommitted_bytes += batch.get_array_memory_size();
         Ok(append_batch(&self.destination, (into, &variants), batch).await?)
     }
 
@@ -48,6 +53,7 @@ impl TableWriter for DuckDbWriter {
             execute_statements(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
             self.open_transaction = false;
         }
+        self.uncommitted_bytes = 0;
         Ok(())
     }
 
