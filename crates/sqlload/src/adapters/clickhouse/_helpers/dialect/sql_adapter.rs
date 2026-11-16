@@ -5,8 +5,9 @@ use crate::adapters::clickhouse::_helpers::dialect::type_names::{logical_type, p
 use crate::adapters::clickhouse::_helpers::dialect::write::{
     clear_statements, range_condition, swap_statements, write_statements,
 };
+use crate::adapters::clickhouse::_helpers::session::steps::publish_step;
 use crate::adapters::clickhouse::constants::EMPTY_SORTING_KEY;
-use crate::adapters::clickhouse::models::ClickHouseSql;
+use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
@@ -72,7 +73,7 @@ impl SqlAdapter for ClickHouseSql {
         false
     }
 
-    fn publishes_ranges_once(&self) -> bool {
+    fn publishes_runs_once(&self) -> bool {
         true
     }
 
@@ -297,6 +298,16 @@ impl SqlAdapter for ClickHouseSql {
     /// ClickHouse's typed bounds, as its partition publish displaces the rows.
     fn render_replaced_rows(&self, request: &WriteStatementsRequest<'_>) -> Option<String> {
         Some(range_condition(self, request))
+    }
+
+    /// A leading [`PublishStep::FillBuild`], whose copy would otherwise hold up every other table's schema changes.
+    fn unguarded_statements(&self, statements: &[String]) -> usize {
+        usize::from(statements.first().is_some_and(|statement| {
+            matches!(
+                publish_step(statement),
+                Ok(Some(PublishStep::FillBuild { .. }))
+            )
+        }))
     }
 
     /// Every statement commits on its own: ClickHouse has no transactions.

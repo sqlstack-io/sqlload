@@ -187,3 +187,15 @@ pub const TOMBSTONE_SUFFIX: &str = "__sqlload_deletes";
 
 /// Why `--sync-deletes` fails a plan none of whose selected tables sets `deletes`.
 pub const NO_DELETES_TABLES: &str = "--sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes. Fix: set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes";
+
+/// Rows a merge [published once per run](crate::loader::_helpers::table_plan::publishes_once) stages before it commits anyway, at its next cut: matching the staged keys holds them all in one set on the server (about 90 bytes a key on ClickHouse), which this keeps under about 1 GiB.
+pub const MERGE_RUN_ROWS: u64 = 10_000_000;
+
+/// How `plan` words a run published in one commit.
+pub const PUBLISHED_ONCE: &str = "published in one commit";
+
+/// How `plan` words a `delete_insert` published in one commit.
+pub const RANGE_PUBLISHED_ONCE: &str = "published in one commit replacing the whole range";
+
+/// How `plan` words a merge published in one commit, up to [`MERGE_RUN_ROWS`] rows.
+pub const MERGE_PUBLISHED_ONCE: &str = "published in one commit, or one every 10 million rows";

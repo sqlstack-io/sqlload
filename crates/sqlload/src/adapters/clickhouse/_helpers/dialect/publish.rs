@@ -45,6 +45,24 @@ pub(crate) fn partition_key_query(database: &str, table: &str) -> String {
     )
 }
 
+/// The query answering `table`'s storage in `database` as a `CREATE TABLE` takes it after `ENGINE =`: its engine, keys and settings.
+pub(crate) fn engine_query(database: &str, table: &str) -> String {
+    format!(
+        "SELECT engine_full FROM system.tables WHERE database = {} AND name = {}",
+        ClickHouseSql.render_loader_value_literal(database),
+        ClickHouseSql.render_loader_value_literal(table)
+    )
+}
+
+/// The query answering a row when `table` in `database` can take its rows in an unpartitioned stand-in of its own columns and storage settings: `CREATE TABLE ... AS` carries a `PRIMARY KEY` and `SAMPLE BY` over, which the stand-in's sorting key would not satisfy, and storage whose settings `engine_full` shows hidden (such as a disk's credentials) would be built again without them.
+pub(crate) fn stageable_query(database: &str, table: &str) -> String {
+    format!(
+        "SELECT 1 FROM system.tables WHERE database = {} AND name = {} AND sampling_key = '' AND NOT match(engine_full, 'PRIMARY KEY|SAMPLE BY|HIDDEN')",
+        ClickHouseSql.render_loader_value_literal(database),
+        ClickHouseSql.render_loader_value_literal(table)
+    )
+}
+
 /// The query listing the columns `table`'s partition key reads.
 pub(crate) fn partition_key_columns_query(database: &str, table: &str) -> String {
     format!(

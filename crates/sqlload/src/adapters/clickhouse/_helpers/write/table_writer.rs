@@ -2,6 +2,7 @@
 
 use arrow_array::RecordBatch;
 
+use crate::adapters::clickhouse::_helpers::session::steps::stage_build;
 use crate::adapters::clickhouse::_helpers::write::arrow_batch::clickhouse_batch;
 use crate::adapters::clickhouse::constants::INSERT_BYTES;
 use crate::adapters::clickhouse::main::session::_insert_arrow::insert_arrow;
@@ -29,11 +30,23 @@ impl TableWriter for ClickHouseWriter {
         };
         let batch =
             clickhouse_batch(&batch, (columns, target.builds)).map_err(LoaderError::Invalid)?;
-        let names: Vec<String> = batch
+        let fields: Vec<String> = batch
             .schema()
             .fields()
             .iter()
-            .map(|field| ClickHouseSql.render_identifier(field.name()))
+            .map(|field| field.name().clone())
+            .collect();
+        let qualified = ClickHouseSql.render_qualified_name(into);
+        if target.builds
+            && target.staging.is_some()
+            && self.staged_build.as_ref() != Some(&qualified)
+        {
+            stage_build(&self.destination, (&into.schema, &into.table), &fields).await?;
+            self.staged_build = Some(qualified);
+        }
+        let names: Vec<String> = fields
+            .iter()
+            .map(|name| ClickHouseSql.render_identifier(name))
             .collect();
         let statement = format!(
             "INSERT INTO {} ({}) FORMAT ArrowStream",

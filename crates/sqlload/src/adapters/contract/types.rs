@@ -104,8 +104,8 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
-    /// Whether a `delete_insert` read in windows or cursor-ordered batches is staged whole and published in one commit at the end, not one commit per batch: each publish here rewrites the partitions it touches, so batches sharing a partition rewrite it again each time, and readers would see the run half published between commits.
-    fn publishes_ranges_once(&self) -> bool {
+    /// Whether a `delete_insert`, `append` or deduplicating `merge` read in windows or cursor-ordered batches is staged whole and published in one commit at the end, not one commit per batch: each publish here rewrites the partitions it touches, so batches sharing a partition rewrite it again each time, and readers would see the run half published between commits.
+    fn publishes_runs_once(&self) -> bool {
         false
     }
 
@@ -541,6 +541,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether a files source may `merge` into this warehouse, file by file with a run record in each file's commit (tested on DuckDB and Postgres so far).
     fn merges_files(&self) -> bool {
         false
+    }
+
+    /// How many of a commit's leading `statements` that swaps a table in run before the destination's schema-change lock is taken, as they copy rows and take the lock only for their own schema changes.
+    fn unguarded_statements(&self, _statements: &[String]) -> usize {
+        0
     }
 
     /// Whether `statement`, run alone, commits by itself, so a run record cannot share its transaction.

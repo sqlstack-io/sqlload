@@ -42,14 +42,29 @@ pub(crate) fn swap_statements(
     ]
 }
 
-/// The statements applying `request.mode` from `staging`. A build table is swapped in. Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key (see [`displaced_keys`]) or `delete_insert` covers by its range or holds a value of its `replace_key` the delta holds.
+/// The statements applying `request.mode` from `staging`. A build table is swapped in, once rows sent to it unpartitioned are partitioned (see [`PublishStep::FillBuild`]). Otherwise the staged rows, converted to the table's types, go into a delta table created `AS` the table, so it has its engine and keys; `replace` swaps that in whole, and the incremental modes publish its partitions, replacing the table's rows that `merge` matches by key (see [`displaced_keys`]) or `delete_insert` covers by its range or holds a value of its `replace_key` the delta holds.
 pub(crate) fn write_statements(
     adapter: &ClickHouseSql,
     request: &WriteStatementsRequest<'_>,
     staging: &TableName,
 ) -> Vec<String> {
     if request.built.is_some() {
-        return swap_statements(adapter, request.table, staging);
+        let swap = with_suffix(staging, SWAP_SUFFIX);
+        let fill = PublishStep::FillBuild {
+            target: (request.table.schema.clone(), request.table.table.clone()),
+            build: (staging.schema.clone(), staging.table.clone()),
+            swap: swap.table.clone(),
+        };
+        return [
+            publish_statement(&fill),
+            format!(
+                "DROP TABLE IF EXISTS {}",
+                adapter.render_qualified_name(&swap)
+            ),
+        ]
+        .into_iter()
+        .chain(swap_statements(adapter, request.table, staging))
+        .collect();
     }
     let target = adapter.render_qualified_name(request.table);
     let delta_table = with_suffix(staging, SWAP_SUFFIX);

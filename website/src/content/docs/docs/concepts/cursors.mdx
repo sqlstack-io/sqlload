@@ -225,8 +225,8 @@ date and timestamp cursors. `--start-cursor` and the typed flags win over it. Wi
 ## Batches
 
 A large load commits along the way instead of all at the end, so a failure keeps what committed and
-the next run carries on from there. The exception is `delete_insert` into ClickHouse read by cursor,
-which publishes once per run (last row below). `plan -v` of one table shows how it commits, on its
+the next run carries on from there. The exception is ClickHouse, where `delete_insert`, `append`
+and `merge` publish once per run (last row below). `plan -v` of one table shows how it commits, on its
 `commits` line, or `batch` for a table with neither a cursor nor logged state.
 
 | Table | Commits |
@@ -236,7 +236,7 @@ which publishes once per run (last row below). `plan -v` of one table shows how 
 | Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
 | Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |
 | `replace` and `--reload` | Once, at the end: the new table is swapped in. |
-| `delete_insert` into ClickHouse, in windows or cursor order | Once, at the end: everything read is staged and the whole range published together. A stopped run publishes nothing, so split a long backfill with `--end-cursor`. |
+| `delete_insert` into ClickHouse in windows or cursor order, and from 0.60.0 `append` and `merge` | Once, at the end: everything read is staged and published together. A merge also commits every 10 million waiting rows, and with `on_duplicate_keys = "fail"` it commits each batch. A stopped run publishes nothing after its last commit, so split a long backfill with `--end-cursor`. |
 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
 integer cursor without `--end-cursor` ends at its maximum when `plan` ran. Other sources can't report
