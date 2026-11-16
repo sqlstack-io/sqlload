@@ -112,12 +112,17 @@ the details they share.
 | `DATE` | `date` |
 | `TIMESTAMP` | `timestamp_tz`, in UTC |
 | `TIMESTAMP_NTZ` | `timestamp_ntz` |
+| `TIMESTAMP(p)`, `TIMESTAMP_NTZ(p)`, p over 6 | none: microseconds are the most a timestamp keeps, so pin `text`, or exclude the column |
 | `ARRAY`, `MAP`, `STRUCT`, `VARIANT` | `json` |
 | `INTERVAL` and others | none: pin `text`, or exclude the column |
 
 Pin a type to load a column another way, such as `columns = { total = "decimal(18,2)" }`. A value
 that doesn't convert to the pinned type fails the read, naming the column, rather than loading as
 NULL. An `array(T)` pin isn't available: arrays load as `json`. See [Types](/docs/concepts/types/).
+
+A `STRING` with a collation other than `UTF8_BINARY`, such as `UTF8_LCASE`, loads as `text`. As a
+text cursor it is compared in byte order (`COLLATE UTF8_BINARY`), the order the destination's
+maximum is found in, so a case-insensitive collation doesn't skip rows.
 
 ## Cost
 

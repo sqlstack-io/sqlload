@@ -1,5 +1,6 @@
 //! Databricks SQL for reading a table or query.
 
+use crate::databricks_source::constants::{BINARY_COLLATION, COLLATE};
 use crate::databricks_source::models::DatabricksReadRequest;
 use crate::postgres_source::models::SourceTable;
 
@@ -25,10 +26,10 @@ fn from_item(catalog: &str, (table, sql): (&SourceTable, Option<&str>)) -> Strin
 
 /// `SELECT <read columns> FROM <the query or table> [WHERE <filter>]`.
 pub(crate) fn select_query(catalog: &str, request: &DatabricksReadRequest<'_>) -> String {
-    let columns: Vec<&str> = request
+    let columns: Vec<String> = request
         .columns
         .iter()
-        .map(|column| column.expression.as_str())
+        .map(|column| selected(&column.expression))
         .collect();
     let filter = request
         .filter
@@ -39,6 +40,14 @@ pub(crate) fn select_query(catalog: &str, request: &DatabricksReadRequest<'_>) -
         columns.join(", "),
         from_item(catalog, (request.table, request.sql))
     )
+}
+
+/// A read column's expression in a select list: as it is, or a collated name re-collated (`` `a` COLLATE UTF8_BINARY ``) named as before, so the result's column keeps its name.
+fn selected(expression: &str) -> String {
+    match expression.strip_suffix(&format!("{COLLATE}{BINARY_COLLATION}")) {
+        Some(name) => format!("{expression} AS {name}"),
+        None => expression.to_owned(),
+    }
 }
 
 /// `SELECT COUNT(*) FROM <the query or table> WHERE <filter>`, the table and query written as `select_query` writes them: how many rows `filter` selects.

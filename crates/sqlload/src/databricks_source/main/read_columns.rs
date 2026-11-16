@@ -5,9 +5,10 @@ use std::collections::BTreeMap;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::databricks_source::_helpers::query::quote_identifier;
+use crate::databricks_source::constants::{BINARY_COLLATION, COLLATE};
 use crate::postgres_source::models::{ReadColumn, SourceTable, WireType};
 
-/// How to read every column of `table`, using `pinned` types where given and the natural mapping otherwise; each read column's expression is its quoted name, which cursor filters compare against. A pin with no Arrow type, or an `array(T)` pin (Databricks sends its arrays as JSON text, read as `json`), is a problem.
+/// How to read every column of `table`, using `pinned` types where given and the natural mapping otherwise; each read column's expression is its quoted name, which cursor filters compare against, and for a string with a collation other than `UTF8_BINARY` that name `COLLATE UTF8_BINARY`, so a text cursor compares bytes as the destination's maximum was found. A pin with no Arrow type, or an `array(T)` pin (Databricks sends its arrays as JSON text, read as `json`), is a problem.
 pub fn read_columns(
     table: &SourceTable,
     pinned: &BTreeMap<String, ColumnType>,
@@ -32,9 +33,15 @@ pub fn read_columns(
             ));
             continue;
         }
+        let quoted = quote_identifier(column.source_spelling.as_deref().unwrap_or(&column.name));
+        let collated = column.postgres_type.contains(COLLATE)
+            && !column.postgres_type.ends_with(BINARY_COLLATION);
         columns.push(ReadColumn {
             name: column.name.clone(),
-            expression: quote_identifier(column.source_spelling.as_deref().unwrap_or(&column.name)),
+            expression: match collated {
+                true => format!("{quoted}{COLLATE}{BINARY_COLLATION}"),
+                false => quoted,
+            },
             wire: WireType::Text,
             output,
         });
