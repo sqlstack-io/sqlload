@@ -31,6 +31,8 @@ pub(crate) struct FileSelectionTestCase {
     pub(crate) keys: &'static [&'static str],
     pub(crate) format: SourceFormat,
     pub(crate) compression: Compression,
+    /// The source's `pattern`, which replaces the format's suffixes.
+    pub(crate) pattern: Option<&'static str>,
     /// The keys read as data files, each with the decompression it is read with.
     pub(crate) expected_files: &'static [(&'static str, Codec)],
 }

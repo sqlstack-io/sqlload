@@ -80,6 +80,38 @@ const CSV_RUNS: &[TextFilesRun] = &[
 /// Rows, names in id order (the quoted delimiter kept), the newest timestamp as epoch seconds, the added column's sum, newest partition, and the pinned column's type.
 const CSV_CHECK: &str = "SELECT count(*) || ',' || string_agg(name, '|' ORDER BY id) || ',' || CAST(epoch(max(seen_at)) AS BIGINT) || ',' || sum(score) || ',' || max(day) || ',' || (SELECT typeof(id) FROM raw.scores LIMIT 1) FROM raw.scores";
 
+/// Two pipe-delimited exports sharing key 2, and a file the pattern leaves out.
+const PATTERN_FILES: &[TextFile] = &[
+    TextFile {
+        key: "file_1.txt",
+        contents: "id|v\n1|a\n2|b\n",
+        encode: plain,
+    },
+    TextFile {
+        key: "file_2.txt",
+        contents: "id|v\n2|B\n3|c\n",
+        encode: plain,
+    },
+    TextFile {
+        key: "other.txt",
+        contents: "not|an|export\n",
+        encode: plain,
+    },
+];
+
+const PATTERN_SETTINGS: &str = "format = \"csv\"\ncsv = { delimiter = \"|\" }\npattern = \"file_*.txt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\norder = \"path\"\n";
+
+const PATTERN_RUNS: &[TextFilesRun] = &[TextFilesRun {
+    files: PATTERN_FILES,
+    expected_error: "",
+    expected_plan: "2 new of 2 matching file_*.txt, 1 other file ignored",
+}];
+
+/// Each row's key, value and the name of the file it came from.
+const PATTERN_CHECK: &str = "SELECT string_agg(id || v || '@' || regexp_extract(_sqlload_source_file, '[^/]+$'), ',' ORDER BY id) FROM raw.scores";
+
+const PATTERN_RESULT: &str = "1a@file_1.txt,2B@file_2.txt,3c@file_2.txt";
+
 /// `code,amount` rows: 10,000 sampled ones with numeric codes, then an alphanumeric code and one with leading zeros.
 const CODES_AFTER_SAMPLE: TextFile = TextFile {
     key: "part-0.csv",
@@ -149,6 +181,34 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             runs: CSV_RUNS,
             check_query: CSV_CHECK,
             expected_result: "3,a|b, c|d,1793779200,7,2026-11-04,VARCHAR",
+        },
+        TextFilesScenarioTestCase {
+            description: "pattern picks pipe-delimited .txt files beside another, merged on their key, each row naming its file",
+            store: local_store,
+            settings: PATTERN_SETTINGS,
+            runs: PATTERN_RUNS,
+            check_query: PATTERN_CHECK,
+            expected_result: PATTERN_RESULT,
+        },
+        TextFilesScenarioTestCase {
+            description: "pattern on S3 behaves the same",
+            store: seaweedfs_store,
+            settings: PATTERN_SETTINGS,
+            runs: PATTERN_RUNS,
+            check_query: PATTERN_CHECK,
+            expected_result: PATTERN_RESULT,
+        },
+        TextFilesScenarioTestCase {
+            description: "without pattern, .txt files fail the plan with the suffixes it looked for and a hint to set pattern",
+            store: local_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: PATTERN_FILES,
+                expected_error: "no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination); to read files of other names, set pattern, such as pattern = \"*.txt\"",
+                expected_plan: "",
+            }],
+            check_query: "SELECT '1'",
+            expected_result: "1",
         },
         TextFilesScenarioTestCase {
             description: "record shape, gzip NDJSON: each object whole in one JSON column beside its partition, a key added by a newer file kept without a new column",

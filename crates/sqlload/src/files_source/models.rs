@@ -416,10 +416,65 @@ pub struct FilesEncoding {
     pub xml: XmlOptions,
     /// With `compression = "zip"`, a pattern the members' names must match, beyond the format's suffix.
     pub members: Option<String>,
+    /// The glob each file's path below `path` must match, in place of the format's name suffix.
+    pub pattern: Option<FilePattern>,
     /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
     pub record: Option<String>,
     /// Which of a JSON record's fields holding objects load as one column per key, `<field>__<key>` (none when a `transform` runs, whose output flattens instead).
     pub flatten: Flatten,
+}
+
+/// A files source's `pattern`: a glob over each file's path below `path`, `*` within one name and `**` across folders.
+#[derive(Debug, Clone)]
+pub struct FilePattern {
+    pub text: String,
+    matcher: globset::GlobMatcher,
+}
+
+impl PartialEq for FilePattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for FilePattern {}
+
+impl FilePattern {
+    /// `text` as a pattern, or why it isn't a glob.
+    pub fn new(text: &str) -> Result<Self, globset::Error> {
+        let glob = globset::GlobBuilder::new(text)
+            .literal_separator(true)
+            .build()?;
+        Ok(Self {
+            text: text.to_owned(),
+            matcher: glob.compile_matcher(),
+        })
+    }
+
+    /// Whether the file at `key`, its path below the source's `path`, matches.
+    pub fn is_match(&self, key: &str) -> bool {
+        self.matcher.is_match(key)
+    }
+}
+
+impl FilesEncoding {
+    /// How the plan names the files a source chose: `listed`, or `matching <pattern>`.
+    pub fn chosen_text(&self) -> String {
+        match &self.pattern {
+            Some(pattern) => format!("matching {}", pattern.text),
+            None => "listed".to_owned(),
+        }
+    }
+
+    /// How the plan names the `count` files listing left out: those that are no data file of this format, or match no `pattern`.
+    pub fn skipped_text(&self, count: usize) -> String {
+        match (count, &self.pattern) {
+            (0, _) => String::new(),
+            (1, Some(_)) => ", 1 other file ignored".to_owned(),
+            (count, Some(_)) => format!(", {count} other files ignored"),
+            (count, None) => format!(", {count} skipped (names that do not fit {self})"),
+        }
+    }
 }
 
 /// How a JSON or CSV source's records load: as typed columns sampled from them, or each whole in one `json` column.

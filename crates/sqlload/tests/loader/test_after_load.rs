@@ -75,6 +75,22 @@ fn given_zip_archives_with_after_load_when_their_members_load_then_each_archive_
             expected_files: &["drop/batch.zip=zip"],
         },
         AfterLoadTestCase {
+            description: "pattern picks the archives and members the members: only batch_1.zip's a.csv loads, and only that archive goes",
+            settings: "write_strategy = \"append\"\ncompression = \"zip\"\npattern = \"batch_*.zip\"\nmembers = \"a*\"\nafter_load = \"delete\"\n",
+            linked: &[],
+            steps: &[AfterLoadStep {
+                removed: &[],
+                args: &[],
+                files: &[
+                    ("drop/batch_1.zip", "a.csv=id,v\n1,a\n;b.csv=id,v\n2,b\n"),
+                    ("drop/other.zip", "a.csv=id,v\n3,c\n"),
+                ],
+                expected_exit: 0,
+                expected_report: r#"{"after_load":{"action":"delete","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+            }],
+            expected_files: &["drop/other.zip=zip"],
+        },
+        AfterLoadTestCase {
             description: "plan refuses after_load while another source reads ZIP archives in a folder inside this one on the same connection, naming it",
             settings: "write_strategy = \"append\"\ncompression = \"zip\"\nafter_load = \"delete\"\n\n[sources.yearly]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"./drop/2026/\"\nformat = \"csv\"\ncompression = \"zip\"\nwrite_strategy = \"append\"\n",
             linked: &[],
@@ -113,6 +129,31 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
                 expected_report: r#"{"after_load":null,"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
             }],
             expected_files: &["drop/a.csv=id,v\\n1,a\\n"],
+        },
+        AfterLoadTestCase {
+            description: "with pattern, move_to moves only the matched files, and a folder left with files that don't match counts as emptied",
+            settings: "write_strategy = \"append\"\npattern = \"file_*.txt\"\nafter_load = { move_to = \"done\" }\n",
+            linked: &[],
+            steps: &[
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[
+                        ("drop/file_1.txt", "id,v\n1,a\n"),
+                        ("drop/other.txt", "x\n"),
+                    ],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":{"action":"move","failed":[],"files":1,"status":"done"},"problems":[],"rows":1,"skipped":[],"status":"loaded"}"#,
+                },
+                AfterLoadStep {
+                    removed: &[],
+                    args: &[],
+                    files: &[],
+                    expected_exit: 0,
+                    expected_report: r#"{"after_load":null,"problems":[],"rows":null,"skipped":["no files to load in drop/: after_load deleted or moved the ones already loaded"],"status":null}"#,
+                },
+            ],
+            expected_files: &["done/file_1.txt=id,v\\n1,a\\n", "drop/other.txt=x\\n"],
         },
         AfterLoadTestCase {
             description: "delete removes each loaded file, a run on the emptied folder skips the table, and a later file of the same name is a new one",
@@ -222,7 +263,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
                     args: &[],
                     files: &[("drop/b.json", "{}")],
                     expected_exit: 1,
-                    expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination)"],"rows":null,"skipped":[],"status":null}"#,
+                    expected_report: r#"{"after_load":null,"problems":["<root>/drop/: no .csv, .csv.gz, .csv.zst files found; check the source's path and format (an empty source never empties the destination); to read files of other names, set pattern, such as pattern = \"*.txt\""],"rows":null,"skipped":[],"status":null}"#,
                 },
                 AfterLoadStep {
                     removed: &["drop"],

@@ -152,6 +152,8 @@ table is named after the source:
   deletes it. See [Deleting or moving loaded files](/docs/sources/files/#deleting-or-moving-loaded-files).
 - `format` is `parquet`, `csv`, `json`, `ndjson`, `xlsx` or `xml`, and the files can be on S3 or an
   SFTP server.
+- A `filesystem` source's `file_glob` is `pattern`, from 0.54.0, which chooses files of any name, such
+  as `pattern = "file_*.txt"`. See [Choosing files](/docs/sources/files/#choosing-files).
 - A CSV reader's `escape_char` is `csv = { escape = "\\" }`, and `quote_char: null` is
   `csv = { quote = false }`, from 0.54.0. See [Quotes and escapes](/docs/sources/files/#quotes-and-escapes).
 - An Excel template read as a cell range without a header row, with its own column names
