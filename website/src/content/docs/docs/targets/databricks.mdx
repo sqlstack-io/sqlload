@@ -116,6 +116,7 @@ loads on a cursor, rows with a NULL cursor under `delete_insert`, an added colum
 decimal in place, `contract diff`, `contract diff --source` and `contract generate --write`, and a
 load that failed mid-way, which committed no rows and left the volume's `sqlload/` folder empty.
 
-A later round, with the code released as 0.59.0, loaded SQL Server and MySQL through ODBC and a BigQuery project
-under `merge` and `replace`, and gzip CSV and Parquet files from an SFTP server under `append`, into
-one schema. It ran twice, a first load and then source changes (updated and new rows, new files), with row counts, keys and sums checked against each source after both.
+A later round, with the code released as 0.59.0, loaded SQL Server and MySQL through ODBC and a
+BigQuery project under `merge` and `replace`, and gzip CSV and Parquet files from an SFTP server
+under `append`, into one schema. It ran twice, a first load and then source changes (updated and
+new rows, new files), with row counts, keys and sums checked against each source after both.
