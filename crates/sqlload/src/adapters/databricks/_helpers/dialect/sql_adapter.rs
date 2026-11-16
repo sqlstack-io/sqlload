@@ -20,6 +20,22 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
+    /// Databricks has no `UPDATE ... FROM`, and a `MERGE` condition can't hold a subquery, so the rows are chosen by the condition without one.
+    fn render_soft_tombstones(
+        &self,
+        (target, column): (&str, &str),
+        (marks, join): (&str, &str),
+        (_condition, matched): (&str, &str),
+    ) -> String {
+        format!(
+            "MERGE INTO {target} USING {marks} ON {join} WHEN MATCHED AND {matched} THEN UPDATE SET {column} = __marks.{column}"
+        )
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }

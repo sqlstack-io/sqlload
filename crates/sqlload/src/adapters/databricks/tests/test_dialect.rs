@@ -1,4 +1,4 @@
-use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::{TableName, TombstoneWrite};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::models::DatabricksSql;
 use crate::adapters::databricks::tests::helpers::{added, live, table};
@@ -95,6 +95,42 @@ fn given_an_unnested_table_when_listing_its_child_tables_then_its_catalog_is_rea
             table: "Orders".to_owned(),
         }),
         expected_statement: "SELECT max(CASE WHEN column_name IN ('_sqlload_parent_id', '_dlt_parent_id') THEN '1' ELSE '0' END) || table_name FROM `Sales`.information_schema.columns WHERE table_schema = 'raw' AND left(table_name, 8) = 'orders__' GROUP BY table_name",
+    }];
+    for test_case in test_cases {
+        assert_eq!(
+            test_case.rendered, test_case.expected_statement,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_soft_tombstones_when_rendering_their_mark_for_delta_then_it_is_a_merge_choosing_rows_without_a_subquery()
+ {
+    let orders = TableName {
+        database: Some("main".to_owned()),
+        schema: "raw".to_owned(),
+        table: "orders".to_owned(),
+    };
+    let test_cases = [RenderedTestCase {
+        description: "Databricks has no UPDATE ... FROM and refuses a subquery in a MERGE condition, so the mark compares each row's cursor with its key's latest tombstone",
+        rendered: DatabricksSql.render_tombstones(
+            &orders,
+            &TombstoneWrite {
+                tombstones: TableName {
+                    table: "orders__sqlload_deletes".to_owned(),
+                    ..orders.clone()
+                },
+                deleted_at: "deleted_at".to_owned(),
+                cursor: vec!["updated_at".to_owned()],
+                unique_key: vec!["id".to_owned()],
+                not_null_keys: Vec::new(),
+                soft: true,
+            },
+        )[1]
+        .clone(),
+        expected_statement: "MERGE INTO `main`.`raw`.`orders` AS __target USING (SELECT __row.`id` AS `id`, CAST(MAX(__tombstone.`deleted_at`) AS TIMESTAMP) AS `_sqlload_deleted_at` FROM `main`.`raw`.`orders` AS __row JOIN `main`.`raw`.`orders__sqlload_deletes` AS __tombstone ON __row.`id` <=> __tombstone.`id` AND (__row.`updated_at` IS NULL OR __tombstone.`deleted_at` >= __row.`updated_at`) WHERE __row.`_sqlload_deleted_at` IS NULL GROUP BY __row.`id`) AS __marks ON __target.`id` <=> __marks.`id` WHEN MATCHED AND __target.`_sqlload_deleted_at` IS NULL AND (__target.`updated_at` IS NULL OR __marks.`_sqlload_deleted_at` >= __target.`updated_at`) THEN UPDATE SET `_sqlload_deleted_at` = __marks.`_sqlload_deleted_at`",
     }];
     for test_case in test_cases {
         assert_eq!(

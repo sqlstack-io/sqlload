@@ -4,7 +4,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 use crate::project::models::{Deletes, SourceKind, WriteStrategy};
 
-/// Why a table of a `kind` source written with `strategy` into `warehouse` cannot take `deletes` (a `postgres_cdc` table's apply captured deletes, so none): it marks rows of a merge, by every key a database or warehouse source lists, on a target where its mark statements have run (BigQuery, DuckDB, MotherDuck, Postgres and Snowflake), and a deleted row would leave its child tables' rows (`unnests`).
+/// Why a table of a `kind` source written with `strategy` into `warehouse` cannot take `deletes` (a `postgres_cdc` table's apply captured deletes, so none): it marks rows of a merge, by every key a database or warehouse source lists, on a target where its mark statements have run (BigQuery, Databricks, DuckDB, MotherDuck, Postgres and Snowflake), and a deleted row would leave its child tables' rows (`unnests`).
 pub fn deletes_problems(
     deletes: Option<Deletes>,
     (strategy, kind): (WriteStrategy, SourceKind),
@@ -31,7 +31,7 @@ pub fn deletes_problems(
     }
     if !sql_adapter(warehouse).marks_deleted_rows() {
         problems.push(format!(
-            "deletes marks rows of the table in place with statements SQLLoad has run only on BigQuery, DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on {warehouse} rather than run them untested. Fix: remove deletes, or load into BigQuery, DuckDB, MotherDuck, Postgres or Snowflake"
+            "deletes marks rows of the table in place with statements SQLLoad has run only on BigQuery, Databricks, DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on {warehouse} rather than run them untested. Fix: remove deletes, or load into BigQuery, Databricks, DuckDB, MotherDuck, Postgres or Snowflake"
         ));
     }
     if unnests {
