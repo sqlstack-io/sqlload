@@ -114,7 +114,7 @@ fn given_soft_tombstones_when_rendering_their_mark_for_delta_then_it_is_a_merge_
         table: "orders".to_owned(),
     };
     let test_cases = [RenderedTestCase {
-        description: "Databricks has no UPDATE ... FROM and refuses a subquery in a MERGE condition, so the mark compares each row's cursor with its key's latest tombstone",
+        description: "Databricks has no UPDATE ... FROM and refuses a subquery in a MERGE condition, so the mark compares each row's cursor with its key's latest tombstone time as stored, uncast",
         rendered: DatabricksSql.render_tombstones(
             &orders,
             &TombstoneWrite {
@@ -130,7 +130,7 @@ fn given_soft_tombstones_when_rendering_their_mark_for_delta_then_it_is_a_merge_
             },
         )[1]
         .clone(),
-        expected_statement: "MERGE INTO `main`.`raw`.`orders` AS __target USING (SELECT __row.`id` AS `id`, CAST(MAX(__tombstone.`deleted_at`) AS TIMESTAMP) AS `_sqlload_deleted_at` FROM `main`.`raw`.`orders` AS __row JOIN `main`.`raw`.`orders__sqlload_deletes` AS __tombstone ON __row.`id` <=> __tombstone.`id` AND (__row.`updated_at` IS NULL OR __tombstone.`deleted_at` >= __row.`updated_at`) WHERE __row.`_sqlload_deleted_at` IS NULL GROUP BY __row.`id`) AS __marks ON __target.`id` <=> __marks.`id` WHEN MATCHED AND __target.`_sqlload_deleted_at` IS NULL AND (__target.`updated_at` IS NULL OR __marks.`_sqlload_deleted_at` >= __target.`updated_at`) THEN UPDATE SET `_sqlload_deleted_at` = __marks.`_sqlload_deleted_at`",
+        expected_statement: "MERGE INTO `main`.`raw`.`orders` AS __target USING (SELECT __row.`id` AS `id`, CAST(MAX(__tombstone.`deleted_at`) AS TIMESTAMP) AS `_sqlload_deleted_at`, MAX(__tombstone.`deleted_at`) AS __sqlload_latest FROM `main`.`raw`.`orders` AS __row JOIN `main`.`raw`.`orders__sqlload_deletes` AS __tombstone ON __row.`id` <=> __tombstone.`id` AND (__row.`updated_at` IS NULL OR __tombstone.`deleted_at` >= __row.`updated_at`) WHERE __row.`_sqlload_deleted_at` IS NULL GROUP BY __row.`id`) AS __marks ON __target.`id` <=> __marks.`id` WHEN MATCHED AND __target.`_sqlload_deleted_at` IS NULL AND (__target.`updated_at` IS NULL OR __marks.__sqlload_latest >= __target.`updated_at`) THEN UPDATE SET `_sqlload_deleted_at` = __marks.`_sqlload_deleted_at`",
     }];
     for test_case in test_cases {
         assert_eq!(

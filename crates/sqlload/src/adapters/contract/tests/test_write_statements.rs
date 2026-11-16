@@ -1,6 +1,8 @@
-use crate::adapters::contract::models::{MergeDedupe, WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{
+    MergeDedupe, TableName, TombstoneWrite, WriteMode, WriteStatementsRequest,
+};
 use crate::adapters::contract::tests::helpers::{accounts, columns};
-use crate::adapters::contract::tests::test_types::WriteStatementsTestCase;
+use crate::adapters::contract::tests::test_types::{TombstonesTestCase, WriteStatementsTestCase};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
 
@@ -481,6 +483,48 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
         };
         assert_eq!(
             sql_adapter(test_case.warehouse).render_write(&request, &staging),
+            test_case.expected_statements,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_soft_tombstones_when_rendering_their_mark_then_a_warehouse_with_update_from_sets_each_rows_latest_tombstone()
+ {
+    let orders = TableName {
+        database: None,
+        schema: "raw".to_owned(),
+        table: "orders".to_owned(),
+    };
+    let tombstones = TombstoneWrite {
+        tombstones: TableName {
+            table: "orders__sqlload_deletes".to_owned(),
+            ..orders.clone()
+        },
+        deleted_at: "deleted_at".to_owned(),
+        cursor: vec!["updated_at".to_owned()],
+        unique_key: vec!["id".to_owned()],
+        not_null_keys: vec!["id".to_owned()],
+        soft: true,
+    };
+    let chosen = "__target.\"_sqlload_deleted_at\" IS NULL AND EXISTS (SELECT 1 FROM \"raw\".\"orders__sqlload_deletes\" AS __tombstone WHERE __target.\"id\" = __tombstone.\"id\" AND (__target.\"updated_at\" IS NULL OR __tombstone.\"deleted_at\" >= __target.\"updated_at\"))";
+    let test_cases = [TombstonesTestCase {
+        description: "DuckDB counts the rows, then sets each one's latest tombstone time through a grouped join, choosing the same rows",
+        warehouse: Warehouse::DuckDb,
+        expected_statements: [
+            format!(
+                "SELECT CAST(COUNT(*) AS VARCHAR) FROM \"raw\".\"orders\" AS __target WHERE {chosen}"
+            ),
+            format!(
+                "UPDATE \"raw\".\"orders\" AS __target SET \"_sqlload_deleted_at\" = __marks.\"_sqlload_deleted_at\" FROM (SELECT __row.\"id\" AS \"id\", CAST(MAX(__tombstone.\"deleted_at\") AS TIMESTAMP WITH TIME ZONE) AS \"_sqlload_deleted_at\" FROM \"raw\".\"orders\" AS __row JOIN \"raw\".\"orders__sqlload_deletes\" AS __tombstone ON __row.\"id\" = __tombstone.\"id\" AND (__row.\"updated_at\" IS NULL OR __tombstone.\"deleted_at\" >= __row.\"updated_at\") WHERE __row.\"_sqlload_deleted_at\" IS NULL GROUP BY __row.\"id\") AS __marks WHERE __target.\"id\" = __marks.\"id\" AND {chosen}"
+            ),
+        ],
+    }];
+    for test_case in test_cases {
+        assert_eq!(
+            sql_adapter(test_case.warehouse).render_tombstones(&orders, &tombstones),
             test_case.expected_statements,
             "{}",
             test_case.description

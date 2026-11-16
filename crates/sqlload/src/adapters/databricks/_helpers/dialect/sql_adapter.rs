@@ -24,15 +24,15 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
-    /// Databricks has no `UPDATE ... FROM`, and a `MERGE` condition can't hold a subquery, so the rows are chosen by the condition without one.
+    /// Databricks has no `UPDATE ... FROM`, and a `MERGE` condition can't hold a subquery, so the rows are chosen by the condition without one, against each key's latest tombstone time uncast: cast from `TIMESTAMP_NTZ` in a session time zone with daylight saving, it could order differently from the cursor.
     fn render_soft_tombstones(
         &self,
         (target, column): (&str, &str),
-        (marks, join): (&str, &str),
+        ((_marks, latest_marks), join): ((&str, &str), &str),
         (_condition, matched): (&str, &str),
     ) -> String {
         format!(
-            "MERGE INTO {target} USING {marks} ON {join} WHEN MATCHED AND {matched} THEN UPDATE SET {column} = __marks.{column}"
+            "MERGE INTO {target} USING {latest_marks} ON {join} WHEN MATCHED AND {matched} THEN UPDATE SET {column} = __marks.{column}"
         )
     }
 

@@ -507,11 +507,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         marked_counts(self, request, mark, staging)
     }
 
-    /// The statement a soft `deletes_from` marks rows with: `target` (the table aliased `__target`) gets `column` set from `marks`, a subquery aliased `__marks` holding each key's latest tombstone time as `column`, joined on `join`, for the rows `condition` chooses. `matched` chooses the same rows of those `marks` joins without a subquery: unmarked, with no cursor or one at or before the key's latest tombstone.
+    /// The statement a soft `deletes_from` marks rows with: `target` (the table aliased `__target`) gets `column` set from `marks`, a subquery aliased `__marks` holding each key's latest tombstone time as `column`, joined on `join`, for the rows `condition` chooses. `matched` chooses the same rows of those `marks` joins without a subquery: unmarked, with no cursor or one at or before the key's latest tombstone, which `latest_marks` (`marks` with that time also uncast, as `__sqlload_latest`) holds, so it compares as the tombstone's own time does.
     fn render_soft_tombstones(
         &self,
         (target, column): (&str, &str),
-        (marks, join): (&str, &str),
+        ((marks, _latest_marks), join): ((&str, &str), &str),
         (condition, _matched): (&str, &str),
     ) -> String {
         format!(

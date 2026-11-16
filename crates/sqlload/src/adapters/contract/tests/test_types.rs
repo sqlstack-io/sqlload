@@ -85,6 +85,12 @@ pub(crate) struct BuildTableTestCase {
     pub(crate) expected_statements: Vec<String>,
 }
 
+pub(crate) struct TombstonesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_statements: [String; 2],
+}
+
 pub(crate) struct PromoteTestCase {
     pub(crate) description: &'static str,
     pub(crate) warehouse: Warehouse,
