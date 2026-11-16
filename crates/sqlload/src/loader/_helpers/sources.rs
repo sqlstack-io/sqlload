@@ -1203,7 +1203,12 @@ pub(crate) fn files_source_parts(
             location,
             table,
             partition_types,
-            constants: values.constants.into_iter().map(|(name, _)| name).collect(),
+            constants: values
+                .constants
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+            paths: values,
             encoding,
             checks,
             notes,
@@ -1356,6 +1361,7 @@ pub(crate) async fn plan_files(
         removed: spec.after_load != AfterLoad::Keep,
         held: &held,
         cursor,
+        paths: &request.files.paths,
         from: request.bounds.0,
         to: request.bounds.1,
     };

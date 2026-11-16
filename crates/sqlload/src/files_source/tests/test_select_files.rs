@@ -1,7 +1,7 @@
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::StoredFile;
 use crate::files_source::main::select_files::select_files;
-use crate::files_source::models::{DataFile, FileSelection, LoadedFile};
+use crate::files_source::models::{DataFile, FileSelection, LoadedFile, PathValues};
 use crate::files_source::tests::test_types::SelectFilesTestCase;
 
 const KEYS: [(&str, &str); 3] = [
@@ -115,7 +115,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
             ),
         },
         SelectFilesTestCase {
-            description: "under delete_insert, files held at their listed version, or at an unknown one, below the window are skipped, and a changed one above it is outside the range asked for",
+            description: "under delete_insert, a file held at its listed version below the window is skipped, one held at an unknown version inside it is read, and a changed one above it is outside the range asked for",
             loaded: &[],
             held: &[
                 ("/data/day=2026-11-03/a.parquet", "1-0"),
@@ -126,6 +126,37 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
             cursor_type: Some(ColumnType::Date),
             bounds: (Some("2026-11-04"), Some("2026-11-05")),
             expected_keys: Ok(&["day=2026-11-04/a.parquet"]),
+        },
+        SelectFilesTestCase {
+            description: "under delete_insert, a file held only at an unknown version below the window fails, naming --reload, as whether it changed can't be told",
+            loaded: &[],
+            held: &[("/data/day=2026-11-03/a.parquet", "")],
+            removed: false,
+            cursor_type: Some(ColumnType::Date),
+            bounds: (Some("2026-11-04"), None),
+            expected_keys: Err(
+                "/data/day=2026-11-03/a.parquet was loaded without its version (_sqlload_source_version is empty, as in rows loaded before SQLLoad recorded it), and its day 2026-11-03 is below this load's range, which starts at 2026-11-04, so whether it changed since can't be told and delete_insert would skip it. Fix: rebuild the table with --reload",
+            ),
+        },
+        SelectFilesTestCase {
+            description: "under delete_insert, a new file below the window fails when the table holds files of its partition, even when all of them have left the folder",
+            loaded: &[],
+            held: &[("/data/day=2026-11-03/gone.parquet", "1-0")],
+            removed: false,
+            cursor_type: Some(ColumnType::Date),
+            bounds: (Some("2026-11-04"), None),
+            expected_keys: Err(
+                "/data/day=2026-11-03/a.parquet is new, but its day 2026-11-03 is below this load's range, which starts at 2026-11-04, and the table holds other files of day 2026-11-03",
+            ),
+        },
+        SelectFilesTestCase {
+            description: "under delete_insert, a new file below the window in a partition the table holds nothing of is skipped",
+            loaded: &[],
+            held: &[("/data/day=2026-11-01/gone.parquet", "1-0")],
+            removed: false,
+            cursor_type: Some(ColumnType::Date),
+            bounds: (Some("2026-11-04"), None),
+            expected_keys: Ok(&["day=2026-11-04/a.parquet", "day=2026-11-05/a.parquet"]),
         },
         SelectFilesTestCase {
             description: "a text cursor compares as text",
@@ -169,6 +200,10 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
             partitions: vec![("day".to_owned(), (*day).to_owned())],
         })
         .collect();
+    let paths = PathValues {
+        partition_columns: vec!["day".to_owned()],
+        ..PathValues::default()
+    };
     for test_case in test_cases {
         let loaded: Vec<LoadedFile> = test_case
             .loaded
@@ -196,6 +231,7 @@ fn given_listed_files_when_selecting_then_loaded_files_and_those_outside_the_win
                 .cursor_type
                 .as_ref()
                 .map(|column_type| ("day", column_type)),
+            paths: &paths,
             from: test_case.bounds.0,
             to: test_case.bounds.1,
         };

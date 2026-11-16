@@ -557,6 +557,7 @@ pub(crate) fn transform_reader(
         },
         partition_types: Vec::new(),
         constants: Vec::new(),
+        paths: crate::files_source::models::PathValues::default(),
         encoding: FilesEncoding::default(),
         checks: TextChecks::default(),
         notes: Vec::new(),
