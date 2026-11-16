@@ -8,12 +8,13 @@ use crate::files_source::constants::{
 use crate::files_source::models::{FilesRead, StoredRead};
 use crate::loader::models::TableSpec;
 
-/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each from the files, its path, or the file's name, version and row number.
+/// The columns a direct `COPY` of a files table fills, in the order the files source reads them, each under its name in the table, from the files (by their name for it), its path, or the file's name, version and row number.
 pub(crate) fn copy_columns(spec: &TableSpec, read: &FilesRead) -> Vec<CopyColumn> {
     read.columns
         .iter()
         .map(|column| CopyColumn {
-            name: column.name.clone(),
+            name: spec.source_table.loaded_as(&column.name).to_owned(),
+            source: column.name.clone(),
             column_type: column.column_type.clone(),
             value: match column.name.as_str() {
                 SOURCE_FILE_COLUMN => CopyValue::SourceFile,

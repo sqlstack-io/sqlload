@@ -1,6 +1,6 @@
 ---
 title: "Nested data"
-description: "List fields as child tables with unnest: how child rows link to their parents, what each write strategy does with them, and what unnest = \"all\" chooses."
+description: "List fields as child tables with unnest, objects as columns with flatten: how child rows link to their parents, what each write strategy does with them, what unnest = \"all\" and flatten = \"all\" choose, and how names load."
 ---
 
 From 0.40.0, `unnest` turns list fields into child tables, the way dlt does. A
@@ -30,7 +30,7 @@ Set in a table entry:
 - `unnest`: the dotted paths of the list fields, each with its parent's path also listed (`items`
   before `items.parts`). Or `"all"`, described below.
 - `max_depth`: how many levels of child tables to make at most, 1000 by default. A list deeper than
-  that stays JSON in its parent.
+  that stays JSON in its parent. It limits [`flatten`](#flattening-objects) too.
 - `columns` (added in 0.42.0): a child table's column is named by its dotted path, such as
   `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
   only the columns named so, with its id and link columns, and leaves out the rest. These keys
@@ -114,7 +114,7 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
   the paths to unnest without it.
 - A field with a child table from an earlier load stays one. A table counts as one only when it is
   named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id` or `_dlt_parent_id`,
-  whatever the `naming`), and is not another table's child table (`orders__notes__items` when a
+  whatever the `compat`), and is not another table's child table (`orders__notes__items` when a
   table `orders__notes` holds no parent-id column). From 0.41.1, other tables
   named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
   `replace` emptied them and a `merge` could delete rows from them.
@@ -122,25 +122,224 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.
 
+## Flattening objects
+
+`flatten` loads an object's keys as columns of their own, named `<object>__<key>`. An object it
+doesn't flatten stays one JSON column (`VARIANT` on Snowflake). It works on every source whose rows
+hold objects: Python tables and their `sl.http` jobs, JSON and NDJSON files, and a files or Google
+Sheets table with a [`transform`](/docs/sources/files/#transforming-each-file), whose output it
+flattens. Any other source fails `plan`.
+
+`flatten` takes the same shape as `unnest`: dotted paths, or `"all"`.
+
+```toml
+[sources.orders.tables.orders]
+unnest  = ["items"]
+flatten = ["customer", "customer.address", "items.dimensions"]   # paths reach inside unnested items
+```
+
+- A path's parent must be flattened or unnested too (`customer` before `customer.address`).
+- `"all"` flattens every object at every level, down to `max_depth`. An object field that a later
+  load brings becomes new columns, which `on_schema_change` decides.
+- A path or name may use the source's spelling or the loaded one (`LineTotals` or `line_totals`).
+- A NULL or missing object leaves its columns NULL. Lists are never flattened; `unnest` makes them
+  child tables.
+- Flattened names keep the `parent__key` form, and then go through [`naming`](#naming)
+  (`customer__address__city`).
+
+Under `"all"`, `plan` lists each object it flattens, with its column count and first keys, and the
+nested columns it keeps as JSON. It warns once when an object looks like a map whose keys are data
+(more than 20 keys, or most of them holding a digit or not a plain name):
+
+```text
+    ├── flatten every object, 1000 levels down at most
+    │           customer          → 3 columns (name, address__city, …)
+    │           customer.address  → 2 columns (city, zip)
+    │           line_totals       → 3 columns (sku_14, sku_99, …)
+    │           ⚠ an object whose keys are data adds a column per key on every load;
+    │             keep it as one column with columns = { line_totals = "json" }
+```
+
+A list of paths names its objects with no warning. On a Python table, `plan` can't see the rows, so
+it says the objects flatten as rows arrive at load.
+
+### Keeping an object whole
+
+A map whose keys are data (`"line_totals": {"sku-14": 12.5}`) makes one column per key. Pin it as
+`json` to keep it, and everything under it, as one column:
+
+```toml
+[sources.orders.tables.orders]
+flatten = "all"
+columns = { line_totals = "json" }
+```
+
+The pinned object leaves the list, and `plan` shows `kept as JSON: line_totals`. An object a `mask`,
+or an `exclude_columns` or `allow_columns` name (not a pattern) names is kept whole too, so the
+setting applies to all of it. Pinning a flattened object as any other type fails `plan`:
+
+```console
+columns line_totals = "text": flatten replaces line_totals with its keys' columns; pin it "json" to keep it whole
+```
+
+`plan` also fails on a listed path that a json pin, mask or name keeps whole, and on an
+`exclude_columns` or `allow_columns` pattern that matches an object but none of its columns. Under
+`"all"`, where a Python table's objects only show as it loads, such an `exclude_columns` pattern
+fails the load instead. The load also fails when a listed path holds a scalar or a list, or when a
+key's column is also a field of the rows or comes from another object.
+
+Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
+NULL from then on, next to the new key columns.
+
 ## Naming
 
-`naming` on a target, source or table chooses the names of the columns a load adds and of the
-child tables `unnest` makes. `sqlload`, the default, leaves every existing table as it was.
-`dlt` uses the names dlt gives them, so tables a dlt pipeline loaded can carry on under SQLLoad.
+From 0.53.0, every table and column loads under a name the warehouse takes without quoting.
+`naming` chooses the case, `rename` names columns yourself, `on_duplicate_names` decides what
+happens when two columns end up with one name, and `compat` chooses the names of the columns a load
+adds. Each is set on a source or a table, and `naming` and `compat` also on the target; the closest
+one wins.
 
-Under `naming = "dlt"` the tables and columns themselves are also named as dlt's default
-`snake_case` naming names them: `Orders-V2` loads as `orders_v2`, `OrderID` as `order_id` and
-`Unit Price` as `unit_price`, and a name longer than the destination allows (63 characters on
-Postgres) is shortened with a tag, as dlt shortens it. Settings may name a column either way
-(`unique_key = ["OrderID"]` or `["order_id"]`), and `plan` shows the loaded name.
-`exclude_columns`, `allow_columns` and `skip_tables_with_columns` match the source's own names,
-and `flatten` the names a Python table yields. A Python table's `ctx.cursor_column` is the cursor's
-loaded name (`updated_at` for a field yielded as `UpdatedAt`). The target schema keeps the name it
-is given.
+Each column's name goes through these steps in turn: its source name, then `naming`, then `rename`,
+then `on_duplicate_names`. For a CSV file whose header is `Order ID,OrderDate,Qty,Qty,Unit Price`,
+with `rename = { "Order ID" = "order_ref" }`, `plan` shows:
 
-The columns a load adds:
+```console
+$ sqlload plan
+…
+Objects (1)                                         sqlload apply
+└── raw.erp                                         create table
+    ├── order_ref  int     -> BIGINT
+    ├── order_date text    -> VARCHAR
+    ├── qty        int     -> BIGINT
+    ├── qty_1      int     -> BIGINT
+    ├── unit_price float   -> DOUBLE
+    └── + _sqlload_source_file, _source_version, _source_row, _load_id, _loaded_at
 
-| What it holds | `naming = "sqlload"` | `naming = "dlt"` |
+Loads (1)                                           sqlload load
+└── raw.erp                                         append
+    ├── source  files  ./drop/  csv, compression by file name
+    ├── route   read csv into Arrow -> DuckDB takes Arrow
+    ├── columns 5, 3 named by snake_case: OrderDate -> order_date, Qty -> qty, ...
+    ├── names   Order ID -> order_ref (rename)
+    │           Qty (column 4) -> qty_1 (numbered)
+…
+```
+
+The `columns` line counts the columns `naming` alone changed and shows the first few. The `names`
+lines list every column `rename` named or numbering numbered, since those names depend on the
+columns' order. `load` prints the same `names` lines under each table, and its
+[JSON result](/docs/cli/load/#results-as-json) gives them in each table's `names`.
+
+### naming
+
+- `snake_case`, the default, names tables and columns as dlt's default `snake_case` naming does:
+  `Orders-V2` loads as `orders_v2`, `OrderID` as `order_id` and `Unit Price` as `unit_price`. A
+  name longer than the destination allows (63 characters on Postgres) is shortened with a tag, as
+  dlt shortens it.
+- `source` keeps the source's names, quoting them where the warehouse needs it. Table names made
+  from a `table_name` template are in lower case.
+
+Settings may name a column either way (`unique_key = ["OrderID"]` or `["order_id"]`), and `plan`
+shows the loaded name, and so may `flatten` paths. `exclude_columns`, `allow_columns` and
+`skip_tables_with_columns` match the source's own names: a Python table's fields as yielded
+(`accessToken`, or `api_secret__key` once flattened), before naming changes them. A Python table's
+`ctx.cursor_column` is the cursor's loaded name (`updated_at` for a field yielded as `UpdatedAt`).
+The target schema keeps the name it is given.
+
+### rename
+
+`rename` is a map of source names to loaded names, or the name of a Python function:
+
+```toml
+[sources.erp.tables.orders]
+rename = { "Order ID" = "order_ref" }   # a map; a key is the source name or the snake_case one
+```
+
+```toml
+python_paths = ["renames"]
+
+[sources.erp.tables.orders]
+rename = "erp_names"                    # a function registered with @sl.rename
+```
+
+```python
+import sqlload as sl
+
+@sl.rename                     # registered as "erp_names", the function's name
+def erp_names(columns, ctx):
+    return {c.position: "qty_returned" for c in columns if c.source == "Qty" and c.position > 2}
+```
+
+- The function gets every column in order, each an `sl.Column` with its `position` (from 1), its
+  `source` name and its `default` name (after `naming`), and `ctx`, an `sl.RenameContext` with the
+  `source` and the `table`. It returns only the names it changes, keyed by position, so it can tell
+  two repeated headers apart. It runs once per table at `plan` and at `load`.
+- `@sl.rename("erp")` registers a function under another name. Functions are found on
+  `python_paths`, the same way Python sources are. A Python table may pass the function itself:
+  `@shop.table(rename=erp_names)`.
+- `plan` fails on a name no function has, listing the registered ones, and on a name two functions
+  have, naming both files:
+
+  ```console
+  rename erp_names: 2 functions are registered as erp_names, in renames/erp.py (erp_names) and renames/other.py (other_names); give one another name with @sl.rename("...")
+  ```
+
+- A function `rename` runs only in the `sqlload` Python package's command (`uv tool install
+  sqlload`); the standalone binary fails `plan` and asks for a map instead.
+- A rename that gives a column a name another column has fails `plan`, whatever
+  `on_duplicate_names` says:
+
+  ```console
+  rename gives column "Qty" the name order_id, which column "Order ID" loads as too; give each a name of its own
+  ```
+
+### on_duplicate_names
+
+`on_duplicate_names` decides what happens when columns meet under one name, ignoring case: a
+header repeated in a file or sheet, or names that collide after `naming` (`OrderID` and
+`Order ID`).
+
+- `number`, the default, keeps the first column's name and numbers the others `_1`, `_2`, …,
+  skipping names the table already has: a header `qty, qty_1, qty` loads as `qty, qty_1, qty_2`.
+- `fail` stops the plan, naming the columns:
+
+  ```console
+  columns "OrderID" and "Order ID" both load as order_id; give them names of their own with rename, or set on_duplicate_names = "number"
+  ```
+
+The order of the numbers on a new table:
+
+- A repeated header is numbered by its place: the first `Qty` keeps `qty`, the next is `qty_1`.
+- Different source names are numbered in the order of their names, not their places, so files
+  that list the columns in another order load each into the same column. `Order ID` sorts before
+  `OrderID`, so `Order ID` keeps `order_id` and `OrderID` loads as `order_id_1`.
+
+Once a table exists, a number stays with the source name it was given to. The table's run log
+records them, for every kind of table, `state = "logged"` Python tables included. A later file that
+adds `ORDER_ID`, which sorts first, gets the next free number, `order_id_2`, and the other two keep
+their columns. A clash on a column the table has, when no load recorded which source name it holds,
+fails rather than number the columns afresh. When the source name a numbered column holds is gone
+and another one would take its column, `plan` fails rather than load other data into it:
+
+```console
+Errors (1)
+└── raw.orders
+    └── reason  orders: column order_id holds "Order ID" from earlier loads, which the source no longer has, and "ORDER_ID" would now load into it; give "ORDER_ID" a name of its own with rename, or rename it to order_id if it is the same column under a new name
+```
+
+`--reload` rebuilds the table and numbers it afresh, and its record replaces the earlier ones.
+
+A Python table's fields are named as they arrive. A field that first shows in a later batch keeps
+clear of the names earlier batches gave, taking the next free number.
+
+### compat
+
+`compat` chooses the names of the columns a load adds and of the child tables `unnest` makes.
+`sqlload`, the default, uses SQLLoad's own. `dlt` uses the ones dlt gives them, so tables a dlt
+pipeline loaded can carry on under SQLLoad. `compat` doesn't change the case of the source's
+names; `naming`'s default already matches dlt's.
+
+| What it holds | `compat = "sqlload"` | `compat = "dlt"` |
 | --- | --- | --- |
 | The load that wrote the row | `_sqlload_load_id` | `_dlt_load_id` |
 | When that load started | `_sqlload_loaded_at` | `_sqlload_loaded_at` (dlt has none) |
@@ -149,35 +348,27 @@ The columns a load adds:
 | A child row's place in its list, from 0 | `_sqlload_list_idx` | `_dlt_list_idx` |
 | A child row's root row, under `merge` | `_sqlload_root_id` | `_dlt_root_id` |
 
-Row ids are made as dlt makes them: random for a root row; under `merge`, a hash of the
-`unique_key`, as dlt's `upsert` merge gives it (its default `delete-insert` merge gives random
-ones); and for a child row a hash of its parent's id, its table and its place in the list, so a
-merged row's children keep their ids on every load. dlt's own tables (`_dlt_loads`,
-`_dlt_pipeline_state`, `_dlt_version`) are not written.
+Under `compat = "dlt"`, `plan` refuses `row_id = false`. Row ids are made as dlt makes them: random
+for a root row; under `merge`, a hash of the `unique_key`, as dlt's `upsert` merge gives it (its
+default `delete-insert` merge gives random ones); and for a child row a hash of its parent's id, its
+table and its place in the list, so a merged row's children keep their ids on every load. dlt's own
+tables (`_dlt_loads`, `_dlt_pipeline_state`, `_dlt_version`) are not written.
 
-Where SQLLoad and dlt still differ under `naming = "dlt"`:
+Where SQLLoad and dlt still differ under `compat = "dlt"`:
 
-- Two columns whose names normalise to one (`OrderID` and `Order ID`) stop the plan, naming
-  both; dlt keeps the last value of a row it is given as a dictionary. Exclude one of them with
-  `exclude_columns`. Two tables of one source whose names normalise to one (`order-items` and
-  `order_items`) stop the plan too; give one its own `name`. Added in 0.42: a `postgres_cdc`
-  source loads under dlt's names too, its snapshot and change stream matching each column by the
-  source's spelling.
+- Two columns whose names meet after `naming` (`OrderID` and `Order ID`) are numbered, as above;
+  dlt keeps the last value of a row it is given as a dictionary. Two keys of one child item that
+  meet still stop the load, naming both. Two tables of one source whose names meet (`order-items`
+  and `order_items`) stop the plan; give one its own `name`. A `postgres_cdc` source loads under
+  the same names too, its snapshot and change stream matching each column by the source's
+  spelling.
 
-- Added in 0.42: a JSON or NDJSON files source flattens objects into `parent__key` columns as dlt
-  does, at every level and inside unnested items, and a list inside an object becomes a child
-  table such as `orders__customer__tags`. An object from a Python table or a database's JSON
-  column stays a JSON column; a Python table's `flatten` expands objects one level.
-  - An object's keys are columns like any other: a key first seen after the sampled rows fails
-    the load, naming its column (`customer__vip`); pin it in `columns` to load it. An object that
-    is NULL in a row loads as NULLs in its columns.
-  - `columns`, `mask`, `exclude_columns` and `allow_columns` name the flattened columns
-    (`customer__email`, or `customer__*`); a setting naming only the object fails the plan,
-    listing its columns.
-  - Upgrading from 0.40 or 0.41: a files source's object columns, which held JSON, stop
-    receiving values, and its objects load into new `parent__key` columns instead. A child table
-    whose list field holds `__` is now named with each part (`orders__a__b` for `a__B`, not
-    `orders__a_b`), as a dlt pipeline names it, so it loads into a new table.
+- JSON and NDJSON files default to dlt's shape: `flatten = "all"` and, on a warehouse,
+  `unnest = "all"`. A table's own `flatten` or `unnest` replaces the default; `[]` turns it off. An object from a
+  Python table or a database's JSON column stays a JSON column unless its table sets
+  [`flatten`](#flattening-objects).
+  - A flattened object's keys are columns like any other: a key first seen after the sampled
+    rows fails the load, naming its column (`customer__vip`); pin it in `columns` to load it.
 - A field that is only NULL in the sampled rows is a text column, beside the `parent__key`
   columns of its objects; dlt makes no column for it.
 - A field listed in `unnest` always goes to its child table, even when an XML element appears

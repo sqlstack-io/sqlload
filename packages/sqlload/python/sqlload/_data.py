@@ -10,9 +10,8 @@ from sqlload._native import JsonData
 BytesLike = bytes | bytearray | memoryview | str
 
 
-#: The conversions `sl.field(parse=...)` knows, a closed list; anything else belongs downstream or in a Python table.
-EPOCH_UNITS = ("epoch_s", "epoch_ms", "epoch_us")
-FORMAT_KINDS = ("timestamp", "date")
+#: What `sl.field(parse=...)` takes, the shape of a table's `parse` entry: an epoch word, or a mapping with `timestamp` or `date` (a format or a list of formats), and optionally `tz` and `on_error`; anything else belongs in a `transform`.
+Parse = str | Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -21,7 +20,7 @@ class Field:
 
 	path: str
 	required: bool = False
-	parse: str | Mapping[str, str] | None = None
+	parse: Parse | None = None
 	on_error: str = "fail"
 	#: Where `path` starts when not at the row: `sl.parent`'s enclosing object or `sl.key`'s request key, as the spec's `from`.
 	source: Mapping[str, Any] | None = None
@@ -31,19 +30,22 @@ class Field:
 Fields = Mapping[str, "str | Field"]
 
 
-def field(path: str, *, required: bool = False, parse: str | Mapping[str, str] | None = None, on_error: str = "fail") -> Field:
+def field(path: str, *, required: bool = False, parse: Parse | None = None, on_error: str = "fail") -> Field:
 	"""The value at `path` (such as `"$.updated-at"` or `"$.items[0].id"`) for `fields=`; `required=True` fails the table on a
 	row without one. A path is dotted keys after `$`, each optionally followed by list indexes: `[0]` is the first item and
 	`[-1]` the last. A missing key, an index past the end of the list or on a value that isn't a list gives NULL. Other
 	JSONPath syntax (`[*]`, filters, slices, `..`) is refused, naming the field.
 
-	`parse` converts the value: `"epoch_s"`, `"epoch_ms"` or `"epoch_us"` turn a number (or numeric text) into a UTC
-	timestamp; `{"timestamp": "%d/%m/%Y %H:%M"}` and `{"date": "%d/%m/%Y"}` read text with a strftime format. A value
-	that doesn't convert fails the table, naming the field and the value, or loads NULL with `on_error="null"`."""
+	`parse` converts the value, as a table's `parse` setting does: `"epoch_s"`, `"epoch_ms"` or `"epoch_us"` turn a number
+	(or numeric text) into a UTC timestamp; `{"timestamp": ["iso", "%m/%d/%Y %H:%M"]}` and `{"date": "%d/%m/%Y"}` read
+	text with a format, or each of a list of formats in turn, the first that reads it winning. A time without an offset
+	is read in `"tz"` (such as `{"timestamp": "%d/%m/%Y %H:%M", "tz": "Europe/Paris"}`), else the table's `timezone`,
+	else UTC, and loads as `timestamp_tz`. A value that doesn't convert fails the table, naming the field and the value,
+	or loads NULL with `on_error="null"`. Other conversions belong in a `transform`."""
 	return Field(path, required, parse, on_error)
 
 
-def parent(path: str, *, levels: int = 1, required: bool = False, parse: str | Mapping[str, str] | None = None, on_error: str = "fail") -> Field:
+def parent(path: str, *, levels: int = 1, required: bool = False, parse: Parse | None = None, on_error: str = "fail") -> Field:
 	"""In an `sl.http` job's `fields=`, the value at `path` in the object around each row that `select` passes through:
 	the nearest with `levels=1`, further out with more, the response document itself outermost (so a page's envelope
 	works too). `required`, `parse` and `on_error` are as for `sl.field`; `plan` refuses more levels than `select` has."""
@@ -103,17 +105,13 @@ def _conversion(name: str, projected: Field) -> dict[str, Any]:
 		if projected.on_error != "fail":
 			raise ValueError(f"fields[{name!r}]: on_error applies to values parse converts; set parse too")
 		return {}
-	if isinstance(parse, str) and parse in EPOCH_UNITS:
-		kind: dict[str, Any] = {"kind": parse}
-	elif isinstance(parse, Mapping) and len(parse) == 1 and next(iter(parse)) in FORMAT_KINDS and isinstance(next(iter(parse.values())), str):
-		((kind_name, format_text),) = parse.items()
-		kind = {"kind": kind_name, "format": format_text}
-	else:
+	if not isinstance(parse, (str, Mapping)):
 		raise ValueError(
-			f'fields[{name!r}]: parse takes "epoch_s", "epoch_ms", "epoch_us", {{"timestamp": format}} or {{"date": format}}, not {parse!r}; '
-			"other conversions belong downstream or in a Python table"
+			f'fields[{name!r}]: parse takes "epoch_s", "epoch_ms", "epoch_us", or {{"timestamp": formats}} or {{"date": formats}}, not {parse!r}; '
+			"other conversions belong in a transform"
 		)
-	return {"parse": kind, **({"on_error": "null"} if projected.on_error == "null" else {})}
+	# Rust reads the rest, as it reads a table's parse setting.
+	return {"parse": parse if isinstance(parse, str) else dict(parse), **({"on_error": "null"} if projected.on_error == "null" else {})}
 
 
 def _fields_text(fields: Fields | None) -> str | None:

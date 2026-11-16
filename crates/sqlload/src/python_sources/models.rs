@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::row_batches::models::Flatten;
+
 /// One `sl.source(...)` (or a standalone `@sl.table`, as a source of its own) found under `python_paths`.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -31,8 +33,9 @@ pub struct TableRead {
     /// A logged table's position from its run log (`ctx.state`), as JSON text.
     pub state: Option<String>,
     pub is_reload: bool,
-    /// Top-level objects the crossing expands one level into `<object>__<key>` columns.
-    pub flatten: Vec<String>,
+    /// The objects the crossing expands into `<object>__<key>` columns.
+    #[serde(skip)]
+    pub flatten: Flatten,
     /// Columns loaded masked.
     pub masked: Vec<String>,
     /// Columns pinned as `array(...)`: their Arrow lists cross as lists, so each element converts exactly.
@@ -40,6 +43,9 @@ pub struct TableRead {
     /// How the table's columns load and the destination's name limit, which the crossing matches yielded fields to `cursor` and `arrays` by; not sent to the table function.
     #[serde(skip)]
     pub naming: (crate::load_naming::models::Naming, Option<usize>),
+    /// The table's `timezone`, which an `sl.field` parse without its own `tz` reads times without an offset in; `None` is UTC.
+    #[serde(skip)]
+    pub zone: Option<chrono_tz::Tz>,
 }
 
 /// The cursor window a table function may use to read only new data.
@@ -54,6 +60,8 @@ pub struct CursorRead {
     pub end: Option<String>,
     /// Whether `start` itself is included.
     pub inclusive: bool,
+    /// The table's `timezone` (an IANA name), which `ctx.cursor_value` and `ctx.cursor_end` arrive in; `None` is UTC.
+    pub timezone: Option<String>,
 }
 
 /// What a `transform` gets as `ctx`: the unit its rows came from, `"file"`, `"range"` or `"page"`. A file sets `path`, `modified_at` and, for its format, `sheet`, `range` and `skip_rows`; a Google Sheets range sets `spreadsheet_id`, `sheet` (the tab) and `range`; an `sl.http` page sets `page` and, in a fan-out, `key`.
@@ -89,6 +97,9 @@ pub struct TransformCall {
     /// How the table's columns load and the destination's name limit.
     #[serde(skip)]
     pub naming: (crate::load_naming::models::Naming, Option<usize>),
+    /// The objects of what it returns that expand into `<object>__<key>` columns (it is given the rows as read).
+    #[serde(skip)]
+    pub flatten: Flatten,
 }
 
 /// How a `transform`'s call on one file or range went, once every batch it returned or yielded has crossed into Arrow and been passed on.

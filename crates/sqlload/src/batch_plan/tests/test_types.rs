@@ -8,6 +8,8 @@ pub(crate) struct SplitWindowsTestCase {
     pub(crate) inclusive: bool,
     pub(crate) step: BatchStep,
     pub(crate) cursor_type: Option<ColumnType>,
+    /// The table's `timezone`, which a bound without an offset is read in while the cursor's type is unknown.
+    pub(crate) zone: chrono_tz::Tz,
     /// Each window as `from..to` (`(` when the start is not read), or the error.
     pub(crate) expected_windows: Result<&'static [&'static str], &'static str>,
 }
@@ -35,4 +37,34 @@ pub(crate) struct PartitionFiles {
     pub(crate) day: &'static str,
     pub(crate) files: usize,
     pub(crate) file_bytes: u64,
+}
+
+pub(crate) struct BoundArrayTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) cursor_type: ColumnType,
+    /// The bound as Arrow displays it.
+    pub(crate) expected_value: &'static str,
+}
+
+pub(crate) struct WindowRowsTestCase {
+    pub(crate) description: &'static str,
+    /// Each row's cursor, in hours from 2026-03-01 00:00 UTC (`None` for NULL).
+    pub(crate) hours: &'static [Option<i64>],
+    /// Where the rows split into a second batch of the same window.
+    pub(crate) split_at: usize,
+    pub(crate) from: Option<&'static str>,
+    pub(crate) to: Option<&'static str>,
+    pub(crate) inclusive: bool,
+    /// `null_cursor = "include"`.
+    pub(crate) include: bool,
+    pub(crate) rule: crate::project::models::OnCursorOutOfRange,
+    /// The table's `timezone`, which the bounds are read in and times are shown in.
+    pub(crate) zone: chrono_tz::Tz,
+    /// How many rows load, across both batches.
+    pub(crate) expected_kept: usize,
+    /// How many rows the bounds skipped for a NULL cursor.
+    pub(crate) expected_nulls: usize,
+    /// What the load says of the rows outside (empty when there are none).
+    pub(crate) expected_text: &'static str,
 }

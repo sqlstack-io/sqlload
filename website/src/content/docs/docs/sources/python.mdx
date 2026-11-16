@@ -49,14 +49,17 @@ Unknown settings raise `TypeError` when the module is imported.
 
 | Setting | On | Meaning |
 |---------|----|---------|
-| `write_strategy`, `unique_key`, `on_duplicate_keys`, `null_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0, `null_keys` from 0.51.0, and `lookback=1` on an integer cursor from 0.52.0. Python tables don't take `lookahead` or `lookback_from`. Every table needs a `write_strategy`, from its source or its own decorator, and a `merge` table names its `unique_key` columns: a Python source reports no primary key, so `"{primary_key}"` is refused. |
+| `write_strategy`, `unique_key`, `on_duplicate_keys`, `null_keys`, `dedup_sort`, `cursor_column`, `cursor_start`, `lookback`, `append_cursor_inclusive`, `batch_size`, `on_cursor_out_of_range` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings), such as `dedup_sort={"updated_at": "desc"}`; `on_duplicate_keys` and `dedup_sort` from 0.39.0, `null_keys` from 0.51.0, `lookback=1` on an integer cursor from 0.52.0, and `on_cursor_out_of_range` from 0.53.0. Python tables don't take `lookahead` or `lookback_from`. Every table needs a `write_strategy`, from its source or its own decorator, and a `merge` table names its `unique_key` columns: a Python source reports no primary key, so `"{primary_key}"` is refused. |
 | `contract`, `on_schema_change`, `auto_widen`, `type_change_rebuild` | source or table | See [Contracts](/docs/concepts/contracts/). |
 | `checks` | source or table | Checks on the staged rows, such as `{"unique": ["order_id"]}`. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | source or table | From 0.37.0. Columns with the same value in every row, such as `{"tenant_id": "acme"}` or `{"shard": {"value": "7", "type": "int"}}`; a table's replace its source's. A yielded field of the same name, ignoring case, fails the table before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
 | `allow_empty` | source or table | Let `replace` empty a table when the function yields no rows. |
 | `state` | source or table | `"logged"` to keep a position in `ctx.state`. See [Logged state](/docs/concepts/cursors/#logged-state). |
+| `send` | source or table | From 0.53.0. `"at_commit"` or `"per_batch"`: when the rows reach the target. See [Sending rows at commit](/docs/targets/#sending-rows-at-commit). |
 | `columns` | table | Pinned column types, such as `{"total": "decimal(18,2)"}`. |
-| `flatten` | table | Top-level objects to expand one level into `<object>__<key>` columns. |
+| `flatten` | table | Objects whose keys load as `<object>__<key>` columns: dotted paths, or `"all"`. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects). |
+| `naming`, `compat`, `on_duplicate_names` | source or table | As in [`sqlload.toml`](/docs/configuration/#table-settings). A field yielded as `rowNumber` loads as `row_number`; `naming="source"` keeps it. See [Naming](/docs/concepts/nested-data/#naming). |
+| `rename` | source or table | From 0.53.0. A map such as `{"orderId": "order_ref"}`, the name an `@sl.rename` function was registered under, or the function itself (`rename=erp_names`). See [rename](/docs/concepts/nested-data/#rename). |
 | `unnest`, `max_depth` | table | As in [`sqlload.toml`](/docs/configuration/#table-settings): the list fields whose items become child tables, such as `unnest=["items"]` or `"all"`, and how many levels deep. See [Nested data](/docs/concepts/nested-data/). |
 | `mask`, `exclude_columns`, `allow_columns` | table (the last two also source) | As for other sources. |
 | `table_name`, `destination_path` | source or table | Destination name template, and folder in a files target. |
@@ -98,11 +101,9 @@ declared. Inferred columns don't change type by themselves; see
 
 ### Flattening objects
 
-Nested values stay one JSON column (`VARIANT` on Snowflake) unless the table lists top-level objects
-in `flatten`:
+Nested values stay one JSON column (`VARIANT` on Snowflake) unless the table sets `flatten`:
 
 ```python
-from datetime import date
 from decimal import Decimal
 
 import sqlload as sl
@@ -112,38 +113,22 @@ store = sl.source("store", write_strategy="replace")
 
 @store.table(
     description="Orders",
-    flatten=["customer"],
+    flatten=["customer", "customer.address"],
     columns={"total": "decimal(18,2)"},
 )
 def store_orders(ctx):
     yield {
         "order_id": 7,
         "total": Decimal("12.50"),
-        "placed_on": date(2026, 11, 1),
         "customer": {"country": "GB", "address": {"city": "Leeds"}},
         "line_totals": {"sku-14": 12.5},
     }
 ```
 
-That loads these DuckDB columns: `order_id BIGINT`, `total DECIMAL(18,2)`, `placed_on DATE`,
-`customer__country VARCHAR`, `customer__address JSON`, `line_totals JSON`.
-
-Each listed object is expanded exactly one level. Objects not listed, such as `line_totals`, stay
-JSON; never flatten maps whose keys are data. Lists are never expanded. A missing or null object
-leaves its columns NULL, and new keys become new columns under `on_schema_change`. Dicts,
-`sl.json` bytes and Arrow structs flatten the same way, and a typed child of an Arrow struct keeps
-its type.
-
-The load fails when a listed value arrives as a scalar or a list, or when a key's column name is
-also a field of the rows or comes from flattening another object. `plan` refuses:
-
-- `flatten` on tables that aren't Python tables;
-- a dotted path, such as `customer.address`: list `customer`, and its nested values stay JSON;
-- an object that `exclude_columns`, `mask` or `columns` also names. After flattening no column
-  carries the object's own name, so name the `<object>__<key>` columns instead.
-
-Turning `flatten` on for a table that already holds the object as a JSON column leaves that column
-NULL from then on, next to the new key columns.
+That loads `customer__country` and `customer__address__city`, and `line_totals` as JSON. Dicts,
+`sl.json` bytes and Arrow structs flatten the same way, and a typed child of an Arrow struct or a
+`Decimal` or `date` in a dict keeps its type. Paths, `"all"`, json pins and what `plan` shows are in
+[Flattening objects](/docs/concepts/nested-data/#flattening-objects).
 
 ### Fields
 
@@ -189,15 +174,16 @@ def accounts(ctx):
   flattening a field makes. A job whose `fields` leave it out fails before any request; `sl.json`
   and `sl.ndjson` data fails before it is parsed.
 - A fan-out's `over` picks keys with its `select` and takes no `fields`.
-- From 0.48.0, `sl.field(path, parse=...)` converts the value, from a closed list:
-  `"epoch_s"`, `"epoch_ms"` and `"epoch_us"` turn a number (or numeric text) into a UTC
-  `timestamp_tz`; `{"timestamp": "%d/%m/%Y %H:%M"}` reads text with a strftime format, as a
-  `timestamp_ntz`, or a `timestamp_tz` when the format has an offset (`%z`, or `%#z`, which also
-  takes `Z`); `{"date": "%d/%m/%Y"}` reads a date. A fraction of a second is `%.f`, as in
-  `"%H:%M:%S%.f"`; Python's `%f` is refused, as it reads nanoseconds here. A value outside the years
-  1 to 9999 doesn't convert.
+- `sl.field(path, parse=...)` converts the value as a table's
+  [`parse`](/docs/concepts/types/#parsing-text-into-times) does, and takes the same entry:
+  `"epoch_s"`, `"epoch_ms"` or `"epoch_us"`, or `{"timestamp": [...]}` or `{"date": [...]}` with a
+  format or a list of formats tried in turn, and `"tz"`. For example,
+  `sl.field("$.updated", parse={"timestamp": ["iso", "%m/%d/%Y %H:%M"], "tz": "Europe/Paris"})`.
+  A timestamp loads as `timestamp_tz`, a time without an offset read in `tz`, else the table's
+  `timezone`, else UTC. A value outside the years 1 to 9999 doesn't convert.
   A value that doesn't convert fails the table, naming the row, the field and the value, or loads
-  NULL with `on_error="null"`. Anything else belongs downstream or in a Python table that yields rows.
+  NULL with `on_error="null"`. A table's `parse` reaches any column without listing it in `fields`.
+  Other conversions belong in a [transform](/docs/sources/files/#transforming-each-file).
 
 #### Path syntax
 
@@ -317,8 +303,17 @@ A table function receives a `sl.Context`:
 | `ctx.client` | The source's `@source.client`, built on first use. |
 | `ctx.table`, `ctx.source`, `ctx.logger` | The table and source names, and a logger. |
 
-Rows outside the cursor window are skipped with a warning, so a function that ignores
-`ctx.cursor_value` still loads correctly, only slower.
+From 0.53.0, on a cursor of times, `ctx.cursor_value` and `ctx.cursor_end` arrive in the table's
+`timezone`, such as `datetime(2026, 3, 1, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/Paris'))`.
+Without it, a `timestamp_tz` cursor's arrive in UTC and a `timestamp_ntz` cursor's arrive naive.
+With it, a `timestamp_ntz` cursor's carry the zone too, keeping their wall-clock time. Python can't
+compare those with naive datetimes, so a function that does must make one side match, such as
+`since = ctx.cursor_value.replace(tzinfo=None)`. See
+[Times without an offset](/docs/concepts/cursors/#times-without-an-offset).
+
+From 0.53.0, rows the function returns outside the window it was asked for fail the table, naming
+how many and their likely cause. `on_cursor_out_of_range="skip"` drops them and `"warn"` loads them.
+See [Rows outside the window](/docs/concepts/cursors/#rows-outside-the-window).
 
 Table functions never get credentials of a connection a `[targets]` entry writes to: a source using
 such a connection fails at `plan`.
@@ -330,26 +325,29 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 `sl.http` describes REST jobs that run entirely in Rust. For worked examples, see
 [HTTP APIs](/docs/guides/python/#http-apis) in the guide. The connection is an
-[`http` connection](/docs/configuration/#http).
+[`http` connection](/docs/configuration/#http). The table's
+[`flatten`](/docs/concepts/nested-data/#flattening-objects) applies to the rows a job reads.
 
 | Function | Meaning |
 |----------|---------|
 | `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
-| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail", transform=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. From 0.45.0, a response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). From 0.52.0, `transform` reshapes each page's rows in Python before they load; see [Transforming each page](#transforming-each-page). |
-| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail", transform=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` is as for `paginate`. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). From 0.52.0, `transform` is as for `paginate`, called once per page of each key. |
+| `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail", error_path=None, transform=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. From 0.45.0, a response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). From 0.53.0, `error_path` is where the API reports an error in a successful response; see [Errors in a successful response](#errors-in-a-successful-response). `fields` and `keep_record` (from 0.27.0) pick and rename each row's values; see [Fields](#fields). `method` and `json_body` are from 0.36.0; see [POST with a JSON body](#post-with-a-json-body). From 0.37.0, `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). From 0.52.0, `transform` reshapes each page's rows in Python before they load; see [Transforming each page](#transforming-each-page). |
+| `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail", error_path=None, transform=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` and `error_path` are as for `paginate`. `fields` and `keep_record` are from 0.27.0. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. From 0.37.0, `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are from 0.36.0, as for `paginate`. From 0.43.0, keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). From 0.52.0, `transform` is as for `paginate`, called once per page of each key. |
 
 | Paginator | Next page |
 |-----------|-----------|
 | `sl.single()` | None: one request. |
-| `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. |
-| `sl.link_header()` | The `Link` header's `rel="next"`. |
+| `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. A link already followed fails the load; see [Repeated pages](#repeated-pages). |
+| `sl.link_header()` | The `Link` header's `rel="next"`. A link already followed fails the load. |
 | `sl.offset(param="offset", *, limit, limit_param="limit", location="query", read_ahead=None)` | Counts rows by `limit`; ends at a short page. `location` is from 0.36.0, `read_ahead` from 0.48.0 (see [Reading pages ahead](#reading-pages-ahead)). From 0.45.0, when a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). |
 | `sl.page_number(param="page", *, start=1, location="query", read_ahead=None)` | Counts pages; ends at an empty page. `location` is from 0.36.0, `read_ahead` from 0.48.0. |
-| `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. |
+| `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. `location` is from 0.36.0. A token already sent fails the load. |
 
 | Cells | Columns |
 |-------|---------|
-| `sl.cells(pointer="$.cells", *, key="columnId", value="$.value", names_from="$.columns", name_key="title", id_key="id", header_row=False)` | From 0.37.0. Each row's cells at `pointer`, one column per column the response names. See [Rows of cells](#rows-of-cells). |
+| `sl.cells(pointer="$.cells", *, value="$.value", name)` | From 0.37.0. Each row's cells at `pointer`, one column per name. `name` is a path in each cell, such as `"$.FIELDNAME"`, when each cell names its own column, or one of the two below. See [Rows of cells](#rows-of-cells). |
+| `sl.listed(path, *, key="columnId", id_key="id", name_key="title", by_position=False)` | The columns the response lists at `path`, such as `"$.columns"`. Each cell's `key` matches a listed column's `id_key`, and `name_key` names it; `by_position=True` matches cells to columns by position. |
+| `sl.header_row()` | The first row's cells name the columns, by position, and that row doesn't load. |
 
 | Auth | Sends |
 |------|-------|
@@ -404,10 +402,40 @@ Some APIs leave an empty list out instead of sending `[]`, as Google's do: an em
 a response without the path as no rows. Before 0.45.0 every response without the path was read
 that way.
 
-`sl.next_link`, `sl.cursor` and `sl.link_header` end at a response without a next page: a missing
-or empty pointer, or no `rel="next"` link. That is how an API says it has no more pages, so SQLLoad
+`sl.next_link`, `sl.cursor` and `sl.link_header` end at a response without a next page: a missing,
+null or empty pointer, or no `rel="next"` link. That is how an API says it has no more pages, so SQLLoad
 can't tell it from an error response that also leaves the pointer out; with `select` set, such a
 response usually lacks the rows' path too, and fails as above.
+
+### Errors in a successful response
+
+From 0.53.0. Some APIs answer an error with a 200 status and the error in the body, beside the
+rows or instead of them, such as EAM's `ErrorAlert`, GraphQL's `errors` or Slack's `error`.
+`error_path` on `paginate` or `fan_out` names where: any value there other than `null`, `false`,
+`""`, `[]` or `{}` fails the table with the API's message, before any row of that page loads.
+`0` counts as an error. The message is the value as text (JSON for a list or an object), with the
+connection's secrets replaced by `***`, cut at 200 characters:
+
+```text
+POST https://eam.example/axis/restservices/grids: the API reported an error at $.ErrorAlert: [{"Message":"Grid WSJOBS: you are not allowed to run this grid"}]
+```
+
+The path takes the same form as `select`, without `[*]`. It is checked on every response that
+yields rows or keys, including a fan-out's `over` and its pages, but not an OAuth2 token response.
+
+### Repeated pages
+
+A paginator that follows the response, `sl.cursor`, `sl.next_link` or `sl.link_header`, fails the
+load when the next position is one it already requested for the same request (in a fan-out, for the
+same key), instead of reading that page again and loading its rows twice. The error names the value
+and the page that returned it:
+
+```text
+POST https://eam.example/axis/restservices/grids: cursor 2 repeated after page 2, so paging would read page 2 again; check the paginator's pointer
+```
+
+`sl.offset` and `sl.page_number` count their own positions, so they never repeat one; instead, a page
+whose response repeats the previous page's fails, as an API ignoring the parameter would loop.
 
 ### Transforming each page
 
@@ -550,48 +578,92 @@ a whole, and `concurrency` counts batches.
 ### Rows of cells
 
 From 0.37.0. Some APIs return each row as a list of cells, such as
-`[{"columnId": 7001, "value": "Bolt"}]`, and list the column names separately (Smartsheet), or
-name them in the first row (Google's grid data). `cells=sl.cells(...)` on `paginate` or `fan_out`
-turns each row into one column per named column, in Rust, before the rows load:
+`[{"columnId": 7001, "value": "Bolt"}]`. Each cell's column name is in the cell itself (EAM's
+grids), in a list of columns the response sends beside the rows (Smartsheet), or in the first row
+(Google's grid data). `cells=sl.cells(...)` on `paginate` or `fan_out` turns each row into one column
+per name, in Rust and page by page, before the rows load. `name` says where the names are:
+
+| `name` | Names come from | Example |
+|--------|-----------------|---------|
+| `"$.FIELDNAME"` | A path in each cell: the cell names its own column. | EAM |
+| `sl.listed("$.columns")` | The columns the response lists, matched by each cell's `columnId` to a column's `id`, named by its `title`. | Smartsheet |
+| `sl.listed("$.columns", by_position=True)` | The columns the response lists, matched by position. | |
+| `sl.header_row()` | The first row's cells, by position; that row doesn't load. | Google's grid data |
+
+An EAM grid is a POST paged by a cursor in the body, and each cell names its column:
+
+```json
+{"Result": {"ResultData": {"NEXTCURSORPOSITION": 2, "DATARECORD": [
+  {"DATAFIELD": [{"FIELDNAME": "wo_code", "FIELDVALUE": "1001", "DATATYPE": "VARCHAR"},
+                 {"FIELDNAME": "DueDate", "FIELDVALUE": "2026-11-01", "DATATYPE": "DATE"}]}]}}}
+```
+
+```python
+@eam.table(description="Work orders.")
+def work_orders(ctx):
+    return api.paginate(
+        "/grids",
+        method="POST",
+        json_body={"GRID": {"NAME": "WSJOBS"}},
+        paginator=sl.cursor("$.Result.ResultData.NEXTCURSORPOSITION", "$.CURSORPOSITION", location="body"),
+        select="$.Result.ResultData.DATARECORD",
+        cells=sl.cells("$.DATAFIELD", value="$.FIELDVALUE", name="$.FIELDNAME"),
+        error_path="$.ErrorAlert",
+    )
+```
+
+The names then go through the table's [`naming`](/docs/concepts/nested-data/#naming) and `rename`
+like any other column's, so `wo_code`, `Description`, `DueDate` and `EstHours` load as:
+
+```text
+wo_code      VARCHAR
+description  VARCHAR
+due_date     VARCHAR
+est_hours    VARCHAR
+```
+
+For Smartsheet, whose rows list cells by `columnId` and whose sheet lists its columns:
 
 ```python
 @sheets.table(description="Parts.")
 def parts(ctx):
     return api.paginate("/sheets/123", paginator=sl.page_number("page"), select="$.rows",
-                        cells=sl.cells(value=["$.value", "$.displayValue"]))
+                        cells=sl.cells(value=["$.value", "$.displayValue"], name=sl.listed("$.columns")))
 ```
 
-- A cell's column is its `key` field (`columnId`), matched to the `id_key` (`id`) of the columns
-  listed at `names_from` (`$.columns`), named by their `name_key` (`title`). These defaults fit
-  Smartsheet.
-- `key=None` matches cells to columns by position. `header_row=True` takes the names from the first
-  row's cells instead of `names_from`, and that row doesn't load. For Google's grid data:
+For Google's grid data:
 
-  ```python
-  api.paginate("/spreadsheets/ID", paginator=sl.single(), select="$.sheets[0].data[0].rowData",
-               select_missing="empty",
-               cells=sl.cells("$.values", key=None, header_row=True,
-                              value=["$.effectiveValue.stringValue", "$.effectiveValue.numberValue",
-                                     "$.effectiveValue.boolValue"]))
-  ```
+```python
+api.paginate("/spreadsheets/ID", paginator=sl.single(), select="$.sheets[0].data[0].rowData",
+             select_missing="empty",
+             cells=sl.cells("$.values", name=sl.header_row(),
+                            value=["$.effectiveValue.stringValue", "$.effectiveValue.numberValue",
+                                   "$.effectiveValue.boolValue"]))
+```
 
 - `value` is where each cell's value is, or a list of places tried in turn; the first present and
   not null wins. Values are typed like any other JSON value: a number loads as a number, `true` as
-  a boolean. Paths in `select` and here may index a list, as in `$.sheets[0]`.
+  a boolean, and text as text. Paths in `select` and here may index a list, as in `$.sheets[0]`.
+- A name given as a number or `true`/`false` is its text. A cell that names itself with nothing at
+  `name`, or an empty name, fails the load, as in `row 2: its cell 2 has no name at $.FIELDNAME`.
+- Two cells for one column in a row fail the load, and so do two names that differ only in case
+  (`Qty` and `qty`), as they would load as one column.
 - A row with no cell for a column loads `NULL` in it. The row's other fields, such as its `id` or
   `modifiedAt`, load beside the cells' columns; one with the name of a cells' column fails the load.
-- A cell whose column the response doesn't name fails the load, naming its id, unless it has no
-  value (Google returns formatted empty cells past the last column). Two cells for one column in a
-  row fail it too, as does a page whose rows have no field at `pointer`. Names are read again
-  from every page that lists them; a page that doesn't keeps the names of the page before it.
-- `header_row` reads the first row of a paginate's first page. In a `fan_out`, that is each key's
-  first page, which suits one sheet per key; a fan-out that splits one sheet into ranges would lose
-  each range's first row, so list the names with `names_from` instead.
+- With `sl.listed`, a cell whose column the response doesn't list fails the load, naming its id,
+  unless it has no value (Google returns formatted empty cells past the last column). Names are read
+  again from every page that lists them; a page that doesn't keeps the names of the page before it.
+  A page whose rows have no field at `pointer` fails the load until a page had cells.
+- `sl.header_row()` reads the first row of a paginate's first page. In a `fan_out`, that is each
+  key's first page, which suits one sheet per key; a fan-out that splits one sheet into ranges would
+  lose each range's first row, so list the names with `sl.listed` instead.
+- Cells that name themselves give each row the columns its cells name. A name that first appears on
+  a later row or page is a new column, as for any JSON rows.
 - A column renamed in the source is a new column to the destination, so
   [`on_schema_change`](/docs/configuration/#table-settings) decides: by default it is added, and
   earlier rows hold `NULL` in it.
-- `fields=` picks from the pivoted columns, by their names (`{"qty": "$.Qty"}`), and `keep_record`
-  keeps the pivoted row, not the cells as the API sent them.
+- `fields=` picks from the pivoted columns, by their names as the API spells them
+  (`{"qty": "$.Qty"}`), and `keep_record` keeps the pivoted row, not the cells as the API sent them.
 
 ### POST with a JSON body
 
@@ -697,4 +769,5 @@ To inspect or correct a logged position, see [`sqlload logged-state`](/docs/cli/
 | `sl.__version__` | The package version. |
 | `sl.executable()` | The path of the `sqlload` command installed with the package, else the one on `PATH`. |
 | `@sl.transform`, `@sl.transform("name")` | From 0.52.0. Registers a function under its own name, or the one given, as a transform for a [files](/docs/sources/files/#transforming-each-file) or [Google Sheets](/docs/sources/google-sheets/#transforming-each-range) table's `transform = "name"`, or an `sl.http` job's [`transform=`](#transforming-each-page). Returns the function unchanged. |
+| `@sl.rename`, `@sl.rename("name")` | From 0.53.0. Registers a function under its own name, or the one given, for a table's `rename`. It gets the columns as `sl.Column`s (`position`, `source`, `default`) and an `sl.RenameContext` (`source`, `table`), and returns the names it changes by position. See [rename](/docs/concepts/nested-data/#rename). |
 | `sl.TransformContext` | From 0.52.0. The `ctx` a transform gets: `unit` (`"file"`, `"range"` or `"page"`), `table`, and the unit's details. |

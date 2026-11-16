@@ -59,7 +59,9 @@ column = "customer"
 reason = "As above: a row whose Customer is NULL gives SQLLoad a text column customer beside the customer__* columns its objects flatten into; dlt makes no column for a value that is only NULL."
 
 [[allowed]]
-kind = "load_failed"
+kind = "extra_column"
 case = "naming_collision"
 run = "1"
-reason = "Two columns whose names normalise to one (OrderID and Order ID, both order_id) stop SQLLoad's plan, naming both, so no value is lost silently; dlt keeps the last value of a row given as a dictionary. Excluding one of the two with exclude_columns resolves it."
+table = "orders"
+column = "order_id_1"
+reason = "Two columns whose names meet after naming (OrderID and Order ID, both order_id) load as order_id and order_id_1, so no value is lost; dlt keeps the last value of a row given as a dictionary. rename chooses other names."

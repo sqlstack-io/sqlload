@@ -11,9 +11,12 @@ use sqlload::loader::models::PlanOptions;
 use sqlload::store_paths::models::Location;
 
 use crate::helpers::{
-    column_values, day_files, described_project, local_store, parquet_bytes, run_once,
+    column_values, day_files, described_project, duckdb_text, local_store, parquet_bytes, run_once,
+    run_sqlload, words,
 };
-use crate::test_types::{FilesToFilesTestCase, ParquetFile, SourceRowUpgradeTestCase};
+use crate::test_types::{
+    ColumnNamesTestCase, FilesToFilesTestCase, NamesOutcome, ParquetFile, SourceRowUpgradeTestCase,
+};
 
 /// A run adding no source files.
 pub(crate) fn no_files() -> Result<Vec<(String, bytes::Bytes)>, String> {
@@ -164,4 +167,61 @@ pub(crate) async fn run_source_row_upgrade(
     )
     .await
     .map_err(|error| error.to_string())
+}
+
+/// An xlsx workbook of one sheet: a row per line of `text`, cells separated by `|`, each written as text.
+pub(crate) fn workbook(text: &str) -> Result<Vec<u8>, String> {
+    let failed = |error: rust_xlsxwriter::XlsxError| error.to_string();
+    let mut book = rust_xlsxwriter::Workbook::new();
+    let sheet = book.add_worksheet();
+    for (row, line) in text.lines().enumerate() {
+        let row = u32::try_from(row).map_err(|error| error.to_string())?;
+        for (column, cell) in line.split('|').enumerate() {
+            let column = u16::try_from(column).map_err(|error| error.to_string())?;
+            sheet.write_string(row, column, cell).map_err(failed)?;
+        }
+    }
+    book.save_to_buffer().map_err(failed)
+}
+
+/// `text` as a file's bytes, unchanged.
+pub(crate) fn text_bytes(text: &str) -> Result<Vec<u8>, String> {
+    Ok(text.as_bytes().to_vec())
+}
+
+/// Plan and load `test_case`'s runs with the executable into a DuckDB file, each run adding its file: whether each run planned and loaded and its plan held the expected text, then the table's columns and what the check query returned, with every run's output.
+pub(crate) fn names_case_outcome(test_case: &ColumnNamesTestCase) -> Result<NamesOutcome, String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(root.path().join("drop")).map_err(|error| error.to_string())?;
+    let database = root.path().join("out.duckdb");
+    let config = root.path().join("sqlload.toml");
+    let text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n\n[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[sources.ShopOrders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"drop/\"\n{}",
+        database.display(),
+        root.path().display(),
+        test_case.settings
+    );
+    std::fs::write(&config, text).map_err(|error| error.to_string())?;
+    let mut outcome = NamesOutcome::default();
+    for run in test_case.runs {
+        std::fs::write(
+            root.path().join("drop").join(run.file),
+            (run.encode)(run.contents)?,
+        )
+        .map_err(|error| error.to_string())?;
+        let (planned, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+        let (loaded, load) = run_sqlload(&config, &["load"], ("", ""))?;
+        let shown = words(&plan).contains(&words(run.expected_plan));
+        outcome.runs.push((planned, loaded, shown));
+        outcome.output.push_str(&format!("{plan}\n{load}\n"));
+    }
+    let (table, _) = test_case.expected_columns;
+    outcome.columns = duckdb_text(
+        &database,
+        &format!(
+            "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = '{table}' AND NOT starts_with(column_name, '_')"
+        ),
+    )?;
+    outcome.checked = duckdb_text(&database, test_case.check.0)?;
+    Ok(outcome)
 }

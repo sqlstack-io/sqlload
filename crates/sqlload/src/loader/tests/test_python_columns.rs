@@ -3,12 +3,12 @@ use crate::column_types::models::Warehouse;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::python::fitting_type;
 use crate::loader::tests::helpers::{
-    bound_text, crossed_schema, inferred_columns, integer_code, live_paths, lower_case_rows,
-    problems_for, spelling,
+    crossed_schema, inferred_columns, integer_code, live_paths, lower_case_rows, problems_for,
+    spelling,
 };
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, FittingTypeTestCase,
-    InferredTableTestCase, SourceSpellingTestCase,
+    ChildPathsTestCase, DeclaredProblemsTestCase, FittingTypeTestCase, InferredTableTestCase,
+    SourceSpellingTestCase,
 };
 
 #[test]
@@ -154,8 +154,8 @@ fn given_declared_keys_when_the_data_lacks_them_then_close_names_and_missing_mas
 -> Result<(), String> {
     let test_cases = [
         DeclaredProblemsTestCase {
-            description: "a mask key in another case than the data's column fails with the right name",
-            settings: r#"{"mask": {"Email": "hash"}}"#,
+            description: "under naming = \"source\", a mask key in another case than the data's column fails with the right name",
+            settings: r#"{"naming": "source", "mask": {"Email": "hash"}}"#,
             columns: &["id", "email"],
             rows: 1,
             expected_problems: "mask key Email names no column of the data; did you mean email?",
@@ -201,62 +201,13 @@ fn given_declared_keys_when_the_data_lacks_them_then_close_names_and_missing_mas
 }
 
 #[test]
-fn given_a_cursor_bound_when_filtering_python_rows_then_it_takes_the_cursor_columns_arrow_type()
--> Result<(), String> {
-    let test_cases = [
-        BoundArrayTestCase {
-            description: "decimal",
-            text: "12.5",
-            cursor_type: ColumnType::Decimal {
-                precision: 18,
-                scale: 2,
-            },
-            expected_value: "Decimal128(18, 2) 12.50",
-        },
-        BoundArrayTestCase {
-            description: "smallint",
-            text: "3",
-            cursor_type: ColumnType::SmallInt,
-            expected_value: "Int16 3",
-        },
-        BoundArrayTestCase {
-            description: "int",
-            text: "42",
-            cursor_type: ColumnType::Int,
-            expected_value: "Int64 42",
-        },
-        BoundArrayTestCase {
-            description: "timestamp with a time zone, as the destination's maximum",
-            text: "2026-01-02 09:00:00.000000+00",
-            cursor_type: ColumnType::TimestampTz,
-            expected_value: "Timestamp(µs, \"UTC\") 2026-01-02T09:00:00Z",
-        },
-        BoundArrayTestCase {
-            description: "date",
-            text: "2026-01-02",
-            cursor_type: ColumnType::Date,
-            expected_value: "Date32 2026-01-02",
-        },
-    ];
-    for test_case in test_cases {
-        assert_eq!(
-            bound_text(&test_case)?,
-            test_case.expected_value,
-            "{}",
-            test_case.description
-        );
-    }
-    Ok(())
-}
-
-#[test]
 fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spelling_gives_the_fields_path()
 -> Result<(), String> {
     let test_cases = [
         ChildPathsTestCase {
             description: "Snowflake lists plain names upper-cased; their paths are the fields as the rows name them",
             warehouse: Warehouse::Snowflake,
-            naming: Naming::Sqlload,
+            naming: Naming::Source,
             pinned: &[],
             parent: "s__t",
             tables: &["S__T__ITEMS", "S__T__ITEMS__PARTS"],
@@ -268,16 +219,16 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "DuckDB lists them as written",
             warehouse: Warehouse::DuckDb,
-            naming: Naming::Sqlload,
+            naming: Naming::Source,
             pinned: &[],
             parent: "s__t",
             tables: &["s__t__items"],
             expected_paths: &[("items", "s__t__items")],
         },
         ChildPathsTestCase {
-            description: "under dlt naming a pinned child column gives the path of a list in a flattened object, whose field holds __; an unpinned table's path comes from its name",
+            description: "under snake_case naming a pinned child column gives the path of a list in a flattened object, whose field holds __; an unpinned table's path comes from its name",
             warehouse: Warehouse::DuckDb,
-            naming: Naming::Dlt,
+            naming: Naming::SnakeCase,
             pinned: &["items.dims__tags.value"],
             parent: "s__t",
             tables: &[
@@ -294,7 +245,7 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "Snowflake keeps mixed-case names: pins on Items and items each give their own table its path",
             warehouse: Warehouse::Snowflake,
-            naming: Naming::Sqlload,
+            naming: Naming::Source,
             pinned: &["Items.sku", "items.sku"],
             parent: "s__t",
             tables: &["S__T__ITEMS", "s__t__Items"],
@@ -303,7 +254,7 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "a pin whose table is not listed never takes the path of a listed table another pin spells exactly",
             warehouse: Warehouse::Snowflake,
-            naming: Naming::Sqlload,
+            naming: Naming::Source,
             pinned: &["Items.sku", "items.sku"],
             parent: "s__t",
             tables: &["s__t__Items"],
@@ -312,7 +263,7 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "Postgres lists an upper-case parent's pinned child folded, which still takes the pin's path",
             warehouse: Warehouse::Postgres,
-            naming: Naming::Dlt,
+            naming: Naming::SnakeCase,
             pinned: &["items.dims__tags.value"],
             parent: "S__T",
             tables: &["s__t__items__dims__tags"],
@@ -321,7 +272,7 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         ChildPathsTestCase {
             description: "Postgres lists an upper-case parent's children folded to lower case",
             warehouse: Warehouse::Postgres,
-            naming: Naming::Sqlload,
+            naming: Naming::Source,
             pinned: &[],
             parent: "S__T",
             tables: &["s__t__items", "other__items"],

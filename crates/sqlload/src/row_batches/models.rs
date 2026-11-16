@@ -4,7 +4,10 @@ use crate::row_batches::types::ListChoices;
 
 use arrow_array::RecordBatch;
 
-use crate::load_naming::models::Naming;
+use crate::column_parse::models::{BadValue, ColumnParse};
+use crate::load_naming::main::loaded_name::loaded_name;
+use crate::load_naming::models::{Compat, Naming};
+use crate::row_batches::constants::FLATTEN_SEPARATOR;
 
 /// One value of a yielded row, before its column's type is known.
 #[derive(Debug, Clone, PartialEq)]
@@ -155,6 +158,8 @@ pub struct JsonRead {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Projection {
     pub fields: Vec<ProjectedField>,
+    /// The zone a parsed time without an offset is in when its field has no `tz`: the table's `timezone`, which the crossing sets; `None` is UTC.
+    pub zone: Option<chrono_tz::Tz>,
     /// A column holding the whole row object as JSON.
     pub keep_record: Option<String>,
     /// The fields' paths as a tree, so each row walks every object on them once.
@@ -173,10 +178,10 @@ pub struct PathNode {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProjectionRules<'a> {
     pub cursor_column: Option<&'a str>,
-    /// Columns expanded into `<column>__<key>` after projection.
-    pub flatten: &'a [String],
+    /// The objects expanded into `<column>__<key>` columns after projection, when the table flattens any.
+    pub flatten: Option<&'a Flatten>,
     pub masked: &'a [String],
-    /// How the table's columns load, and the destination's name limit: under dlt's naming a field loads the cursor when its loaded name is the cursor's.
+    /// How the table's columns load, and the destination's name limit: a field loads the cursor when its loaded name is the cursor's.
     pub naming: (Naming, Option<usize>),
 }
 
@@ -187,8 +192,9 @@ pub struct FieldSpec {
     pub path: String,
     #[serde(default)]
     pub required: bool,
+    /// `sl.field(parse=...)` as written, as a table's `parse` entry is (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
     #[serde(default)]
-    pub parse: Option<Parse>,
+    pub parse: Option<serde_json::Value>,
     #[serde(default)]
     pub on_error: BadValue,
     /// What `path` starts from: the row, or, in an `sl.http` job, an object around it or the request's key.
@@ -210,26 +216,6 @@ pub enum FieldFrom {
     },
 }
 
-/// `sl.field(parse=...)`, a closed set of conversions: epoch seconds, milliseconds or microseconds (a number or numeric text) to a UTC timestamp, or text read with a strftime `format` as a timestamp or a date.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Parse {
-    EpochS,
-    EpochMs,
-    EpochUs,
-    Timestamp { format: String },
-    Date { format: String },
-}
-
-/// What a value that `parse` can't convert does: fail the read, naming the field and the value, or load NULL.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BadValue {
-    #[default]
-    Fail,
-    Null,
-}
-
 /// One column a projection loads: the value at `path` (keys from the row object down), or NULL when it is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectedField {
@@ -239,8 +225,8 @@ pub struct ProjectedField {
     pub text: String,
     /// A row without a value at `path` fails the read rather than loading NULL.
     pub required: bool,
-    pub parse: Option<Parse>,
-    pub on_error: BadValue,
+    /// How its value converts, with what a value that doesn't convert does.
+    pub parse: Option<ColumnParse>,
 }
 
 /// Builds compact JSON text for nested values, escaping strings as serde_json does.
@@ -324,6 +310,151 @@ impl Unnest {
     }
 }
 
+/// Which objects of a table's rows flatten into `<object>__<key>` columns.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FlattenObjects {
+    /// None: objects stay JSON columns.
+    #[default]
+    None,
+    /// Every object, at every level down to `max_depth`.
+    All,
+    /// The objects at these dotted paths (`customer`, `customer.address`, `items.dimensions` inside an unnested list's items).
+    Paths(Vec<String>),
+}
+
+/// How a table flattens the objects of its rows: which, the ones kept whole, and how deep.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Flatten {
+    pub objects: FlattenObjects,
+    /// Objects kept whole as one column, by the name each would load as (`line_totals`, `customer__address`): those pinned `json`, and those masked, so the mask applies to the whole object.
+    pub keep: Vec<String>,
+    /// Columns pinned as another type than `json`, by name, with the type: flattening one of them fails rather than leave the pin unused.
+    pub pinned: Vec<(String, String)>,
+    /// How many levels down objects flatten at most (a field of the row is level 1); deeper ones stay JSON.
+    pub max_depth: u32,
+    /// How the table names its columns: under snake_case, a path or name matches a key as written or as both load (`LineTotals` is `line_totals`); under `source`, only as written.
+    pub naming: Naming,
+    /// The table's `exclude_columns` patterns: one matching an object flattening would replace, but not its `<object>__<key>` columns, fails rather than let those columns load.
+    pub excluded: ExcludePatterns,
+}
+
+/// A table's `exclude_columns` patterns, matched as one set.
+#[derive(Debug, Clone, Default)]
+pub struct ExcludePatterns {
+    patterns: Vec<String>,
+    set: globset::GlobSet,
+}
+
+impl PartialEq for ExcludePatterns {
+    fn eq(&self, other: &Self) -> bool {
+        self.patterns == other.patterns
+    }
+}
+
+impl Eq for ExcludePatterns {}
+
+impl ExcludePatterns {
+    /// `patterns` as one set, or why one isn't a glob.
+    pub fn new(patterns: Vec<String>) -> Result<Self, globset::Error> {
+        let mut builder = globset::GlobSetBuilder::new();
+        for pattern in &patterns {
+            builder.add(globset::Glob::new(pattern)?);
+        }
+        let set = builder.build()?;
+        Ok(Self { patterns, set })
+    }
+
+    /// The first pattern matching object `name` but not the `<name>__<key>` columns flattening replaces it with.
+    pub fn bypassed(&self, name: &str) -> Option<&str> {
+        let below = self.set.matches(format!("{name}{FLATTEN_SEPARATOR}"));
+        self.set
+            .matches(name)
+            .into_iter()
+            .find(|index| !below.contains(index))
+            .map(|index| self.patterns[index].as_str())
+    }
+}
+
+impl Flatten {
+    /// Whether no object flattens.
+    pub fn is_none(&self) -> bool {
+        self.objects == FlattenObjects::None
+    }
+
+    /// Whether the object at `path` (keys from the row down, as the data spells them) flattens: listed, or any under `"all"`, no deeper than `max_depth`, and not kept whole; an error when a pin of another type than `json` names it, or an `exclude_columns` pattern matches it but not its columns.
+    pub fn flattens(&self, path: &[&str]) -> Result<bool, String> {
+        let chosen = match &self.objects {
+            FlattenObjects::None => false,
+            FlattenObjects::All => true,
+            FlattenObjects::Paths(_) => self.lists(path),
+        };
+        if !chosen || path.len() > self.max_depth as usize || self.keeps(path) {
+            return Ok(false);
+        }
+        let name = path.join(FLATTEN_SEPARATOR);
+        if let Some(pattern) = self.excluded.bypassed(&name) {
+            return Err(format!(
+                "exclude_columns {pattern} names {name}, which flatten replaces with {name}__<key> columns the pattern doesn't match; name those columns instead, or keep {name} whole with columns = {{ {name} = \"json\" }}"
+            ));
+        }
+        match self
+            .pinned
+            .iter()
+            .find(|(pinned, _)| self.same_parts(pinned.split(FLATTEN_SEPARATOR), path))
+        {
+            Some((pinned, column_type)) => Err(format!(
+                "columns {pinned} = {column_type:?}: flatten replaces {name} with its keys' columns; pin it \"json\" to keep it whole"
+            )),
+            None => Ok(true),
+        }
+    }
+
+    /// Whether `path` is one of the listed paths (never under `"all"`), whose values must be objects.
+    pub fn lists(&self, path: &[&str]) -> bool {
+        match &self.objects {
+            FlattenObjects::Paths(paths) => paths
+                .iter()
+                .any(|listed| self.same_parts(listed.split('.'), path)),
+            FlattenObjects::None | FlattenObjects::All => false,
+        }
+    }
+
+    /// Whether column `name` may be one flattening made: under `"all"` any holding `__`, else one below a listed path.
+    pub fn may_make(&self, name: &str) -> bool {
+        match &self.objects {
+            FlattenObjects::None => false,
+            FlattenObjects::All => name.contains(FLATTEN_SEPARATOR),
+            FlattenObjects::Paths(paths) => paths.iter().any(|listed| {
+                let prefix = format!(
+                    "{}{FLATTEN_SEPARATOR}",
+                    listed.replace('.', FLATTEN_SEPARATOR)
+                );
+                name.get(..prefix.len())
+                    .is_some_and(|start| start.eq_ignore_ascii_case(&prefix))
+            }),
+        }
+    }
+
+    /// Whether the object at `path` is kept whole: `keep` names it, its parts joined by `__`.
+    pub fn keeps(&self, path: &[&str]) -> bool {
+        self.keep
+            .iter()
+            .any(|name| self.same_parts(name.split(FLATTEN_SEPARATOR), path))
+    }
+
+    /// Whether `parts` and `path` name the same keys, each as written or, under snake_case, as both load (`LineTotals` is `line_totals`).
+    fn same_parts<'a>(&self, parts: impl Iterator<Item = &'a str>, path: &[&str]) -> bool {
+        let parts: Vec<&str> = parts.collect();
+        parts.len() == path.len()
+            && parts.iter().zip(path).all(|(part, key)| {
+                part == key
+                    || (self.naming == Naming::SnakeCase
+                        && loaded_name(self.naming, part, None)
+                            == loaded_name(self.naming, key, None))
+            })
+    }
+}
+
 /// How [`unnest_batch`](crate::row_batches::main::unnest_batch::unnest_batch) splits a batch's list fields into child tables.
 #[derive(Debug, Clone, Copy)]
 pub struct UnnestRequest<'a> {
@@ -333,10 +464,12 @@ pub struct UnnestRequest<'a> {
     /// How many levels of child tables to make at most.
     pub max_depth: u32,
     pub naming: Naming,
-    /// The longest name dlt's naming gives on the destination.
+    /// Whose names the child rows' id, parent and position columns take.
+    pub compat: Compat,
+    /// The longest name the destination takes.
     pub name_limit: Option<usize>,
-    /// Whether an object inside an item flattens into `<key>__<inner>` fields, as dlt flattens it (files sources under `naming = "dlt"`).
-    pub flatten_objects: bool,
+    /// Which objects inside an item flatten into `<key>__<inner>` fields, by their path from the table's row (`items.dimensions`).
+    pub flatten: &'a Flatten,
     /// Under `unnest = "all"`, the child tables the destination already has, as it stores their names (compared in any case): a field whose child table is among them is a list field, as an earlier load chose it.
     pub live: &'a [String],
     /// Each row's id, which its child rows name as their parent's.

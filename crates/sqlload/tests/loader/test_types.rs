@@ -1197,6 +1197,8 @@ pub(crate) struct UnnestFailTestCase {
     /// Each run's new file before the failing one, as `name`, `contents`.
     pub(crate) runs: &'static [(&'static str, &'static str)],
     pub(crate) failing: (&'static str, &'static str),
+    /// A file written with the failing one, which the same load reads first.
+    pub(crate) alongside: Option<(&'static str, &'static str)>,
     /// Text the failed load's output holds.
     pub(crate) expected_error: &'static str,
     /// A query of the database after the failed load and what it returns: what the failure left.
@@ -1421,4 +1423,74 @@ pub(crate) struct ArchivedReloadTestCase {
     pub(crate) expected_plan: &'static str,
     /// Every row as `id:score`, in order, after the reload.
     pub(crate) expected_rows: &'static str,
+}
+
+/// One run of a [`ColumnNamesTestCase`]: a file written under `drop/`, then `plan` and `load`.
+pub(crate) struct NamesRun {
+    pub(crate) file: &'static str,
+    pub(crate) contents: &'static str,
+    /// The file's bytes from `contents`: the text itself, or a workbook of rows by line and cells by `|`.
+    pub(crate) encode: fn(&str) -> Result<Vec<u8>, String>,
+    /// Whether `plan` and `load` succeed.
+    pub(crate) expected_ok: bool,
+    /// Text the plan's output holds.
+    pub(crate) expected_plan: &'static str,
+}
+
+/// What the runs of a [`ColumnNamesTestCase`] did: for each run whether `plan` and `load` succeeded and the plan held its text, then the table's columns, what the check query returned, and every run's output.
+#[derive(Debug, Default)]
+pub(crate) struct NamesOutcome {
+    pub(crate) runs: Vec<(bool, bool, bool)>,
+    pub(crate) columns: String,
+    pub(crate) checked: String,
+    pub(crate) output: String,
+}
+
+/// A files source under `drop/` with `settings`, planned and loaded by the executable into DuckDB once per run, each run adding its file.
+pub(crate) struct ColumnNamesTestCase {
+    pub(crate) description: &'static str,
+    /// The source's `format` and other settings, after its `path`.
+    pub(crate) settings: &'static str,
+    pub(crate) runs: &'static [NamesRun],
+    /// The table in `raw` and its columns after the runs, in order and joined by `,`, the ones a load adds left out.
+    pub(crate) expected_columns: (&'static str, &'static str),
+    /// A query of the database after the runs and what it returns.
+    pub(crate) check: (&'static str, &'static str),
+}
+
+/// One `plan` of an ODBC source, its catalog calls traced.
+#[cfg(feature = "odbc")]
+pub(crate) struct OdbcCatalogTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) database: sqlload_testkit::odbc_servers::models::OdbcDatabase,
+    /// The driver name in the server's connection string and the one SQLLoad reads through instead; both empty to keep it.
+    pub(crate) driver: (&'static str, &'static str),
+    /// Statements creating the tables.
+    pub(crate) setup: &'static [&'static str],
+    /// The source's `include`, settings and table entries.
+    pub(crate) source: &'static str,
+    /// The `SQLTables` and `SQLPrimaryKeys` calls and `INFORMATION_SCHEMA` queries, in order.
+    pub(crate) expected_calls: &'static [&'static str],
+    /// Whether `plan` succeeds, and text its output shows.
+    pub(crate) expected_output: (bool, &'static [&'static str]),
+    /// Text it must not show.
+    pub(crate) absent: &'static [&'static str],
+}
+
+/// A project whose `plan` runs piped, with `RUNNING` rows every 300 ms: what its stderr must and must not hold, and at least how many `RUNNING` rows.
+pub(crate) struct PlanProgressTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) config: String,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) expected_stderr: &'static [&'static str],
+    pub(crate) unexpected_stderr: &'static [&'static str],
+    pub(crate) least_running_rows: usize,
+}
+
+/// A run under `--json`, where in its report the phase times are (a JSON pointer), and each phase expected there: role, name, phase, ok, and whether `elapsed_ms` is a whole number.
+pub(crate) struct PhaseTimesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) pointer: &'static str,
+    pub(crate) expected_phases: Vec<(String, String, String, bool, bool)>,
 }

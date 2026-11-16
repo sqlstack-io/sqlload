@@ -2,7 +2,7 @@
 # requires-python = ">=3.12,<3.13"
 # dependencies = ["duckdb==2.0.0", "pytz==2026.6"]
 # ///
-"""Load every case with a SQLLoad binary into DuckDB under naming = "dlt", and print each run's canonical dataset as JSON.
+"""Load every case with a SQLLoad binary into DuckDB under compat = "dlt", and print each run's canonical dataset as JSON.
 
 A run whose load fails shows as {"error": <the load's output>}, and later runs of that case are skipped.
 It reads the databases with the DuckDB SQLLoad bundles (2.0), which dlt's pinned DuckDB cannot open, so it runs as a
@@ -49,7 +49,7 @@ description = "Parity case {case.name}."
 connection = "files"
 path = "drop/"
 format = "{case.fmt}"{xml}
-naming = "dlt"
+compat = "dlt"
 write_strategy = "{strategy}"{key}
 
 [sources.{TABLE}.tables.{TABLE}]

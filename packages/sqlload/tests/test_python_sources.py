@@ -141,7 +141,7 @@ def seen(project: Path, table: str) -> dict[str, Any]:
 		),
 		("write_strategy='replace'", [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}], [{"id": 3, "v": "c"}], [(3, "c")]),
 		(
-			"write_strategy='delete_insert', cursor_column='day'",
+			"write_strategy='delete_insert', cursor_column='day', on_cursor_out_of_range='skip'",
 			[{"id": 1, "v": "a", "day": "2026-01-01T00:00:00Z"}, {"id": 2, "v": "b", "day": "2026-01-02T00:00:00Z"}],
 			[
 				{"id": 1, "v": "stale", "day": "2026-01-01T00:00:00Z"},
@@ -169,7 +169,7 @@ def test_given_dlt_naming_when_a_python_table_merges_twice_then_fields_load_snak
 	project = make_project(
 		tmp_path,
 		DUCKDB_PROJECT,
-		"shop.table(description='Test table.', naming='dlt', write_strategy='merge', unique_key='OrderID', unnest=['LineItems'])(rows)\n",
+		"shop.table(description='Test table.', compat='dlt', write_strategy='merge', unique_key='OrderID', unnest=['LineItems'])(rows)\n",
 	)
 	give(project, "rows", [{"OrderID": 1, "Unit Price": "a", "LineItems": [{"UnitPrice": 5}]}, {"OrderID": 2, "Unit Price": "b", "LineItems": []}])
 	load(project)
@@ -182,7 +182,7 @@ def test_given_dlt_naming_when_a_python_table_merges_twice_then_fields_load_snak
 
 
 def test_given_dlt_naming_and_a_source_spelled_cursor_when_loading_again_then_ctx_gets_the_loaded_cursor_and_its_maximum(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', naming='dlt', write_strategy='append', cursor_column='UpdatedAt')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', compat='dlt', write_strategy='append', cursor_column='UpdatedAt')(rows)\n")
 	give(project, "rows", [{"ID": 1, "UpdatedAt": 10}, {"ID": 2, "UpdatedAt": 20}])
 	load(project)
 	give(project, "rows", [{"ID": 3, "UpdatedAt": 30}])
@@ -192,12 +192,38 @@ def test_given_dlt_naming_and_a_source_spelled_cursor_when_loading_again_then_ct
 	assert query(project, 'SELECT id, updated_at FROM "RAW"."shop__rows" ORDER BY id') == [(1, 10), (2, 20), (3, 30)]
 
 
-def test_given_dlt_naming_when_two_yielded_fields_load_as_one_name_then_the_table_fails_naming_both(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', naming='dlt')(rows)\n")
+def test_given_two_yielded_fields_loading_as_one_name_when_loading_then_they_are_numbered_in_source_name_order(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.')(rows)\n")
 	give(project, "rows", [{"OrderID": 1, "Order ID": 2}])
-	done = sqlload(project, "load")
-	assert done.returncode != 0
-	assert 'fields "OrderID" and "Order ID" both load as order_id under naming = "dlt"' in done.stdout + done.stderr
+	done = load(project)
+	assert "names  OrderID -> order_id_1 (numbered)" in done.stdout, done.stdout
+	assert query(project, 'SELECT order_id, order_id_1 FROM "RAW"."shop__rows"') == [(2, 1)]
+
+
+def test_given_a_reload_whose_fields_need_no_numbers_when_loading_again_then_the_numbers_from_before_it_do_not_come_back(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
+	give(project, "rows", [{"OrderID": 1, "Order ID": 2}])
+	load(project)
+	give(project, "rows", [{"order_id": 7, "order_id_1": 8}])
+	load(project, "--reload", "--yes")
+	give(project, "rows", [{"order_id": 9, "order_id_1": 10}])
+	load(project)
+	assert query(project, 'SELECT order_id, order_id_1 FROM "RAW"."shop__rows" ORDER BY order_id') == [(7, 8), (9, 10)]
+
+
+def test_given_a_setting_naming_a_field_whose_name_another_field_loads_as_when_loading_then_it_applies_to_the_field_it_names(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', columns={'name': 'smallint'})(rows)\n")
+	give(project, "rows", [{"Name": "Ann", "name": 7}])
+	load(project)
+	assert query(project, 'SELECT name, name_1 FROM "RAW"."shop__rows"') == [("Ann", 7)]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'name_1'") == [("SMALLINT",)]
+
+
+def test_given_a_rename_map_and_a_pin_on_a_child_tables_key_of_the_same_name_when_loading_then_the_pin_applies_to_the_child_column(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', unnest=['items'], rename={'SKU': 'product_code'}, columns={'items.SKU': 'smallint'})(rows)\n")
+	give(project, "rows", [{"id": 1, "SKU": 9, "items": [{"SKU": 5}]}])
+	load(project)
+	assert query(project, "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'shop__rows__items' AND column_name = 'sku'") == [("sku", "SMALLINT")]
 
 
 def test_given_new_fields_when_loading_again_then_columns_are_added_and_values_fit_the_live_types(tmp_path: Path) -> None:
@@ -499,7 +525,7 @@ def test_given_single_file_csv_when_columns_appear_partway_through_a_load_then_i
 
 def test_given_a_files_target_with_day_partitions_when_delete_insert_reloads_a_day_then_it_is_replaced(tmp_path: Path) -> None:
 	toml = FILES_PROJECT.replace('path = "{table}/"', 'path = "{table}/day={cursor:date}/"')
-	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'})(rows)\n")
+	project = make_project(tmp_path, toml, "shop.table(description='Test table.', write_strategy='delete_insert', cursor_column='day', columns={'day': 'date'}, on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "a", "day": "2026-01-01"}, {"id": 2, "v": "b", "day": "2026-01-02"}])
 	load(project)
 	give(project, "rows", [{"id": 1, "v": "stale", "day": "2026-01-01"}, {"id": 2, "v": "B", "day": "2026-01-02"}, {"id": 3, "v": "c", "day": "2026-01-03"}])
@@ -516,6 +542,44 @@ def test_given_masked_and_excluded_columns_when_loading_then_values_are_hashed_o
 	assert len(email) == 64 and email != "a@example.com"
 	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows'")]
 	assert "secret_note" not in columns
+
+
+def test_given_exclude_columns_naming_a_yielded_field_as_spelt_when_loading_then_it_does_not_load(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', exclude_columns=['accessToken', '*Key'])(rows)\n")
+	give(project, "rows", [{"id": 1, "accessToken": "t0k3n", "apiKey": "k3y"}])
+	load(project)
+	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' AND NOT starts_with(column_name, '_')")]
+	assert columns == ["id"]
+
+
+def test_given_flatten_all_and_an_exclude_pattern_matching_an_object_but_not_its_columns_when_loading_then_it_fails_and_nothing_loads(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten='all', exclude_columns=['*_secret'])(rows)\n")
+	give(project, "rows", [{"id": 1, "api_secret": {"key": "s3cr3t"}}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert "exclude_columns *_secret names api_secret, which flatten replaces with api_secret__<key> columns" in done.stdout, done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+
+
+#: Times as a CSV file or a dict gives them, in Paris around the change to summer time on 29 March 2026, and the UTC instant each loads as;
+#: the loader test `given_a_csv_column_of_mixed_formats_in_paris` reads the same values from a file.
+PARIS_TIMES = [
+	("2026-03-29T01:30:00", "2026-03-29 00:30:00"),
+	("03/29/2026 03:30:00", "2026-03-29 01:30:00"),
+	("03/29/2026 12:00", "2026-03-29 10:00:00"),
+	("03/30/2026", "2026-03-29 22:00:00"),
+	("2026-03-29T09:00:00Z", "2026-03-29 09:00:00"),
+]
+
+
+def test_given_a_dict_column_of_mixed_formats_in_paris_when_loading_with_parse_then_it_loads_the_instants_a_csv_column_does(tmp_path: Path) -> None:
+	parse = "{'Updated At': {'timestamp': ['iso', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%m/%d/%Y']}}"
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', timezone='Europe/Paris', parse={parse})(rows)\n")
+	give(project, "rows", [{"id": index, "Updated At": text} for index, (text, _) in enumerate(PARIS_TIMES, 1)])
+	load(project)
+	assert query(project, """SELECT CAST(timezone('UTC', updated_at) AS VARCHAR), typeof(updated_at) FROM "RAW".shop__rows ORDER BY id""") == [
+		(instant, "TIMESTAMP WITH TIME ZONE") for _, instant in PARIS_TIMES
+	]
 
 
 PRICED_TABLE = """
@@ -694,8 +758,8 @@ def test_given_a_pin_added_to_an_existing_table_when_planning_then_the_add_colum
 @pytest.mark.parametrize(
 	("settings", "rows", "message"),
 	[
-		("mask={'Email': 'hash'}", [{"id": 1, "email": "a@example.com"}], "mask key Email names no column of the data; did you mean email?"),
-		("mask={'ssn': 'hash'}", [{"id": 1, "SSN": "123"}], "mask key ssn names no column of the data; did you mean SSN?"),
+		("naming='source', mask={'Email': 'hash'}", [{"id": 1, "email": "a@example.com"}], "mask key Email names no column of the data; did you mean email?"),
+		("naming='source', mask={'ssn': 'hash'}", [{"id": 1, "SSN": "123"}], "mask key ssn names no column of the data; did you mean SSN?"),
 		("mask={'ssn': 'hash'}", [{"id": 1}], "mask ssn names no column of the data"),
 		("columns={'totl': 'int'}", [{"id": 1, "total": 1}], "columns key totl names no column of the data; did you mean total?"),
 	],
@@ -755,7 +819,7 @@ def test_given_a_files_target_and_an_undeclared_cursor_when_planning_then_it_ask
 def test_given_a_decimal_or_smallint_cursor_when_appending_again_then_only_new_rows_load(
 	tmp_path: Path, column_type: str, first: list[Any], second: list[Any], expected: list[Any]
 ) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', columns={{'v': '{column_type}'}})(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='append', cursor_column='v', columns={{'v': '{column_type}'}}, on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [{"v": value} for value in first])
 	load(project)
 	give(project, "rows", [{"v": value} for value in second])
@@ -784,7 +848,7 @@ def test_given_a_pinned_narrower_type_when_a_value_would_lose_digits_then_the_lo
 
 
 def test_given_cursor_start_when_the_cursor_type_is_not_known_yet_then_ctx_gets_the_same_type_on_every_run(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z')(rows)\n")
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', cursor_column='at', cursor_start='2026-01-01T00:00:00Z', on_cursor_out_of_range='skip')(rows)\n")
 	give(project, "rows", [])
 	load(project)
 	assert seen(project, "rows")["cursor_value"] == "datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)"
@@ -1068,7 +1132,8 @@ def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_leve
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten=['customer'])(rows)\n")
 	give(project, "rows", first)
 	planned = sqlload(project, "plan")
-	assert "columns inferred on first load, customer flattened one level" in planned.stdout, planned.stdout
+	assert "columns inferred on first load" in planned.stdout, planned.stdout
+	assert "flatten customer; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
 	load(project)
 	give(project, "rows", second)
 	done = sqlload(project, "load")
@@ -1132,10 +1197,11 @@ def test_given_flatten_when_a_later_batch_has_a_field_of_a_flattened_name_then_t
 	("settings", "expected_problem"),
 	[
 		("exclude_columns=['customer']", "flatten customer: exclude_columns customer also names customer, which flattening replaces with customer__<key> columns"),
-		("mask={'customer': 'hash'}", "flatten customer: mask also names customer"),
-		("columns={'customer': 'json'}", "flatten customer: columns also names customer"),
+		("mask={'customer': 'hash'}", "flatten customer: a json pin, a mask or an allow_columns entry names customer, which keeps it whole"),
+		("columns={'customer': 'json'}", "flatten customer: a json pin, a mask or an allow_columns entry names customer, which keeps it whole"),
+		("columns={'customer': 'text'}", 'columns customer = "text": flatten replaces customer with its keys\' columns; pin it "json" to keep it whole'),
 	],
-	ids=["exclude", "mask", "pin"],
+	ids=["exclude", "mask", "json-pin", "text-pin"],
 )
 def test_given_flatten_and_a_setting_on_the_same_object_when_planning_then_it_is_refused(tmp_path: Path, settings: str, expected_problem: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', flatten=['customer'], {settings})(rows)\n")
@@ -1179,22 +1245,33 @@ def test_given_an_exclude_glob_covering_the_key_columns_when_loading_then_they_s
 	assert columns == [("id",), ("_sqlload_load_id",), ("_sqlload_loaded_at",)]
 
 
-def test_given_flatten_with_a_path_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer.address'])(rows)\n")
-	give(project, "rows", [{"id": 1}])
-	done = sqlload(project, "plan")
-	assert done.returncode == 1
-	assert "flatten customer.address: flatten names top-level objects, not paths; list customer instead" in done.stdout, done.stdout + done.stderr
+def test_given_a_dotted_flatten_path_two_levels_deep_when_loading_then_the_inner_object_flattens_too(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', flatten=['customer', 'customer.address'])(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds", "geo": {"lat": 1}}}}])
+	load(project)
+	assert query(project, 'SELECT id, customer__name, customer__address__city, customer__address__geo::VARCHAR FROM "RAW".shop__rows') == [(1, "Ann", "Leeds", '{"lat":1}')]
 
 
-def test_given_flatten_on_a_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "ndjson"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+def test_given_flatten_all_when_a_later_load_adds_an_object_field_then_it_becomes_columns(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten='all')(rows)\n")
+	give(project, "rows", [{"id": 1, "customer": {"name": "Ann"}}])
+	planned = sqlload(project, "plan")
+	assert "flatten every object, 1000 levels down at most; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
+	load(project)
+	give(project, "rows", [{"id": 2, "customer": {"name": "Bo", "address": {"city": "Leeds"}}, "tags": ["x"]}])
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT id, customer__name, customer__address__city, tags::VARCHAR FROM "RAW".shop__rows ORDER BY id') == [(1, "Ann", None, None), (2, "Bo", "Leeds", '["x"]')]
+
+
+def test_given_flatten_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
+	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
 	project = make_project(tmp_path, toml, "")
 	(project / "lake" / "events").mkdir()
-	(project / "lake" / "events" / "a.ndjson").write_text('{"customer": {"country": "GB"}}\n')
+	(project / "lake" / "events" / "a.csv").write_text("id\n1\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "flatten applies to Python tables; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
+	assert "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
 
 
 DATE_CURSOR_MODULE = '''
@@ -1301,7 +1378,7 @@ def test_given_arrow_list_batches_when_loading_a_pinned_array_then_every_batch_k
 
 def test_given_dlt_naming_when_a_source_spelled_arrow_list_is_pinned_as_an_array_then_it_crosses_as_a_list(tmp_path: Path) -> None:
 	data = "[__import__('pyarrow').table({'ID': [1], 'Scores': [[float('nan'), 1]]})]"
-	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', naming='dlt', columns={{'Scores': 'array(float)'}})(lambda ctx: {data})\n"
+	module = f"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace')\nshop.table(description='Test table.', name='t', compat='dlt', columns={{'Scores': 'array(float)'}})(lambda ctx: {data})\n"
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
 	load(project)
 	assert query(project, 'SELECT id, scores::VARCHAR FROM "RAW".shop__t') == [(1, "[nan, 1.0]")]

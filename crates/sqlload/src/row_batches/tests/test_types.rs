@@ -35,7 +35,15 @@ pub(crate) struct TextRowsTestCase {
 pub(crate) struct FlattenBatchTestCase {
     pub(crate) description: &'static str,
     pub(crate) rows: &'static str,
-    pub(crate) flatten: &'static [&'static str],
+    /// The objects to flatten.
+    pub(crate) flatten: fn() -> crate::row_batches::models::FlattenObjects,
+    /// Objects kept whole (pinned `json`).
+    pub(crate) keep: &'static [&'static str],
+    /// Columns pinned as another type.
+    pub(crate) pinned: &'static [(&'static str, &'static str)],
+    /// `exclude_columns` patterns.
+    pub(crate) excluded: &'static [&'static str],
+    pub(crate) max_depth: u32,
     pub(crate) expected_batch: Result<&'static str, &'static str>,
 }
 
@@ -84,6 +92,8 @@ pub(crate) struct UnnestBatchTestCase {
     pub(crate) roots: Option<&'static [&'static str]>,
     /// Under `unnest = "all"`, the fields already chosen as list fields (`true`) or not, as `path`, `chosen`.
     pub(crate) chosen: &'static [(&'static str, bool)],
+    /// The objects to flatten, inside the list's items.
+    pub(crate) flatten: fn() -> crate::row_batches::models::FlattenObjects,
     /// The parent rendered as `schema / rows`, then each child as `table = schema / rows`, then the choices made (`chosen: path=true,...`) under `"all"`, or the error text.
     pub(crate) expected_batches: Result<&'static [&'static str], &'static str>,
 }

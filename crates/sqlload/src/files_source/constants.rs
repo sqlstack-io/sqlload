@@ -159,4 +159,4 @@ pub const MAX_EXACT_FLOAT_INT: f64 = 9_007_199_254_740_992.0;
 pub const EXCEL_DAY: f64 = 1.0;
 
 /// How a column flattening made is held, which a destination reading the files itself would not find.
-pub const FLATTENED_KEY: &str = "a key of an object naming = \"dlt\" flattens";
+pub const FLATTENED_KEY: &str = "a key of an object flatten flattens";

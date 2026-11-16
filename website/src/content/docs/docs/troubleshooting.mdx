@@ -47,7 +47,7 @@ common ones; each message is copied from SQLLoad.
 | `invalid peer certificate: certificate not valid for name "..."` | `verify-full` connected to a host the certificate doesn't name. Use the host name in its subject alternative names. |
 | `error performing TLS handshake: server does not support TLS` | `require` or `verify-*` against a server without TLS. |
 | `sslcert and sslkey must be set together` | Set both, or neither. |
-| `skipped rows outside the cursor window; use ctx.cursor_value to read only new data` | A warning: the load is correct, but the function reads more than it needs. Filter on `ctx.cursor_value`. |
+| `the function returned 24 rows outside the window it was asked for, ...` | A Python table's function returned rows its window doesn't hold. The message names the likely cause and its fix: send `ctx.cursor_value` and `ctx.cursor_end` with the request, set `timezone` to the zone the API reads times in, or, for an API that filters by whole days, set `on_cursor_out_of_range = "skip"`. See [Rows outside the window](/docs/concepts/cursors/#rows-outside-the-window). |
 
 ## A table is missing from the plan
 

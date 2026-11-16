@@ -56,6 +56,9 @@ pub struct RunRecord {
     /// The version of the table's `transform` a load ran (its name, `@` and a hash of the file it is defined in).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<String>,
+    /// The names numbering gave the table's columns, each with its source column, which later loads keep: the newest record holding a list says them all, and an empty list that numbering gave none since the table was rebuilt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbered: Option<Vec<crate::load_naming::models::NumberedName>>,
 }
 
 /// What a finished run adds to its record.

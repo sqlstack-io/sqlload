@@ -11,7 +11,7 @@ use crate::files_source::models::{
     XlsxOptions, XmlOptions,
 };
 use crate::http_source::models::LiteralPaths;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
     deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
@@ -21,6 +21,7 @@ use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
     DEFAULT_TABLE_NAME,
 };
+use crate::row_batches::models::Flatten;
 
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
 #[derive(Debug, Clone, Deserialize)]
@@ -62,6 +63,9 @@ pub struct ProjectConfig {
     /// Each `transform` named in the project: its version (a hash of the file it is defined in), or why it cannot run.
     #[serde(skip)]
     pub transforms: BTreeMap<String, Result<String, String>>,
+    /// Each `rename` function named in the project, or why it cannot run.
+    #[serde(skip)]
+    pub renames: BTreeMap<String, Result<(), String>>,
 }
 
 /// The lines of a project file's sources, tables and their `unique_key` (see [`crate::project::main::config_lines::config_lines`]).
@@ -354,9 +358,28 @@ pub struct TargetConfig {
     /// The most Parquet footers `plan` reads for one table's schema (files targets).
     #[serde(default)]
     pub max_footer_reads: Option<usize>,
-    /// How its tables name the columns a load adds and the child tables `unnest` makes; a source or table may override it.
+    /// How its tables and columns are named: snake_case (default) or as the source spells them; a source or table may override it.
     #[serde(default)]
     pub naming: Option<Naming>,
+    /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's; a source or table may override it.
+    #[serde(default)]
+    pub compat: Option<Compat>,
+    /// When a table's rows reach the target: all of a commit's at once (`at_commit`, the default on targets billed while they run queries) or each batch as it is read; a source or table may override it.
+    #[serde(default)]
+    pub send: Option<SendMode>,
+    /// The folder `send = "at_commit"` holds a commit's rows in until it is sent; the system's temporary folder when unset.
+    #[serde(default)]
+    pub staging_dir: Option<std::path::PathBuf>,
+}
+
+/// When a table's rows reach its target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SendMode {
+    /// Each commit's batches wait in local files, then reach the target in one burst just before the commit, so a warehouse billed while it runs queries runs none during the read.
+    AtCommit,
+    /// Each batch reaches the target as it is read.
+    PerBatch,
 }
 
 impl TargetConfig {
@@ -583,8 +606,8 @@ impl SourceConfig {
     pub fn files_encoding(&self) -> FilesEncoding {
         let mut xml = self.xml.clone().unwrap_or_default();
         for path in self.tables.values().flat_map(|table| match &table.unnest {
-            Some(UnnestSetting::Paths(paths)) => paths.as_slice(),
-            Some(UnnestSetting::Word(_)) | None => &[],
+            Some(PathsSetting::Paths(paths)) => paths.as_slice(),
+            Some(PathsSetting::Word(_)) | None => &[],
         }) {
             let element = path.rsplit('.').next().unwrap_or_default().to_owned();
             if !xml.lists.contains(&element) {
@@ -614,7 +637,7 @@ impl SourceConfig {
                     .clone()
                     .unwrap_or_else(|| RECORD_COLUMN.to_owned())
             }),
-            flatten_objects: false,
+            flatten: Flatten::default(),
         }
     }
 
@@ -766,6 +789,9 @@ pub struct TableSettings {
     /// What an incremental read does with source rows whose cursor is NULL: fail the load (default), read them on every run (`merge` only), or skip them.
     #[serde(default)]
     pub null_cursor: Option<NullCursor>,
+    /// What a Python table's load does with the rows its function returns outside the cursor window it was asked for: fail the table (default), skip them, or load them with a warning.
+    #[serde(default)]
+    pub on_cursor_out_of_range: Option<OnCursorOutOfRange>,
     #[serde(default)]
     pub contract: Option<Contract>,
     #[serde(default)]
@@ -829,15 +855,38 @@ pub struct TableSettings {
     /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
     #[serde(default)]
     pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
-    /// How the columns the load adds, and the child tables `unnest` makes, are named: SQLLoad's own names (default) or dlt's; overrides the target's.
+    /// How the table and its columns are named: snake_case (default) or as the source spells them; overrides the target's.
     #[serde(default)]
     pub naming: Option<Naming>,
-    /// Give every row a unique id column (`_sqlload_row_id`); always on under `naming = "dlt"`, as `_dlt_id`.
+    /// Whose names the columns a load adds take: SQLLoad's (default) or dlt's, with a row id on every row; overrides the target's.
+    #[serde(default)]
+    pub compat: Option<Compat>,
+    /// When the table's rows reach the target: at each commit, or each batch as it is read; overrides the target's.
+    #[serde(default)]
+    pub send: Option<SendMode>,
+    /// Names for columns the naming leaves unfit: a map from source name to loaded name, or the name `@sl.rename` registered a Python function under.
+    #[serde(default)]
+    pub rename: Option<RenameSetting>,
+    /// What the load does with columns that would load under one name: number them (default) or fail.
+    #[serde(default)]
+    pub on_duplicate_names: Option<OnDuplicateNames>,
+    /// The IANA time zone, such as `Europe/Paris`, of the times without an offset that `parse` reads in a column without its own `tz` (UTC when unset).
+    #[serde(default)]
+    pub timezone: Option<String>,
+    /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
     /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
     #[serde(default)]
     pub transform: Option<String>,
+}
+
+/// `rename`: loaded names by source name, or a Python function's registered name.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum RenameSetting {
+    Map(BTreeMap<String, String>),
+    Function(String),
 }
 
 /// What a merge does with rows of one commit that share a `unique_key`.
@@ -951,6 +1000,19 @@ pub enum NullCursor {
     Ignore,
 }
 
+/// What a Python table's load does with the rows its function returns outside the cursor window it was asked for (a NULL cursor is `null_cursor`'s).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnCursorOutOfRange {
+    /// The window does not commit, and the table fails naming the rows and their likely cause.
+    #[default]
+    Fail,
+    /// Drop them: a later window reads the rows past its end, and an earlier one read those before its start.
+    Skip,
+    /// Load them, with a warning in the load report.
+    Warn,
+}
+
 /// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lookback {
@@ -995,21 +1057,24 @@ pub struct TableOverride {
     pub exclude_columns: Vec<String>,
     #[serde(default)]
     pub allow_columns: Vec<String>,
-    /// Top-level objects of a Python table expanded one level into `<object>__<key>` columns; everything else nested stays JSON.
+    /// Objects whose keys load as `<object>__<key>` columns: dotted paths (`"customer"`, `"customer.address"`, `"items.dimensions"` inside unnested items), or `"all"`; everything else nested stays JSON.
     #[serde(default)]
-    pub flatten: Vec<String>,
+    pub flatten: Option<PathsSetting>,
     /// List fields whose items become rows of child tables: dotted paths (`"items"`, `"items.parts"`), or `"all"`.
     #[serde(default)]
-    pub unnest: Option<UnnestSetting>,
-    /// How many levels of child tables `unnest` makes at most; deeper lists stay JSON (default 1000, as dlt's).
+    pub unnest: Option<PathsSetting>,
+    /// How many levels down `unnest` makes child tables and `flatten` flattens objects at most; deeper lists and objects stay JSON (default 1000, as dlt's).
     #[serde(default)]
     pub max_depth: Option<u32>,
+    /// Text columns read as times, by column name: `"epoch_ms"`, or `{ timestamp = ["iso", "%m/%d/%Y %H:%M"], tz = "Europe/Paris", on_error = "null" }` (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
+    #[serde(default)]
+    pub parse: BTreeMap<String, serde_json::Value>,
 }
 
-/// A table's `unnest` as written: a word (`"all"`) or a list of dotted paths.
+/// A table's `unnest` or `flatten` as written: a word (`"all"`) or a list of dotted paths.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
-pub enum UnnestSetting {
+pub enum PathsSetting {
     Word(String),
     Paths(Vec<String>),
 }

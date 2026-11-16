@@ -30,6 +30,10 @@ impl SqlAdapter for SnowflakeSql {
         Warehouse::Snowflake
     }
 
+    fn bills_while_running(&self) -> bool {
+        true
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }

@@ -125,15 +125,36 @@ Loads (1)                                           sqlload load
 ✓ Plan complete  1 selected, 1 to load
 ```
 
-On a terminal, `plan` shows `Planning  checking sources, 1 of 3 done` while it reads catalogs, and
-clears it when the plan prints.
-
 | Section | Lists |
 |---------|-------|
 | `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0, excluded and masked columns. |
-| `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `key`, `reads`, `commits`, `files`, `schema`, `route`, `why`, `batch` and `note`. A plan of one table also shows `columns` (how many, and under `naming = "dlt"` the names it changes) and `checks`, and `key` names the `sqlload.toml` line that sets `unique_key`. |
+| `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `key`, `reads`, `commits`, `files`, `schema`, `route`, `why`, `batch` and `note`. A plan of one table also shows `columns` (how many, and the names `naming` changes), `names` (every column `rename` named or numbering numbered; see [Naming](/docs/concepts/nested-data/#naming)) and `checks`, and `key` names the `sqlload.toml` line that sets `unique_key`. |
 | `Skipped` | Tables left out on purpose, with the reason: a files table with no new file (`up to date: 0 new of 3 files in drop/orders/ (csv)`), or one left out by `skip_tables_with_columns` or `new_tables = "skip"`. `load` reads nothing for them. |
 | `Errors` | Tables that can't load as configured, with a short headline, the reason and the fix. A source that can't be read is one item, with what it holds up under `blocks`. |
 | `Warnings` | Tables that load, but slower or with less than you might expect. |
 
 A table under `Errors` is left out; the others still run, and the command exits 1.
+
+## Connecting and discovering
+
+From 0.53.0, `plan`, and the plan `apply` and `load` start with, writes a line to standard error as
+each target's and source's connection opens and as each source's tables are found, with how long it
+took:
+
+```console
+✓ Target connected  dev  DUCKDB  (0.02s)
+✓ Source connected  erp  OPENEDGE through ODBC  (1.84s)
+✓ Discovered  erp  2 tables  (21.30s)
+```
+
+A step that fails says how long it ran, as
+`✗ Source connection failed  erp  POSTGRES  (after 30.01s)`. A step still running after 30 seconds writes a row every 30 seconds, such as
+`  erp  listing tables  RUNNING 30.0s`, so logs that aren't a terminal show it too. Postgres and
+ODBC sources have a connection line; other sources connect as their tables are found, within the
+`Discovered` time. `--json` and `--log-format json` leave the lines out, and `plan --json` has the
+times under `phases`: one entry per connection (`"phase": "connect"`) and discovery
+(`"discover"`), with its `role` (`target` or `source`), `name`, `ok` and `elapsed_ms`.
+
+On a terminal, a spinner names the step running once it has run 300 ms, such as
+`erp  describing PUB.absence (2/5)… 18s`, or between steps `Planning  checking sources, 1 of 3 done`.
+`--progress never` leaves it out. It clears when the plan prints.

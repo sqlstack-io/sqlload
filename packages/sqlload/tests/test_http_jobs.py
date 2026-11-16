@@ -25,35 +25,6 @@ REFRESH_TOKEN = "r3fresh-first"
 PASSWORD = "pa55+word/x"
 
 
-#: A later page of Google grid data holding only a blank row, then the end.
-GRID_BLANK_PAGE = {"sheets": [{"data": [{"rowData": [{}]}]}]}
-GRID_END = {"sheets": [{"data": [{}]}]}
-SHEET_ROWS = [
-	{"id": 1, "rowNumber": 1, "cells": [{"columnId": 7001, "value": "Bolt"}, {"columnId": 7002, "value": 3}, {"columnId": 7003, "value": 0.25}, {"columnId": 7004, "value": True}]},
-	{"id": 2, "rowNumber": 2, "cells": [{"columnId": 7003, "value": 1.5}, {"columnId": 7001, "value": "Nut"}]},
-	{"id": 3, "rowNumber": 3, "cells": [{"columnId": 7001, "value": "Washer"}, {"columnId": 7002, "value": 12}, {"columnId": 7004, "value": False}]},
-	{"id": 4, "rowNumber": 4, "cells": []},
-	{"id": 5, "rowNumber": 5, "cells": [{"columnId": 7001, "value": "Gear"}, {"columnId": 7002, "displayValue": 4}, {"columnId": 7003, "value": 9.0}]},
-]
-GRID = {
-	"spreadsheetId": "synthetic",
-	"sheets": [
-		{
-			"data": [
-				{
-					"rowData": [
-						{"values": [{"effectiveValue": {"stringValue": "Name"}}, {"effectiveValue": {"stringValue": "Qty"}}, {"effectiveValue": {"stringValue": "Done"}}, {"userEnteredFormat": {}}]},
-						{"values": [{"effectiveValue": {"stringValue": "Bolt"}}, {"effectiveValue": {"numberValue": 3}}, {"effectiveValue": {"boolValue": True}}, {"userEnteredFormat": {}}]},
-						{"values": [{"effectiveValue": {"stringValue": "Nut"}}, {}, {"effectiveValue": {"boolValue": False}}]},
-						{"values": [{"effectiveValue": {"stringValue": "Washer"}}]},
-					]
-				}
-			]
-		}
-	],
-}
-
-
 class Api(BaseHTTPRequestHandler):
 	"""A stub shop API; `self.server.log` records every request's path and auth header."""
 
@@ -98,6 +69,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/cursor": self.cursor,
 			"/v1/link": self.link,
 			"/v1/flaky": self.flaky,
+			"/v1/nested": lambda query: self.reply(200, {"items": [{"order_id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds", "geo": {"lat": 1}}}}]}),
 			"/v1/broken": lambda query: self.reply(500, {"message": f"down, token {TOKEN}"}),
 			"/v1/long": lambda query: self.reply(400, {"message": "x" * 280 + f" token {TOKEN} and {TOKEN}"}),
 			"/v1/redir": lambda query: self.reply(302, {}, {"Location": f"{self.server.other}/steal"}),  # type: ignore[attr-defined]
@@ -110,8 +82,11 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/capped_small": lambda query: self.reply(200, ORDERS[:2][int(query["offset"]) : int(query["offset"]) + 3]),
 			"/v1/rounded": lambda query: self.reply(200, ORDERS[int(query["offset"]) // int(query["limit"]) * int(query["limit"]) :][: int(query["limit"])]),
 			"/v1/comma": self.comma,
-			"/v1/sheet": self.sheet,
-			"/v1/grid": lambda query: self.reply(200, [GRID, GRID_BLANK_PAGE, GRID_END][int(query["page"]) - 1]),
+			"/v1/loop-next": lambda query: self.reply(200, {"items": ORDERS[:1] if "page" not in query else [], "next": "/v1/loop-next?page=1"}),
+			"/v1/loop-link": lambda query: self.reply(200, ORDERS[:1] if "page" not in query else [], {"Link": f'<{self.server_url()}/v1/loop-link?page=1>; rel="next"'}),
+			"/v1/alert": self.alert,
+			"/v1/alert-long": lambda query: self.reply(200, {"items": ORDERS, "errors": {"code": 429, "detail": "x" * 300}}),
+			"/v1/alert-only": lambda query: self.reply(200, {"errors": [{"message": f"token {TOKEN} expired"}]}),
 			"/v1/moved": lambda query: self.reply(302, {}, {"Location": "/v1/landed/"}),
 			"/v1/landed/": lambda query: self.reply(200, {"items": ORDERS[:3], "next": "more"}),
 			"/v1/landed/more": lambda query: self.reply(200, {"items": ORDERS[3:], "next": None}),
@@ -144,7 +119,7 @@ class Api(BaseHTTPRequestHandler):
 		self.token()
 
 	def search(self) -> None:
-		"""Orders after `$.filter.after`, paged by `$.page.offset`/`$.page.limit` or by `$.page.cursor` (four at a time)."""
+		"""Orders after `$.filter.after`, paged by `$.page.offset`/`$.page.limit` or by `$.page.cursor` (four at a time); `/v1/search-stuck` answers cursor 4 every time."""
 		body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
 		url = urlparse(self.path)
 		self.server.bodies.append((url.path, ", ".join(self.headers.get_all("Content-Type") or []), body))  # type: ignore[attr-defined]
@@ -170,6 +145,8 @@ class Api(BaseHTTPRequestHandler):
 			start, limit = page["offset"], page["limit"]
 			return self.reply(200, {"items": rows[start : start + limit]})
 		start = int(page.get("cursor") or 0)
+		if url.path == "/v1/search-stuck":
+			return self.reply(200, {"items": rows[:4] if start == 0 else [], "meta": {"next": "4"}})
 		token: Any = start + 4 if url.path == "/v1/search-number" else str(start + 4)
 		self.reply(200, {"items": rows[start : start + 4], "meta": {"next": token if start + 4 < len(rows) else None}})
 
@@ -305,17 +282,11 @@ class Api(BaseHTTPRequestHandler):
 		notes = [{"order_id": order, "item_id": item, "note": f"{item}-{page}-{n}"} for n in range(2)] if page <= 2 else []
 		self.reply(200, {"items": notes})
 
-	def sheet(self, query: dict[str, str]) -> None:
-		"""A Smartsheet-shaped sheet, two rows a page: its columns listed on page 1 only, the Qty column titled `self.server.sheet_title`,
-		and with `unknown` a cell of a column it does not list."""
-		page = int(query["page"])
-		columns = [{"id": 7001, "title": "Name"}, {"id": 7002, "title": self.server.sheet_title}, {"id": 7003, "title": "Price"}, {"id": 7004, "title": "Done"}]  # type: ignore[attr-defined]
-		rows = [dict(row, cells=list(row["cells"])) for row in SHEET_ROWS[(page - 1) * 2 : page * 2]]
-		if query.get("unknown") and rows and page == 2:
-			rows[0]["cells"].append({"columnId": 7999, "value": "stray"})
-		if query.get("twice") and rows and page == 1:
-			rows[0]["cells"].append({"columnId": 7002, "value": 4})
-		self.reply(200, {"columns": columns, "rows": rows} if page == 1 else {"rows": rows})
+	def alert(self, query: dict[str, str]) -> None:
+		"""Three orders a page by `p`, with `$.errors` null on page 1 and, on page 2, the JSON value of `e` beside the orders."""
+		page = int(query["p"])
+		errors = json.loads(query["e"]) if page == 2 else None
+		self.reply(200, {"items": ORDERS[(page - 1) * 3 : page * 3], "errors": errors})
 
 	def page_number(self, query: dict[str, str]) -> None:
 		page = int(query["p"])
@@ -399,7 +370,6 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server.tokens = {}  # type: ignore[attr-defined]
 	server.token_requests = []  # type: ignore[attr-defined]
 	server.refresh_token = REFRESH_TOKEN  # type: ignore[attr-defined]
-	server.sheet_title = "Qty"  # type: ignore[attr-defined]
 	host, port = elsewhere.server_address[:2]
 	server.other = f"http://localhost:{port}"  # type: ignore[attr-defined]
 	yield server
@@ -487,6 +457,15 @@ def test_given_a_paginated_endpoint_when_a_table_returns_its_job_then_every_page
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__orders ORDER BY order_id') == expected_rows
 	assert all(auth == f"Bearer {TOKEN}" for _, _, auth in api.log)  # type: ignore[attr-defined]
+
+
+def test_given_a_dotted_flatten_path_two_levels_deep_when_a_job_loads_then_the_inner_object_flattens_too(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	project = make_project(
+		tmp_path, api, "@shop.table(description='Orders.', flatten=['customer', 'customer.address'])\ndef orders(ctx):\n    return api.paginate('/nested', paginator=sl.single(), select='$.items')\n"
+	)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT order_id, customer__name, customer__address__city, customer__address__geo::VARCHAR FROM "RAW".shop__orders') == [(1, "Ann", "Leeds", '{"lat":1}')]
 
 
 @pytest.mark.parametrize(
@@ -604,20 +583,12 @@ def orders(ctx):
 			"rows of an sl.http job stay in Rust and are never handed to Python one at a time (rule python_row_loop)",
 		),
 		(
-			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/cycle', paginator=sl.cursor('$.next', 'c'), select='$.items')\n",
-			"the paginator came back to a page it already read",
-		),
-		(
 			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/wrapped', paginator=sl.page_number('p'))\n",
 			"offset and page-number paging count the rows in a list, but select \"$\" is not one",
 		),
 		(
 			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/long', paginator=sl.single())\n",
 			"HTTP 400",
-		),
-		(
-			"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/wrapped', paginator=sl.page_number('p'), select='$.items')\n",
-			"the response repeats the previous page",
 		),
 		(
 			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12', 'X-Credential': 'abc123secret'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
@@ -637,10 +608,8 @@ def orders(ctx):
 		"unlisted-status-fails",
 		"bad-definition-fails-before-requests",
 		"python-row-loop",
-		"pagination-cycle",
 		"page-number-over-an-object",
 		"token-at-the-excerpt-cut",
-		"page-number-api-ignoring-the-page",
 		"only-secret-looking-headers-redacted",
 		"page-without-the-selected-key-fails",
 		"error-body-with-status-200-fails",
@@ -672,6 +641,131 @@ def test_given_a_failing_job_when_loading_with_json_then_the_exit_code_and_repor
 
 
 ALL_ITEMS = sorted((n, line) for n, lines in ITEMS.items() for line in range(len(lines)))
+
+
+@pytest.mark.parametrize(
+	("job", "expected_text", "expected_requests"),
+	[
+		(
+			"api.paginate('/cycle', paginator=sl.cursor('$.next', 'c'), select='$.items')",
+			"GET {base}/cycle?c=B: cursor A repeated after page 3, so paging would read page 2 again; check the paginator's pointer",
+			3,
+		),
+		(
+			"api.paginate('/search-stuck', method='POST', paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'), select='$.items')",
+			"POST {base}/search-stuck: cursor 4 repeated after page 2, so paging would read page 2 again; check the paginator's pointer",
+			2,
+		),
+		(
+			"api.paginate('/loop-next', paginator=sl.next_link('$.next'), select='$.items')",
+			"GET {base}/loop-next?page=1: next link /v1/loop-next?page=1 repeated after page 2, so paging would read page 2 again; check the paginator's pointer",
+			2,
+		),
+		(
+			"api.paginate('/loop-link', paginator=sl.link_header())",
+			"GET {base}/loop-link?page=1: Link header next {base}/loop-link?page=1 repeated after page 2, so paging would read page 2 again; check the paginator's pointer",
+			2,
+		),
+		(
+			"api.paginate('/wrapped', paginator=sl.offset(limit=2), select='$.items')",
+			"GET {base}/wrapped?offset=2&limit=2: the response repeats the previous page; the API may ignore the paginator's parameter",
+			2,
+		),
+		(
+			"api.paginate('/wrapped', paginator=sl.page_number('p'), select='$.items')",
+			"GET {base}/wrapped?p=2: the response repeats the previous page; the API may ignore the paginator's parameter",
+			2,
+		),
+	],
+	ids=["cursor-in-the-query", "cursor-in-the-body", "next-link", "link-header", "offset-api-ignoring-the-offset", "page-number-api-ignoring-the-page"],
+)
+def test_given_a_paginator_sent_back_to_a_page_it_read_when_loading_then_the_load_fails_naming_the_value_and_the_page(
+	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_text: str, expected_requests: int
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	host, port = api.server_address[:2]
+	assert expected_text.format(base=f"http://{host}:{port}/v1") in done.stdout + done.stderr, done.stdout + done.stderr
+	assert len(api.log) + len(api.bodies) == expected_requests  # type: ignore[attr-defined]
+
+
+def test_given_a_null_next_link_or_cursor_when_paging_then_paging_ends_after_that_page(tmp_path: Path, api: ThreadingHTTPServer) -> None:
+	tables = (
+		"@shop.table(description='T.')\ndef by_link(ctx):\n    return api.paginate('/next', paginator=sl.next_link('$.next'), select='$.data.items')\n\n"
+		"@shop.table(description='T.')\ndef by_cursor(ctx):\n    return api.paginate('/search-cursor', method='POST', paginator=sl.cursor('$.meta.next', '$.page.cursor', location='body'), select='$.items')\n"
+	)
+	project = make_project(tmp_path, api, tables)
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert [query for path, query, _ in api.log if path == "/v1/next"] == [{}, {"page": "1"}, {"page": "2"}]  # type: ignore[attr-defined]
+	assert [body for path, _, body in api.bodies] == [{}, {"page": {"cursor": "4"}}]  # type: ignore[attr-defined]
+	assert query(project, 'SELECT (SELECT count(*) FROM "RAW".shop__by_link), (SELECT count(*) FROM "RAW".shop__by_cursor)') == [(7, 7)]
+
+
+#: A page transform logging each page it is called with to `pages.log`.
+PAGE_LOG = """
+@sl.transform
+def log_page(rows, ctx):
+    with open("pages.log", "a") as log:
+        log.write(f"{ctx.page}\\n")
+    return rows
+
+"""
+
+
+@pytest.mark.parametrize("value", ["null", "false", '""', "[]", "{}"])
+def test_given_error_path_when_a_page_holds_nothing_there_then_every_page_loads(tmp_path: Path, api: ThreadingHTTPServer, value: str) -> None:
+	job = f"api.paginate('/alert', params={{'e': {value!r}}}, paginator=sl.page_number('p'), select='$.items', error_path='$.errors')"
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
+
+
+@pytest.mark.parametrize(
+	("job", "expected_text", "unexpected_text", "expected_pages"),
+	[
+		(
+			"api.paginate('/alert', params={'e': '\"daily quota used\"'}, paginator=sl.page_number('p'), select='$.items', error_path='$.errors', transform=log_page)",
+			"&p=2: the API reported an error at $.errors: daily quota used",
+			'"daily quota used"',
+			["1"],
+		),
+		(
+			"api.paginate('/alert', params={'e': '0'}, paginator=sl.page_number('p'), select='$.items', error_path='$.errors', transform=log_page)",
+			"/v1/alert?e=0&p=2: the API reported an error at $.errors: 0",
+			'select "$.items"',
+			["1"],
+		),
+		(
+			"api.paginate('/alert-long', paginator=sl.single(), select='$.items', error_path='$.errors', transform=log_page)",
+			'/v1/alert-long: the API reported an error at $.errors: {"code":429,"detail":"' + "x" * 178,
+			"x" * 179,
+			[],
+		),
+		(
+			"api.paginate('/alert-only', paginator=sl.single(), select='$.items', error_path='$.errors', transform=log_page)",
+			'/v1/alert-only: the API reported an error at $.errors: [{"message":"token *** expired"}]',
+			TOKEN,
+			[],
+		),
+	],
+	ids=["text-beside-rows", "zero-beside-rows", "long-object-beside-rows-cut-at-200-characters", "error-only-body-with-a-secret"],
+)
+def test_given_error_path_when_a_page_reports_an_error_then_the_table_fails_with_it_before_that_pages_rows_load(
+	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_text: str, unexpected_text: str, expected_pages: list[str]
+) -> None:
+	project = make_project(tmp_path, api, PAGE_LOG + f"@shop.table(description='T.')\ndef t(ctx):\n    return {job}\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
+	assert unexpected_text not in done.stdout + done.stderr, done.stdout + done.stderr
+	logged = project / "pages.log"
+	assert (logged.read_text().split() if logged.exists() else []) == expected_pages
+	# A table whose first page fails is never created; one whose later page fails is left without rows.
+	created = query(project, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'RAW' AND table_name = 'shop__t'") == [(1,)]
+	assert not created or query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(0,)]
 
 
 @pytest.mark.parametrize(
@@ -823,11 +917,14 @@ def test_given_read_ahead_when_later_pages_answer_first_and_one_is_retried_then_
 def test_given_read_ahead_and_a_rate_limit_when_loading_then_every_request_waits_its_turn(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	tables = "limited = sl.http(shop, auth=sl.bearer(), rate_limit='10/s')\n\n@shop.table(description='T.')\ndef t(ctx):\n    return limited.paginate('/ahead', paginator=sl.offset(limit=1, read_ahead=4))\n"
 	project = make_project(tmp_path, api, tables)
-	done = sqlload(project, "load")
+	done = sqlload(project, "load", "--events", "jsonl")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
-	arrivals = sorted(at for _, at in api.ahead)  # type: ignore[attr-defined]
-	assert api.most_open >= 2 and min(later - earlier for earlier, later in zip(arrivals, arrivals[1:])) >= 0.08, arrivals  # type: ignore[attr-defined]
+	events = [json.loads(line) for line in done.stderr.splitlines() if line.startswith("{")]
+	waits = [event for event in events if event["event"] == "rate_limited"]
+	# Read ahead, every page after the first goes in a task of its own, so pages that waited for their turn show the tasks take turns
+	# from the limiter; the limiter's spacing of turns is checked on tokio's paused clock (test_limiter.rs), not by the wall clock here.
+	assert api.most_open >= 2 and waits and {event["rate"] for event in waits} == {"10/s"}, done.stderr  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("paginator", ["sl.cursor('$.meta.next', 'after', read_ahead=2)", "sl.next_link('$.next', read_ahead=2)", "sl.link_header(read_ahead=2)"])
@@ -1503,138 +1600,3 @@ def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_mul
 	)
 	done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
 	assert done.stdout.strip() == ONE_LEVEL_JOB, done.stderr
-
-
-SHEET = "api.paginate('/sheet', paginator=sl.page_number('page'), select='$.rows', cells=sl.cells(value=['$.value', '$.displayValue']){extra})"
-GRID_JOB = (
-	"api.paginate('/grid', paginator=sl.page_number('page'), select='$.sheets[0].data[0].rowData', select_missing='empty', cells=sl.cells('$.values', key=None, "
-	"value=['$.effectiveValue.stringValue', '$.effectiveValue.numberValue', '$.effectiveValue.boolValue'], header_row=True))"
-)
-
-
-def table_project(tmp_path: Path, api: ThreadingHTTPServer, job: str, settings: str = "") -> Path:
-	return make_project(tmp_path, api, f"@shop.table(description='Rows.'{settings})\ndef rows(ctx):\n    return {job}\n")
-
-
-@pytest.mark.parametrize(
-	("job", "expected_columns", "expected_rows"),
-	[
-		(
-			SHEET.format(extra=""),
-			[("id", "BIGINT"), ("rowNumber", "BIGINT"), ("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Price", "DOUBLE"), ("Done", "BOOLEAN")],
-			[(1, 1, "Bolt", 3, 0.25, True), (2, 2, "Nut", None, 1.5, None), (3, 3, "Washer", 12, None, False), (4, 4, None, None, None, None), (5, 5, "Gear", 4, 9.0, None)],
-		),
-		(
-			SHEET.format(extra="").replace("['$.value', '$.displayValue']", "'$.value'"),
-			[("id", "BIGINT"), ("rowNumber", "BIGINT"), ("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Price", "DOUBLE"), ("Done", "BOOLEAN")],
-			[(1, 1, "Bolt", 3, 0.25, True), (2, 2, "Nut", None, 1.5, None), (3, 3, "Washer", 12, None, False), (4, 4, None, None, None, None), (5, 5, "Gear", None, 9.0, None)],
-		),
-		(
-			GRID_JOB,
-			[("Name", "VARCHAR"), ("Qty", "BIGINT"), ("Done", "BOOLEAN")],
-			[("Bolt", 3, True), ("Nut", None, False), ("Washer", None, None), (None, None, None)],
-		),
-	],
-	ids=["smartsheet-value-then-display-value", "smartsheet-value-only", "google-grid-header-row"],
-)
-def test_given_rows_of_cells_when_loading_with_cells_then_each_named_column_loads_typed_and_a_missing_cell_is_null(
-	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_columns: list[tuple[str, str]], expected_rows: list[tuple[Any, ...]]
-) -> None:
-	project = table_project(tmp_path, api, job)
-	done = sqlload(project, "load")
-	assert done.returncode == 0, done.stdout + done.stderr
-	described = query(project, 'SELECT column_name, column_type FROM (DESCRIBE "RAW".shop__rows) WHERE column_name NOT LIKE \'_sqlload%\'')
-	assert described == expected_columns
-	names = ", ".join(f'"{name}"' for name, _ in expected_columns)
-	assert query(project, f'SELECT {names} FROM "RAW".shop__rows ORDER BY rowid') == expected_rows
-
-
-def test_given_a_sheet_listing_its_columns_on_its_first_page_when_paging_then_later_pages_keep_the_names(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	project = table_project(tmp_path, api, SHEET.format(extra=""))
-	assert sqlload(project, "load").returncode == 0
-	assert [query["page"] for path, query, _ in api.log if path == "/v1/sheet"] == ["1", "2", "3", "4"]  # type: ignore[attr-defined]
-	assert query(project, 'SELECT "Name" FROM "RAW".shop__rows WHERE id = 3') == [("Washer",)]
-
-
-@pytest.mark.parametrize(
-	("settings", "expected_code", "expected_text", "expected_columns"),
-	[
-		("", 0, "", ["id", "rowNumber", "Name", "Qty", "Price", "Done", "Quantity"]),
-		(", on_schema_change='fail'", 1, "Quantity", ["id", "rowNumber", "Name", "Qty", "Price", "Done"]),
-	],
-	ids=["append-new-columns", "fail"],
-)
-def test_given_a_column_renamed_between_runs_when_loading_again_then_on_schema_change_decides(
-	tmp_path: Path, api: ThreadingHTTPServer, settings: str, expected_code: int, expected_text: str, expected_columns: list[str]
-) -> None:
-	project = table_project(tmp_path, api, SHEET.format(extra=""), settings)
-	assert sqlload(project, "load").returncode == 0
-	api.sheet_title = "Quantity"  # type: ignore[attr-defined]
-	done = sqlload(project, "load")
-	assert done.returncode == expected_code, done.stdout + done.stderr
-	assert expected_text in done.stdout + done.stderr
-	described = query(project, 'SELECT column_name FROM (DESCRIBE "RAW".shop__rows) WHERE column_name NOT LIKE \'_sqlload%\'')
-	assert [name for (name,) in described] == expected_columns
-
-
-@pytest.mark.parametrize(
-	("job", "expected_code", "expected_text", "expected_requests"),
-	[
-		(
-			SHEET.format(extra="").replace("paginator=sl.page_number('page')", "paginator=sl.page_number('page'), params={'unknown': 1}"),
-			1,
-			"page=2: cells: row 1: a cell's columnId 7999 is not the id of a column $.columns names",
-			2,
-		),
-		(
-			"api.paginate('/sheet', paginator=sl.single(), select='$.rows', cells=sl.cells(names_from='$.columns', header_row=True))",
-			1,
-			"cells takes names_from or header_row, not both",
-			0,
-		),
-		(
-			"api.paginate('/sheet', paginator=sl.single(), select='$.rows', cells=sl.cells('$.rows[*].cells'))",
-			1,
-			"cells path \"$.rows[*].cells\" cannot pick from a list with [*]",
-			0,
-		),
-		(
-			"api.fan_out('/orders/{order_id}/items', over=api.paginate('/sheet', paginator=sl.single(), select='$.rows[*].id', cells=sl.cells()), select='$.items')",
-			1,
-			"fan_out's over picks keys with its select; cells are for the fan-out's own rows",
-			0,
-		),
-		(
-			SHEET.format(extra="").replace("paginator=sl.page_number('page')", "paginator=sl.page_number('page'), params={'twice': 1}"),
-			1,
-			"page=1: cells: row 1: it has two cells for the column Qty",
-			1,
-		),
-		(
-			"api.paginate('/sheet', paginator=sl.page_number('page'), select='$.rows', cells=sl.cells('$.cell'))",
-			1,
-			'cells: no row has a cell field, so cells pointer "$.cell" finds no cells; check it',
-			1,
-		),
-	],
-	ids=["unknown-column-id", "names-from-and-header-row", "pointer-into-a-list", "cells-on-an-over", "two-cells-for-one-column", "pointer-naming-no-field"],
-)
-def test_given_cells_that_cannot_pivot_when_loading_then_it_fails_naming_why(
-	tmp_path: Path, api: ThreadingHTTPServer, job: str, expected_code: int, expected_text: str, expected_requests: int
-) -> None:
-	project = table_project(tmp_path, api, job)
-	done = sqlload(project, "load")
-	assert done.returncode == expected_code, done.stdout + done.stderr
-	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
-	assert len(api.log) == expected_requests  # type: ignore[attr-defined]
-
-
-def test_given_a_job_without_cells_when_built_then_its_definition_has_no_cells_field() -> None:
-	import sqlload as sl
-
-	api = sl.http(sl.source("shop", write_strategy="replace", connection="shop"))
-	plain = json.loads(api.paginate("/orders", paginator=sl.single(), select="$.items").__sqlload_http_job__())
-	pivoted = json.loads(api.paginate("/orders", paginator=sl.single(), select="$.items", cells=sl.cells()).__sqlload_http_job__())
-	assert "cells" not in plain
-	assert pivoted["cells"] == {"pointer": "$.cells", "key": "columnId", "value": ["$.value"], "names_from": "$.columns", "name_key": "title", "id_key": "id", "header_row": False}
-	assert {key: value for key, value in pivoted.items() if key != "cells"} == plain

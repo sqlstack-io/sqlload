@@ -7,7 +7,7 @@ use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
@@ -19,12 +19,12 @@ pub(crate) struct PulledFile {
     pub constants: Vec<(String, Option<String>)>,
 }
 
-/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
+/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
 pub(crate) fn pull_insert(
     into: &TableName,
-    (columns, in_files): (&[DesiredColumn], &[String]),
+    (columns, in_files): (&[DesiredColumn], &[(String, String)]),
     files: &[PulledFile],
-    (naming, load_id, loaded_at): (Naming, &str, &str),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -39,7 +39,7 @@ pub(crate) fn pull_insert(
     let values: Vec<String> = columns
         .iter()
         .map(
-            |column| match (metadata_role(naming, &column.name), column.name.as_str()) {
+            |column| match (metadata_role(compat, &column.name), column.name.as_str()) {
                 (Some(MetadataRole::LoadId), _) => cast(literal(load_id), column),
                 (Some(MetadataRole::LoadedAt), _) => cast(literal(loaded_at), column),
                 (None, SOURCE_ROW_COLUMN) => cast("f.file_row_number + 1".to_owned(), column),
@@ -56,8 +56,8 @@ pub(crate) fn pull_insert(
                         column,
                     )
                 }
-                (_, name) if in_files.contains(&name.to_owned()) => {
-                    cast(format!("f.{}", identifier(name)), column)
+                (_, name) if let Some(file) = in_file(in_files, name) => {
+                    cast(format!("f.{}", identifier(file)), column)
                 }
                 _ => "NULL".to_owned(),
             },
@@ -75,6 +75,14 @@ pub(crate) fn pull_insert(
         values.join(", "),
         urls.join(", ")
     )
+}
+
+/// The name in the files of the column the table holds as `name`, when the files hold it.
+fn in_file<'a>(in_files: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    in_files
+        .iter()
+        .find(|(held, _)| held == name)
+        .map(|(_, file)| file.as_str())
 }
 
 /// `file`'s constant `name`: `Some(None)` when its folder lacks it, `None` when it has no such constant.
@@ -106,7 +114,7 @@ pub(crate) struct UnloadedColumns<'a> {
     pub read: &'a [ReadColumn],
     pub constants: &'a [(String, ColumnType, String)],
     /// How the table names the columns a load adds.
-    pub naming: Naming,
+    pub compat: Compat,
     /// The batch, from 1: a merge's `_sqlload_row` numbers its rows after earlier batches', by file and row in file.
     pub batch: u64,
 }
@@ -118,7 +126,7 @@ pub(crate) fn unloaded_insert(
         columns,
         read,
         constants,
-        naming,
+        compat,
         batch,
     }: UnloadedColumns<'_>,
     urls: &[String],
@@ -132,7 +140,7 @@ pub(crate) fn unloaded_insert(
             match column_value(
                 column,
                 (read, constants),
-                (naming, load_id, loaded_at),
+                (compat, load_id, loaded_at),
                 batch,
             ) {
                 Some(value) => format!(
@@ -167,14 +175,14 @@ pub(crate) fn unloaded_insert(
 fn column_value(
     column: &DesiredColumn,
     (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
-    (naming, load_id, loaded_at): (Naming, &str, &str),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
     batch: u64,
 ) -> Option<String> {
     let constant = constants
         .iter()
         .find(|(name, _, _)| *name == column.name)
         .map(|(_, _, value)| DuckDbSql.render_loader_value_literal(value));
-    match (metadata_role(naming, &column.name), column.name.as_str()) {
+    match (metadata_role(compat, &column.name), column.name.as_str()) {
         (Some(MetadataRole::LoadId), _) => Some(DuckDbSql.render_loader_value_literal(load_id)),
         (Some(MetadataRole::LoadedAt), _) => Some(DuckDbSql.render_loader_value_literal(loaded_at)),
         (None, MERGE_ROW_COLUMN) => Some(format!(

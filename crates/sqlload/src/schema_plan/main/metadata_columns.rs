@@ -2,11 +2,11 @@
 
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::metadata_name::metadata_name;
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
-/// The load id and load time columns under `naming`, then the row id when the table gives its rows one, appended after the data columns.
-pub fn metadata_columns(naming: Naming, row_id: bool) -> Vec<DesiredColumn> {
+/// The load id and load time columns under `compat`, then the row id when the table gives its rows one, appended after the data columns.
+pub fn metadata_columns(compat: Compat, row_id: bool) -> Vec<DesiredColumn> {
     [
         (MetadataRole::LoadId, ColumnType::Text, true),
         (MetadataRole::LoadedAt, ColumnType::TimestampTz, true),
@@ -15,7 +15,7 @@ pub fn metadata_columns(naming: Naming, row_id: bool) -> Vec<DesiredColumn> {
     .into_iter()
     .filter(|(_, _, added)| *added)
     .map(|(role, column_type, _)| DesiredColumn {
-        name: metadata_name(naming, role).to_owned(),
+        name: metadata_name(compat, role).to_owned(),
         column_type,
         origin: ColumnOrigin::Metadata,
     })

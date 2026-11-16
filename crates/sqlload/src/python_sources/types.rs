@@ -41,6 +41,8 @@ pub trait PythonHost: Send + Sync + std::fmt::Debug {
         rows: Vec<RecordBatch>,
         schema: SchemaRef,
     ) -> Result<Box<dyn BatchStream>, String>;
+    /// Call the `rename` function `@sl.rename` registered as `name` on `columns` (JSON: each column's `position`, `source` and `default` name) with its `ctx` (JSON: `source`, `table`): the names it gives, by position, as a JSON object; with no `columns`, only look the function up. Fails when no function, or two, are registered as `name`, or it fails or returns something else.
+    fn rename(&self, name: &str, columns: Option<&str>, context: &str) -> Result<String, String>;
     /// Close the clients the run built.
     fn finish(&self);
 }

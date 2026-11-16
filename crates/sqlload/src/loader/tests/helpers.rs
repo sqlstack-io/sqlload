@@ -1,3 +1,4 @@
+use crate::column_parse::main::column_parse::column_parse;
 use std::collections::{BTreeSet, HashMap};
 
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
@@ -5,11 +6,9 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
-use crate::column_types::main::arrow_field::arrow_field;
 use crate::file_store::errors::StoreError;
 use crate::files_source::models::{FilesEncoding, FilesTable, TextChecks};
 use crate::http::errors::ApiError;
-use crate::loader::_helpers::python::bound_array;
 use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::{
     YieldedData, declared_problems, inferred_table, python_tables, source_spelling,
@@ -19,9 +18,8 @@ use crate::loader::_helpers::table_plan::reader_offer;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
-    BoundArrayTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase,
-    ItemSpec, OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase,
-    TransformReaderTestCase,
+    ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
+    OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -46,6 +44,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
                 column_type: Ok(crate::column_types::models::ColumnType::Text),
                 nullable: true,
                 source_spelling: None,
+                repeat_of: None,
             })
             .collect(),
         primary_key: Vec::new(),
@@ -82,7 +81,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         rows: 1,
     };
     inferred_table(
-        (&planned, crate::load_naming::models::Naming::Sqlload),
+        (&planned, crate::load_naming::models::Compat::Sqlload),
         &declared,
         &data,
         live,
@@ -181,16 +180,6 @@ pub(crate) fn problems_for(test_case: &DeclaredProblemsTestCase) -> Result<Strin
         rows: test_case.rows,
     };
     Ok(declared_problems(&spec, &data).join("; "))
-}
-
-/// The bound built for a cursor column of the case's type, as Arrow displays it.
-pub(crate) fn bound_text(test_case: &BoundArrayTestCase) -> Result<String, String> {
-    let field = arrow_field("c", &test_case.cursor_type).ok_or("no Arrow type")?;
-    let array = bound_array(test_case.text, &test_case.cursor_type, field.data_type())
-        .map_err(|error| error.to_string())?;
-    let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
-        .map_err(|error| error.to_string())?;
-    Ok(format!("{} {}", array.data_type(), formatter.value(0)))
 }
 
 /// `specs` as plan items.
@@ -421,6 +410,7 @@ pub(crate) fn refused_bounds_runs(
             column_type: Ok(test_case.column_type.clone()),
             nullable: false,
             source_spelling: None,
+            repeat_of: None,
         }],
         primary_key: Vec::new(),
         indexed_columns: Vec::new(),
@@ -512,6 +502,7 @@ pub(crate) fn not_null_keys(
                 column_type: Ok(crate::column_types::models::ColumnType::Text),
                 nullable: *nullable,
                 source_spelling: None,
+                repeat_of: None,
             })
             .collect(),
         primary_key: test_case
@@ -534,7 +525,7 @@ pub(crate) fn not_null_keys(
         .ok_or_else(|| resolved.problems.join("; "))
 }
 
-/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform`.
+/// Why SQLLoad must read a Parquet files table's files itself, with the case's `transform` and `parse`.
 pub(crate) fn transform_reader(
     test_case: &TransformReaderTestCase,
 ) -> Result<Option<String>, String> {
@@ -571,6 +562,9 @@ pub(crate) fn transform_reader(
         older: 0,
         creates_log: false,
     });
+    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
+    spec.parses
+        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
     Ok(reader_offer(&spec, None, None).needs_loader)
 }
 

@@ -75,7 +75,7 @@ fn given_files_under_the_stage_when_building_direct_copies_then_values_match_the
             )),
         },
         DirectCopiesTestCase {
-            description: "a partition value the reader cannot convert fails, naming the file",
+            description: "a partition value the reader cannot convert fails, compat the file",
             files: vec![("day=soon/part-0.parquet".to_owned(), "soon")],
             columns: order_columns(),
             from: EXTERNAL,

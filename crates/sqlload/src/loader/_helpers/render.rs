@@ -1,11 +1,11 @@
-use crate::load_naming::models::Naming;
-use crate::loader::constants::{
-    FIX_LABEL, HOURS_OFFSET_LENGTH, REASON_LABEL, ROUTE_LABEL, SECOND_TIMESTAMP_LENGTH,
-    SOURCE_LABEL,
-};
+use crate::load_naming::main::name_lines::name_lines;
+use crate::load_naming::models::NameChange;
+use crate::loader::constants::{FIX_LABEL, REASON_LABEL, ROUTE_LABEL, SOURCE_LABEL};
 use crate::loader::models::UnreadSource;
 use crate::project::models::CheckName;
 use crate::run_log::models::RunEvent;
+use crate::time_text::main::clock_time::clock_time;
+use crate::time_text::main::trimmed_time::trimmed_time;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -17,9 +17,12 @@ use crate::adapters::dispatch::main::route::sends_rows::sends_rows;
 use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
+use crate::batch_plan::main::cursor_rules::cursor_rules;
+use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
+use crate::loader::_helpers::publish::send_line;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
@@ -32,16 +35,16 @@ use crate::loader::constants::{
     PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
-    CommitRule, FilesOutput, ObjectChange, PlanDetail, PlanItem, PlanView, ProjectPlan,
-    PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan, TableResult,
-    TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
+    CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
+    ProjectPlan, PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan,
+    TableResult, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
-use crate::project::models::NullCursor;
 use crate::project::models::{FilesFormat, OutputCompression};
 use crate::routing::models::{Route, Step, Store};
+use crate::row_batches::main::flatten_lines::flatten_lines;
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
 use crate::run_log::main::runs_table::runs_table;
@@ -131,6 +134,11 @@ fn aligned(left: &str, right: &str) -> String {
         true => left.to_owned(),
         false => format!("{left:<width$}{right}", width = PLAN_DETAIL_COLUMN),
     }
+}
+
+/// The `names` detail of a table: a line per column `rename` or numbering named, as [`name_lines`] gives them; `None` when there are none.
+fn names_details(lines: &[String]) -> Option<PlanDetail> {
+    (!lines.is_empty()).then(|| detail("names", lines.join("\n")))
 }
 
 /// `name` padded so `detail` starts in the plan's detail column (after a branch prefix), or two spaces after a name too long for it.
@@ -260,7 +268,7 @@ fn column_details(table: &TablePlan) -> Vec<PlanDetail> {
         .schema
         .write_columns
         .iter()
-        .partition(|column| is_load_column(table.spec.naming, &column.name));
+        .partition(|column| is_load_column(table.spec.compat, &column.name));
     let name_width = data
         .iter()
         .map(|column| column.name.len())
@@ -542,6 +550,42 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         };
         details.push(detail("unnest", text));
     }
+    let sampled: Option<Vec<String>> = spec
+        .files
+        .as_ref()
+        .filter(|files| files.transform.is_none())
+        .map(file_column_names);
+    let kept: Vec<String> = table
+        .schema
+        .write_columns
+        .iter()
+        .filter(|column| sampled.is_some() && column.column_type == ColumnType::Json)
+        .filter(|column| {
+            matches!(
+                column.origin,
+                ColumnOrigin::Source | ColumnOrigin::Inferred | ColumnOrigin::Pinned
+            )
+        })
+        .map(|column| column.name.clone())
+        .collect();
+    let objects = spec
+        .files
+        .as_ref()
+        .map(|files| files.table.objects.as_slice());
+    let lines = flatten_lines(&spec.flatten, objects.zip(sampled.as_deref()), &kept);
+    if !lines.is_empty() {
+        details.push(detail("flatten", lines.join("\n")));
+    }
+    let zone = spec
+        .timezone
+        .map(|(zone, at)| (zone, format!("the {at}'s timezone")));
+    let lines = parse_lines(
+        &spec.parses,
+        zone.as_ref().map(|(zone, from)| (*zone, from.as_str())),
+    );
+    if !lines.is_empty() {
+        details.push(detail("parse", lines.join("\n")));
+    }
     details.extend(
         spec.files
             .as_ref()
@@ -673,6 +717,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
+    details.extend(send_line(table).map(|text| detail("send", text)));
     details.extend(
         spec.python
             .iter()
@@ -699,13 +744,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
         ));
     }
-    details.extend(table.cursor_note.iter().map(|note| {
-        let text = match null_cursor_rule(table) {
-            Some(rule) => format!("{note} ({rule})"),
-            None => note.clone(),
-        };
-        detail("cursor", text)
-    }));
+    details.extend(
+        (table.cursor_note.iter()).map(|note| detail("cursor", cursor_rules(table, note, true))),
+    );
     details.extend(table.logged.as_ref().map(|logged| {
         detail(
             "state",
@@ -1058,21 +1099,25 @@ fn python_create(table: &TablePlan) -> String {
     }
 }
 
+/// The names of the columns a files table's sampled files hold, as they spell them.
+fn file_column_names(files: &FilesSource) -> Vec<String> {
+    files
+        .table
+        .columns
+        .iter()
+        .map(|column| column.name.clone())
+        .collect()
+}
+
 /// Where a Python table's columns come from.
 fn python_columns_line(table: &TablePlan, python: &PythonTable) -> String {
     let declared = match python.declared.len() {
         0 => String::new(),
         count => format!(", {count} declared"),
     };
-    let flattened = match table.spec.flatten.is_empty() {
-        true => String::new(),
-        false => format!(", {} flattened one level", table.spec.flatten.join(", ")),
-    };
     match table.exists {
-        true => format!(
-            "columns inferred at load and checked against the live table{declared}{flattened}"
-        ),
-        false => format!("columns inferred on first load{declared}{flattened}"),
+        true => format!("columns inferred at load and checked against the live table{declared}"),
+        false => format!("columns inferred on first load{declared}"),
     }
 }
 
@@ -1220,6 +1265,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         summary: summary.join(", "),
         selected,
         destinations: named,
+        phases: plan.phases.clone(),
         objects: stages
             .iter()
             .map(|stage| stage_item(stage))
@@ -1439,6 +1485,14 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.transforms.clone(),
             Err(_) => Vec::new(),
         },
+        names: match &outcome.loaded {
+            Ok(loaded) => loaded.names.clone(),
+            Err(_) => Vec::new(),
+        },
+        warnings: match &outcome.loaded {
+            Ok(loaded) => loaded.warnings.clone(),
+            Err(_) => Vec::new(),
+        },
         peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }
@@ -1528,6 +1582,7 @@ pub(crate) fn text_item(
     }
     if one {
         added.extend(columns_line(table).map(|text| detail("columns", text)));
+        added.extend(names_details(&name_lines(&table.spec.names.columns)));
         added.extend(checks_line(table).map(|text| detail("checks", text)));
     }
     details.splice(after_source..after_source, added);
@@ -1538,7 +1593,7 @@ pub(crate) fn text_item(
     }
 }
 
-/// How many columns the table loads from its source, and under dlt's naming the first names it changes: `6, named by naming = "dlt": company-no -> company_no, item-no -> item_no, ...`; `None` when they are only known at load.
+/// How many columns the table loads from its source, and how many of them `naming` alone changes, with the first few: `6, 4 named by snake_case: Company No -> company_no, ItemNo -> item_no, ...`; `None` when they are only known at load. The columns `rename` or numbering named have lines of their own (see [`names_details`]).
 fn columns_line(table: &TablePlan) -> Option<String> {
     let count = table
         .schema
@@ -1551,20 +1606,18 @@ fn columns_line(table: &TablePlan) -> Option<String> {
     }
     let renamed: Vec<String> = table
         .spec
-        .source_table
+        .names
         .columns
         .iter()
-        .filter(|_| table.spec.naming == Naming::Dlt)
-        .filter_map(|column| {
-            let spelled = column.source_spelling.as_deref()?;
-            (spelled != column.name).then(|| format!("{spelled} -> {}", column.name))
-        })
+        .filter(|column| column.change == Some(NameChange::Named))
+        .map(|column| format!("{} -> {}", column.source, column.loaded))
         .collect();
     Some(match renamed.as_slice() {
         [] => thousands(count as u64),
         shown => format!(
-            "{}, named by naming = \"dlt\": {}{}",
+            "{}, {} named by snake_case: {}{}",
             thousands(count as u64),
+            thousands(shown.len() as u64),
             shown
                 .iter()
                 .take(SHOWN_RENAMES)
@@ -1648,32 +1701,10 @@ fn key_line(table: &TablePlan) -> Option<String> {
     })
 }
 
-/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by what it does with rows whose cursor is NULL, when [`null_cursor_rule`] says.
+/// Where the read starts: `updated_at >= 2026-11-14 07:49:41 (warehouse maximum minus lookback 5s)`, or the logged state; times to the second, or to the millisecond when `precise`; a cursor read followed by its rules (see [`cursor_rules`]).
 pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
     let line = reads_text(table, precise)?;
-    Some(
-        match null_cursor_rule(table).filter(|_| table.logged.is_none()) {
-            Some(rule) => format!("{line} ({rule})"),
-            None => line,
-        },
-    )
-}
-
-/// What a cursor read does with source rows whose cursor is NULL, for `plan`: `NULL cursors: included` or `skipped` as `null_cursor` says, and by default `fail the load` when the source reports a cursor column nullable; `None` when it reports one NOT NULL or reports nothing (a Python table), and for a files source, whose cursor comes from each file's path.
-pub(crate) fn null_cursor_rule(table: &TablePlan) -> Option<&'static str> {
-    let spec = &table.spec;
-    let cursor = spec.cursor.as_ref().filter(|_| spec.files.is_none())?;
-    let nullable = cursor.columns().all(|name| {
-        spec.source_table
-            .column(name)
-            .is_some_and(|column| column.nullable)
-    });
-    match cursor.null_cursor {
-        NullCursor::Include => Some("NULL cursors: included"),
-        NullCursor::Ignore => Some("NULL cursors: skipped"),
-        NullCursor::Fail if nullable => Some("NULL cursors: fail the load"),
-        NullCursor::Fail => None,
-    }
+    Some(cursor_rules(table, &line, table.logged.is_none()))
 }
 
 /// [`reads_line`] without the NULL cursor rule.
@@ -1787,51 +1818,6 @@ fn window_length(step: std::time::Duration) -> String {
             || humantime::format_duration(step).to_string(),
             |(size, unit)| format!("{}-{unit}", seconds / size),
         )
-}
-
-/// `value` with a timestamp's fraction of a second cut to the second, or to the millisecond when `precise`, and an offset of whole hours shortened (`+00:00` to `+00`); anything else as it is.
-fn trimmed_time(value: &str, precise: bool) -> String {
-    let bytes = value.as_bytes();
-    let is_timestamp = bytes.len() >= SECOND_TIMESTAMP_LENGTH
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && matches!(bytes[10], b' ' | b'T')
-        && bytes[13] == b':'
-        && bytes[16] == b':'
-        && value.is_char_boundary(SECOND_TIMESTAMP_LENGTH);
-    if !is_timestamp {
-        return value.to_owned();
-    }
-    let (seconds, rest) = value.split_at(SECOND_TIMESTAMP_LENGTH);
-    let digits = match rest.strip_prefix('.') {
-        Some(fraction) => fraction.bytes().take_while(u8::is_ascii_digit).count(),
-        None => 0,
-    };
-    let (fraction, offset) = match digits {
-        0 => ("", rest),
-        _ => rest.split_at(digits + 1),
-    };
-    let fraction = match precise {
-        true => fraction.get(..4).unwrap_or(fraction),
-        false => "",
-    };
-    let offset = offset
-        .strip_suffix(":00")
-        .filter(|hours| hours.len() == HOURS_OFFSET_LENGTH)
-        .unwrap_or(offset);
-    format!("{seconds}{fraction}{offset}")
-}
-
-/// A recorded time's clock part: `2026-11-14T07:54:11.123456Z` as `07:54:11Z`.
-fn clock_time(recorded_at: &str) -> String {
-    let time = recorded_at
-        .split_once('T')
-        .map_or(recorded_at, |(_, time)| time);
-    let clock = time.get(..8).unwrap_or(time);
-    match time.ends_with('Z') {
-        true => format!("{clock}Z"),
-        false => clock.to_owned(),
-    }
 }
 
 /// `item`, an `Errors` item for `problem` (a project problem, or a blocked table's reason), as `plan` prints it: a source that could not be read named by the source, with a headline, its driver's message, a fix and what it holds up (`blocks`); a table's problem named as its table lands, with a headline when its reason has a known one, and a fix that changes a setting starting with where the table's settings are written (`at`, as `sqlload.toml:93`).

@@ -6,7 +6,7 @@ use pyo3::types::{
     PyList, PyListMethods, PyString, PyStringMethods, PyTuple, PyType, PyTypeMethods,
 };
 use pyo3::{Bound, PyAny, PyErr, PyResult, Python};
-use sqlload::row_batches::models::{Cell, JsonWriter, RowColumns};
+use sqlload::row_batches::models::{Cell, Flatten, FlattenObjects, JsonWriter, RowColumns};
 
 use crate::crossing::constants::{
     EPOCH_ORDINAL, MICROS_PER_DAY, MICROS_PER_SECOND, NUMPY_ARRAY, NUMPY_MODULE,
@@ -89,8 +89,8 @@ fn collision(object: &str, key: &str, name: &str, clash: &str) -> PyErr {
     ))
 }
 
-/// Read `rows`, a list of dicts, column by column, holding the GIL; each key named in `flatten` holding a dict becomes one typed column per key, `<object>__<key>`.
-pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &[String]) -> PyResult<RowColumns> {
+/// Read `rows`, a list of dicts, column by column, holding the GIL; each dict `flatten` flattens becomes one typed column per key, `<object>__<key>`, and its dicts in turn.
+pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &Flatten) -> PyResult<RowColumns> {
     let mut walker = Walker::new(rows.py())?;
     let mut columns = RowColumns::new();
     let mut names = FlatNames::default();
@@ -104,12 +104,11 @@ pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &[String]) -> PyResul
         for (key, value) in row.iter() {
             let key = key.cast::<PyString>().map_err(|_| key_error(&key))?;
             let key = key.to_str()?;
-            match flatten.is_empty() {
+            match flatten.is_none() {
                 true => columns.push(key, walker.cell(&value)?),
                 false => walker.flattened_cell(
-                    key,
-                    &value,
-                    (index, flatten),
+                    (key, &value),
+                    (index, &[], flatten),
                     (&mut columns, &mut names),
                 )?,
             }
@@ -270,36 +269,48 @@ impl<'py> Walker<'py> {
 }
 
 impl<'py> Walker<'py> {
-    /// Push `value` under `key`, expanding it one level when `flatten` lists `key`: a dict's items as typed cells, nothing for `None`, an error for anything else.
+    /// Push `value` under `key`, at `path` below the row, or, when it is a dict `flatten` flattens (a listed path, or under `"all"` any dict), its items in its place, named `<object>__<key>`, and theirs in turn: nothing for `None` there or inside a flattened dict, and an error for a listed path holding anything but a dict.
     fn flattened_cell(
         &mut self,
-        key: &str,
-        value: &Bound<'py, PyAny>,
-        (row, flatten): (usize, &[String]),
+        (key, value): (&str, &Bound<'py, PyAny>),
+        (row, path, flatten): (usize, &[String], &Flatten),
         (columns, names): (&mut RowColumns, &mut FlatNames),
     ) -> PyResult<()> {
-        if !flatten.iter().any(|listed| listed == key) {
-            names.plain(key)?;
-            columns.push(key, self.cell(value)?);
+        let here: Vec<&str> = path.iter().map(String::as_str).chain([key]).collect();
+        let object = flatten.lists(&here)
+            || (flatten.objects == FlattenObjects::All && value.is_instance_of::<PyDict>());
+        if !(object && flatten.flattens(&here).map_err(PyValueError::new_err)?) {
+            if path.is_empty() {
+                names.plain(key)?;
+                columns.push(key, self.cell(value)?);
+            } else if !value.is_none() {
+                let name = names.claim(&path.join("__"), key)?;
+                columns.push(&name, self.cell(value)?);
+            }
             return Ok(());
         }
         let items = match self.plain(value)? {
             Plain::Null => return Ok(()),
             Plain::Object(items) => items,
             other => {
+                let listed = here.join(".");
                 return Err(PyValueError::new_err(format!(
-                    "flatten {key}: row {} of a batch holds {}, not an object; the shape changed, so leave {key} unflattened or fix the source",
+                    "flatten {listed}: row {} of a batch holds {}, not an object; the shape changed, so leave {listed} unflattened or fix the source",
                     row + 1,
                     shape(&other)
                 )));
             }
         };
+        let below: Vec<String> = here.iter().map(|part| (*part).to_owned()).collect();
         for (item_key, item) in items {
             let item_key = item_key
                 .cast::<PyString>()
                 .map_err(|_| key_error(&item_key))?;
-            let name = names.claim(key, item_key.to_str()?)?;
-            columns.push(&name, self.cell(&item)?);
+            self.flattened_cell(
+                (item_key.to_str()?, &item),
+                (row, &below, flatten),
+                (columns, names),
+            )?;
         }
         Ok(())
     }

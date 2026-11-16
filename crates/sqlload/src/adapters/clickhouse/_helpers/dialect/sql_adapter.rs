@@ -135,6 +135,10 @@ impl SqlAdapter for ClickHouseSql {
         )
     }
 
+    fn sorts_by_unique_key(&self) -> bool {
+        true
+    }
+
     fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
         layout_problems(layout)
     }

@@ -8,7 +8,7 @@ fn given_a_merge_key_that_may_be_null_when_planning_on_postgres_then_it_needs_ve
  {
     let test_cases = [
         NullKeysProblemTestCase {
-            description: "Postgres 14 cannot create an index NULLS NOT DISTINCT, so a key that may be NULL is refused, naming the version and the fixes",
+            description: "Postgres 14 cannot create an index NULLS NOT DISTINCT, so a key that may be NULL is refused, compat the version and the fixes",
             nullable: &["site"],
             version: (140_011, "14.11"),
             indexes: None,

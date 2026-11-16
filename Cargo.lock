@@ -319,6 +319,7 @@ dependencies = [
  "arrow-select",
  "flatbuffers",
  "lz4_flex",
+ "zstd",
 ]
 
 [[package]]
@@ -5752,6 +5753,7 @@ dependencies = [
  "arrow-array",
  "arrow-pyarrow",
  "arrow-schema",
+ "chrono-tz",
  "pyo3",
  "serde_json",
  "sqlload",

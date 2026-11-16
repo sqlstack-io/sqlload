@@ -12,6 +12,7 @@ use crate::adapters::snowflake::models::SnowflakeSql;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue, DirectCopy};
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{DataFile, SourceFormat, StoredRead};
+use crate::load_naming::main::numbered_header::numbered_header;
 
 /// One `COPY` of `files`, which lie in `request.folder` below the stage; CSV files share one `header`, which places their columns.
 pub(crate) fn copy_sql(
@@ -97,17 +98,13 @@ fn column_value(
             .collect::<Result<_, String>>()?;
         Ok(format!("CASE {} ELSE {otherwise} END", arms.join(" ")))
     };
-    let inferred = request.inferred.contains(&column.name);
+    let inferred = request.inferred.contains(&column.source);
     Ok(match &column.value {
         CopyValue::File { .. } if request.encoding.record.is_some() => {
             record_value(request, header)
         }
         CopyValue::File { .. } if request.encoding.format == SourceFormat::Csv => {
-            match header
-                .unwrap_or_default()
-                .iter()
-                .position(|name| *name == column.name)
-            {
+            match header_position(header.unwrap_or_default(), &column.source) {
                 Some(position) => csv_value(
                     (
                         &column.name,
@@ -120,16 +117,19 @@ fn column_value(
             }
         }
         CopyValue::File { .. } if request.encoding.format != SourceFormat::Parquet => json_value(
-            (&column.name, &format!("GET($1, {})", literal(&column.name))),
+            (
+                &column.name,
+                &format!("GET($1, {})", literal(&column.source)),
+            ),
             (&column.column_type, &sql_type),
             inferred,
         ),
         CopyValue::File { .. } if column.column_type == ColumnType::Json => format!(
             "PARSE_JSON(CAST(GET($1, {}) AS VARCHAR))",
-            literal(&column.name)
+            literal(&column.source)
         ),
         CopyValue::File { stored, short, .. } => file_value(
-            &format!("GET($1, {})", literal(&column.name)),
+            &format!("GET($1, {})", literal(&column.source)),
             (&column.column_type, &sql_type),
             (*stored, *short),
         ),
@@ -155,6 +155,13 @@ fn column_value(
             "NULL".to_owned(),
         )?,
     })
+}
+
+/// The place of the column SQLLoad's reader reads as `read_as` in a CSV file whose header is `header`: a repeated name counts as the reader numbers it (`Qty`, `Qty_1`).
+fn header_position(header: &[String], read_as: &str) -> Option<usize> {
+    numbered_header(header)
+        .into_iter()
+        .position(|(name, _)| name == read_as)
 }
 
 /// The whole record of a `shape = "record"` read: a JSON record itself, or a CSV line as an array of its `header`'s fields as strings, a NULL field (see `csv_field`) as JSON `null`. A line with another number of fields than the header fails the load, as SQLLoad's reader does (Snowflake's CSV error names the file and line, and shows a metadata column's placeholder in place of a message reading one, so the message reads none): a present field is never NULL in the `COPY` (no `NULL_IF`, empty fields kept), and one past the line's end is.
@@ -191,7 +198,7 @@ fn partition_value(data: &DataFile, column: &CopyColumn, sql_type: &str) -> Resu
     let Some((_, raw)) = data
         .partitions
         .iter()
-        .find(|(name, _)| *name == column.name)
+        .find(|(name, _)| *name == column.source)
     else {
         return Ok("NULL".to_owned());
     };

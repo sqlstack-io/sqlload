@@ -5,6 +5,7 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
+use sqlload::command::constants::COMMAND_STACK_BYTES;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
@@ -33,12 +34,13 @@ use crate::test_types::{
     TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
-/// Run an async test body on a fresh multi-threaded runtime.
+/// Run an async test body on a fresh multi-threaded runtime whose threads have the stack a command runs on, as `load` gives the threads tables load on.
 pub(crate) fn run_async<F: std::future::Future<Output = Result<(), String>>>(
     body: F,
 ) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(COMMAND_STACK_BYTES)
         .build()
         .map_err(|error| error.to_string())?;
     runtime.block_on(body)

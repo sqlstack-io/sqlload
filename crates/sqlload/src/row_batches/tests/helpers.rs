@@ -178,12 +178,51 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
         Ok(())
     })?;
     let batch = batches.first().ok_or("no rows")?;
-    let flatten: Vec<String> = test_case
-        .flatten
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect();
-    flatten_batch(batch, &flatten).map(|batch| render(&batch))
+    let rule = crate::row_batches::models::Flatten {
+        excluded: crate::row_batches::models::ExcludePatterns::new(
+            test_case
+                .excluded
+                .iter()
+                .map(|pattern| (*pattern).to_owned())
+                .collect(),
+        )
+        .map_err(|error| error.to_string())?,
+        ..flatten_rule(
+            (test_case.flatten)(),
+            (test_case.keep, test_case.pinned),
+            (
+                test_case.max_depth,
+                crate::load_naming::models::Naming::SnakeCase,
+            ),
+        )
+    };
+    flatten_batch(batch, &rule).map(|batch| render(&batch))
+}
+
+/// The flatten rule flattening `objects`, keeping `keep` whole and refusing to flatten `pinned`, down to `max_depth`, matching names as `naming` does.
+pub(crate) fn flatten_rule(
+    objects: crate::row_batches::models::FlattenObjects,
+    (keep, pinned): (&[&str], &[(&str, &str)]),
+    (max_depth, naming): (u32, crate::load_naming::models::Naming),
+) -> crate::row_batches::models::Flatten {
+    crate::row_batches::models::Flatten {
+        objects,
+        keep: keep.iter().map(|name| (*name).to_owned()).collect(),
+        pinned: pinned
+            .iter()
+            .map(|(name, column_type)| ((*name).to_owned(), (*column_type).to_owned()))
+            .collect(),
+        max_depth,
+        naming,
+        excluded: crate::row_batches::models::ExcludePatterns::default(),
+    }
+}
+
+/// The objects at the dotted `paths`.
+pub(crate) fn paths(paths: &[&str]) -> crate::row_batches::models::FlattenObjects {
+    crate::row_batches::models::FlattenObjects::Paths(
+        paths.iter().map(|path| (*path).to_owned()).collect(),
+    )
 }
 
 /// `texts` converted by [`json_lists`](crate::row_batches::main::json_lists::json_lists) to lists of `element`, joined by `|` with NULL as `null`; an error up to its first `: `.
@@ -233,13 +272,20 @@ pub(crate) fn unnested(
         .roots
         .map(|roots| roots.iter().map(|id| (*id).to_owned()).collect());
     let unnest = (test_case.unnest)();
+    let flatten = crate::row_batches::models::Flatten {
+        objects: (test_case.flatten)(),
+        max_depth: test_case.max_depth,
+        naming: crate::load_naming::models::Naming::Source,
+        ..crate::row_batches::models::Flatten::default()
+    };
     let request = crate::row_batches::models::UnnestRequest {
         table: "orders",
         unnest: &unnest,
         max_depth: test_case.max_depth,
-        naming: crate::load_naming::models::Naming::Sqlload,
+        naming: crate::load_naming::models::Naming::Source,
+        compat: crate::load_naming::models::Compat::Sqlload,
         name_limit: None,
-        flatten_objects: false,
+        flatten: &flatten,
         live: &[],
         ids: &ids,
         roots: roots.as_deref(),

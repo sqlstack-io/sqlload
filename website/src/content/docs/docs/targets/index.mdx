@@ -71,3 +71,37 @@ Each kind has its own page: [Snowflake](/docs/targets/snowflake/),
 [ClickHouse](/docs/targets/clickhouse/), [Postgres](/docs/targets/postgres/),
 [DuckDB](/docs/targets/duckdb/), [MotherDuck](/docs/targets/motherduck/) and
 [Parquet files](/docs/targets/files/).
+
+## Sending rows at commit
+
+From 0.53.0, `send` says when a table's rows reach its target. With `send = "at_commit"`, each
+commit's rows wait on the machine running SQLLoad, in local Arrow files, and reach the target in one
+burst just before the commit: the target runs nothing while the source is read. With
+`send = "per_batch"`, each batch goes to the target as it's read.
+
+Snowflake, Databricks and MotherDuck bill for the time a warehouse runs queries, and keep it
+running a while after the last one (a minute's minimum after Snowflake resumes, MotherDuck's
+cooldown, a Databricks SQL warehouse's auto-stop). A slow read sending batch after batch keeps them
+billing for the whole read, so `at_commit` is the default there. Every other target defaults to
+`per_batch`.
+
+```toml
+[targets.cloud]
+connection = "md"
+loader_schema = "raw"
+send = "at_commit"        # the default on MotherDuck, Snowflake and Databricks
+staging_dir = "/data/sqlload"   # where the rows wait; the system's temporary folder by default
+```
+
+A source or table can set `send` too. Commits stay where they are: once after the read for
+`replace` and `--reload`, after each window for `batch_size`, about every 1 GB for incremental reads,
+and every 1,000 files or about 1 GB for files sources. A read that fails part-way sends nothing for
+its commit, and the held files are removed after each commit, failed or not. `plan` shows a `send`
+line for each table under `at_commit`, with about how much a commit holds where the source gives a
+size, and `load` fails before reading when `staging_dir` has less room than that.
+
+`send` doesn't apply where the target reads the files itself, such as Parquet files DuckDB reads or
+an `external_stage` Snowflake copies from: each commit there is already one `COPY`, and `plan` says
+`send  n/a: <target> reads the files itself`. A column added part-way through a read sends the rows
+held so far before the table is altered.
+

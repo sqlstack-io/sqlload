@@ -8,12 +8,19 @@ use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_sta
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::clear_pending::clear_pending;
+use crate::adapters::files::main::close_writer::close_writer;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
+use crate::adapters::files::main::open_writer::open_writer;
+use crate::adapters::files::main::partitions_finished::partitions_finished;
+use crate::adapters::files::main::swap_folder::swap_folder;
 use crate::adapters::files::main::table_path::table_path;
+use crate::adapters::files::main::write_loaded_files::write_loaded_files;
+use crate::adapters::files::main::write_rows::write_rows;
 use crate::adapters::files::models::{
     FilesDestination, FolderClaim, TableFiles, TablePath, TablePathRequest,
 };
+use crate::adapters::files::models::{FilesWriter, WriterRequest};
 use crate::adapters::files::models::{PartitionFolder, PendingPhase, PendingRun, ReplacedFiles};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::delete_files::delete_files;
@@ -22,15 +29,19 @@ use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::NANOSECOND_SCALE;
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::files_source::models::{DataFile, LoadedFile};
 use crate::files_source::models::{FileColumn, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
+use crate::loader::models::{CommitRange, Publisher};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
+use crate::run_log::main::record_object_name::record_object_name;
+use crate::run_log::main::runs_location::runs_location;
 use crate::schema_plan::models::{LiveColumn, TableAction};
 use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
@@ -38,6 +49,7 @@ use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
+use arrow_array::RecordBatch;
 use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
@@ -553,4 +565,248 @@ pub(crate) async fn replace_files(
     }
     delete_files(folder, keys).await?;
     Ok(clear_pending(folder, file_id).await?)
+}
+
+impl Publisher {
+    /// Add a batch to the commit's files, starting them (and marking the commit as writing) on its first batch.
+    pub(crate) async fn stage_files(&mut self, batch: RecordBatch) -> Result<(), LoaderError> {
+        let writer = match self.files.as_mut().and_then(|sink| sink.writer.take()) {
+            Some(writer) => writer,
+            None => self.open_files().await?,
+        };
+        let mut writer = writer;
+        let written = write_rows(&mut writer, batch).await.map(|_| ());
+        if let Some(sink) = self.files.as_mut() {
+            sink.writer = Some(writer);
+        }
+        Ok(written?)
+    }
+
+    /// A writer for the next commit's files, whose pending marker says they are being written.
+    async fn open_files(&mut self) -> Result<FilesWriter, LoaderError> {
+        let sink = self.sink()?;
+        let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
+        let spec = &self.table.spec;
+        let writer = open_writer(WriterRequest {
+            folder: sink.folder.clone(),
+            path: &sink.output.path,
+            cursor_column: spec.cursor.as_ref().map(|cursor| cursor.column.as_str()),
+            columns: &self.table.schema.write_columns,
+            compat: self.table.spec.compat,
+            load_id: &self.load_id,
+            file_id: &file_id,
+            loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
+        })
+        .map_err(LoaderError::Invalid)?;
+        mark_pending(&sink.folder, &file_id, PendingPhase::Writing, (&[], None)).await?;
+        Ok(writer)
+    }
+
+    /// Commit the files written since the last commit: store the open ones, record the files they replace (and a logged table's record) in the marker, which commits them; then write the record, delete the replaced files and the marker. The last commit of a `replace` with no rows still stores one empty file, so the table keeps its columns.
+    pub(crate) async fn commit_files(&mut self, last: bool) -> Result<(), LoaderError> {
+        let writer = match (
+            self.files.as_mut().and_then(|sink| sink.writer.take()),
+            last && self.at_end,
+        ) {
+            (Some(writer), _) => Some(writer),
+            (None, true) if self.committed_rows == 0 => Some(self.open_files().await?),
+            (None, _) => None,
+        };
+        let Some(mut writer) = writer else {
+            return self.delete_leftovers(last).await;
+        };
+        let keep_schema = self.at_end && self.committed_rows == 0;
+        close_writer(&mut writer, keep_schema).await?;
+        let sink = self.sink()?;
+        let mut keys = commit_deletes(
+            &sink.replaced,
+            sink.output.path.partition.as_ref(),
+            (&writer.partitions, last),
+            &sink.deleted,
+        );
+        keys.retain(|key| !writer.written.contains(key));
+        let run = match &self.run {
+            Some(_) => {
+                let mut record = self.record(self.waiting_rows)?;
+                record.files = writer.written.clone();
+                Some(PendingRun {
+                    prefix: runs_location(&self.sink()?.folder.location).prefix,
+                    name: record_object_name(&record),
+                    json: serde_json::to_string(&record)
+                        .map_err(|error| LoaderError::Invalid(error.to_string()))?,
+                })
+            }
+            None => None,
+        };
+        let sink = self.sink()?;
+        let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
+        let table_folder = leased_folder(sink).clone();
+        if !sink.reading.is_empty() {
+            write_loaded_files(&folder, &writer.file_id, &sink.reading).await?;
+        }
+        replace_files(
+            (&folder, (&table_folder, &lease)),
+            &writer.file_id,
+            (&keys, run.as_ref()),
+        )
+        .await?;
+        if let Some(swap) = self.sink()?.swap.as_ref().filter(|_| last) {
+            swap_folder(&swap.live, &folder, &swap.replaced).await?;
+        }
+        if let Some(sink) = self.files.as_mut() {
+            sink.deleted.extend(keys);
+            sink.deleted.extend(writer.written.iter().cloned());
+            sink.reading.clear();
+        }
+        self.committed_rows += self.waiting_rows;
+        self.waiting_rows = 0;
+        self.commits += 1;
+        self.committed_state = self.state.clone();
+        Ok(())
+    }
+
+    /// Whether a files target's `delete_insert` would end this commit inside a partition it wrote (a `batch_size` finer than the partition): the commit then waits for the rest of the partition, so a failure leaves its old files in place and none of the new ones.
+    pub(crate) fn partition_unfinished(&self, range: &CommitRange) -> Result<bool, LoaderError> {
+        let (
+            Some(sink),
+            WriteMode::DeleteInsert {
+                cursor_column: Some(cursor_column),
+                ..
+            },
+            CommitRange::Window { to: Some(to), .. },
+        ) = (&self.files, &self.table.mode, range)
+        else {
+            return Ok(false);
+        };
+        let cursor_type = self
+            .table
+            .schema
+            .write_columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(cursor_column))
+            .map(|column| &column.column_type);
+        let (Some(partition), Some(writer), Some(cursor_type)) =
+            (&sink.output.path.partition, &sink.writer, cursor_type)
+        else {
+            return Ok(false);
+        };
+        partitions_finished(&writer.partitions, partition.by, cursor_type, to)
+            .map(|finished| !finished)
+            .map_err(LoaderError::Invalid)
+    }
+
+    /// Note the source files about to be read, so a files target's commit records them as loaded.
+    pub(crate) fn note_read(&mut self, files: &[DataFile]) {
+        let (Some(sink), Some(source)) = (self.files.as_mut(), &self.table.spec.files) else {
+            return;
+        };
+        let location = source.location.to_string();
+        sink.reading.extend(files.iter().map(|data| LoadedFile {
+            name: format!("{location}{}", data.file.relative_key),
+            version: data.file.version(),
+        }));
+    }
+
+    /// The columns grew while a files commit is being written: store its open files, and write later rows to new files holding the new columns too.
+    pub(crate) async fn widen_files(&mut self) -> Result<(), LoaderError> {
+        let Some(sink) = self.files.as_mut() else {
+            return Ok(());
+        };
+        let Some(mut writer) = sink.writer.take() else {
+            return Ok(());
+        };
+        if writer.encoding.single_file && !(writer.open.is_empty() && writer.written.is_empty()) {
+            sink.writer = Some(writer);
+            return Err(LoaderError::Invalid(format!(
+                "{}: new columns appeared partway through the load, and single_file writes each file once, with one header; drop single_file, or have the source return every column from its first rows",
+                self.table.spec.destination.table
+            )));
+        }
+        let cursor_column = self
+            .table
+            .spec
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.column.as_str());
+        let opened = open_writer(WriterRequest {
+            folder: sink.folder.clone(),
+            path: &sink.output.path,
+            cursor_column,
+            columns: &self.table.schema.write_columns,
+            compat: self.table.spec.compat,
+            load_id: &self.load_id,
+            file_id: &writer.file_id,
+            loaded_at: &self.loaded_at,
+            encoding: &sink.output.encoding,
+        });
+        let closed = close_writer(&mut writer, false).await.map(|_| ());
+        let opened = opened.map(|opened| {
+            writer.schema = opened.schema;
+            writer.metadata = opened.metadata;
+        });
+        sink.writer = Some(writer);
+        closed?;
+        opened.map_err(LoaderError::Invalid)
+    }
+
+    /// Whether the last commit still has replaced files to delete that no partition written took with it.
+    pub(crate) fn leftover_deletes(&self) -> bool {
+        self.files.as_ref().is_some_and(|sink| {
+            !commit_deletes(
+                &sink.replaced,
+                None,
+                (&BTreeSet::new(), true),
+                &sink.deleted,
+            )
+            .is_empty()
+        })
+    }
+
+    /// At the last commit, delete the replaced files no commit deleted, under a marker of their own.
+    async fn delete_leftovers(&mut self, last: bool) -> Result<(), LoaderError> {
+        let sink = self.sink()?;
+        let keys = commit_deletes(
+            &sink.replaced,
+            None,
+            (&BTreeSet::new(), last),
+            &sink.deleted,
+        );
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let file_id = format!("{}.{:05}", self.load_id, self.commits + 1);
+        let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
+        let table_folder = leased_folder(sink).clone();
+        replace_files((&folder, (&table_folder, &lease)), &file_id, (&keys, None)).await?;
+        if let Some(sink) = self.files.as_mut() {
+            sink.deleted.extend(keys);
+        }
+        Ok(())
+    }
+
+    /// After a failure: delete the files of the commit being written, best effort, keeping its `writing` marker so the next plan or load deletes any file a failed put still stored; a table staged beside its folder is deleted whole by the next load. Outside such a folder, `single_file` names are the table's own, so files already put stay: deleting them would delete the table's data.
+    pub(crate) async fn abandon_files(&mut self) {
+        let Some(sink) = self.files.as_mut() else {
+            return;
+        };
+        if sink.swap.is_none() && sink.output.encoding.single_file {
+            return;
+        }
+        let Some(writer) = sink.writer.take() else {
+            return;
+        };
+        if let Err(error) = delete_files(&sink.folder, &writer.written).await {
+            tracing::warn!(error = %error, folder = %sink.folder.location, "cannot delete the files of a failed load; the next plan or load deletes them");
+        }
+    }
+
+    fn sink(&self) -> Result<&FilesSink, LoaderError> {
+        self.files.as_ref().ok_or_else(|| {
+            LoaderError::Invalid(format!(
+                "{}: a files target table has no files planned",
+                self.table.spec.destination.table
+            ))
+        })
+    }
 }

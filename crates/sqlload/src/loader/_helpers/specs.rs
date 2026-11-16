@@ -11,6 +11,9 @@ use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
+use crate::column_parse::main::column_parse::column_parse;
+use crate::column_parse::main::time_zone::time_zone;
+use crate::column_parse::models::ColumnParse;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
@@ -24,14 +27,13 @@ use crate::files_source::models::{
     AfterLoad, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::Naming;
+use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
-    DEFAULT_MAX_DEPTH, ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE,
-    UNNEST_ALL,
+    ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE, UNNEST_ALL,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -43,17 +45,19 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::postgres_source::models::{ReadColumn, WireType};
+use crate::project::constants::DEFAULT_MAX_DEPTH;
+use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
     CdcDeletes, CdcMode, CursorBounds, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, ProjectConfig, SortDirection, SourceConfig, SourceKind, StateMode,
-    TableOverride, TableSettings, UnloadStage, UnnestSetting, WriteStrategy,
+    OnDuplicateKeys, PathsSetting, ProjectConfig, SortDirection, SourceConfig, SourceKind,
+    StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::merge_schema::merge_schema;
-use crate::row_batches::models::Unnest;
+use crate::row_batches::models::{Flatten, Unnest};
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
@@ -141,15 +145,15 @@ pub(crate) fn pinned_types(
 /// Whether `columns` key `key` declares a column of one of the table's child tables (`items.sku`): its path before the last dot is a listed `unnest` path, or under `unnest = "all"` it has one.
 pub(crate) fn is_child_column(key: &str, overrides: &TableOverride) -> bool {
     match &overrides.unnest {
-        Some(UnnestSetting::Paths(paths)) => key
+        Some(PathsSetting::Paths(paths)) => key
             .rsplit_once('.')
             .is_some_and(|(path, _)| paths.iter().any(|listed| listed == path)),
-        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
+        Some(PathsSetting::Word(word)) if word == UNNEST_ALL => key.contains('.'),
         _ => false,
     }
 }
 
-/// Problems with `columns` and `mask` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
+/// Problems with `columns`, `mask` and `parse` keys that name no source column, so a typo never loads a column unmasked; a `columns` key declaring a child table's column is not checked, as its field may be missing from the rows read first.
 fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> Vec<String> {
     let names: Vec<&str> = table
         .columns
@@ -161,9 +165,41 @@ fn column_reference_problems(table: &SourceTable, overrides: &TableOverride) -> 
         .keys()
         .filter(|key| !is_child_column(key, overrides))
         .map(|key| ("columns", key))
-        .chain(overrides.mask.keys().map(|key| ("mask", key)));
+        .chain(overrides.mask.keys().map(|key| ("mask", key)))
+        .chain(overrides.parse.keys().map(|key| ("parse", key)));
     keys.filter(|(_, key)| !names.contains(&key.as_str()))
         .map(|(setting, key)| unknown_column(setting, key, &names))
+        .collect()
+}
+
+/// A problem for each `parse` key naming a column a database's catalog already types as a date or a time, which holds no text to parse; files, Sheets and Python columns are typed from their values, and read as text where they are parsed.
+fn typed_parse_problems(
+    kind: SourceKind,
+    table: &SourceTable,
+    overrides: &TableOverride,
+) -> Vec<String> {
+    if matches!(
+        kind,
+        SourceKind::Files | SourceKind::GoogleSheets | SourceKind::Python
+    ) {
+        return Vec::new();
+    }
+    table
+        .columns
+        .iter()
+        .filter(|column| overrides.parse.contains_key(&column.name))
+        .filter_map(|column| match &column.column_type {
+            Ok(
+                column_type @ (ColumnType::Date
+                | ColumnType::Time
+                | ColumnType::TimestampTz
+                | ColumnType::TimestampNtz),
+            ) => Some(format!(
+                "parse {}: the source already types the column as {column_type}, so it holds no text to parse; drop its parse",
+                column.name
+            )),
+            _ => None,
+        })
         .collect()
 }
 
@@ -236,6 +272,7 @@ pub(crate) fn build_spec(
     };
     problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
     problems.extend(column_reference_problems(table, overrides));
+    problems.extend(typed_parse_problems(context.source.kind, table, overrides));
     problems.extend(cursor_problems(
         context,
         (settings, defaults),
@@ -323,12 +360,6 @@ pub(crate) fn build_spec(
         .or(table.comment.as_deref())
         .map(str::trim)
         .filter(|text| !text.is_empty());
-    if !overrides.flatten.is_empty() && context.source.kind != SourceKind::Python {
-        problems.push(
-            "flatten applies to Python tables; nested values from this source stay JSON".to_owned(),
-        );
-    }
-    problems.extend(flatten_problems(context, overrides));
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
@@ -340,6 +371,14 @@ pub(crate) fn build_spec(
     problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
+    let parses = table_parses(overrides).unwrap_or_else(|found| {
+        problems.extend(found);
+        BTreeMap::new()
+    });
+    let timezone = table_timezone((settings, defaults)).unwrap_or_else(|problem| {
+        problems.push(problem);
+        None
+    });
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -372,6 +411,12 @@ pub(crate) fn build_spec(
         settings_at: None,
         unique_key_at: None,
         naming: nesting.naming,
+        compat: nesting.compat,
+        send: layered(&settings.send, &defaults.send).map_or(context.target.send, |(send, _)| send),
+        staging_dir: context.target.staging_dir.clone(),
+        names: LoadedNames::default(),
+        name_rules: NameRules::default(),
+        listed: None,
         on_duplicate_keys: on_duplicate_keys
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -414,7 +459,7 @@ pub(crate) fn build_spec(
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
-        flatten: overrides.flatten.clone(),
+        flatten: nesting.flatten,
         row_id: nesting.row_id,
         root_rows: false,
         unnest: nesting.unnest,
@@ -457,7 +502,42 @@ pub(crate) fn build_spec(
         },
         layout,
         transform: None,
+        parses,
+        timezone,
     })
+}
+
+/// The table's `parse` entries read, or their problems; a column cannot be both pinned in `columns` and parsed, as `parse` gives its type.
+fn table_parses(overrides: &TableOverride) -> Result<BTreeMap<String, ColumnParse>, Vec<String>> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut parses: BTreeMap<String, ColumnParse> = BTreeMap::new();
+    for (column, setting) in &overrides.parse {
+        match column_parse(setting) {
+            Ok(_) if overrides.columns.contains_key(column) => problems.push(format!(
+                "parse {column}: the column is also pinned in columns, and parse gives its type; drop the pin"
+            )),
+            Ok(parse) => {
+                parses.insert(column.clone(), parse);
+            }
+            Err(problem) => problems.push(format!("parse {column}: {problem}")),
+        }
+    }
+    match problems.is_empty() {
+        true => Ok(parses),
+        false => Err(problems),
+    }
+}
+
+/// The table's `timezone` (its own, else its source's) and where it is set, or why it is not an IANA zone.
+fn table_timezone(
+    (settings, defaults): (&TableSettings, &TableSettings),
+) -> Result<Option<(chrono_tz::Tz, SettingOrigin)>, String> {
+    match layered(&settings.timezone, &defaults.timezone) {
+        Some((name, origin)) => time_zone(&name)
+            .map(|zone| Some((zone, origin)))
+            .map_err(|problem| format!("timezone: {problem}")),
+        None => Ok(None),
+    }
 }
 
 /// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a name the source table already has among its loaded columns, ignoring case, a type with no Arrow type or one the target cannot load, or an array. A files source's are checked as before by its reader, which fills them and replaces a file column of the same name (`plan` notes it).
@@ -682,48 +762,6 @@ pub(crate) struct ColumnRules {
     pub(crate) skip_tables_with: Vec<String>,
 }
 
-/// Listed objects that are paths rather than top-level names, or that another column setting names: after flattening, no column carries the object's own name, so an exclusion, mask or pin on it would silently stop applying.
-fn flatten_problems(context: &SourceContext<'_>, overrides: &TableOverride) -> Vec<String> {
-    let exclude: Vec<String> = [
-        context.source.exclude_columns.clone(),
-        overrides.exclude_columns.clone(),
-    ]
-    .concat();
-    overrides
-        .flatten
-        .iter()
-        .filter_map(|object| {
-            let excluded = excluding_pattern(object, &exclude);
-            let setting = match (excluded, overrides.mask.contains_key(object), overrides.columns.contains_key(object)) {
-                _ if object.contains('.') => {
-                    return Some(format!(
-                        "flatten {object}: flatten names top-level objects, not paths; list {} instead (its nested values stay JSON)",
-                        object.split('.').next().unwrap_or_default()
-                    ));
-                }
-                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
-                (None, true, _) => "mask".to_owned(),
-                (None, false, true) => "columns".to_owned(),
-                (None, false, false) => return None,
-            };
-            Some(format!(
-                "flatten {object}: {setting} also names {object}, which flattening replaces with {object}__<key> columns; name those columns instead, or leave {object} unflattened"
-            ))
-        })
-        .collect()
-}
-
-/// The first `exclude_columns` pattern matching the object `name` but not its `name__<key>` columns, which would stop applying once it is flattened.
-fn excluding_pattern<'a>(name: &str, exclude: &'a [String]) -> Option<&'a String> {
-    let keys = format!("{name}__");
-    exclude.iter().find(|pattern| {
-        glob(pattern).is_ok_and(|glob| {
-            let matcher = glob.compile_matcher();
-            matcher.is_match(name) && !matcher.is_match(&keys)
-        })
-    })
-}
-
 /// What the column rules decide for one table.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ColumnSelection {
@@ -769,7 +807,7 @@ fn excluded_by(name: &str, exclude: &[(&String, GlobMatcher)]) -> Option<(String
     Some((name.to_owned(), format!("exclude_columns {pattern}")))
 }
 
-/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in; as it loads under `rule`.
+/// The destination table name of `table` from source `source_name`: `name` (its `name` setting) when it has no placeholder, else that template (or the source's) filled in, in lower case under `naming = "source"`; as it loads under `rule`.
 pub(crate) fn table_name(
     (source_name, source): (&str, &SourceConfig),
     name: Option<&str>,
@@ -777,11 +815,17 @@ pub(crate) fn table_name(
 ) -> String {
     let name = match name {
         Some(name) if !name.contains('{') => name.to_owned(),
-        _ => destination_name(
-            name.unwrap_or(source.table_name_template()),
-            source_name,
-            table,
-        ),
+        _ => {
+            let filled = destination_name(
+                name.unwrap_or(source.table_name_template()),
+                source_name,
+                table,
+            );
+            match rule.0 {
+                Naming::Source => filled.to_ascii_lowercase(),
+                Naming::SnakeCase => filled,
+            }
+        }
     };
     loaded_name(rule.0, &name, rule.1)
 }
@@ -792,7 +836,6 @@ pub(crate) fn destination_name(template: &str, source: &str, table: &SourceTable
         .replace("{source}", source)
         .replace("{schema}", &table.schema)
         .replace("{table}", &table.name)
-        .to_ascii_lowercase()
 }
 
 /// A table's value if set, otherwise its source's.
@@ -817,6 +860,12 @@ pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<Cu
         null_cursor: layered(&table.null_cursor, &source.null_cursor)
             .map(|(value, _)| value)
             .unwrap_or_default(),
+        out_of_range: layered(
+            &table.on_cursor_out_of_range,
+            &source.on_cursor_out_of_range,
+        )
+        .map(|(value, _)| value)
+        .unwrap_or_default(),
         start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
         lookback: match layered(&table.lookback, &source.lookback) {
             Some((Lookback::Duration(duration), _)) => Some(duration),
@@ -1192,6 +1241,19 @@ fn cursor_problems(
     {
         problems.push("null_cursor says what a cursor read does with rows whose cursor is NULL, but the table has no cursor_column; remove it".to_owned());
     }
+    let out_of_range = layered(
+        &settings.on_cursor_out_of_range,
+        &defaults.on_cursor_out_of_range,
+    );
+    match (out_of_range, context.source.kind) {
+        (None, _) => {}
+        (Some(_), SourceKind::Python) if cursor.is_none() => problems.push("on_cursor_out_of_range says what a load does with rows outside the cursor window, but the table has no cursor_column; remove it".to_owned()),
+        (Some(_), SourceKind::Python) => {}
+        (Some(_), kind) => problems.push(format!(
+            "on_cursor_out_of_range checks the rows a Python table's function returns against its cursor window; SQLLoad filters a {} source's reads itself, so remove it",
+            kind.name()
+        )),
+    }
     let Some(cursor) = cursor else {
         return problems;
     };
@@ -1355,12 +1417,14 @@ fn after_load_problems(
 /// What a table's nesting settings come to.
 struct Nesting {
     naming: Naming,
+    compat: Compat,
     row_id: bool,
     unnest: Unnest,
     max_depth: u32,
+    flatten: Flatten,
 }
 
-/// The table's naming (its own, its source's, then its target's), whether its rows get an id (always under dlt's naming), its `unnest` and `max_depth`, and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
+/// The table's naming and compat (each its own, its source's, then its target's), whether its rows get an id (always under `compat = "dlt"`), its `unnest` (under `compat = "dlt"`, `"all"` for JSON and NDJSON files on a warehouse), `max_depth` and `flatten` (see [`table_flatten`]), and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
 fn nesting(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
@@ -1369,31 +1433,47 @@ fn nesting(
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let naming = table_naming((settings, defaults), context.target.naming);
+    let compat = table_compat((settings, defaults), context.target.compat);
     let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
     let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
     let mut problems: Vec<String> = Vec::new();
-    if naming == Naming::Dlt && row_id == Some(false) {
-        problems.push("row_id = false: naming = \"dlt\" gives every row its _dlt_id; drop row_id or use naming = \"sqlload\"".to_owned());
+    if compat == Compat::Dlt && row_id == Some(false) {
+        problems.push(
+            "row_id = false: compat = \"dlt\" gives every row its _dlt_id; drop row_id".to_owned(),
+        );
     }
+    let json_files = context.source.kind == SourceKind::Files
+        && matches!(
+            context.source.format,
+            SourceFormat::Json | SourceFormat::Ndjson
+        );
     let unnest = match &overrides.unnest {
+        None if compat == Compat::Dlt && json_files && context.target.path.is_none() => Unnest::All,
         None => Unnest::None,
-        Some(UnnestSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
-        Some(UnnestSetting::Word(word)) => {
+        Some(PathsSetting::Paths(paths)) if paths.is_empty() => Unnest::None,
+        Some(PathsSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
+        Some(PathsSetting::Word(word)) => {
             problems.push(format!(
                 "unnest = {word:?}: list the dotted paths of the list fields to unnest, or write \"{UNNEST_ALL}\""
             ));
             Unnest::None
         }
-        Some(UnnestSetting::Paths(paths)) => {
+        Some(PathsSetting::Paths(paths)) => {
             problems.extend(path_problems(paths, max_depth));
             problems.extend(column_setting_problems(context, overrides, paths));
             Unnest::Paths(paths.clone())
         }
     };
+    let transform = settings.transform.is_some() || defaults.transform.is_some();
+    let (flatten, found) = table_flatten(
+        (context.source, Some(overrides)),
+        (compat, naming, transform),
+    );
+    problems.extend(found);
     match unnest {
-        Unnest::None if overrides.max_depth.is_some() => {
+        Unnest::None if overrides.max_depth.is_some() && flatten.is_none() => {
             problems.push(
-                "max_depth limits the child tables unnest makes, and this table sets no unnest"
+                "max_depth limits the child tables unnest makes and the objects flatten flattens, and this table sets neither"
                     .to_owned(),
             );
         }
@@ -1408,20 +1488,33 @@ fn nesting(
     (
         Nesting {
             naming,
-            row_id: row_id.unwrap_or(naming == Naming::Dlt || unnest != Unnest::None),
+            compat,
+            row_id: row_id.unwrap_or(compat == Compat::Dlt || unnest != Unnest::None),
             unnest,
             max_depth,
+            flatten,
         },
         problems,
     )
 }
 
-/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else SQLLoad's.
+/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else snake_case.
 pub(crate) fn table_naming(
     (settings, defaults): (&TableSettings, &TableSettings),
     target: Option<Naming>,
 ) -> Naming {
     layered(&settings.naming, &defaults.naming)
+        .map(|(value, _)| value)
+        .or(target)
+        .unwrap_or_default()
+}
+
+/// Whose names the columns a table's load adds take: its own `compat`, else its source's, else its target's (`target`), else SQLLoad's.
+pub(crate) fn table_compat(
+    (settings, defaults): (&TableSettings, &TableSettings),
+    target: Option<Compat>,
+) -> Compat {
+    layered(&settings.compat, &defaults.compat)
         .map(|(value, _)| value)
         .or(target)
         .unwrap_or_default()
@@ -1508,7 +1601,7 @@ fn refused_writes(
             .unwrap_or(target_path)
     });
     let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
-    let all = matches!(&overrides.unnest, Some(UnnestSetting::Word(word)) if word == UNNEST_ALL);
+    let all = matches!(&overrides.unnest, Some(PathsSetting::Word(word)) if word == UNNEST_ALL);
     let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
     let files_target = template.is_some();
     let template = template.map(String::as_str).unwrap_or_default();
@@ -1555,63 +1648,26 @@ pub(crate) fn referenced_columns(
             column_type: Ok(ColumnType::Text),
             nullable: true,
             source_spelling: None,
+            repeat_of: None,
         })
         .collect()
 }
 
-/// Problems with settings naming an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them; an object NULL in some sampled rows is a column too, but its keys still escape a setting naming only it), so they would silently stop applying: a `columns` or `mask` key naming it (by its loaded name under `rule`, as pins may), or an `exclude_columns` or `allow_columns` pattern matching it but none of its sampled `columns`.
+/// Problems with `allow_columns` patterns matching an object that flattening replaced with its `<object>__<key>` columns (`objects`, as the sampled records held them) but none of its sampled `columns`, so they would silently stop applying (a setting naming the object itself keeps it whole; see [`table_flatten`]); flattening refuses such an `exclude_columns` pattern itself.
 pub(crate) fn flattened_object_problems(
     (source, overrides): (&SourceConfig, Option<&TableOverride>),
     (columns, objects): (&[FileColumn], &[String]),
-    rule: NameRule,
 ) -> Result<Vec<String>, String> {
     let sampled: BTreeSet<&str> = columns.iter().map(|column| column.name.as_str()).collect();
-    let mut names: Vec<(&str, &String)> = Vec::new();
-    let mut patterns: Vec<(&str, &String)> = Vec::new();
-    if let Some(overrides) = overrides {
-        names.extend(overrides.columns.keys().map(|key| ("columns", key)));
-        names.extend(overrides.mask.keys().map(|key| ("mask", key)));
-        patterns.extend(
-            overrides
-                .exclude_columns
-                .iter()
-                .map(|key| ("exclude_columns", key)),
-        );
-        patterns.extend(
-            overrides
-                .allow_columns
-                .iter()
-                .map(|key| ("allow_columns", key)),
-        );
-    }
-    patterns.extend(
-        source
-            .exclude_columns
-            .iter()
-            .map(|key| ("exclude_columns", key)),
-    );
-    patterns.extend(
-        source
-            .allow_columns
-            .iter()
-            .map(|key| ("allow_columns", key)),
-    );
-    let mut settings: Vec<(&str, &String, Option<GlobMatcher>)> = names
-        .into_iter()
-        .map(|(setting, name)| (setting, name, None))
-        .collect();
-    for (setting, pattern) in patterns {
+    let own = |pick: fn(&TableOverride) -> &Vec<String>| overrides.map(pick).into_iter().flatten();
+    let patterns = own(|table| &table.allow_columns)
+        .chain(&source.allow_columns)
+        .filter(|pattern| pattern.contains(['*', '?', '[', '{']));
+    let mut problems: Vec<String> = Vec::new();
+    for pattern in patterns {
         let matcher = Glob::new(pattern)
             .map_err(|error| format!("invalid column pattern {pattern:?}: {error}"))?
             .compile_matcher();
-        settings.push((setting, pattern, Some(matcher)));
-    }
-    let mut problems: Vec<String> = Vec::new();
-    for (setting, pattern, matcher) in settings {
-        let matches = |name: &str| match &matcher {
-            Some(matcher) => matcher.is_match(name),
-            None => loaded_name(rule.0, name, rule.1) == loaded_name(rule.0, pattern, rule.1),
-        };
         for object in objects {
             let prefix = format!("{object}{FLATTEN_SEPARATOR}");
             let keys: Vec<&str> = sampled
@@ -1619,11 +1675,14 @@ pub(crate) fn flattened_object_problems(
                 .copied()
                 .filter(|name| name.starts_with(&prefix))
                 .collect();
-            if keys.is_empty() || !matches(object) || keys.iter().any(|key| matches(key)) {
+            if keys.is_empty()
+                || !matcher.is_match(object)
+                || keys.iter().any(|key| matcher.is_match(key))
+            {
                 continue;
             }
             problems.push(format!(
-                "{setting} {pattern} names {object}, which naming = \"dlt\" flattens into {}; name those columns instead",
+                "allow_columns {pattern} names {object}, which flatten replaces with {}; name those columns instead, or keep {object} whole with columns = {{ {object} = \"json\" }}",
                 keys.join(", ")
             ));
         }
@@ -1731,7 +1790,7 @@ pub(crate) fn path_values(
     Ok((values, types))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. Under `rule`'s dlt naming a pin naming a sampled column by its loaded name is one sampling saw.
+/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. A pin naming a sampled column by the name `rule`'s naming gives it is one sampling saw.
 pub(crate) fn pinned_unsampled(
     overrides: Option<&TableOverride>,
     (table, added, rule): (&FilesTable, &[&str], NameRule),
@@ -1796,7 +1855,7 @@ pub(crate) fn files_read_as(
     (columns, inferred)
 }
 
-/// The read columns of a files source: the file's types, or the pinned ones (converted while reading).
+/// The read columns of a files source: the file's types, or the pinned ones (converted while reading); a parsed column reads as text, for `parse` to convert.
 pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
     let mut columns: Vec<ReadColumn> = Vec::new();
@@ -1807,6 +1866,7 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
             .any(|(excluded, _)| *excluded == column.name);
         let output = match (spec.pinned.get(&column.name), &column.column_type) {
             _ if excluded => continue,
+            _ if spec.parses.contains_key(&column.name) => ColumnType::Text,
             (Some(pinned), _) => pinned.clone(),
             (None, Ok(column_type)) => column_type.clone(),
             (None, Err(reason)) => {

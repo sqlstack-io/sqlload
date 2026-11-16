@@ -10,6 +10,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "append_cursor_inclusive",
     "cursor_bounds",
     "null_cursor",
+    "on_cursor_out_of_range",
     "contract",
     "on_schema_change",
     "auto_widen",
@@ -30,6 +31,11 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "replace_key",
     "dedup_sort",
     "naming",
+    "compat",
+    "send",
+    "rename",
+    "on_duplicate_names",
+    "timezone",
     "row_id",
     "transform",
     #[cfg(feature = "container-tests")]
@@ -116,6 +122,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "flatten",
     "unnest",
     "max_depth",
+    "parse",
 ];
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.
@@ -179,3 +186,9 @@ pub const MOTHERDUCK_PREFIX: &str = "md:";
 
 /// The starts of a DuckDB path that opens MotherDuck: `md:` and its alias, matched in any case as DuckDB does.
 pub const MOTHERDUCK_PREFIXES: &[&str] = &["md:", "motherduck:"];
+
+/// The `flatten` word that flattens every object.
+pub const FLATTEN_ALL: &str = "all";
+
+/// How many levels down `unnest` makes child tables and `flatten` flattens objects when `max_depth` is not set: dlt's own default nesting limit (1.32.0).
+pub const DEFAULT_MAX_DEPTH: u32 = 1000;

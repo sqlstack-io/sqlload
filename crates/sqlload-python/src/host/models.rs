@@ -63,6 +63,7 @@ impl PythonHost for ExtensionHost {
                     masked: request.masked.clone(),
                     arrays: request.arrays.clone(),
                     naming: request.naming,
+                    zone: request.zone,
                 },
             ))
         })
@@ -98,12 +99,28 @@ impl PythonHost for ExtensionHost {
         rows: Vec<RecordBatch>,
         schema: SchemaRef,
     ) -> Result<Box<dyn BatchStream>, String> {
-        let (batches, returned) =
-            returned_batches(call, (rows, schema), (crossing_options(), Vec::new()))?;
+        let (batches, returned) = returned_batches(
+            call,
+            (rows, schema),
+            (crossing_options(), call.flatten.clone()),
+        )?;
         Ok(Box::new(TransformBatches {
             batches: PythonBatches(batches),
             returned,
         }))
+    }
+
+    fn rename(&self, name: &str, columns: Option<&str>, context: &str) -> Result<String, String> {
+        let called = Python::attach(|py| -> PyResult<(Option<String>, Option<String>)> {
+            py.import(RUNTIME_MODULE)?
+                .call_method1("rename", (name, columns, context))?
+                .extract()
+        })
+        .map_err(|error| error_text(&error))?;
+        match called {
+            (Some(names), _) => Ok(names),
+            (None, problem) => Err(problem.unwrap_or_else(|| format!("{name} cannot run"))),
+        }
     }
 
     fn finish(&self) {

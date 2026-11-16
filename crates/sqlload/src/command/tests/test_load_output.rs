@@ -1,10 +1,14 @@
-use crate::command::_helpers::load_output::{Tally, event_lines, summary_lines};
+use std::time::Duration;
+
+use crate::command::_helpers::load_output::{
+    Tally, event_lines, running_row, spinner_message, summary_lines,
+};
 use crate::command::tests::helpers::{done, read_back};
 use crate::command::tests::test_types::{
-    LoadEventsFileTestCase, LoadOutputTestCase, TransformTallyTestCase,
+    LoadEventsFileTestCase, LoadOutputTestCase, PlanProgressTestCase, TransformTallyTestCase,
 };
 use crate::load_events::constants::EVENTS_SCHEMA_VERSION;
-use crate::load_events::models::{EventKind, LoadEvent};
+use crate::load_events::models::{EventKind, LoadEvent, StepView};
 use crate::python_sources::models::TransformTime;
 
 /// A `--fail-fast` run where every failure is retryable, as `--events jsonl` writes it.
@@ -42,6 +46,8 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
                     position: None,
                     changes: vec!["created  raw.a__items  6 columns".to_owned()],
                     transforms: Vec::new(),
+                    names: Vec::new(),
+                    warnings: Vec::new(),
                     peak_memory_bytes: None,
                 },
             )],
@@ -111,6 +117,8 @@ loaded  raw.b      1 row  18.0s
                         position: Some("id now 7".to_owned()),
                         changes: Vec::new(),
                         transforms: Vec::new(),
+                        names: Vec::new(),
+                        warnings: Vec::new(),
                         peak_memory_bytes: Some(85 * 1024 * 1024),
                     },
                 ),
@@ -267,6 +275,8 @@ fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_
                 elapsed_ms: 9_000,
                 position: None,
                 changes: Vec::new(),
+                names: Vec::new(),
+                warnings: Vec::new(),
                 transforms: test_case
                     .transforms
                     .iter()
@@ -283,6 +293,114 @@ fn given_a_table_with_a_transform_when_it_loads_then_each_file_has_its_time_and_
         assert_eq!(
             event_lines(&event, (7, 5)).join("\n"),
             test_case.expected_lines.replace("{indent}", &indent),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_steps_before_the_plan_when_watched_then_the_spinner_waits_300ms_and_running_rows_print_once_per_interval()
+ {
+    let step = |id: u64, elapsed_ms: u64| StepView {
+        id,
+        subject: "erp".to_owned(),
+        doing: "listing tables".to_owned(),
+        elapsed: Duration::from_millis(elapsed_ms),
+    };
+    let test_cases = [
+        PlanProgressTestCase {
+            description: "a step that just started shows nothing",
+            step: Some((1, 100)),
+            waited_ms: 100,
+            expected_spinner: None,
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "just under the delay, still nothing",
+            step: Some((1, 299)),
+            waited_ms: 299,
+            expected_spinner: None,
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "at the delay, the spinner names the step",
+            step: Some((1, 300)),
+            waited_ms: 300,
+            expected_spinner: Some("erp  listing tables… 0s"),
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "past one interval, one RUNNING row",
+            step: Some((1, 30_050)),
+            waited_ms: 30_050,
+            expected_spinner: Some("erp  listing tables… 30s"),
+            expected_row: Some("  erp  listing tables  RUNNING 30.1s"),
+        },
+        PlanProgressTestCase {
+            description: "later in the same interval, no second row",
+            step: Some((1, 30_150)),
+            waited_ms: 30_150,
+            expected_spinner: Some("erp  listing tables… 30s"),
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "past two intervals, one more row",
+            step: Some((1, 61_000)),
+            waited_ms: 61_000,
+            expected_spinner: Some("erp  listing tables… 61s"),
+            expected_row: Some("  erp  listing tables  RUNNING 61.0s"),
+        },
+        PlanProgressTestCase {
+            description: "a new step starts its own count, and its own delay",
+            step: Some((2, 200)),
+            waited_ms: 61_200,
+            expected_spinner: None,
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "a new step's first interval gets its own row",
+            step: Some((2, 30_000)),
+            waited_ms: 91_000,
+            expected_spinner: Some("erp  listing tables… 30s"),
+            expected_row: Some("  erp  listing tables  RUNNING 30.0s"),
+        },
+        PlanProgressTestCase {
+            description: "between steps early on, nothing",
+            step: None,
+            waited_ms: 200,
+            expected_spinner: None,
+            expected_row: None,
+        },
+        PlanProgressTestCase {
+            description: "between steps after the delay, the sources done",
+            step: None,
+            waited_ms: 400,
+            expected_spinner: Some("Planning  checking sources, 1 of 2 done"),
+            expected_row: None,
+        },
+    ];
+    let every = Duration::from_secs(30);
+    let mut reported: (u64, u128) = (0, 0);
+    for test_case in test_cases {
+        let view = test_case.step.map(|(id, elapsed_ms)| step(id, elapsed_ms));
+        assert_eq!(
+            (
+                spinner_message(
+                    view.as_ref(),
+                    Duration::from_millis(test_case.waited_ms),
+                    (1, 2)
+                ),
+                {
+                    let row;
+                    (reported, row) = running_row(view.as_ref(), every, reported);
+                    row
+                },
+            ),
+            (
+                test_case.expected_spinner.map(str::to_owned),
+                test_case.expected_row.map(str::to_owned),
+            ),
             "{}",
             test_case.description
         );

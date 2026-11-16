@@ -148,7 +148,10 @@ pub enum CopyValue {
 /// One column a direct `COPY` fills.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CopyColumn {
+    /// The column's name in the table.
     pub name: String,
+    /// Its name in the files and their paths, which `naming`, `rename` or numbering may have changed (a repeated CSV header's is numbered as SQLLoad's reader numbers it: `Qty_1`).
+    pub source: String,
     pub column_type: ColumnType,
     pub value: CopyValue,
 }

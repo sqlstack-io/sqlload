@@ -2,12 +2,11 @@ use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use std::collections::BTreeMap;
+use chrono_tz::Tz;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
 use crate::adapters::contract::models::TableName;
-use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
@@ -17,6 +16,7 @@ use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
+use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
@@ -39,13 +39,16 @@ use crate::files_source::models::{
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
+use crate::load_events::main::end_step::end_step;
+use crate::load_events::main::step_doing::step_doing;
+use crate::load_events::models::{Role, StepEnd};
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::Naming;
-use crate::loader::_helpers::destination::{folder_claims, nanosecond_columns};
+use crate::load_naming::models::{Compat, Naming};
+use crate::loader::_helpers::destination::nanosecond_columns;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
 use crate::loader::_helpers::python::{read_schema, read_types};
 use crate::loader::_helpers::resolve::{
-    display_name, resolve_tables, source_target, spec_names, target_display_name, unread_source,
+    display_name, resolve_tables, source_target, spec_names, target_display_name,
 };
 use crate::loader::_helpers::run_log::{
     file_column_problem, loaded_file, logs_files, merge_ledger, reload_order,
@@ -53,7 +56,7 @@ use crate::loader::_helpers::run_log::{
 use crate::loader::_helpers::specs::integer_cursor;
 use crate::loader::_helpers::specs::{files_read_as, path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{
-    flattened_object_problems, referenced_columns, table_name, table_naming,
+    flattened_object_problems, referenced_columns, table_compat, table_name, table_naming,
 };
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 use crate::loader::constants::NO_TRANSFORM_HOST;
@@ -63,11 +66,11 @@ use crate::loader::constants::{
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesTransform;
+use crate::loader::models::TransformRun;
 use crate::loader::models::{
     CommitRule, DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd,
     SourceProblem, SourceReader, TablePlan, TableSpec,
 };
-use crate::loader::models::{FoundSource, FoundSources, TransformRun};
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
@@ -79,6 +82,8 @@ use crate::postgres_source::models::{
     SslMode,
 };
 use crate::project::main::postgres_address::postgres_address;
+use crate::project::main::reader_flatten::reader_flatten;
+use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
     BatchStep, ConnectionConfig, OnDuplicateKeys, ProjectConfig, SourceConfig, SourceKind,
     TableOverride, TableSettings, WriteStrategy,
@@ -244,9 +249,24 @@ pub(crate) async fn source_tables(
                 Ok(address) => address,
                 Err(problem) => return Ok(Err(problem.into())),
             };
-            let (client, encryption) = match connect_postgres(address.clone()).await {
-                Ok(connected) => connected,
-                Err(error) => return Ok(Err(LoaderError::from(error).into())),
+            step_doing("connecting");
+            let connected = connect_postgres(address.clone()).await;
+            let ended = |ok| {
+                end_step(StepEnd::Connected {
+                    role: Role::Source,
+                    label: "POSTGRES".to_owned(),
+                    ok,
+                });
+            };
+            let (client, encryption) = match connected {
+                Ok(connected) => {
+                    ended(true);
+                    connected
+                }
+                Err(error) => {
+                    ended(false);
+                    return Ok(Err(LoaderError::from(error).into()));
+                }
             };
             let warnings: Vec<String> =
                 plain_text_warning((source_name, &source.connection), &address, encryption)
@@ -270,11 +290,12 @@ pub(crate) async fn source_tables(
                 .get(source_name)
                 .map_or(&unset, |overrides| &overrides.settings);
             let naming = table_naming((settings, &source.defaults), target.naming);
+            let compat = table_compat((settings, &source.defaults), target.compat);
             Ok(
                 match discover_files_table(
                     (project, options),
                     (source_name, source),
-                    (target.warehouse, naming),
+                    (target.warehouse, (naming, compat)),
                 )
                 .await
                 {
@@ -459,7 +480,11 @@ async fn discover_odbc(
     let reader = odbc_source_reader(project, source).map_err(|error| error.to_string())?;
     crate::odbc_source::main::read_catalog::read_catalog(
         &reader,
-        (&source.include, &source.exclude),
+        (
+            &source.include,
+            &source.exclude,
+            &crate::loader::_helpers::resolve::key_uses(project, source),
+        ),
         queries,
     )
     .await
@@ -690,6 +715,7 @@ async fn sheets_tables(
                     column_type: column.column_type,
                     nullable: true,
                     source_spelling: None,
+                    repeat_of: column.repeat_of,
                 })
                 .collect(),
             primary_key: Vec::new(),
@@ -719,6 +745,11 @@ async fn transformed_sheet(
         masked: Vec::new(),
         arrays: Vec::new(),
         naming: (Naming::default(), None),
+        flatten: table_flatten(
+            (source, source.tables.get(name)),
+            (Compat::default(), Naming::default(), true),
+        )
+        .0,
     };
     let (batches, _) = transform_range(host, call, input).await?;
     let columns: Vec<SourceColumn> = returned_columns(&batches)
@@ -730,6 +761,7 @@ async fn transformed_sheet(
             column_type: Ok(column_type),
             nullable: true,
             source_spelling: None,
+            repeat_of: None,
         })
         .collect();
     Ok(SourceTable {
@@ -909,13 +941,13 @@ fn snowflake_session(
 pub(crate) async fn discover_files_table(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
-    (warehouse, naming): (Warehouse, Naming),
+    (warehouse, (naming, compat)): (Warehouse, (Naming, Compat)),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let location = files_location(project, source)?;
     let folder = open_folder(&location)?;
     let (values, _) = path_values((source_name, source), warehouse)?;
     let encoding = FilesEncoding {
-        flatten_objects: naming == Naming::Dlt,
+        flatten: reader_flatten(source, source_name, (naming, compat)),
         ..source.files_encoding()
     };
     let archive = match &source.after_load {
@@ -958,6 +990,7 @@ pub(crate) async fn discover_files_table(
                 masked: Vec::new(),
                 arrays: Vec::new(),
                 naming: (naming, sql_adapter(warehouse).max_identifier_length()),
+                flatten: table_flatten((source, overrides), (compat, naming, true)).0,
             };
             let (table, input) =
                 transform_sample((&folder, host, call), (input, &encoding), table).await?;
@@ -965,8 +998,12 @@ pub(crate) async fn discover_files_table(
         }
         None => (table, None),
     };
-    let (table, files) =
-        files_source_parts(source_name, source, (warehouse, naming), (location, table))?;
+    let (table, files) = files_source_parts(
+        source_name,
+        source,
+        (warehouse, (naming, compat)),
+        (location, table),
+    )?;
     Ok((
         table,
         FilesSource {
@@ -1013,6 +1050,7 @@ async fn transform_sample(
             direct_refusal: None,
             stored_read: StoredRead::Plain,
             lists: None,
+            repeat_of: None,
         })
         .collect();
     let sample = format!("{}{}", folder.location, newest.file.relative_key);
@@ -1042,11 +1080,11 @@ fn input_read(input: &FilesTransform, encoding: &FilesEncoding, data: &DataFile)
 pub(crate) fn files_source_parts(
     source_name: &str,
     source: &SourceConfig,
-    (warehouse, naming): (Warehouse, Naming),
+    (warehouse, (naming, compat)): (Warehouse, (Naming, Compat)),
     (location, table): (Location, FilesTable),
 ) -> Result<(SourceTable, FilesSource), LoaderError> {
     let encoding = FilesEncoding {
-        flatten_objects: naming == Naming::Dlt,
+        flatten: reader_flatten(source, source_name, (naming, compat)),
         ..source.files_encoding()
     };
     let (values, partition_types) = path_values((source_name, source), warehouse)?;
@@ -1058,9 +1096,9 @@ pub(crate) fn files_source_parts(
     let overrides = source.tables.get(source_name);
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
     let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
-    if encoding.flatten_objects {
+    if !table.objects.is_empty() {
         let problems =
-            flattened_object_problems((source, overrides), (&table.columns, &table.objects), rule)
+            flattened_object_problems((source, overrides), (&table.columns, &table.objects))
                 .map_err(LoaderError::Invalid)?;
         if !problems.is_empty() {
             return Err(LoaderError::Invalid(problems.join("; ")));
@@ -1082,30 +1120,37 @@ pub(crate) fn files_source_parts(
         .columns
         .iter()
         .filter(|column| !added.contains(&column.name.as_str()))
-        .map(|column| (column.name.clone(), column.column_type.clone()))
+        .map(|column| {
+            (
+                column.name.clone(),
+                column.column_type.clone(),
+                column.repeat_of.clone(),
+            )
+        })
         .chain(
             pinned_only
                 .into_iter()
-                .map(|name| (name, Ok(ColumnType::Text))),
+                .map(|name| (name, Ok(ColumnType::Text), None)),
         )
         .chain(
             partition_types
                 .iter()
-                .map(|(name, column_type)| (name.clone(), Ok(column_type.clone()))),
+                .map(|(name, column_type)| (name.clone(), Ok(column_type.clone()), None)),
         )
         .chain([
-            (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text)),
-            (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text)),
-            (SOURCE_ROW_COLUMN.to_owned(), Ok(ColumnType::Int)),
+            (SOURCE_FILE_COLUMN.to_owned(), Ok(ColumnType::Text), None),
+            (SOURCE_VERSION_COLUMN.to_owned(), Ok(ColumnType::Text), None),
+            (SOURCE_ROW_COLUMN.to_owned(), Ok(ColumnType::Int), None),
         ]);
     let columns: Vec<SourceColumn> = typed
-        .map(|(name, column_type)| SourceColumn {
+        .map(|(name, column_type, repeat_of)| SourceColumn {
             name,
             postgres_type: encoding.format.to_string(),
             pg_type: PgType::Other,
             column_type,
             nullable: true,
             source_spelling: None,
+            repeat_of,
         })
         .collect();
     let checks = TextChecks {
@@ -1377,7 +1422,7 @@ pub(crate) struct ReadPart {
     pub(crate) transform: Option<TransformRun>,
 }
 
-/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch`; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
+/// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch` with its `parse` columns parsed; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
 pub(crate) async fn read_source(
     reader: &SourceReader,
     table: &TablePlan,
@@ -1385,7 +1430,11 @@ pub(crate) async fn read_source(
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), LoaderError>,
 ) -> Result<u64, LoaderError> {
     let mut failed: Option<LoaderError> = None;
+    let zone = table.spec.timezone.map_or(Tz::UTC, |(zone, _)| zone);
+    let mut rows: u64 = 0;
     let read = Box::pin(read_each(reader, table, part, async |batch| {
+        let batch = parsed_batch(&batch, &table.spec.parses, zone, rows)?;
+        rows += batch.num_rows() as u64;
         on_batch(batch).await.map_err(|error| {
             let text = error.to_string();
             failed = Some(error);
@@ -1580,6 +1629,7 @@ fn transform_call<'a>(
             spec.naming,
             sql_adapter(spec.warehouse).max_identifier_length(),
         ),
+        flatten: spec.flatten.clone(),
     };
     Ok((call, run))
 }
@@ -1875,91 +1925,4 @@ pub(crate) fn source_in_scope(
         || tables
             .iter()
             .any(|names| selected(options, (source_name, names)))
-}
-
-/// Every source's tables, resolved before any is planned so each knows which others share its destination table, with the folders they claim; a source whose tables cannot be read is a problem in the plan.
-pub(crate) async fn found_sources<'a>(
-    project: &'a ProjectConfig,
-    destinations: &BTreeMap<String, Destination>,
-    options: &PlanOptions,
-) -> Result<FoundSources<'a>, LoaderError> {
-    let mut found = FoundSources::default();
-    let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
-    for (source_name, source) in &project.sources {
-        let (mut resolved, files) =
-            match scoped_tables((project, options), (source_name, source)).await? {
-                Ok(tables) => tables,
-                Err(problem) => {
-                    found.unresolved.push(source_name.clone());
-                    if let Some(problem) = problem {
-                        found.plan.unread_sources.insert(
-                            source_name.clone(),
-                            unread_source(project, (source_name, source)),
-                        );
-                        if problem.retryable {
-                            found.plan.retryable_problems.push(problem.message.clone());
-                        }
-                        found.plan.failed_sources.insert(source_name.clone());
-                        found.plan.problems.push(problem.message);
-                    }
-                    continue;
-                }
-            };
-        if let Some(drained) = resolved.drained.take() {
-            drained_sources.push((found.sources.len(), drained));
-        }
-        found
-            .claims
-            .extend(folder_claims(&resolved.specs, files.as_ref(), destinations));
-        found.configured.extend(resolved.specs.iter().cloned());
-        found.sources.push(FoundSource {
-            name: source_name,
-            source,
-            resolved,
-            files,
-        });
-    }
-    let mut drained_specs: Vec<TableSpec> = Vec::new();
-    for (index, drained) in drained_sources {
-        let source = &mut found.sources[index];
-        let shared = found
-            .configured
-            .iter()
-            .any(|spec| spec.target == drained.target && spec.destination == drained.table);
-        if shared {
-            found.unresolved.push(source.name.clone());
-        }
-        found.drained.extend([
-            drained.table.table.clone(),
-            drained.skipped.destination.clone(),
-            source.name.clone(),
-        ]);
-        drained_specs.extend(drained.spec);
-        if !drained.in_scope {
-            continue;
-        }
-        let exists = match destinations.get(&drained.target) {
-            Some(destination) => live_columns(destination, &drained.table).await?.is_some(),
-            None => false,
-        };
-        let path = source.source.path.as_deref().unwrap_or_default();
-        let problem = match (exists, shared, options.reload) {
-            (false, _, _) => Some(drained.problem),
-            (true, true, _) => Some(format!(
-                "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
-                source.name, drained.table.table, source.name
-            )),
-            (true, false, true) if source.source.after_load == AfterLoad::Delete => Some(format!(
-                "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
-                source.name
-            )),
-            (true, false, _) => None,
-        };
-        match problem {
-            Some(problem) => source.resolved.problems.push(problem),
-            None => source.resolved.skipped.push(drained.skipped),
-        }
-    }
-    found.configured.extend(drained_specs);
-    Ok(found)
 }

@@ -17,10 +17,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
 from sqlload._http_paths import literal_paths
+from sqlload._rename import RENAMES, Column, RenameContext, renamed
 from sqlload._transform import TRANSFORMS, TransformContext, returned_items
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
@@ -109,8 +111,8 @@ def start_table(request: str) -> Iterator[Any]:
 		connection=connection,
 		logger=logging.getLogger(f"sqlload.{read['source']}.{table.name}"),
 		cursor_column=cursor.get("column"),
-		cursor_value=_cursor_value(cursor.get("start"), cursor.get("column_type")),
-		cursor_end=_cursor_value(cursor.get("end"), cursor.get("column_type")),
+		cursor_value=_cursor_value(cursor.get("start"), cursor.get("column_type"), cursor.get("timezone")),
+		cursor_end=_cursor_value(cursor.get("end"), cursor.get("column_type"), cursor.get("timezone")),
 		cursor_inclusive=cursor.get("inclusive", True),
 		is_reload=read["is_reload"],
 		client_factory=_shared_client(source) if source is not None and source.client_factory else None,
@@ -188,9 +190,30 @@ def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None
 	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
 
 
+def rename(name: str, columns: str | None, context: str) -> tuple[str | None, str | None]:
+	"""Call the rename function `name` on `columns` (JSON: each column's `position`, `source` and `default`) with its
+	`ctx` (JSON); with no `columns`, only look it up.
+
+	Returns the names it gives, by position, as JSON, or why it gives none: no function or two are registered as
+	`name`, or it failed or returned something else.
+	"""
+	function, problem = RENAMES.lookup(name, _root[0] if _root else None)
+	if function is None:
+		return None, problem
+	if columns is None:
+		return "{}", None
+	given = [Column(**column) for column in json.loads(columns)]
+	ctx = RenameContext(**json.loads(context))
+	try:
+		return json.dumps(renamed(name, function, given, ctx)), None
+	except Exception as error:
+		return None, f"{type(error).__name__}: {error}"
+
+
 def finish_run() -> None:
 	"""Close every client the run built (their `close()`, when they have one)."""
 	TRANSFORMS.release()
+	RENAMES.release()
 	clients = list(_clients.values())
 	_clients.clear()
 	for client in clients:
@@ -241,6 +264,8 @@ def _remember(table: Table) -> None:
 
 def _source_declaration(source: Source, relative: str) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in source.settings.items() if value is not None}
+	if callable(source.settings.get("rename")):
+		settings["rename"], _ = RENAMES.key(source.settings["rename"])
 	if source.description is not None:
 		settings["description"] = source.description
 	if source.client_factory is not None:
@@ -257,6 +282,8 @@ def _http_paths(tables: list[Table]) -> dict[str, Any]:
 
 def _table_settings(table: Table) -> dict[str, Any]:
 	settings: dict[str, Any] = {key: _setting(value) for key, value in table.settings.items() if value is not None}
+	if callable(table.settings.get("rename")):
+		settings["rename"], _ = RENAMES.key(table.settings["rename"])
 	if "table_name" in settings:
 		settings["name"] = settings.pop("table_name")
 	if table.description is not None:
@@ -288,8 +315,9 @@ def _shared_client(source: Source) -> Any:
 	return build
 
 
-def _cursor_value(text: str | None, column_type: str | None) -> Any:
-	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime (aware for `timestamp_tz`).
+def _cursor_value(text: str | None, column_type: str | None, zone: str | None = None) -> Any:
+	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime: aware for `timestamp_tz`, in the
+	table's `timezone` (`zone`) or UTC; for `timestamp_ntz`, aware in `zone` when it is set, its wall-clock time kept.
 
 	Before the first load shows the cursor's type (`unknown`), ISO dates and timestamps and integers
 	are read as such, so the value's type matches later runs.
@@ -301,7 +329,7 @@ def _cursor_value(text: str | None, column_type: str | None) -> Any:
 		kind = "decimal"
 	try:
 		if kind == "unknown":
-			return _guessed_value(text)
+			return _zoned(_guessed_value(text), zone)
 		if kind in ("int", "smallint"):
 			return int(text)
 		if kind == "float":
@@ -311,7 +339,7 @@ def _cursor_value(text: str | None, column_type: str | None) -> Any:
 		if kind == "date":
 			return date.fromisoformat(text[:10])
 		if kind in ("timestamp_tz", "timestamp_ntz"):
-			return _timestamp(text, aware=kind == "timestamp_tz")
+			return _zoned(_timestamp(text, aware=kind == "timestamp_tz"), zone)
 	except (ValueError, ArithmeticError):
 		return text
 	return text
@@ -330,6 +358,15 @@ def _offset_text(text: str) -> str:
 	"""`text` with a `Z` or `+00` offset written as `+00:00`, which `fromisoformat` reads on Python 3.10."""
 	normal = text.replace("Z", "+00:00")
 	return normal + ":00" if normal.endswith("+00") else normal
+
+
+def _zoned(value: Any, zone: str | None) -> Any:
+	"""`value` in the IANA zone `zone` when it is a datetime and `zone` is set: an aware one converted, a naive one (a
+	wall-clock time declared to be in that zone) given it; anything else as it is."""
+	if zone is None or not isinstance(value, datetime):
+		return value
+	where = ZoneInfo(zone)
+	return value.astimezone(where) if value.tzinfo is not None else value.replace(tzinfo=where)
 
 
 def _timestamp(text: str, *, aware: bool) -> datetime:

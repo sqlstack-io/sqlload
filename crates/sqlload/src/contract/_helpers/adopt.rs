@@ -24,7 +24,7 @@ pub(crate) fn adoption(spec: &TableSpec, live: &[LiveColumn], overwrite: bool) -
     let mut paste: Vec<(String, String)> = Vec::new();
     for column in live
         .iter()
-        .filter(|column| !is_own(spec.naming, &column.name) && !masked(&column.name))
+        .filter(|column| !is_own(spec.compat, &column.name) && !masked(&column.name))
     {
         let physical = column.column_type.to_string();
         let found = declared
@@ -95,10 +95,7 @@ fn declarable(spec: &TableSpec, live_name: &str) -> Option<String> {
         true => lowered,
         false => live_name.to_owned(),
     };
-    let flattened = spec.flatten.iter().any(|object| {
-        name.to_ascii_lowercase()
-            .starts_with(&format!("{}__", object.to_ascii_lowercase()))
-    });
+    let flattened = spec.flatten.may_make(&name);
     (!flattened).then_some(name)
 }
 

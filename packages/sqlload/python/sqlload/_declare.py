@@ -29,14 +29,20 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"cursor_start",
 		"dedup_sort",
 		"lookback",
+		"compat",
 		"naming",
 		"null_keys",
 		"null_cursor",
+		"on_cursor_out_of_range",
 		"on_duplicate_keys",
+		"on_duplicate_names",
 		"on_schema_change",
+		"rename",
 		"replace_key",
 		"row_id",
+		"send",
 		"state",
+		"timezone",
 		"type_change_rebuild",
 		"unique_key",
 		"write_strategy",
@@ -53,6 +59,7 @@ TABLE_ONLY_SETTINGS: frozenset[str] = frozenset(
 		"flatten",
 		"mask",
 		"max_depth",
+		"parse",
 		"table_name",
 		"unnest",
 	}
@@ -236,9 +243,10 @@ class Context:
 	"""What a table function receives: its connection and client, the cursor window, and a logger.
 
 	`cursor_value` is where to read from (the destination's maximum of `cursor_column` minus
-	`lookback`, `cursor_start` on a first run, or `--start-cursor-*`); `None` means read everything.
-	Rows outside the window are skipped at load, so a function that ignores it still loads
-	correctly, only slower.
+	`lookback`, `cursor_start` on a first run, or `--start-cursor-*`), and `cursor_end` where to stop
+	(not included); `None` means open. Times arrive in the table's `timezone`, else UTC. Rows the
+	function returns outside the window fail the table, unless `on_cursor_out_of_range` says to skip
+	them or load them with a warning.
 
 	With `state="logged"`, `state` is the position the last successful run left (`None` on the
 	first run, after `--reload` or `sqlload logged-state reset --clear`); set `ctx.state` to the new

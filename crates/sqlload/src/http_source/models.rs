@@ -64,6 +64,9 @@ pub struct Request {
     /// What a response without the `select` path means.
     #[serde(default)]
     pub select_missing: SelectMissing,
+    /// Where a successful response reports an error, such as `$.errors`: a value there that is not null, false or empty fails the table before the page's rows load.
+    #[serde(default)]
+    pub error_path: Option<String>,
     /// In a fan-out, where each record's key is, checked against the keys its request sent.
     #[serde(default)]
     pub key_path: Option<KeyPath>,
@@ -103,27 +106,37 @@ pub enum SelectMissing {
     Empty,
 }
 
-/// How each row's list of cells becomes columns: where the cells are, each one's column and value, and where the columns' names come from.
+/// How each row's list of cells becomes columns: where the cells are, each one's value, and where its column's name comes from.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Cells {
     /// The row's field holding its cells, such as `$.cells`.
     pub pointer: String,
-    /// The field of each cell holding its column's id; `None` matches cells to columns by position.
-    #[serde(default)]
-    pub key: Option<String>,
     /// Where each cell's value is, such as `$.value`; the first present and not null is used.
     pub value: Vec<String>,
-    /// Where a response lists its columns, such as `$.columns`; a page without the list keeps the names before it.
-    #[serde(default)]
-    pub names_from: Option<String>,
-    /// The field of each listed column holding its name; `None` when each listed column is its name.
-    #[serde(default)]
-    pub name_key: Option<String>,
-    /// The field of each listed column holding its id, matched against each cell's `key`.
-    pub id_key: String,
-    /// The first row names the columns by its cells' values, and does not load.
-    #[serde(default)]
-    pub header_row: bool,
+    /// Where each cell's column name comes from.
+    pub name: CellName,
+}
+
+/// Where the cells' column names come from (`sl.cells(name=...)`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CellName {
+    /// The columns a response lists at `from`, such as `$.columns`; a page without the list keeps the names before it.
+    Listed {
+        from: String,
+        /// The field of each cell holding its column's id; `None` matches cells to columns by position.
+        #[serde(default)]
+        key: Option<String>,
+        /// The field of each listed column holding its id, matched against each cell's `key`.
+        id_key: String,
+        /// The field of each listed column holding its name; `None` when each listed column is its name.
+        #[serde(default)]
+        name_key: Option<String>,
+    },
+    /// The first row's cells name the columns by position, and that row does not load.
+    HeaderRow,
+    /// Each cell names its own column at `path`, such as `$.FIELDNAME`, so each row has the columns its cells name.
+    Field { path: String },
 }
 
 /// The columns a job's cells pivot into, in order, with each one's position by its id as text.
@@ -421,7 +434,8 @@ pub struct Limiter {
     /// The limit as configured, such as `5/s`.
     pub rate: String,
     pub interval: Duration,
-    pub next: Mutex<Instant>,
+    /// The next free turn, on tokio's clock, which the waits sleep on.
+    pub next: Mutex<tokio::time::Instant>,
 }
 
 /// What one request needs: the pooled client, the endpoint, the shared rate limit and the retry budget.

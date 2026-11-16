@@ -1,5 +1,6 @@
 //! Where a range's header and rows are, and the A1 names of its cells.
 
+use crate::load_naming::main::numbered_header::numbered_header;
 use crate::sheets_source::constants::{MAX_A1_COLUMNS, MAX_A1_ROWS};
 use crate::sheets_source::models::{Cell, Grid, HeaderRule};
 
@@ -66,8 +67,12 @@ fn header_text(cell: &Cell) -> String {
     }
 }
 
-/// The range's column names, one per column up to its last named one (`column_1`, … up to its widest row without a header); `Err` names each blank header cell and each name used twice, ignoring case, by cell.
-pub(crate) fn header_names(grid: &Grid, rule: &HeaderRule) -> Result<Vec<String>, Vec<String>> {
+/// The range's column names, one per column up to its last named one (`column_1`, … up to its widest row without a header), each with the header it repeats: a name the header row has again (ignoring case) is numbered (see [`numbered_header`]); `Err` names each blank header cell.
+pub(crate) fn header_names(
+    grid: &Grid,
+    rule: &HeaderRule,
+) -> Result<Vec<(String, Option<String>)>, Vec<String>> {
+    let plain = |names: Vec<String>| names.into_iter().map(|name| (name, None)).collect();
     let Some(index) = header_index(grid, rule) else {
         let width = data_rows(grid, rule, usize::MAX)
             .iter()
@@ -84,16 +89,20 @@ pub(crate) fn header_names(grid: &Grid, rule: &HeaderRule) -> Result<Vec<String>
                 grid.title, rule.header_row
             )]),
             false => match &rule.column_names {
-                Some(names) if names.len() == rule.width.unwrap_or(width) => Ok(names.clone()),
+                Some(names) if names.len() == rule.width.unwrap_or(width) => {
+                    Ok(plain(names.clone()))
+                }
                 Some(names) => Err(vec![format!(
                     "{}: the range has {} columns, but column_names names {}; name each column of the range",
                     grid.title,
                     rule.width.unwrap_or(width),
                     names.len()
                 )]),
-                None => Ok((1..=width)
-                    .map(|number| format!("column_{number}"))
-                    .collect()),
+                None => Ok(plain(
+                    (1..=width)
+                        .map(|number| format!("column_{number}"))
+                        .collect(),
+                )),
             },
         };
     };
@@ -104,19 +113,11 @@ pub(crate) fn header_names(grid: &Grid, rule: &HeaderRule) -> Result<Vec<String>
         .map_or(0, |last| last + 1);
     let mut problems: Vec<String> = Vec::new();
     for (position, name) in names.iter().take(width).enumerate() {
-        let earlier = names[..position]
-            .iter()
-            .any(|other| other.eq_ignore_ascii_case(name));
-        match (name.is_empty(), earlier) {
-            (true, _) => problems.push(format!(
+        if name.is_empty() {
+            problems.push(format!(
                 "{}: the header cell is blank; name the column, or narrow the range",
                 cell_name(grid, index, position)
-            )),
-            (false, true) => problems.push(format!(
-                "{}: the header {name:?} names an earlier column too (ignoring case); rename one",
-                cell_name(grid, index, position)
-            )),
-            (false, false) => {}
+            ));
         }
     }
     match (problems.is_empty(), width) {
@@ -124,7 +125,10 @@ pub(crate) fn header_names(grid: &Grid, rule: &HeaderRule) -> Result<Vec<String>
             "{}: the header row {} is empty; set header_row, or header = false",
             grid.title, rule.header_row
         )]),
-        (true, _) => Ok(names.into_iter().take(width).collect()),
+        (true, _) => {
+            let kept: Vec<String> = names.into_iter().take(width).collect();
+            Ok(numbered_header(&kept))
+        }
         (false, _) => Err(problems),
     }
 }

@@ -162,6 +162,7 @@ pub(crate) fn data_file(key: &str, day: &str) -> DataFile {
 pub(crate) fn column(name: &str, column_type: ColumnType, value: CopyValue) -> CopyColumn {
     CopyColumn {
         name: name.to_owned(),
+        source: name.to_owned(),
         column_type,
         value,
     }

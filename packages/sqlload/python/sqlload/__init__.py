@@ -30,6 +30,7 @@ from importlib.metadata import version
 
 from sqlload._data import checkpoint, field, json, key, ndjson, parent
 from sqlload._http import (
+	CellName,
 	Cells,
 	Http,
 	Job,
@@ -38,8 +39,10 @@ from sqlload._http import (
 	bearer,
 	cells,
 	cursor,
+	header_row,
 	http,
 	link_header,
+	listed,
 	next_link,
 	oauth2_client_credentials,
 	oauth2_password,
@@ -49,15 +52,19 @@ from sqlload._http import (
 	single,
 )
 from sqlload._declare import Context, Source, Table, source, table
+from sqlload._rename import Column, RenameContext, rename
 from sqlload._transform import TransformContext, transform
 
 __version__: str = version("sqlload")
 
 __all__ = [
+	"CellName",
 	"Cells",
+	"Column",
 	"Context",
 	"Http",
 	"Job",
+	"RenameContext",
 	"Source",
 	"Table",
 	"TransformContext",
@@ -70,10 +77,12 @@ __all__ = [
 	"cursor",
 	"executable",
 	"field",
+	"header_row",
 	"http",
 	"json",
 	"key",
 	"link_header",
+	"listed",
 	"ndjson",
 	"next_link",
 	"oauth2_client_credentials",
@@ -82,6 +91,7 @@ __all__ = [
 	"offset",
 	"page_number",
 	"parent",
+	"rename",
 	"single",
 	"source",
 	"table",

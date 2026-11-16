@@ -28,8 +28,9 @@ use crate::contract::models::{ContractReport, ContractRequest};
 use crate::load_events::main::close::close;
 use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
-use crate::load_events::models::EventKind;
-use crate::loader::constants::{NO_PYTHON_HOST, NO_TRANSFORM_HOST};
+use crate::load_events::main::take_timings::take_timings;
+use crate::load_events::models::{EventKind, LoadEvent};
+use crate::loader::constants::{NO_PYTHON_HOST, NO_RENAME_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
 use crate::loader::main::debug_project::debug_project;
@@ -49,8 +50,9 @@ use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::project::models::{ProjectConfig, SourceKind};
+use crate::project::models::{ProjectConfig, RenameSetting, SourceKind, TableSettings};
 use crate::python_sources::types::PythonHost;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
 fn environment_variable(name: &str) -> Option<String> {
@@ -105,7 +107,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         let Some(value) = value else {
             continue;
         };
-        if cursor_text(value, column_type).is_err() {
+        if cursor_text(value, column_type, chrono_tz::Tz::UTC).is_err() {
             return Err(match column_type {
                 ColumnType::Int => format!("{flag} value '{value}' is not a whole number"),
                 _ => format!("{flag} value '{value}' is not an RFC 3339 timestamp or a date"),
@@ -154,6 +156,9 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
     if let (None, Some((place, _))) = (&request.host, transforms.first()) {
         return Err(NO_TRANSFORM_HOST.replace("{place}", place));
     }
+    if let (None, Some((place, _))) = (&request.host, rename_places(&project).first()) {
+        return Err(NO_RENAME_HOST.replace("{place}", place));
+    }
     if project.python_paths.is_empty() {
         return Ok(project);
     }
@@ -183,6 +188,17 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
             .map_err(|error| format!("Python transform check failed: {error}"))?;
         project.transforms.insert(function, version);
     }
+    for (_, function) in rename_places(&project) {
+        if project.renames.contains_key(&function) {
+            continue;
+        }
+        let checking = Arc::clone(&host);
+        let called = function.clone();
+        let found = tokio::task::spawn_blocking(move || checking.rename(&called, None, "{}"))
+            .await
+            .map_err(|error| format!("Python rename check failed: {error}"))?;
+        project.renames.insert(function, found.map(|_| ()));
+    }
     project.python_host = Some(host);
     Ok(project)
 }
@@ -197,6 +213,26 @@ fn transform_places(project: &ProjectConfig) -> Vec<(String, String)> {
         for (table, overrides) in &source.tables {
             if let Some(function) = &overrides.settings.transform {
                 places.push((format!("table {name}.{table}"), function.clone()));
+            }
+        }
+    }
+    places
+}
+
+/// Each source or table in `project` whose `rename` names a function (`source x` or `table x.y`), with the function.
+fn rename_places(project: &ProjectConfig) -> Vec<(String, String)> {
+    let function = |settings: &TableSettings| match &settings.rename {
+        Some(RenameSetting::Function(function)) => Some(function.clone()),
+        _ => None,
+    };
+    let mut places: Vec<(String, String)> = Vec::new();
+    for (name, source) in &project.sources {
+        if let Some(function) = function(&source.defaults) {
+            places.push((format!("source {name}"), function));
+        }
+        for (table, overrides) in &source.tables {
+            if let Some(function) = function(&overrides.settings) {
+                places.push((format!("table {name}.{table}"), function));
             }
         }
     }
@@ -256,7 +292,9 @@ pub(crate) async fn run_loader(
         }
         command => {
             let shown = (request.no_color, request.streams, request.log_json);
-            run_command(&project, command, request.host.clone(), shown).await
+            let outcome = run_command(&project, command, request.host.clone(), shown).await;
+            close();
+            outcome
         }
     };
     if let Some(host) = request.host {
@@ -327,15 +365,15 @@ async fn run_command(
             false => Err(lines.join("\n").into()),
         };
     }
-    let destinations = connect_targets(project).await;
     if let Command::LoggedState { action } = command {
-        let destinations = destinations.map_err(|error| error.to_string())?;
+        let destinations = connect_targets(project)
+            .await
+            .map_err(|error| error.to_string())?;
         return run_state(project, &destinations, action)
             .await
             .map(|lines| (lines, 0))
             .map_err(Into::into);
     }
-    let destinations = destinations?;
     let (args, applies, loads) = match command {
         Command::Plan(args) => (args, false, false),
         Command::Apply(args) => (args, true, false),
@@ -372,12 +410,18 @@ async fn run_command(
         Progress::Auto => streams && !json && !log_json && std::io::stderr().is_terminal(),
     };
     let options = options(args)?;
-    let plan = planning(
-        plan_project(project, &destinations, &options),
+    let receiver = listen(&uuid::Uuid::new_v4().to_string());
+    let (destinations, mut plan) = planning(
+        async {
+            let destinations = connect_targets(project).await?;
+            let plan = plan_project(project, &destinations, &options).await?;
+            Ok::<_, CommandError>((destinations, plan))
+        },
         project.sources.len(),
-        (draws, no_color),
+        (draws, streams && !json && !log_json, no_color),
     )
     .await?;
+    plan.phases = take_timings();
     if json && !applies {
         let (text, ok, retryable) = json_report(&plan, None);
         return Ok((vec![text], exit_code(ok, retryable)));
@@ -444,6 +488,7 @@ async fn run_command(
     };
     if loads {
         let streamed = StreamedLoad {
+            receiver,
             run: &run,
             plan: &plan,
             applied: &applied,
@@ -508,8 +553,9 @@ async fn run_command(
     Ok((lines, exit_code(planned && completed, plan_retryable)))
 }
 
-/// What a load streams its lines and events from: its run and plan, what `apply` changed before it, what stops a `load --follow`, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
+/// What a load streams its lines and events from: the events since the command started listening, its run and plan, what `apply` changed before it, what stops a `load --follow`, where its lines go, when it started, and whether the plan was ready and failed only in ways a rerun may get past.
 struct StreamedLoad<'a> {
+    receiver: UnboundedReceiver<LoadEvent>,
     run: &'a LoadRun<'a>,
     plan: &'a ProjectPlan,
     applied: &'a [String],
@@ -529,7 +575,6 @@ struct StreamedEnd {
 
 /// Load `load.plan`, rendering its events as they come: each table's outcome, the lines not printed yet (the `created`/`altered` lines `apply` reported, each table's line as it finished, and the summary, which a load of no table leaves to the plan's closing line), the exit code, the same as a load without events, and the run's peak memory (the most of the process's before the tables loaded, after, and each table's under `--memory-per-table`, whose resets the process's own figure may miss).
 async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
-    let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let width = load.output.name_width;
     let selected = load.plan.tables.len();
     let to_load = load
@@ -554,7 +599,7 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
         true => print_lines(first, no_color),
         false => kept.extend(first),
     }
-    let writer = tokio::spawn(write_events(load.output, receiver));
+    let writer = tokio::spawn(write_events(load.output, load.receiver));
     emit(None, EventKind::RunStarted { selected, to_load });
     let before = run_peak_bytes(&[]);
     let outcomes = load_tables(load.run, load.plan, load.stop.as_ref()).await;

@@ -1,4 +1,4 @@
-use crate::load_naming::models::{MetadataRole, Naming};
+use crate::load_naming::models::{Compat, MetadataRole};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -175,7 +175,7 @@ pub struct WriterRequest<'a> {
     pub cursor_column: Option<&'a str>,
     pub columns: &'a [DesiredColumn],
     /// How the table names the columns a load adds.
-    pub naming: Naming,
+    pub compat: Compat,
     pub load_id: &'a str,
     /// Names the files and the pending marker (see [`FilesWriter::file_id`]).
     pub file_id: &'a str,

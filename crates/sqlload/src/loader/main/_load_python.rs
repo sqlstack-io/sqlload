@@ -20,13 +20,16 @@ pub(in crate::loader) async fn load_python(
         table: load.table.clone(),
         merged: arrow_schema::Schema::empty(),
         rows: 0,
-        outside: 0,
+        outside: Default::default(),
+        warnings: Vec::new(),
+        unshown: (0, 0),
         null_cursors: 0,
         publisher: None,
         changes: Vec::new(),
         state,
         reconciled,
         flattened: std::collections::BTreeMap::new(),
+        names: crate::load_naming::models::NameMemo::default(),
     };
     let loaded = feed.load(load).await;
     if let Some(publisher) = &mut feed.publisher {

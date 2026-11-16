@@ -16,6 +16,10 @@ impl SqlAdapter for DatabricksSql {
         Warehouse::Databricks
     }
 
+    fn bills_while_running(&self) -> bool {
+        true
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }

@@ -94,3 +94,12 @@ pub(crate) struct TransformTallyTestCase {
     pub(crate) transforms: &'static [(&'static str, u64, u64, bool)],
     pub(crate) expected_lines: &'static str,
 }
+
+/// One look at the plan's progress, in order with the ones before it: the step running (its id and how long it has run, in milliseconds), how long the plan has run, and what the spinner and the `RUNNING` rows show.
+pub(crate) struct PlanProgressTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) step: Option<(u64, u64)>,
+    pub(crate) waited_ms: u64,
+    pub(crate) expected_spinner: Option<&'static str>,
+    pub(crate) expected_row: Option<&'static str>,
+}

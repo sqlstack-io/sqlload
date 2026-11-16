@@ -37,6 +37,8 @@ mod test_batched_loads;
 mod test_bigquery_loads;
 #[path = "loader/test_bigquery_source.rs"]
 mod test_bigquery_source;
+#[path = "loader/test_column_names.rs"]
+mod test_column_names;
 #[path = "loader/test_databricks_loads.rs"]
 mod test_databricks_loads;
 #[path = "loader/test_debug_project.rs"]
@@ -58,6 +60,9 @@ mod test_mixed_cursors;
 #[path = "loader/test_null_cursors.rs"]
 mod test_null_cursors;
 #[cfg(feature = "odbc")]
+#[path = "loader/test_odbc_catalog.rs"]
+mod test_odbc_catalog;
+#[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_drivers.rs"]
 mod test_odbc_drivers;
 #[cfg(feature = "odbc")]
@@ -66,6 +71,10 @@ mod test_odbc_memory;
 #[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_to_duckdb.rs"]
 mod test_odbc_to_duckdb;
+#[path = "loader/test_parsed_columns.rs"]
+mod test_parsed_columns;
+#[path = "loader/test_plan_progress.rs"]
+mod test_plan_progress;
 #[path = "loader/test_postgres_cdc.rs"]
 mod test_postgres_cdc;
 #[path = "loader/test_postgres_cdc_files.rs"]

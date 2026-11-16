@@ -7,7 +7,7 @@ use crate::sheets_helpers::{
 };
 use crate::test_types::{SheetsLoadTestCase, SheetsRefusalTestCase, SheetsUserTestCase};
 
-const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || ':' || coalesce(CAST(Opened AS VARCHAR), '') || ':' || coalesce(CAST(Active AS VARCHAR), '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(CAST(\"Updated At\" AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations";
+const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || ':' || coalesce(CAST(Opened AS VARCHAR), '') || ':' || coalesce(CAST(Active AS VARCHAR), '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(CAST(updated_at AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations";
 
 #[test]
 fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_and_replaces_its_table()
@@ -26,14 +26,14 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
                 refused_reads: 0,
                 expected_output: "tab \"Empty\" is empty, so it loads no table",
                 query: LOCATIONS,
-                expected_result: "L1:North:2026-01-15:true:120:2026-11-08 09:30:00:00123,L2:South, Upper:2025-12-31:false:::|Code VARCHAR,Name VARCHAR,Opened DATE,Active BOOLEAN,Capacity BIGINT,Updated At TIMESTAMP,Ref VARCHAR",
+                expected_result: "L1:North:2026-01-15:true:120:2026-11-08 09:30:00:00123,L2:South, Upper:2025-12-31:false:::|code VARCHAR,name VARCHAR,opened DATE,active BOOLEAN,capacity BIGINT,updated_at TIMESTAMP,ref VARCHAR",
             },
             SheetsLoadTestCase {
                 description: "a range below title rows takes its header from header_row and stops at the range's last column; the header-only tab is an empty table",
                 tabs: first_tabs,
                 refused_reads: 0,
                 expected_output: "",
-                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'Note') || '|' || (SELECT count(*) FROM raw.reference__header_only) FROM raw.report__items",
+                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT count(*) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'report__items' AND column_name = 'note') || '|' || (SELECT count(*) FROM raw.reference__header_only) FROM raw.report__items",
                 expected_result: "alpha:1.0,beta:2.5|0|0",
             },
             SheetsLoadTestCase {
@@ -49,7 +49,7 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
                 tabs: retyped_tabs,
                 refused_reads: 0,
                 expected_output: "",
-                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT string_agg(id || ':' || name, ',') FROM raw.reference__header_only) || '|' || (SELECT string_agg(data_type, ',' ORDER BY table_name) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name IN ('Qty', 'id')) || '|' || (SELECT CAST(\"Updated At\" AS VARCHAR) FROM raw.reference__locations WHERE Code = 'L1') FROM raw.report__items",
+                query: "SELECT string_agg(Item || ':' || CAST(Qty AS VARCHAR), ',' ORDER BY Item) || '|' || (SELECT string_agg(id || ':' || name, ',') FROM raw.reference__header_only) || '|' || (SELECT string_agg(data_type, ',' ORDER BY table_name) FROM information_schema.columns WHERE table_schema = 'raw' AND column_name IN ('qty', 'id')) || '|' || (SELECT CAST(updated_at AS VARCHAR) FROM raw.reference__locations WHERE Code = 'L1') FROM raw.report__items",
                 expected_result: "alpha:3.0,beta:4.0|7:seven|VARCHAR,DOUBLE|2026-01-15 00:00:00",
             },
         ];
@@ -74,6 +74,48 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
             tokens >= 4,
             "a refused token was replaced, so later runs asked for more tokens than runs: {tokens}"
         );
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_sheet_s_date_time_column_when_loading_with_parse_and_tz_then_its_wall_clock_times_load_as_instants()
+-> Result<(), String> {
+    run_async(async {
+        let fake = start_fake_sheets().await?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        let project = project_text(&fake.key_json, &fake.base_url, &database);
+        let parsed = "[sources.reference.tables.locations]\nparse = { \"Updated At\" = { timestamp = \"iso\", tz = \"Europe/Paris\" } }\n";
+        std::fs::write(&config, format!("{project}\n{parsed}"))
+            .map_err(|error| error.to_string())?;
+        let test_cases = [SheetsLoadTestCase {
+            description: "the sheet's 09:30 in Paris loads as 08:30 UTC, typed timestamp_tz, and plan names the column's tz",
+            tabs: first_tabs,
+            refused_reads: 0,
+            expected_output: "",
+            query: "SELECT string_agg(Code || ':' || coalesce(CAST(timezone('UTC', updated_at) AS VARCHAR), ''), ',' ORDER BY Code) || '|' || (SELECT data_type FROM information_schema.columns WHERE table_name = 'reference__locations' AND column_name = 'updated_at') FROM raw.reference__locations",
+            expected_result: "L1:2026-11-08 08:30:00,L2:|TIMESTAMP WITH TIME ZONE",
+        }];
+        for test_case in test_cases {
+            fake.place("fake-sheet", (test_case.tabs)());
+            let (_, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (succeeded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(
+                succeeded
+                    && words(&output).contains(&words(test_case.expected_output))
+                    && words(&plan).contains(&words("updated_at timestamp_tz from iso; times without an offset in Europe/Paris (its tz)")),
+                "{}:\n{plan}\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                duckdb_text(&database, test_case.query)?,
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
         Ok(())
     })
 }

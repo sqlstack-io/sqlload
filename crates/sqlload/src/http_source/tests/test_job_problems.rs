@@ -206,6 +206,35 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
                 "batch= is for the fan-out that loads rows; a fan_out used as over sends one request per key",
             ],
         },
+        JobProblemsTestCase {
+            description: "cells named by a listed column, by the header row and by each cell itself are fine, and so is an error_path",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"error_path":"$.Result.ErrorAlert","cells":{"pointer":"$.DATAFIELD","value":["$.FIELDVALUE"],"name":{"kind":"field","path":"$.FIELDNAME"}},"over":{"kind":"values","values":[{"id":1}]}}"#,
+            expected_problems: &[],
+        },
+        JobProblemsTestCase {
+            description: "a listed column source that is not a path, and a self-named cell's name path through a list",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"field","path":"$.names[*].text"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/sheets","paginator":{"kind":"single"},"select":"$.rows[*].id","cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"listed","from":"columns","key":"columnId","id_key":"id","name_key":"title"}}}}"#,
+            expected_problems: &[
+                "cells path \"$.names[*].text\" cannot pick from a list with [*]",
+                "cells path \"columns\" is not a path such as \"$.cells\" or \"$.value\"",
+                "fan_out's over picks keys with its select; cells are for the fan-out's own rows",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "a header-row cells pointer that is not one field of the row",
+            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/grid","paginator":{"kind":"single"},"select":"$.rows","cells":{"pointer":"$","value":["$.v"],"name":{"kind":"header_row"}}}"#,
+            expected_problems: &[
+                "cells pointer \"$\" must name one field of the row, such as \"$.cells\"",
+            ],
+        },
+        JobProblemsTestCase {
+            description: "an error_path at the whole response, and one through a list on the level that feeds keys",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"error_path":"$","over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id","error_path":"$.errors[*].message"}}"#,
+            expected_problems: &[
+                "error_path \"$\" is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]",
+                "error_path \"$.errors[*].message\" is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]",
+            ],
+        },
     ];
     for test_case in test_cases {
         let job: HttpJob = serde_json::from_str(test_case.job).expect(test_case.description);

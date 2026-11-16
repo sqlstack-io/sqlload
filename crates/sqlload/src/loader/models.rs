@@ -1,7 +1,9 @@
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
-use crate::load_naming::models::Naming;
-use crate::row_batches::models::Unnest;
+use crate::column_parse::models::ColumnParse;
+use crate::load_events::models::PhaseTiming;
+use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
+use crate::row_batches::models::{Flatten, Unnest};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -25,8 +27,9 @@ use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnDuplicateKeys, OnSchemaChange,
-    OutputEncoding, Policy, ProjectConfig, SortDirection, TableChecks, WriteStrategy,
+    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnCursorOutOfRange, OnDuplicateKeys,
+    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, SortDirection, TableChecks,
+    WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -75,6 +78,8 @@ pub struct CursorSpec {
     pub coalesce: Vec<String>,
     /// What an incremental read does with source rows whose cursor is NULL.
     pub null_cursor: NullCursor,
+    /// What a Python table's load does with the rows its function returns outside the window it was asked for.
+    pub out_of_range: OnCursorOutOfRange,
 }
 
 impl CursorSpec {
@@ -178,8 +183,8 @@ pub struct TableSpec {
     pub files: Option<FilesSource>,
     /// The table's folder template in a files target; `None` for warehouse targets.
     pub destination_path: Option<String>,
-    /// The top-level objects expanded one level into `<object>__<key>` columns (Python tables only).
-    pub flatten: Vec<String>,
+    /// The objects whose keys load as `<object>__<key>` columns.
+    pub flatten: Flatten,
     /// Every row gets a unique id column.
     pub row_id: bool,
     /// A child table of a merge: always staged, never written straight to the table, its staged rows carrying their root row's ordinal (`_sqlload_root_row`, staging only), so the rows of roots the merge drops leave before the commit.
@@ -202,10 +207,33 @@ pub struct TableSpec {
     pub warehouse_source: Option<WarehouseSource>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
-    /// How the load names the columns it adds, and under dlt's naming its tables and columns.
+    /// How the table's and its columns' names load.
     pub naming: Naming,
+    /// Whose names the columns the load adds take.
+    pub compat: Compat,
+    /// When its rows reach the target: at each commit, held in local files until then, or each batch as it is read.
+    pub send: SendMode,
+    /// Where `send = "at_commit"` holds a commit's rows; the system's temporary folder when `None`.
+    pub staging_dir: Option<std::path::PathBuf>,
+    /// Each source column's name through the name pipeline (none for a Python table, whose columns are named as they arrive), and the names numbering gave.
+    pub names: LoadedNames,
+    /// What the name pipeline ran under.
+    pub name_rules: NameRules,
+    /// The table as its source listed it, before the name pipeline, so the plan can name its columns again keeping the numbers its earlier loads gave; `None` for a Python table.
+    pub listed: Option<Box<SourceTable>>,
     /// The Python function each file's (or Sheets range's) rows go through before they load; `None` without `transform`.
     pub transform: Option<TableTransform>,
+    /// The text columns read as times, by the name each loads as.
+    pub parses: BTreeMap<String, ColumnParse>,
+    /// The zone of the times without an offset that a parse without its own `tz` reads, and whose setting it is; `None` reads them as UTC.
+    pub timezone: Option<(chrono_tz::Tz, SettingOrigin)>,
+}
+
+impl TableSpec {
+    /// The zone the table's times without an offset are in: its `timezone`, else UTC.
+    pub fn zone(&self) -> chrono_tz::Tz {
+        self.timezone.map_or(chrono_tz::Tz::UTC, |(zone, _)| zone)
+    }
 }
 
 /// A table's `transform`: the Python function each file's (or Sheets range's) rows go through before they load.
@@ -546,6 +574,8 @@ pub struct ProjectPlan {
     pub unread_sources: BTreeMap<String, UnreadSource>,
     /// Each warning that a source could not be read so tables may share a destination with it, and what it is about.
     pub unread_sharing: Vec<UnreadSharing>,
+    /// How long each target's and source's connection and each source's discovery took, when the command line timed them.
+    pub phases: Vec<PhaseTiming>,
 }
 
 /// The tables a source that could not be read would load, as far as its settings name them.
@@ -811,6 +841,10 @@ pub struct TableLoaded {
     pub replaced_keys: Option<ReplacedKeys>,
     /// How long the table's `transform` took on each file or range, in the order they loaded.
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// A line per column `rename` named or numbering numbered.
+    pub names: Vec<String>,
+    /// What the load warns of: a Python table's rows outside the cursor window it skipped or loaded.
+    pub warnings: Vec<String>,
 }
 
 /// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
@@ -874,8 +908,12 @@ pub struct PythonFeed {
     /// The schema merged from every batch so far, all-NULL columns as `Null`.
     pub merged: arrow_schema::Schema,
     pub rows: u64,
-    /// Rows the function yielded outside the cursor window, which were skipped.
-    pub outside: u64,
+    /// The rows the function returned outside the current cursor window.
+    pub outside: crate::batch_plan::models::OutsideRows,
+    /// The load report's lines on rows outside windows (`on_cursor_out_of_range = "skip"` or `"warn"`), for the first few windows that had any.
+    pub warnings: Vec<String>,
+    /// The rows outside later windows, and how many windows, which no line shows.
+    pub unshown: (u64, u64),
     /// Of those, the rows whose cursor was NULL, which fail the table unless `null_cursor` says otherwise.
     pub null_cursors: u64,
     /// Opened once the table exists for the data.
@@ -888,6 +926,8 @@ pub struct PythonFeed {
     pub reconciled: Option<String>,
     /// Each column seen so far, and whether flattening a listed object made it, so no column comes from both.
     pub flattened: std::collections::BTreeMap<String, bool>,
+    /// The names the load gave the yielded fields so far.
+    pub names: NameMemo,
 }
 
 /// A Postgres table's integer cursor as plan found it, ending its `batch_size` windows.
@@ -1021,6 +1061,8 @@ pub struct Publisher {
     pub rebuild: Option<MergeRebuild>,
     /// The `transform`'s calls so far, and how many the commits recorded: each commit records the version with the files or ranges since.
     pub transform: Option<(TransformRun, usize)>,
+    /// Under `send = "at_commit"`, the batches held locally until their commit sends them; `None` when each batch is sent as it is read.
+    pub spool: Option<crate::commit_spool::models::Spool>,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.
@@ -1183,6 +1225,8 @@ pub struct PlanView {
     pub skipped: Vec<PlanItem>,
     pub errors: Vec<PlanItem>,
     pub warnings: Vec<PlanItem>,
+    /// How long each connection and discovery took before the plan.
+    pub phases: Vec<PhaseTiming>,
 }
 
 /// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.
@@ -1296,6 +1340,12 @@ pub struct TableResult {
     /// How long the table's `transform` took on each file or range; left out without one.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
+    /// A line per column `rename` named or numbering numbered; left out when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+    /// What the load warns of, such as rows outside a cursor window; left out when there is nothing.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_bytes: Option<u64>,

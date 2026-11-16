@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten_objects: false }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } } } }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -586,6 +586,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "column_names on whole CSV records is refused",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nshape = \"record\"\ncsv = { header = false }\ncolumn_names = [\"a\"]\n",
             expected_message: "column_names is for columns of data without a header row",
+        },
+        ParseProjectErrorTestCase {
+            description: "naming takes snake_case or source; dlt is no naming",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nnaming = \"dlt\"\n",
+            expected_message: "unknown variant `dlt`, expected `snake_case` or `source`",
         },
         ParseProjectErrorTestCase {
             description: "an xlsx header_row past the range's rows is refused",

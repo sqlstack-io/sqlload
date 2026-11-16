@@ -126,10 +126,9 @@ columns = { value = "decimal(12,2)" }
   the last one holding a value without a range), and each file's for CSV. Otherwise `plan` fails, or
   for a later file the load, naming both counts and the file, so a shifted layout fails rather than
   loading under the wrong names.
-- The names become columns like header names, under the target's `naming`. Two names equal ignoring
-  case fail `plan`.
-- Renaming the columns of data that has a header is modelling work for downstream; SQLLoad has no
-  general `rename`.
+- The names become columns like header names, under `naming`. Two names equal ignoring case fail
+  `plan`.
+- To rename the columns of data that has a header, use [`rename`](/docs/concepts/nested-data/#rename).
 
 **XML (`format = "xml"`).** Each element at `xml.record_path` is a row. Its attributes and child
 elements are its columns, by name without a namespace prefix. A child that appears more than once
@@ -586,6 +585,12 @@ as `"1.50"` or `"2026-11-08T10:00:00.123456"`. Before 0.27.0 these columns fail 
 conversion differs. In Snowflake, where files under an external stage or copied with
 `copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
 `exclude_columns`.
+
+A JSON or NDJSON object loads as one `json` column unless the table's `flatten` loads its keys as
+`<object>__<key>` columns. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects).
+
+A table's `parse` reads text columns as times, in a list of formats such as ISO and `%m/%d/%Y`, and
+in a time zone. See [Parsing text into times](/docs/concepts/types/#parsing-text-into-times).
 
 From 0.27.0, pin a list column, or a JSON array in a CSV or JSON file, as
 [`array(T)`](/docs/concepts/types/#arrays) to load it as an array instead, such as

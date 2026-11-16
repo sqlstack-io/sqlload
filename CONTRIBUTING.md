@@ -32,6 +32,18 @@ each file`, and `plan_route` takes the same path as for `hmac`. Without a `trans
 changes, and the route test below still checks that only `hmac` reaches SQLLoad's reader among the
 settings it plans.
 
+A JSON or NDJSON table whose `flatten` flattens objects is read by SQLLoad, as a table with `unnest`
+or `row_id` is: its rows change shape before they load, and `reader_offer` gives the reason `the
+table flattens objects into columns, which SQLLoad does`.
+
+A table with a `parse` is read by SQLLoad too: its formats are tried in turn and times without an
+offset read in a time zone, which no warehouse does exactly alike. `reader_offer` gives the reason
+`parse runs on <columns>`.
+
+A column that loads under another name than its files give it (`naming`, `rename` or numbering) is
+no reason to read the files: each direct route selects it by its name in the files and loads it
+under its own (`f."Order ID"` into `order_id`; a repeated CSV header by its place).
+
 Anything else fails rather than falling back to SQLLoad:
 
 - Files no external stage covers fail the plan, and the error says how to fix it.
@@ -45,7 +57,7 @@ These checks enforce the rule:
   - `Step::FileReader` is built only in routing's `loader_reads`.
   - `plan_route` sends a warehouse destination without `hmac` to `warehouse_reads`, and that function never reaches the reader.
 - The route test `given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_strategy_then_only_hmac_reaches_sqlloads_reader`
-  plans every format, type and write strategy, unmasked, hashed and `hmac`-masked, and checks
-  that only `hmac` reaches SQLLoad's reader.
+  plans every format, type and write strategy, unmasked, hashed, `hmac`-masked and with a renamed
+  column, and checks that only `hmac` reaches SQLLoad's reader.
 
 Warehouse-specific code lives in `crates/sqlload/src/adapters` (fensu rule `XSL001`).

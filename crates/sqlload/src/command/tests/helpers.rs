@@ -4,6 +4,7 @@ use clap::Parser;
 
 use crate::command::_helpers::load_output::{Tally, event_lines, summary_lines};
 use crate::command::_helpers::loader_commands::{exit_code, options, run_loader};
+use crate::command::constants::COMMAND_STACK_BYTES;
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::load_events::main::event_line::event_line;
@@ -37,7 +38,7 @@ pub(crate) fn debug_without_host(project: &str) -> String {
         .unwrap_or_default()
 }
 
-/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then its exit code as `exit N` on its own line.
+/// The command line `argv` (after `sqlload`) on `project` without a Python host: its output, or its error, then its exit code as `exit N` on its own line. It runs on a thread with the command's stack (`COMMAND_STACK_BYTES`), as the executable and the Python package run every command, not on the test's 2 MiB.
 pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
     let Ok(cli) = Cli::try_parse_from(["sqlload"].iter().chain(argv)) else {
         return "unparsed".to_owned();
@@ -53,18 +54,33 @@ pub(crate) fn run_without_host(project: &str, argv: &[&str]) -> String {
         variables: Default::default(),
         generated: false,
     };
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| CommandError::from(error.to_string()))
-        .and_then(|runtime| runtime.block_on(run_loader(request)))
-        .map_or_else(
-            |error| {
-                let code = exit_code(false, error.retryable);
-                format!("{}\nexit {code}", error.message)
-            },
-            |(lines, code)| format!("{}\nexit {code}", lines.join("\n")),
-        )
+    let command = || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| CommandError::from(error.to_string()))
+            .and_then(|runtime| runtime.block_on(run_loader(request)))
+            .map_or_else(
+                |error| {
+                    let code = exit_code(false, error.retryable);
+                    format!("{}\nexit {code}", error.message)
+                },
+                |(lines, code)| format!("{}\nexit {code}", lines.join("\n")),
+            )
+    };
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(COMMAND_STACK_BYTES)
+            .spawn_scoped(scope, command)
+            .map_or_else(
+                |error| format!("cannot start the command's thread: {error}\nexit 1"),
+                |thread| {
+                    thread
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                },
+            )
+    })
 }
 
 /// The selection and cursor options `sqlload load <argv>` plans with, as `select | exclude | start | end`, or the parse error.
@@ -92,6 +108,8 @@ pub(crate) fn done(rows: u64, elapsed_ms: u64, position: Option<&str>) -> EventK
         position: position.map(str::to_owned),
         changes: Vec::new(),
         transforms: Vec::new(),
+        names: Vec::new(),
+        warnings: Vec::new(),
         peak_memory_bytes: None,
     }
 }

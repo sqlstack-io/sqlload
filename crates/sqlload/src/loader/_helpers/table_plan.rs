@@ -118,7 +118,7 @@ pub(crate) fn selected_columns(spec: &TableSpec) -> SourceTable {
     table
 }
 
-/// The columns the table should have: the read columns (pinned, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
+/// The columns the table should have: the read columns (pinned, parsed, typed by the source, or inferred from sampled values for Python tables and JSON, NDJSON and CSV files, whose partition columns are declared; a files source reads its constant columns itself), then the constant columns the source does not read, then the metadata columns.
 pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<DesiredColumn> {
     let sampled = spec.python.is_some()
         || spec
@@ -137,10 +137,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
         .iter()
         .map(|column| DesiredColumn {
             name: column.name.clone(),
-            column_type: column.output.clone(),
+            column_type: match spec.parses.get(&column.name) {
+                Some(parse) => parse.kind.column_type(),
+                None => column.output.clone(),
+            },
             origin: match (
                 column.name == SOURCE_ROW_COLUMN,
-                spec.pinned.contains_key(&column.name),
+                spec.pinned.contains_key(&column.name) || spec.parses.contains_key(&column.name),
             ) {
                 (true, _) => ColumnOrigin::Metadata,
                 (false, true) => ColumnOrigin::Pinned,
@@ -165,11 +168,11 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     desired.retain(|column| !(merged && column.name == CDC_UNCHANGED_COLUMN));
     for column in desired
         .iter_mut()
-        .filter(|column| is_load_column(spec.naming, &column.name))
+        .filter(|column| is_load_column(spec.compat, &column.name))
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns(spec.naming, spec.row_id));
+    desired.extend(metadata_columns(spec.compat, spec.row_id));
     desired
 }
 
@@ -421,7 +424,7 @@ pub(crate) async fn replan_columns(
                 auto_widen: spec.auto_widen,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
-                naming: spec.naming,
+                compat: spec.compat,
             };
             let compared = live.as_deref().filter(|_| !options.reload);
             let mut schema = plan_schema(&desired, compared, rules);
@@ -765,7 +768,7 @@ async fn plan_table_once(
         auto_widen: spec.auto_widen,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
-        naming: spec.naming,
+        compat: spec.compat,
     };
     let compared = live.as_deref().filter(|_| !options.reload);
     let mut schema = plan_schema(&desired, compared, rules);
@@ -1032,10 +1035,15 @@ pub(crate) fn reader_offer(
         .filter(|(_, method)| **method == MaskMethod::Hmac)
         .map(|(name, _)| name.as_str())
         .collect();
-    let nesting = match (spec.unnest == Unnest::None, spec.row_id) {
-        (false, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
-        (true, true) => Some("the table gives each row an id, which SQLLoad makes"),
-        (true, false) => None,
+    let flattens = spec
+        .files
+        .as_ref()
+        .is_some_and(|files| !files.table.objects.is_empty());
+    let nesting = match (spec.unnest == Unnest::None, spec.row_id, flattens) {
+        (false, _, _) => Some("the table unnests lists into child tables, which SQLLoad writes"),
+        (true, true, _) => Some("the table gives each row an id, which SQLLoad makes"),
+        (true, false, true) => Some("the table flattens objects into columns, which SQLLoad does"),
+        (true, false, false) => None,
     };
     let needs_loader = match (hmac.is_empty(), spec.test_loader_route, &spec.checks) {
         (false, _, _) => Some(format!(
@@ -1070,6 +1078,10 @@ pub(crate) fn reader_offer(
         spec.transform
             .as_ref()
             .map(|transform| format!("transform {} runs on each file", transform.function))
+    })
+    .or_else(|| {
+        let parsed: Vec<&str> = spec.parses.keys().map(String::as_str).collect();
+        (!parsed.is_empty()).then(|| format!("parse runs on {}", parsed.join(", ")))
     })
     .or_else(|| archived_reason(spec, read));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
@@ -1464,7 +1476,7 @@ async fn lower_bound(
     let cursor_start = match cursor
         .start
         .as_deref()
-        .map(|start| cursor_text(start, cursor_type))
+        .map(|start| cursor_text(start, cursor_type, request.spec.zone()))
     {
         Some(Ok(start)) => Some(start),
         Some(Err(problem)) => return Ok(Err(format!("cursor_start: {problem}"))),
@@ -1595,7 +1607,7 @@ pub(crate) async fn cursor_window(
     let flag = |value: &Option<String>| {
         value
             .as_deref()
-            .map(|text| cursor_text(text, cursor_type))
+            .map(|text| cursor_text(text, cursor_type, spec.zone()))
             .transpose()
     };
     let (start_flag, to) = match (flag(&options.start_cursor), flag(&options.end_cursor)) {
@@ -1736,6 +1748,7 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
                 .cursor_type
                 .filter(|known| spec.python.is_none() || **known != ColumnType::Text),
             now: chrono::Utc::now(),
+            zone: spec.zone(),
         })?;
         return Ok(CommitRule::Windows(windows));
     }

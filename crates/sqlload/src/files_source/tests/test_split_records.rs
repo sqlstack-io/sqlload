@@ -124,7 +124,7 @@ fn given_csv_bytes_in_chunks_when_reading_then_the_first_record_and_open_quotes_
 }
 
 #[test]
-fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_become_parent_key_fields_in_place()
+fn given_json_objects_with_nested_objects_when_flattening_all_then_keys_become_parent_key_fields_in_place()
  {
     let test_cases = [
         FlattenJsonTestCase {
@@ -143,7 +143,7 @@ fn given_json_objects_with_nested_objects_when_flattening_as_dlt_then_keys_becom
             description: "a flattened name the record already has is an error naming it",
             text: r#"{"c__n":1,"c":{"n":2}}"#,
             expected_flattened: Err(
-                "line 1: naming = \"dlt\" flattens an object into the column c__n",
+                "line 1: flatten makes the column c__n from an object, which the record already has as a key",
             ),
         },
     ];

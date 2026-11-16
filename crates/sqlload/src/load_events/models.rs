@@ -26,6 +26,21 @@ pub enum EventKind {
     TableStarted { strategy: String },
     /// A table finished part of its read: `unit` is `page`, `batch`, `window` or `file`, `count` how many so far, `rows` its rows so far.
     TableProgress { unit: String, count: u64, rows: u64 },
+    /// Before the plan, a source's or target's connection opened, or failed to (`ok`), after `elapsed_ms`; `label` says what it reached, such as `OPENEDGE through ODBC`.
+    Connected {
+        role: Role,
+        name: String,
+        label: String,
+        ok: bool,
+        elapsed_ms: u64,
+    },
+    /// Before the plan, a source's tables were listed and described, or that failed (`ok`), after `elapsed_ms` past its connection.
+    Discovered {
+        source: String,
+        tables: usize,
+        ok: bool,
+        elapsed_ms: u64,
+    },
     /// A request waits its turn under a connection's `rate_limit` (`rate`, such as `5/s`).
     RateLimited {
         connection: String,
@@ -52,6 +67,12 @@ pub enum EventKind {
         /// How long a files or Sheets table's `transform` took on each file or range.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         transforms: Vec<crate::python_sources::models::TransformTime>,
+        /// A line per column `rename` named or numbering numbered: `Qty (column 3) -> qty_1 (numbered)`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        names: Vec<String>,
+        /// What the load warns of, such as rows outside a cursor window.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
         /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         peak_memory_bytes: Option<u64>,
@@ -79,4 +100,47 @@ pub enum EventKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         peak_memory_bytes: Option<u64>,
     },
+}
+
+/// Whether a connection is a source's or a target's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Source,
+    Target,
+}
+
+/// How one step before the plan ended: a connection opening, or failing to; a source's tables found (how many), or not (`None`); or a step that ends without a line of its own, such as planning a table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepEnd {
+    Connected { role: Role, label: String, ok: bool },
+    Discovered { tables: Option<usize> },
+    Quiet,
+}
+
+/// How long a connection or a source's discovery took, for the plan's report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PhaseTiming {
+    pub role: Role,
+    pub name: String,
+    /// `connect` or `discover`.
+    pub phase: &'static str,
+    pub ok: bool,
+    pub elapsed_ms: u64,
+}
+
+/// The step running now: whose it is, what it does, its id (each step's own), and how long it has run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepView {
+    pub id: u64,
+    pub subject: String,
+    pub doing: String,
+    pub elapsed: std::time::Duration,
+}
+
+/// What the plan's progress has to show: the phase lines finished since last asked, and the step running now.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProgressView {
+    pub lines: Vec<String>,
+    pub step: Option<StepView>,
 }
