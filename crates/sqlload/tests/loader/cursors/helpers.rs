@@ -56,7 +56,7 @@ pub(crate) async fn run_typed_cursors(
         let plan = plan_project(&project, &destinations, &options)
             .await
             .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
+        let (lines, ok) = render_plan(&plan, true);
         let shown = words(&lines.join("\n"));
         let missing: Vec<&&str> = run
             .expected_plan

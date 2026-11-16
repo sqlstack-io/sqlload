@@ -61,7 +61,7 @@ pub(crate) async fn run_batched(
         let plan = plan_project(&project, &destinations, &options)
             .await
             .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
+        let (lines, ok) = render_plan(&plan, true);
         let refused = lines.iter().filter(|_| !ok).find_map(|line| {
             line.split_once("reason  ")
                 .map(|(_, reason)| format!("plan: {reason}"))
@@ -96,7 +96,7 @@ async fn apply_and_load(
     destinations: &BTreeMap<String, Destination>,
     options: &PlanOptions,
 ) -> Result<String, String> {
-    let (lines, ok) = render_plan(plan);
+    let (lines, ok) = render_plan(plan, true);
     ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
     apply_project(plan, destinations)
         .await

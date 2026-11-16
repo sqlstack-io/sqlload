@@ -77,7 +77,7 @@ fn given_each_odbc_driver_when_a_table_has_an_unbounded_text_column_then_every_v
             )
             .map_err(|error| error.to_string())?;
             let (succeeded, loaded) = run_sqlload(&config, &["load", "--yes"], ("", ""))?;
-            let (_, planned) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (_, planned) = run_sqlload(&config, &["plan", "-v"], ("", ""))?;
             let output = format!("{planned}\n{loaded}");
             assert!(
                 succeeded
@@ -156,7 +156,7 @@ fn given_a_mysql_table_of_265_text_columns_when_loading_then_it_reads_value_by_v
             )
             .map_err(|error| error.to_string())?;
             let (succeeded, loaded, peak) = run_measured(&config, &["load", "--yes"], "info")?;
-            let (_, planned) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (_, planned) = run_sqlload(&config, &["plan", "-v"], ("", ""))?;
             let output = format!("{planned}\n{loaded}");
             assert!(
                 succeeded

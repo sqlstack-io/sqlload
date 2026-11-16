@@ -204,7 +204,7 @@ then `on_duplicate_names`. For a CSV file whose header is `Order ID,OrderDate,Qt
 with `rename = { "Order ID" = "order_ref" }`, `plan` shows:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 Objects (1)                                         sqlload apply
 └── raw.erp                                         create table

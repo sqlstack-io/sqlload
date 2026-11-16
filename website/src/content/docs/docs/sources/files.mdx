@@ -271,7 +271,7 @@ def metric_rows(rows: pa.Table, ctx: sl.TransformContext):
 
 ```console
 $ sqlload load
-✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 object to create, 1 to load   (sqlload plan shows the tree)
 
 created  raw.metrics  8 columns
 loaded  raw.metrics      5 rows 0.0s
@@ -320,7 +320,7 @@ no index is left over.
   └── raw.metrics
       └── reason  transform metrics_rows: no function is registered as metrics_rows with @sl.transform; the registered ones are metric_rows
 
-  ✗ Plan failed with errors
+  ✗ Plan failed  1 error
   ```
 
   It then runs the function on the newest file (by name), and the table's columns are what it
@@ -352,7 +352,7 @@ Files already loaded aren't read again, so after a change, `plan` warns on the t
 it holds files an earlier version loaded, here after a load of one new file:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
@@ -463,7 +463,7 @@ otherwise. Before 0.46.0 it took `replace` without a `cursor_column`, and before
 `delete_insert` with one. Files report no primary key, so a `merge` names its `unique_key` columns.
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 └── raw.events_log                                  append
     ├── source  files  lake/events/  parquet
@@ -542,7 +542,7 @@ replace_key = ["le_version"]
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 └── raw.le                                          delete_insert (replace_key: le_version; NULLs in keys match)
     ├── source  files  lake/finance/le/  csv, compression by file name

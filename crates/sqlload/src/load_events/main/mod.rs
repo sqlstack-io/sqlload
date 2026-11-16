@@ -4,6 +4,7 @@ pub mod emit;
 pub mod end_step;
 pub mod event_line;
 pub mod listen;
+pub mod phase_summary;
 pub mod progress_view;
 pub mod step_doing;
 pub mod take_timings;

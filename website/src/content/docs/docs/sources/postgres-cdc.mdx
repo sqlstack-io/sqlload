@@ -61,7 +61,7 @@ loader_schema = "raw"
 `plan` shows each table's snapshot copy, then how its changes apply:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 Plan ready  2 selected, 2 objects to create, 2 to load
 to  Databricks lakehouse
 
@@ -136,7 +136,7 @@ cdc_mode = "changelog"
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 └── app__orders                                     snapshot copy, then append changes (changelog)
     ├── source  postgres_cdc  app  public.orders  slot sqlload_app
@@ -152,7 +152,7 @@ from [step 4](/docs/guides/postgres-cdc/#4-load-the-changes):
 
 ```console
 $ sqlload load
-✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  lake/app/customers/     50 rows 0.3s
 loaded  lake/app/orders/     1,000 rows 0.3s
@@ -161,7 +161,7 @@ loaded  lake/app/orders/     1,000 rows 0.3s
 ├── slowest      lake/app/customers/ 0.3s
 └── peak memory  66.6 MiB
 $ sqlload load
-✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  lake/app/customers/      0 rows 0.3s
 loaded  lake/app/orders/         3 rows 0.3s

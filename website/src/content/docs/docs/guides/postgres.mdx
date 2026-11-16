@@ -57,7 +57,7 @@ other one.
 Run `sqlload plan` to see what loads, then `sqlload load`:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 Loads (2)                                           sqlload load
 ├── raw.app__customers                              replace
@@ -83,7 +83,7 @@ Run `sqlload load` on a schedule. A table with a `cursor_column` continues from 
 maximum of that column, read from the table itself:
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan -v app__orders
 …
     ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
     ├── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
@@ -102,7 +102,7 @@ lookback = "2h"
 ```
 
 ```console
-$ sqlload plan app__page_views
+$ sqlload plan -v app__page_views
 …
     ├── reads   viewed_at >= 2026-10-14 19:20:00.000+00 (warehouse maximum minus lookback 2h)
 …
@@ -128,7 +128,7 @@ lookback = "2h"
 ```
 
 ```console
-$ sqlload plan app__page_views
+$ sqlload plan -v app__page_views
 …
 └── raw.app__page_views                             delete_insert (cursor: viewed_at)
     ├── source  postgres  app  public.page_views
@@ -149,7 +149,7 @@ A failure keeps the windows that committed, and the next run carries on from the
 To load a range again, give `--start-cursor` and `--end-cursor`. The end isn't included:
 
 ```console
-$ sqlload plan app__page_views --start-cursor 2026-10-05 --end-cursor 2026-10-07
+$ sqlload plan -v app__page_views --start-cursor 2026-10-05 --end-cursor 2026-10-07
 …
     ├── reads   viewed_at from 2026-10-05 00:00:00.000000+00 (--start-cursor), below 2026-10-07 00:00:00.000000+00 (--end-cursor)
 …

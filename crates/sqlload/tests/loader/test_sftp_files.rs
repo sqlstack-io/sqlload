@@ -36,7 +36,7 @@ fn given_an_sftp_server_when_loading_files_then_new_files_load_once_and_unknown_
                 },
             ],
             sign_in: KEYED,
-            command: "plan",
+            command: "plan -v",
             expected_success: true,
             expected_output: "read over SFTP -> read csv into Arrow",
             check_query: NO_TABLES,
@@ -262,7 +262,7 @@ fn given_sftp_files_and_a_snowflake_target_when_planning_then_sqlload_reads_them
                 snowflake_project(&bastion, &fake.base_url, test_case.settings),
             )
             .map_err(|error| error.to_string())?;
-            let (succeeded, output) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (succeeded, output) = run_sqlload(&config, &["plan", "-v"], ("", ""))?;
             assert!(
                 succeeded == test_case.expected_success
                     && words(&output).contains(&words(test_case.expected_output))

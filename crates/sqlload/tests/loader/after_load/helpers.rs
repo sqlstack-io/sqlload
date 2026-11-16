@@ -253,7 +253,7 @@ pub(crate) fn run_archived_reload(
     let (loaded, output) = run_sqlload(&config, &["load"], ("", ""))?;
     assert!(loaded, "{} first load:\n{output}", test_case.description);
     write(test_case.later)?;
-    let (_, plan) = run_sqlload(&config, &["plan", "--reload"], ("", ""))?;
+    let (_, plan) = run_sqlload(&config, &["plan", "-v", "--reload"], ("", ""))?;
     let (reloaded, output) = run_sqlload(&config, &["load", "--reload", "--yes"], ("", ""))?;
     assert!(reloaded, "{} reload:\n{output}", test_case.description);
     let rows = duckdb_text(

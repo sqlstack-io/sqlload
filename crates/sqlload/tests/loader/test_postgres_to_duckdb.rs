@@ -313,7 +313,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
             let plan = plan_project(&project, &destinations, &PlanOptions::default())
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
-            let (lines, ok) = render_plan(&plan);
+            let (lines, ok) = render_plan(&plan, true);
             assert!(ok, "{}:\n{}", test_case.description, lines.join("\n"));
             apply_project(&plan, &destinations)
                 .await
@@ -377,7 +377,7 @@ fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_i
             let plan = plan_project(&project, &destinations, &PlanOptions::default())
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
-            let (lines, ok) = render_plan(&plan);
+            let (lines, ok) = render_plan(&plan, true);
             assert!(ok, "{}:\n{}", test_case.description, lines.join("\n"));
             assert_eq!(
                 lines.join("\n"),
@@ -722,7 +722,7 @@ fn given_quoted_source_names_under_dlt_naming_when_loading_twice_then_the_table_
             let plan = plan_project(&project, &destinations, &PlanOptions::default())
                 .await
                 .map_err(|error| format!("{}: {error}", test_case.description))?;
-            let (lines, ok) = render_plan(&plan);
+            let (lines, ok) = render_plan(&plan, true);
             assert!(ok, "{}:\n{}", test_case.description, lines.join("\n"));
             assert_eq!(
                 lines.join("\n"),

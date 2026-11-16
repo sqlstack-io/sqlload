@@ -344,10 +344,13 @@ fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, u8),
     match args.json {
         true => Ok((vec![json_error("config", &error, false)], 1)),
         false => {
-            let (lines, ok) = render_plan(&ProjectPlan {
-                problems: problems(&error),
-                ..ProjectPlan::default()
-            });
+            let (lines, ok) = render_plan(
+                &ProjectPlan {
+                    problems: problems(&error),
+                    ..ProjectPlan::default()
+                },
+                args.verbose,
+            );
             Ok((lines, exit_code(ok, false)))
         }
     }
@@ -387,10 +390,11 @@ async fn run_command(
             );
         }
     };
-    let (json, yes, follow) = (
+    let (json, yes, follow, verbose) = (
         args.json,
         args.yes,
         args.follow.then_some(args.max_duration),
+        args.verbose,
     );
     let started = (chrono::Utc::now(), std::time::Instant::now());
     if !loads && (args.events.is_some() || args.events_file.is_some()) {
@@ -420,6 +424,7 @@ async fn run_command(
         },
         project.sources.len(),
         (draws, streams && !json && !log_json, no_color),
+        verbose,
     )
     .await?;
     plan.phases = take_timings();
@@ -429,13 +434,13 @@ async fn run_command(
     }
     let (mut lines, planned) = match json {
         true => (Vec::new(), true),
-        false => render_plan(&plan),
+        false => render_plan(&plan, verbose),
     };
     let plan_retryable = plan.only_retryable_problems();
     if !applies {
         return Ok((lines, exit_code(planned, plan_retryable)));
     }
-    if follow.is_some() && !render_plan(&plan).1 {
+    if follow.is_some() && !render_plan(&plan, verbose).1 {
         return Ok(match json {
             true => {
                 let (text, _, retryable) = json_report(&plan, None);

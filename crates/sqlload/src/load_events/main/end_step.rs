@@ -2,11 +2,12 @@
 
 use std::time::Instant;
 
-use crate::load_events::_helpers::steps::{STEPS, Step, phase_line};
+use crate::load_events::_helpers::steps::{STEPS, Step, phase_line, system_name};
+use crate::load_events::constants::SLOW_STEP;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::{EventKind, PhaseTiming, Role, StepEnd};
 
-/// End the running step as `end` says, with its phase line, timing and load event: a connection that opened goes on as its source's `listing tables`, timed afresh; one that failed, a discovery, and a quiet end leave no step running. Nothing when no step runs, as when a source's connection failed before its discovery could.
+/// End the running step as `end` says, with its phase line (quiet when it ended well within [`SLOW_STEP`]), timing, load event and, when quiet, its part of the summary lines (a slow or failed step keeps its own line instead): a connection that opened goes on as its source's `listing tables`, timed afresh; one that failed, a discovery, and a quiet end leave no step running. Nothing when no step runs, as when a source's connection failed before its discovery could.
 pub fn end_step(end: StepEnd) {
     let Ok(mut steps) = STEPS.lock() else {
         return;
@@ -53,7 +54,21 @@ pub fn end_step(end: StepEnd) {
         }
     };
     let line = phase_line((role, phase, ok), (&step.subject, &detail), seconds);
-    steps.lines.push(line);
+    let quiet = ok && elapsed < SLOW_STEP;
+    steps.lines.push((line, quiet));
+    match (&kind, quiet) {
+        (EventKind::Connected { label, .. }, true) => {
+            steps
+                .connected
+                .push(format!("{} {}", step.subject, system_name(label)));
+            steps.connect_ms += elapsed_ms;
+        }
+        (EventKind::Discovered { tables, .. }, true) => {
+            let (found, sources, millis) = steps.discovered;
+            steps.discovered = (found + tables, sources + 1, millis + elapsed_ms);
+        }
+        _ => {}
+    }
     steps.timings.push(PhaseTiming {
         role,
         name: step.subject.clone(),

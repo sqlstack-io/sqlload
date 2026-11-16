@@ -209,7 +209,7 @@ pub(crate) fn names_case_outcome(test_case: &ColumnNamesTestCase) -> Result<Name
             (run.encode)(run.contents)?,
         )
         .map_err(|error| error.to_string())?;
-        let (planned, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+        let (planned, plan) = run_sqlload(&config, &["plan", "-v"], ("", ""))?;
         let (loaded, load) = run_sqlload(&config, &["load"], ("", ""))?;
         let shown = words(&plan).contains(&words(run.expected_plan));
         outcome.runs.push((planned, loaded, shown));
