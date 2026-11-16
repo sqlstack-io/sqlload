@@ -95,7 +95,7 @@ stops being updated. `replace` drops it, and so does `deletes` with `load --sync
 | `mask` (per table) | Keep a column but replace its values with `hash` (SHA-256 hex) or `hmac` (HMAC-SHA256 hex, keyed by the source's `mask_key`). |
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 Plan ready  1 selected, 1 object to create, 1 to load, 1 skipped
 to  DuckDB local
 

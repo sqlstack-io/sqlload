@@ -15,7 +15,7 @@ finishes. It takes the same [options](/docs/cli/plan/#options) as `plan`.
 
 ```console
 $ sqlload load
-✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__customers     50 rows 0.0s
 loaded  raw.app__orders     1,000 rows 0.0s
@@ -76,7 +76,7 @@ range](/docs/concepts/cursors/#backfilling-a-range).
 
 ```console
 $ sqlload load --reload --yes app__customers
-✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 object to create, 1 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__customers     50 rows 0.0s
 
@@ -91,7 +91,7 @@ the rows in that range, as SQLBuild's
 outside the range are dropped, and `plan` warns which:
 
 ```console
-$ sqlload plan --reload --start-cursor 100000 --end-cursor 200000 shop__orders
+$ sqlload plan -v --reload --start-cursor 100000 --end-cursor 200000 shop__orders
 …
     ├── reads   order_id from 100000 (--start-cursor), below 200000 (--end-cursor)
 …
@@ -129,7 +129,7 @@ reads it after:
 
 ```console
 $ sqlload load --memory-per-table
-✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__customers     50 rows 0.0s  peak memory 80.7 MiB
 loaded  raw.app__orders         1 row  0.0s  peak memory 84.7 MiB

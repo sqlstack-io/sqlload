@@ -264,7 +264,7 @@ def test_given_an_integer_cursor_with_lookback_when_loading_again_then_ctx_start
 	give(project, "rows", [{"fy": 2025, "amount": 125}, {"fy": 2026, "amount": 10}])
 	done = load(project)
 	assert seen(project, "rows")["cursor_value"] == "2025"
-	assert "fy >= 2025 (warehouse maximum 2026 minus lookback 1)" in sqlload(project, "plan").stdout
+	assert "fy >= 2025 (warehouse maximum 2026 minus lookback 1)" in sqlload(project, "plan", "-v").stdout
 	assert query(project, 'SELECT fy, amount FROM "RAW"."shop__rows" ORDER BY fy') == [(2025, 125), (2026, 10)], done.stdout
 	load(project, "--start-cursor-int", "2024")
 	assert seen(project, "rows")["cursor_value"] == "2024"
@@ -433,7 +433,7 @@ def refunds(ctx):
 
 def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come_from(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='orders', columns={'total': 'decimal(18,2)'})(rows)\nshop.table(description='Test table.', name='stores')(rows)\n")
-	done = sqlload(project, "plan")
+	done = sqlload(project, "plan", "-v")
 	assert done.returncode == 0, done.stderr
 	for line in [
 		"create table on first load (1 declared columns, the rest inferred from the data)",
@@ -446,7 +446,7 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 	give(project, "stores", [{"id": 1}])
 	load(project)
 	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__orders' AND column_name = 'total'") == [("DECIMAL(18,2)",)]
-	assert "columns inferred at load and checked against the live table" in sqlload(project, "plan", "stores").stdout
+	assert "columns inferred at load and checked against the live table" in sqlload(project, "plan", "-v", "stores").stdout
 
 
 @pytest.mark.parametrize(
@@ -1268,7 +1268,7 @@ def test_given_flatten_when_loading_then_only_the_listed_object_expands_one_leve
 ) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten=['customer'])(rows)\n")
 	give(project, "rows", first)
-	planned = sqlload(project, "plan")
+	planned = sqlload(project, "plan", "-v")
 	assert "columns inferred on first load" in planned.stdout, planned.stdout
 	assert "flatten customer; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
 	load(project)
@@ -1392,7 +1392,7 @@ def test_given_a_dotted_flatten_path_two_levels_deep_when_loading_then_the_inner
 def test_given_flatten_all_when_a_later_load_adds_an_object_field_then_it_becomes_columns(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', flatten='all')(rows)\n")
 	give(project, "rows", [{"id": 1, "customer": {"name": "Ann"}}])
-	planned = sqlload(project, "plan")
+	planned = sqlload(project, "plan", "-v")
 	assert "flatten every object, 1000 levels down at most; objects flatten as rows arrive at load" in planned.stdout, planned.stdout
 	load(project)
 	give(project, "rows", [{"id": 2, "customer": {"name": "Bo", "address": {"city": "Leeds"}}, "tags": ["x"]}])

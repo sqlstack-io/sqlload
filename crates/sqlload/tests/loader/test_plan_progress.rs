@@ -11,38 +11,87 @@ fn given_plan_piped_when_connecting_and_discovering_then_timed_phase_lines_and_r
     std::fs::create_dir_all(root.join("drop/orders")).map_err(|error| error.to_string())?;
     std::fs::write(root.join("drop/orders/a.csv"), "id,qty\n1,2\n")
         .map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(root.join("drop/days/day=2026-11-02"))
+        .map_err(|error| error.to_string())?;
+    std::fs::write(root.join("drop/days/day=2026-11-02/a.csv"), "id,qty\n1,2\n")
+        .map_err(|error| error.to_string())?;
     let port = silent_server(Duration::from_millis(1200))?;
     let target = format!(
         "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{root}/out.duckdb\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n",
         root = root.display()
     );
     let files = "[sources.orders]\nkind = \"files\"\nconnection = \"files\"\npath = \"drop/orders/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n";
+    let windowed = "[sources.days]\nkind = \"files\"\nconnection = \"files\"\npath = \"drop/days/\"\nformat = \"csv\"\ndescription = \"Orders by day.\"\npartition_columns = { day = \"date\" }\nwrite_strategy = \"delete_insert\"\ncursor_column = \"day\"\n";
     let slow = format!(
         "[connections.pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {port}\nuser = \"sqlload\"\npassword = \"secret\"\ndatabase = \"app\"\n\n[sources.erp]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\nwrite_strategy = \"replace\"\n"
     );
     let test_cases = [
         PlanProgressTestCase {
-            description: "a fast plan: a line per connection and discovery, no RUNNING row, no spinner",
+            description: "a fast plan: its connections and discoveries collapse into two summary lines, no RUNNING row, no spinner",
             config: format!("{target}{files}"),
             args: &["plan", "--progress", "always"],
+            expected_stderr: &[
+                "✓ Connected   dev DuckDB   0.",
+                "✓ Discovered  1 table in 1 source   0.",
+            ],
+            unexpected_stderr: &[
+                "Target connected",
+                "orders  1 table",
+                "RUNNING",
+                "Planning",
+                "⠋",
+                "\u{1b}",
+            ],
+            least_running_rows: 0,
+            expected_stdout: &[],
+        },
+        PlanProgressTestCase {
+            description: "-v: a line per connection and discovery, and no summary",
+            config: format!("{target}{files}"),
+            args: &["plan", "-v"],
             expected_stderr: &[
                 "✓ Target connected  dev  DUCKDB  (",
                 "✓ Discovered  orders  1 table  (",
             ],
-            unexpected_stderr: &["RUNNING", "Planning", "⠋", "\u{1b}"],
+            unexpected_stderr: &["✓ Connected", "in 1 source"],
             least_running_rows: 0,
+            expected_stdout: &[],
         },
         PlanProgressTestCase {
-            description: "a source slow to connect: RUNNING rows as it waits, then the failure with its time",
+            description: "a source slow to connect: RUNNING rows as it waits, then the failure with its time, and the target in the summary",
             config: format!("{target}{slow}"),
             args: &["plan"],
             expected_stderr: &[
-                "✓ Target connected  dev  DUCKDB  (",
                 "  erp  connecting  RUNNING 0.",
                 "✗ Source connection failed  erp  POSTGRES  (after ",
+                "✓ Connected   dev DuckDB   0.",
             ],
-            unexpected_stderr: &["Discovered", "Discovery failed"],
+            unexpected_stderr: &["Discovered", "Discovery failed", "Target connected"],
             least_running_rows: 2,
+            expected_stdout: &[],
+        },
+        PlanProgressTestCase {
+            description: "-v: every step's line in the order the steps ended, the target's before the source that failed after it",
+            config: format!("{target}{slow}"),
+            args: &["plan", "-v"],
+            expected_stderr: &[
+                "✓ Target connected  dev  DUCKDB  (",
+                "✗ Source connection failed  erp  POSTGRES  (after ",
+            ],
+            unexpected_stderr: &["✓ Connected"],
+            least_running_rows: 0,
+            expected_stdout: &[],
+        },
+        PlanProgressTestCase {
+            description: "a files table read by a cursor keeps its start on its line, the file count after it",
+            config: format!("{target}{windowed}"),
+            args: &["plan", "--start-cursor", "2026-11-01"],
+            expected_stderr: &[],
+            unexpected_stderr: &[],
+            least_running_rows: 0,
+            expected_stdout: &[
+                "delete_insert on day   day \u{2265} 2026-11-01 (--start-cursor) \u{b7} 1 new of 1 files",
+            ],
         },
     ];
     let config = root.join("sqlload.toml");
@@ -57,18 +106,26 @@ fn given_plan_piped_when_connecting_and_discovering_then_timed_phase_lines_and_r
             .output()
             .map_err(|error| error.to_string())?;
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let rows = stderr.matches("RUNNING").count();
+        let mut rest: &str = &stderr;
+        let in_order = test_case.expected_stderr.iter().all(|expected| {
+            rest.find(expected)
+                .map(|at| rest = &rest[at + expected.len()..])
+                .is_some()
+        });
         assert!(
-            test_case
-                .expected_stderr
-                .iter()
-                .all(|expected| stderr.contains(expected))
+            in_order
+                && test_case
+                    .expected_stdout
+                    .iter()
+                    .all(|expected| stdout.contains(expected))
                 && !test_case
                     .unexpected_stderr
                     .iter()
                     .any(|unexpected| stderr.contains(unexpected))
                 && rows >= test_case.least_running_rows,
-            "{}: {stderr:?}",
+            "{}: {stderr:?} {stdout:?}",
             test_case.description
         );
     }

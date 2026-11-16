@@ -157,7 +157,7 @@ def customers(ctx):
     return api.paginate("/customers", paginator=sl.single(), select="$.customers[*]", fields={"id": "$.id"})
 """
 	)
-	done = sqlload(make_project(tmp_path, api, module), "plan")
+	done = sqlload(make_project(tmp_path, api, module), "plan", "-v")
 	shown = words(done.stdout + done.stderr)
 	assert done.returncode == 0, shown
 	assert "RAW.shop__orders replace" in shown and 'paths checked at load, as they\'re computed: fields["sku"], fields["at"]' in shown, shown

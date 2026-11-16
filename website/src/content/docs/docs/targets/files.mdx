@@ -28,7 +28,7 @@ path = "{source}/{table}/dt={cursor:date}/"
 A source's `destination_path`, or one table's, overrides the target's `path`.
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
@@ -43,7 +43,7 @@ Loads (1)                                           sqlload load
 
 ✓ Plan complete  1 selected, 1 to load
 $ sqlload load
-✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 to load   (sqlload plan shows the tree)
 
 loaded  out/app/orders/  1,000 rows 0.1s
 

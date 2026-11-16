@@ -255,6 +255,9 @@ pub struct LoaderArgs {
     /// The bytes a batch holds before it may commit, instead of about 1 GB (for tests).
     #[arg(long, hide = true, value_parser = clap::value_parser!(u64).range(1..))]
     pub batch_bytes: Option<u64>,
+    /// Show every line of the plan, the defaults each table follows too, and every connection's and discovery's own line.
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
 }
 
 /// How `--events` writes load events.

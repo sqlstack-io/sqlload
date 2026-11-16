@@ -392,7 +392,7 @@ async fn run_step(
     let mut plan = plan_project(&project, destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
     apply_project(&plan, destinations)
         .await
@@ -492,7 +492,7 @@ pub(crate) async fn run_sync_deletes(
         let plan = plan_project(&project, &destinations, &options)
             .await
             .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
+        let (lines, ok) = render_plan(&plan, true);
         ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
         let scan = format!(
             "then a full key scan of public.items {} the rows of keys it no longer holds (at most 50% of the table)",
@@ -561,7 +561,7 @@ pub(crate) async fn sync_deletes_plan(
         .batch_execute("DROP TABLE public.estimates")
         .await
         .map_err(|error| error.to_string())?;
-    Ok(render_plan(&plan).0.join("\n"))
+    Ok(render_plan(&plan, true).0.join("\n"))
 }
 
 /// The key scan refusing to mark every row: more than the table's `max_row_drop` of 50%.
@@ -656,7 +656,7 @@ pub(crate) async fn tombstones_plan(
         .batch_execute("DROP TABLE public.items; DROP SCHEMA audit CASCADE")
         .await
         .map_err(|error| error.to_string())?;
-    Ok(render_plan(&plan).0.join("\n"))
+    Ok(render_plan(&plan, true).0.join("\n"))
 }
 
 /// Run [`TOMBSTONE_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `coalesce(updated_at, created_at)` with `target.deletes` and `deletes_from` its tombstones in `audit.deleted_items`: after each step, `target.check_query`'s rows, then ` | ` and the items load's note, or its error.
@@ -700,7 +700,7 @@ pub(crate) async fn run_tombstones(
         let plan = plan_project(&project, &destinations, &options)
             .await
             .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
+        let (lines, ok) = render_plan(&plan, true);
         let shown = words(&lines.join("\n"));
         ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
         assert!(

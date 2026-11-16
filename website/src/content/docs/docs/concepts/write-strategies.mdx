@@ -275,7 +275,7 @@ nightly `--sync-deletes`, so SQLLoad keeps no schedule.
 `plan` shows the cost on the table's line, and the result shows how many rows were marked:
 
 ```console
-$ sqlload plan --sync-deletes
+$ sqlload plan -v --sync-deletes
 …
 └── raw.erp__stock_item   merge (unique_key: company_no, item_no), then a full key scan of pub.stock_item soft-deletes the rows of keys it no longer holds (at most 10% of the table)
 …
@@ -328,7 +328,7 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
   `hard` takes any column that compares with the table's cursor, such as a sequence number.
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 ├── raw.erp__stock_item                  merge (unique_key: company_no, item_no), then soft-deletes the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)
 └── raw.erp__stock_item__sqlload_deletes  delete_insert (cursor: deleted_at)

@@ -41,7 +41,7 @@ to each warehouse. See [Types](/docs/concepts/types/).
 | `fail` | Stops the table. |
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan -v app__orders
 Plan ready  1 selected, 1 to alter, 1 to load
 
 Objects (1)                                         sqlload apply
@@ -56,7 +56,7 @@ SQLLoad never drops columns from a destination table.
 A pinned type wider than the live column widens it:
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan -v app__orders
 Plan ready  1 selected, 1 to alter, 1 to load
 
 Objects (1)                                         sqlload apply

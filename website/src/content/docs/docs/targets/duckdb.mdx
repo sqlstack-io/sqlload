@@ -10,7 +10,7 @@ Parquet files in S3 or a local folder load directly: DuckDB reads them with `rea
 same values SQLLoad's own reader gives:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
     ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
 ```

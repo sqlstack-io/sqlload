@@ -43,7 +43,7 @@ Under `append`, each run loads only the files it hasn't loaded yet, by `_sqlload
 After one more file arrives:
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 └── raw.events_log                                  append
     ├── source  files  lake/events/  parquet
@@ -53,7 +53,7 @@ $ sqlload plan
 
 ✓ Plan complete  1 selected, 1 to load
 $ sqlload load
-✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 to load   (sqlload plan shows the tree)
 
 loaded  raw.events_log      3 rows 0.0s
 …
@@ -81,7 +81,7 @@ cursor_column = "dt"
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 └── raw.events                                      delete_insert (cursor: dt)
     ├── source  files  lake/events/  parquet
@@ -92,7 +92,7 @@ $ sqlload plan
 
 ✓ Plan complete  1 selected, 1 to load
 $ sqlload load
-✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 to load   (sqlload plan shows the tree)
 
 loaded  raw.events      6 rows 0.0s
 …

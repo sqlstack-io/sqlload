@@ -227,13 +227,11 @@ and `sl.parent`, and `key_path=`, with the same checker as load:
 
 ```console
 $ sqlload plan
-Plan ready  1 selected
-
 Errors (1)
 └── raw.shop__orders
     └── reason  fields["sku"]: field path "$.lines[*].sku" uses the wildcard [*], which one column can't hold; take one item with [n] or [-1], or select the list's items as rows
 
-✗ Plan failed with errors  1 selected
+✗ Plan failed  1 error
 ```
 
 - Only calls whose names lead to sqlload count, however it was imported (`import sqlload as sl`,
@@ -497,7 +495,7 @@ def lines(ctx):
 
 ```console
 $ sqlload load
-✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 object to create, 1 to load   (sqlload plan shows the tree)
 
 created  raw.shop__lines  6 columns
 loaded  raw.shop__lines      6 rows 0.1s
@@ -522,13 +520,11 @@ loaded  raw.shop__lines      6 rows 0.1s
 
   ```console
   $ sqlload plan
-  Plan ready  1 selected
-
   Errors (1)
   └── raw.shop__lines
       └── reason  transform order_line: no function is registered as order_line with @sl.transform; the registered ones are order_lines
 
-  ✗ Plan failed with errors  1 selected
+  ✗ Plan failed  1 error
   ```
 
 - `transform` is for the job whose rows load; a job given as a fan-out's `over=` refuses it.

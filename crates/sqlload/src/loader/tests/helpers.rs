@@ -1,3 +1,4 @@
+use crate::adapters::contract::models::{MergeDedupe, WriteMode};
 use crate::column_parse::main::column_parse::column_parse;
 use std::collections::{BTreeSet, HashMap};
 
@@ -607,4 +608,30 @@ pub(crate) fn older_count(test_case: &OlderFilesTestCase) -> Result<usize, Strin
     Ok(crate::loader::_helpers::run_log::older_files(
         &records, &spec, "f@2",
     ))
+}
+
+/// A plan's `replace` write.
+pub(crate) fn replace_mode() -> WriteMode {
+    WriteMode::Replace
+}
+
+/// A merge on two columns that refuses repeated keys.
+pub(crate) fn merge_failing_repeats() -> WriteMode {
+    WriteMode::Merge {
+        unique_key: vec!["tenant_id".to_owned(), "id".to_owned()],
+        dedupe: None,
+        not_null_keys: Vec::new(),
+    }
+}
+
+/// A merge on one column that keeps the newest row of a key by `updated_at`.
+pub(crate) fn merge_newest() -> WriteMode {
+    WriteMode::Merge {
+        unique_key: vec!["id".to_owned()],
+        dedupe: Some(MergeDedupe {
+            ordinal: "_ord".to_owned(),
+            newest_by: vec!["updated_at".to_owned()],
+        }),
+        not_null_keys: Vec::new(),
+    }
 }

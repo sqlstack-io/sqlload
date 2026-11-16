@@ -176,7 +176,7 @@ def test_an_api_reading_times_in_another_zone_fails_as_an_offset_until_timezone_
 
 def test_timezone_reads_cursor_start_and_flags_in_its_zone_and_gives_ctx_times_in_it(tmp_path: Path) -> None:
 	project = make_project(tmp_path, 'timezone="Europe/Paris"')
-	planned = sqlload(project, "plan", "shop__paris")
+	planned = sqlload(project, "plan", "-v", "shop__paris")
 	assert (
 		"reads   updated_at >= 2026-03-01 00:00:00 (first run, from cursor_start); rows outside a window fail the table; "
 		"times without an offset in Europe/Paris (the source's timezone)"

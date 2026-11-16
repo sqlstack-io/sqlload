@@ -8,7 +8,7 @@ destination's maximum of that column. SQLLoad doesn't store the position anywher
 it from the table, so a table you change, truncate or drop by hand is followed on the next run.
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan -v app__orders
 …
     ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
 …
@@ -98,7 +98,7 @@ cursor_column = ["updated_at", "created_at"]
 cursor column nullable, and nothing when it reports it `NOT NULL`, which skips the count:
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan -v app__orders
 …
     ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum) (NULL cursors: included)
 …
@@ -141,7 +141,7 @@ end. Values are typed from each selected table's cursor: an integer, an RFC 3339
 date.
 
 ```console
-$ sqlload plan app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
+$ sqlload plan -v app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
 …
     ├── reads   updated_at from 2026-10-01 00:00:00.000000+00 (--start-cursor), below 2026-10-08 00:00:00.000000+00 (--end-cursor)
 …
@@ -155,7 +155,7 @@ and `--end-cursor-ts` take an RFC 3339 timestamp or a date, and apply to date an
 both kinds in one run, and each table takes the flags of its cursor's kind:
 
 ```console
-$ sqlload plan --start-cursor-ts 2026-10-01 --end-cursor-ts 2026-10-08 --start-cursor-int 2024
+$ sqlload plan -v --start-cursor-ts 2026-10-01 --end-cursor-ts 2026-10-08 --start-cursor-int 2024
 …
 ├── raw.erp__gl_balances                            delete_insert (cursor: fiscal_year)
 │   ├── source  postgres  erp  public.gl_balances
@@ -200,7 +200,7 @@ lookback = 1
 ```
 
 ```console
-$ sqlload plan erp__gl_balances
+$ sqlload plan -v erp__gl_balances
 …
 └── raw.erp__gl_balances                            delete_insert (cursor: fiscal_year)
     ├── source  postgres  erp  public.gl_balances
@@ -226,7 +226,7 @@ date and timestamp cursors. `--start-cursor` and the typed flags win over it. Wi
 
 A large load commits along the way instead of all at the end, so a failure keeps what committed and
 the next run carries on from there. The exception is `delete_insert` into ClickHouse read by cursor,
-which publishes once per run (last row below). `plan` of one table shows how it commits, on its
+which publishes once per run (last row below). `plan -v` of one table shows how it commits, on its
 `commits` line, or `batch` for a table with neither a cursor nor logged state.
 
 | Table | Commits |
@@ -246,7 +246,7 @@ into a new table and swaps it in once at the end. The rebuilt table holds only t
 [Reloading](/docs/cli/load/#reloading).
 
 ```console
-$ sqlload plan --reload --end-cursor 200000 shop__orders
+$ sqlload plan -v --reload --end-cursor 200000 shop__orders
 …
 └── raw.shop__orders                                recreate from the whole source (--reload)
 …
@@ -270,7 +270,7 @@ lookback = "1h"
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
     ├── reads   updated_at >= 2026-09-01 00:00:00.000+00 (first run, from cursor_start)
     ├── commits 11 windows of 7days, one commit each
@@ -314,7 +314,7 @@ def orders(ctx):
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
     ├── reads   updated_at >= 2026-09-01 00:00:00 (first run, from cursor_start); rows outside a window fail the table; times without an offset in UTC (the default, as timezone is not set)
 …
@@ -363,7 +363,7 @@ From 0.53.0. On a cursor of times with a time zone, `timezone` sets the zone tha
 `timezone`, both are UTC. `plan` names the zone, and where it came from, on the `reads` line:
 
 ```console
-$ sqlload plan --start-cursor "2026-09-03 00:00:00" --end-cursor "2026-09-05 00:00:00"
+$ sqlload plan -v --start-cursor "2026-09-03 00:00:00" --end-cursor "2026-09-05 00:00:00"
 …
     ├── reads   updated_at from 2026-09-03 00:00:00 (--start-cursor), below 2026-09-05 00:00:00 (--end-cursor); rows outside a window fail the table; times without an offset in Europe/Paris (the table's timezone)
 …

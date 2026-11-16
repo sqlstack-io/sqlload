@@ -81,7 +81,7 @@ pub(crate) async fn load_once(
     let plan = plan_project(project, destinations, options)
         .await
         .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
     apply_project(&plan, destinations)
         .await
