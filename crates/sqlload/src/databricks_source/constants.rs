@@ -18,3 +18,10 @@ pub const DECIMAL_DEFAULT: (u32, u32) = (10, 0);
 
 /// What `information_schema.columns.is_nullable` says of a column that can't hold NULL.
 pub const NOT_NULLABLE: &str = "NO";
+
+/// The most fractional-second digits a timestamp loads with; a `TIMESTAMP(9)` would lose its nanoseconds.
+pub const TIMESTAMP_DIGITS: u32 = 6;
+
+/// How a column type names its collation, and the byte-order one cursor filters compare text in.
+pub const COLLATE: &str = " COLLATE ";
+pub const BINARY_COLLATION: &str = "UTF8_BINARY";

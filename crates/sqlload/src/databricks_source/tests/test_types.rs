@@ -14,3 +14,12 @@ pub(crate) struct SelectQueryTestCase {
     pub(crate) filter: Option<&'static str>,
     pub(crate) expected_query: &'static str,
 }
+
+pub(crate) struct CollatedSelectTestCase {
+    pub(crate) description: &'static str,
+    /// The string column's type as `information_schema.columns.full_data_type` writes it.
+    pub(crate) sql_type: &'static str,
+    /// The read column's expression, which cursor filters compare.
+    pub(crate) expected_expression: &'static str,
+    pub(crate) expected_query: &'static str,
+}

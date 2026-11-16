@@ -2,10 +2,10 @@
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::models::ColumnType;
-use crate::databricks_source::constants::DECIMAL_DEFAULT;
+use crate::databricks_source::constants::{DECIMAL_DEFAULT, TIMESTAMP_DIGITS};
 use crate::postgres_source::models::{PgType, SourceColumn};
 
-/// A column from its name, its full SQL type as Databricks writes it (`information_schema.columns.full_data_type`, or a result's `type_text`, in either case) and whether it may be NULL: `ARRAY`, `MAP`, `STRUCT` and `VARIANT` as `json`; a type with no portable one (`INTERVAL`, `GEOMETRY`, `VOID`) must be pinned or excluded.
+/// A column from its name, its full SQL type as Databricks writes it (`information_schema.columns.full_data_type`, or a result's `type_text`, in either case) and whether it may be NULL: `ARRAY`, `MAP`, `STRUCT` and `VARIANT` as `json`; a type with no portable one (`INTERVAL`, `GEOMETRY`, `VOID`, a timestamp with more than microseconds) must be pinned or excluded.
 pub(crate) fn source_column(name: &str, sql_type: &str, nullable: bool) -> SourceColumn {
     let shown = sql_type.trim().to_ascii_uppercase();
     let column_type = scalar_type(&shown).ok_or_else(|| {
@@ -60,8 +60,12 @@ fn scalar_type(shown: &str) -> Option<ColumnType> {
         },
         "BINARY" => ColumnType::Binary,
         "DATE" => ColumnType::Date,
-        "TIMESTAMP" | "TIMESTAMP_LTZ" => ColumnType::TimestampTz,
-        "TIMESTAMP_NTZ" => ColumnType::TimestampNtz,
+        "TIMESTAMP" | "TIMESTAMP_LTZ" if first.is_none_or(|digits| digits <= TIMESTAMP_DIGITS) => {
+            ColumnType::TimestampTz
+        }
+        "TIMESTAMP_NTZ" if first.is_none_or(|digits| digits <= TIMESTAMP_DIGITS) => {
+            ColumnType::TimestampNtz
+        }
         "ARRAY" | "MAP" | "STRUCT" | "VARIANT" | "OBJECT" => ColumnType::Json,
         _ => return None,
     })

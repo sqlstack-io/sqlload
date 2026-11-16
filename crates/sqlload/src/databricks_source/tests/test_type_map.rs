@@ -57,6 +57,21 @@ fn given_databricks_column_types_when_mapping_them_then_each_gets_its_portable_t
             expected_type: Some(ColumnType::Json),
         },
         SourceColumnTestCase {
+            description: "a string with a collation is still text",
+            sql_type: "string collate UTF8_LCASE",
+            expected_type: Some(ColumnType::Text),
+        },
+        SourceColumnTestCase {
+            description: "a timestamp in microseconds is a timestamp",
+            sql_type: "timestamp(6)",
+            expected_type: Some(ColumnType::TimestampTz),
+        },
+        SourceColumnTestCase {
+            description: "a timestamp in nanoseconds would lose digits, so it must be pinned",
+            sql_type: "timestamp_ntz(9)",
+            expected_type: None,
+        },
+        SourceColumnTestCase {
             description: "an interval has no portable type",
             sql_type: "interval day to second",
             expected_type: None,
