@@ -4,11 +4,15 @@ use arrow_array::builder::{
     BooleanBuilder, Date32Builder, Decimal128Builder, Float64Builder, Int64Builder, StringBuilder,
     TimestampMicrosecondBuilder,
 };
-use arrow_array::{ArrayRef, NullArray, TimestampMicrosecondArray};
+use arrow_array::cast::AsArray;
+use arrow_array::types::Float64Type;
+use arrow_array::{Array, ArrayRef, NullArray, TimestampMicrosecondArray};
+use arrow_schema::{DataType, Field};
 use chrono::DateTime;
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::main::combined_type::combined_type;
+use crate::column_types::main::portable_type::portable_type;
 use crate::column_types::models::ColumnType;
 use crate::row_batches::constants::{INT_DIGITS, MIN_TIMESTAMP_LENGTH, SECONDS_PER_DAY, UTC_ZONE};
 use crate::row_batches::models::Cell;
@@ -269,4 +273,34 @@ fn float_text(value: f64) -> String {
         Some(number) => number.to_string(),
         None => value.to_string(),
     }
+}
+
+/// Why `column`, a float column turning integer or decimal `field`, can't: its first NaN or infinity, by its row counted after `first_row`; `None` for any other column.
+pub(crate) fn nonfinite_problem(
+    field: &Field,
+    column: &ArrayRef,
+    first_row: u64,
+) -> Option<String> {
+    let exact = field.data_type().is_integer()
+        || matches!(
+            field.data_type(),
+            DataType::Decimal128(..) | DataType::Decimal256(..)
+        );
+    if !exact {
+        return None;
+    }
+    let floats = column.as_primitive_opt::<Float64Type>()?;
+    let row =
+        (0..floats.len()).find(|row| floats.is_valid(*row) && !floats.value(*row).is_finite())?;
+    let value = floats.value(row);
+    let type_text = match portable_type(field) {
+        Ok(column_type) => column_type.to_string(),
+        Err(_) => field.data_type().to_string(),
+    };
+    Some(format!(
+        "column {}: row {} holds {value}, which {type_text} can't hold; pin {} as float, or set on_nonfinite = \"null\" to load NaN and infinities as NULL",
+        field.name(),
+        first_row + row as u64 + 1,
+        field.name()
+    ))
 }

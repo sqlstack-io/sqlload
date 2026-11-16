@@ -44,6 +44,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             names.join(", "),
             values.join(", ")
         )],
+        WriteMode::MarkMissing(mark) => vec![adapter.render_mark(request, mark, staging)],
         WriteMode::Changes(change) => adapter
             .render_changes(request, change, staging)
             .into_iter()

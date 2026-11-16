@@ -97,6 +97,36 @@ pub(crate) struct SettingsChangeTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A CSV files table loaded once, planned under changed settings, then loaded again with one more file.
+pub(crate) struct FilesSettingsChangeTestCase {
+    pub(crate) description: &'static str,
+    /// The file (name, contents) the first load reads, and the one added before the second.
+    pub(crate) first: (&'static str, &'static str),
+    pub(crate) second: (&'static str, &'static str),
+    /// Source settings for the first load, then for the plan and second load.
+    pub(crate) before: &'static str,
+    pub(crate) after: &'static str,
+    /// Lines the plan under `after` shows.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// A query on the DuckDB destination after the second load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
+/// A files source loaded once into a DuckDB target with target settings, such as `json_type`.
+pub(crate) struct TargetSettingsFilesTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added under `[targets.dev]`.
+    pub(crate) target_settings: &'static str,
+    /// Source settings after its `path`, starting with its format.
+    pub(crate) source_settings: &'static str,
+    /// The file (name, contents) the load reads.
+    pub(crate) file: (&'static str, &'static str),
+    /// A query on the DuckDB destination after the load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One project with constant columns planned and loaded once on a fresh Postgres.
 pub(crate) struct ConstantLoadTestCase {
     pub(crate) description: &'static str,
@@ -1057,7 +1087,7 @@ pub(crate) struct FilesMergeTestCase {
 
 /// One `sqlload load --json` of an `after_load` case.
 pub(crate) struct AfterLoadStep {
-    /// Files written first, by path below the connection's root, such as `drop/a.csv`.
+    /// Files written first, by path below the connection's root, such as `drop/a.csv`; one ending `.zip` is an archive of the members its contents list, each `name=contents`, separated by `;`.
     pub(crate) files: &'static [(&'static str, &'static str)],
     /// Folders removed next, by path below the root, such as `drop`.
     pub(crate) removed: &'static [&'static str],
@@ -1075,7 +1105,7 @@ pub(crate) struct AfterLoadTestCase {
     /// Folders below the root made links to a fresh folder in another directory, such as `/dev/shm`, which may be another volume.
     pub(crate) linked: &'static [(&'static str, &'static str)],
     pub(crate) steps: &'static [AfterLoadStep],
-    /// Every file left below the root, sorted, as `path=contents`.
+    /// Every file left below the root, sorted, as `path=contents` (`path=zip` for an archive).
     pub(crate) expected_files: &'static [&'static str],
 }
 
@@ -1098,7 +1128,7 @@ pub(crate) struct S3AfterLoadTestCase {
 /// One repeated-key rule: a load of `public.readings`, merged on `sensor` with `reading_id` as cursor, from a fresh target table.
 pub(crate) struct DedupeRule {
     pub(crate) description: &'static str,
-    /// Table settings after the merge's own, such as `dedup_sort`.
+    /// Table settings after the merge's own, such as `newest_by`.
     pub(crate) settings: &'static str,
     /// Text the plan's or the load's error must contain; empty when the load must succeed.
     pub(crate) expected_error: &'static str,
@@ -1106,7 +1136,7 @@ pub(crate) struct DedupeRule {
     pub(crate) expected_plan: &'static str,
 }
 
-/// A `dedup_sort` plan refuses.
+/// A `newest_by` plan refuses.
 pub(crate) struct DedupeRefusalTestCase {
     pub(crate) description: &'static str,
     pub(crate) rule: DedupeRule,
@@ -1283,6 +1313,28 @@ pub(crate) struct NullCursorPlanTestCase {
     pub(crate) settings: &'static str,
     /// Text the rendered plan (or the error that refused it) must contain, whitespace collapsed.
     pub(crate) expected_plan: &'static str,
+}
+
+/// One load of `erp.orders` and `erp.sites`, narrowed by `where`, after a change at the source.
+#[cfg(feature = "odbc")]
+pub(crate) struct RowFilterTestCase {
+    pub(crate) description: &'static str,
+    /// The source's kind: `odbc` (over psqlODBC) or `postgres`, each loading into its own DuckDB file.
+    pub(crate) source_kind: &'static str,
+    /// The `[connections.erp]` settings for the test database's port.
+    pub(crate) connection: fn(u16) -> String,
+    /// SQL run in Postgres before this load.
+    pub(crate) source_change: &'static str,
+    /// The `where` line of the orders table.
+    pub(crate) orders_filter: &'static str,
+    /// Text `plan` prints, before the load.
+    pub(crate) expected_plan: &'static str,
+    /// The load's arguments.
+    pub(crate) load: &'static [&'static str],
+    /// Whether `load` succeeds, and text its output holds.
+    pub(crate) expected_output: (bool, &'static str),
+    /// The loaded orders as `id:status` and sites as codes, with the count of loads the orders came from.
+    pub(crate) expected_result: &'static str,
 }
 
 /// One load of `erp.t` over ODBC with a NULL cursor rule, after a change at the source.
@@ -1493,4 +1545,43 @@ pub(crate) struct PhaseTimesTestCase {
     pub(crate) args: &'static [&'static str],
     pub(crate) pointer: &'static str,
     pub(crate) expected_phases: Vec<(String, String, String, bool, bool)>,
+}
+
+/// One target's run of the delete steps (key scans, or tombstones): a merge of `public.items` with `deletes` set, each step's rows and what its load said.
+pub(crate) struct SyncDeletesTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table.
+    pub(crate) reset: &'static [&'static str],
+    /// `deletes = "soft"` or `"hard"`.
+    pub(crate) deletes: &'static str,
+    /// What the plan says the scan or the tombstones do to those rows: `soft-deletes` or `deletes`.
+    pub(crate) marks: &'static str,
+    /// The table's rows as one text value, `id:state` ordered by id.
+    pub(crate) check_query: &'static str,
+    /// After each step: `check_query`'s rows, then ` | ` and the load's note, or its error.
+    pub(crate) expected_steps: Vec<String>,
+}
+
+/// A plan of `public.estimates` (a `delete_insert`) with settings and flags `plan` refuses.
+pub(crate) struct SyncDeletesRefusalTestCase {
+    pub(crate) description: &'static str,
+    /// TOML lines added to the table's entry.
+    pub(crate) settings: &'static str,
+    pub(crate) sync_deletes: bool,
+    /// Text the failed plan must show, compared as words.
+    pub(crate) expected_error: &'static str,
+}
+
+/// A plan of `public.items` with `deletes_from` tombstones whose `deleted_at` has some type.
+pub(crate) struct TombstonePlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) deletes: &'static str,
+    /// The Postgres type of the tombstones' `deleted_at`.
+    pub(crate) deleted_at_type: &'static str,
+    pub(crate) expected_failed: bool,
+    /// Text the plan must show, compared as words; empty when it succeeds.
+    pub(crate) expected_error: &'static str,
 }

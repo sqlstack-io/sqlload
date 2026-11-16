@@ -17,7 +17,7 @@ fn format_suffixes(format: SourceFormat) -> &'static [&'static str] {
     }
 }
 
-/// The decompression `key` is read with, or `None` when its name does not belong to `encoding` (case-insensitive); with `compression = "zip"`, `Plain` for a ZIP archive, whose members [`member_fits`] picks.
+/// The decompression `key` is read with, or `None` when its name does not belong to `encoding`: it matches no `pattern`, or without one, lacks the format's suffix (case-insensitive); with `compression = "zip"`, `Plain` for a ZIP archive, whose members [`member_fits`] picks.
 pub(crate) fn file_codec(key: &str, encoding: &FilesEncoding) -> Option<Codec> {
     let lower = key.to_ascii_lowercase();
     let (stem, suffix_codec) = match (
@@ -28,8 +28,14 @@ pub(crate) fn file_codec(key: &str, encoding: &FilesEncoding) -> Option<Codec> {
         (None, Some(stem)) => (stem, Some(Codec::Zstd)),
         (None, None) => (lower.as_str(), None),
     };
+    let chosen = |suffixed: bool| match &encoding.pattern {
+        Some(pattern) => pattern.is_match(key),
+        None => suffixed,
+    };
     let codec = match (encoding.format, encoding.compression, suffix_codec) {
-        (_, Compression::Zip, _) => return lower.ends_with(ZIP_SUFFIX).then_some(Codec::Plain),
+        (_, Compression::Zip, _) => {
+            return chosen(lower.ends_with(ZIP_SUFFIX)).then_some(Codec::Plain);
+        }
         (SourceFormat::Parquet, _, Some(_)) => return None,
         (SourceFormat::Parquet, _, None) => Codec::Plain,
         (_, Compression::Auto, suffix) => suffix.unwrap_or(Codec::Plain),
@@ -38,10 +44,12 @@ pub(crate) fn file_codec(key: &str, encoding: &FilesEncoding) -> Option<Codec> {
         (_, Compression::Zstd, None | Some(Codec::Zstd)) => Codec::Zstd,
         (_, Compression::None | Compression::Gzip | Compression::Zstd, Some(_)) => return None,
     };
-    format_suffixes(encoding.format)
-        .iter()
-        .any(|suffix| stem.ends_with(suffix))
-        .then_some(codec)
+    chosen(
+        format_suffixes(encoding.format)
+            .iter()
+            .any(|suffix| stem.ends_with(suffix)),
+    )
+    .then_some(codec)
 }
 
 /// Whether a ZIP archive's member `name` is one of `encoding`'s files: its name ends with the format's suffix (case-insensitive) and matches `members` when set.

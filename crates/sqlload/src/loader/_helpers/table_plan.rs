@@ -35,12 +35,14 @@ use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
+use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::destination::checked_encoding;
 use crate::loader::_helpers::destination::truncated_nanoseconds;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -81,7 +83,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
-use crate::project::models::{NullCursor, OnDuplicateKeys, SortDirection};
+use crate::project::models::{NullCursor, OnDuplicateKeys};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -137,10 +139,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
         .iter()
         .map(|column| DesiredColumn {
             name: column.name.clone(),
-            column_type: match spec.parses.get(&column.name) {
-                Some(parse) => parse.kind.column_type(),
-                None => column.output.clone(),
-            },
+            column_type: spec.loaded_type(
+                &column.name,
+                match spec.parses.get(&column.name) {
+                    Some(parse) => parse.kind.column_type(),
+                    None => column.output.clone(),
+                },
+            ),
             origin: match (
                 column.name == SOURCE_ROW_COLUMN,
                 spec.pinned.contains_key(&column.name) || spec.parses.contains_key(&column.name),
@@ -172,7 +177,10 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns(spec.compat, spec.row_id));
+    desired.extend(metadata_columns(
+        spec.compat,
+        (spec.row_id, spec.soft_deletes()),
+    ));
     desired
 }
 
@@ -251,12 +259,11 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
-    plan.schema.warnings.extend(split_ranking(&plan));
     let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
     with_transform_version(plan, destination).await
 }
 
-/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
+/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or a `newest_by` column is not among the columns written, or has no order. A Python table's columns are known only once it yields, so its `newest_by` is not checked here.
 fn unwritten_column(
     spec: &TableSpec,
     schema: &SchemaPlan,
@@ -280,17 +287,24 @@ fn unwritten_column(
             "replace_key column {key} is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change). Fix: name a column the table loads in replace_key, such as the version column every row holds"
         ));
     }
-    let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
+    let columns = spec.newest_by.iter().filter(|_| spec.python.is_none());
+    columns
+        .filter_map(|name| unordered_column(schema, name))
+        .next()
+}
+
+/// Why `newest_by` column `name` cannot say which row is newer: it isn't written, or it is JSON or an array, which have no order.
+fn unordered_column(schema: &SchemaPlan, name: &str) -> Option<String> {
     let column = schema
         .write_columns
         .iter()
         .find(|column| column.name.eq_ignore_ascii_case(name));
     match column.map(|column| &column.column_type) {
         None => Some(format!(
-            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+            "newest_by column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
         )),
         Some(column_type @ (ColumnType::Json | ColumnType::Array(_))) => Some(format!(
-            "dedup_sort column {name} is {column_type}, which has no order to rank rows by; name a column of another type"
+            "newest_by column {name} is {column_type}, which has no order to say which row is newer; name a column of another type"
         )),
         Some(_) => None,
     }
@@ -307,7 +321,7 @@ fn ordered_mode(mode: WriteMode, mut schema: SchemaPlan) -> (WriteMode, SchemaPl
     }
 }
 
-/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `dedup_sort`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
+/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `newest_by`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
 fn unordered_merge(
     mode: WriteMode,
     schema: &SchemaPlan,
@@ -328,12 +342,12 @@ fn unordered_merge(
             .write_columns
             .iter()
             .any(|column| column.name == SOURCE_ROW_COLUMN);
-    match (ordered, &dedupe.sort) {
+    match (ordered, dedupe.newest_by.is_empty()) {
         (true, _) => Ok((mode, None)),
-        (false, Some(_)) => Err(format!(
-            "dedup_sort breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
+        (false, false) => Err(format!(
+            "newest_by breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
         )),
-        (false, None) => Ok((
+        (false, true) => Ok((
             WriteMode::Merge {
                 unique_key: unique_key.clone(),
                 dedupe: None,
@@ -344,37 +358,6 @@ fn unordered_merge(
             )),
         )),
     }
-}
-
-/// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
-fn split_ranking(plan: &TablePlan) -> Option<String> {
-    let WriteMode::Merge {
-        dedupe: Some(MergeDedupe {
-            sort: Some((column, _)),
-            ..
-        }),
-        ..
-    } = &plan.mode
-    else {
-        return None;
-    };
-    let (commits, remedy) = match &plan.commits {
-        CommitRule::Windows(windows) if windows.count > 1 => (
-            format!("once per window ({} windows)", windows.count),
-            "; set batch_size = \"none\" to load it in one commit",
-        ),
-        CommitRule::FileGroups(groups) if groups.len() > 1 => {
-            (format!("once per file ({} files)", groups.len()), "")
-        }
-        CommitRule::Ordered { .. } | CommitRule::Size => (
-            "about every 1 GB".to_owned(),
-            "; set batch_size = \"none\" to load it in one commit",
-        ),
-        _ => return None,
-    };
-    Some(format!(
-        "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
-    ))
 }
 
 /// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` swaps the whole table in once, as does `--reload` (whose cursor windows still cut the reads), and windows need a cursor.
@@ -422,6 +405,7 @@ pub(crate) async fn replan_columns(
                 contract: spec.contract,
                 on_schema_change: spec.on_schema_change,
                 auto_widen: spec.auto_widen,
+                infer_types: spec.infer_types,
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
                 compat: spec.compat,
@@ -710,8 +694,14 @@ async fn checked_writes(
     (mode, exists): (&WriteMode, bool),
     mut schema: SchemaPlan,
 ) -> Result<SchemaPlan, LoaderError> {
+    let variants = !spec.variants.is_empty()
+        || (spec.variant_json && spec.python.is_some())
+        || schema
+            .write_columns
+            .iter()
+            .any(|column| is_variant(&column.column_type));
     let (problems, warnings) =
-        write_problems(destination, &spec.destination, (mode, exists)).await?;
+        write_problems(destination, &spec.destination, (mode, exists, variants)).await?;
     schema.warnings.extend(warnings);
     Ok(match problems.is_empty() {
         true => schema,
@@ -766,6 +756,7 @@ async fn plan_table_once(
         contract: spec.contract,
         on_schema_change: spec.on_schema_change,
         auto_widen: spec.auto_widen,
+        infer_types: spec.infer_types,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
         compat: spec.compat,
@@ -1083,7 +1074,8 @@ pub(crate) fn reader_offer(
         let parsed: Vec<&str> = spec.parses.keys().map(String::as_str).collect();
         (!parsed.is_empty()).then(|| format!("parse runs on {}", parsed.join(", ")))
     })
-    .or_else(|| archived_reason(spec, read));
+    .or_else(|| archived_reason(spec, read))
+    .or_else(|| checked_encoding(spec));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },
@@ -1271,10 +1263,7 @@ fn write_mode(
                     true => SOURCE_ROW_COLUMN.to_owned(),
                     false => MERGE_ROW_COLUMN.to_owned(),
                 },
-                sort: spec
-                    .dedup_sort
-                    .as_ref()
-                    .map(|(column, direction)| (column.clone(), *direction == SortDirection::Desc)),
+                newest_by: spec.newest_by.clone(),
             }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {
@@ -1887,6 +1876,7 @@ pub(crate) async fn block_refused_bounds(
     {
         let (spec, read_columns) = (&table.spec, &table.read_columns);
         let run = async |filter: String, parameters: Vec<BoundParameter>| {
+            let filter = spec.read_filter(Some(filter));
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &spec.source_table,
                 sql: spec
@@ -1894,7 +1884,7 @@ pub(crate) async fn block_refused_bounds(
                     .as_ref()
                     .and_then(|source| source.sql.as_deref()),
                 columns: read_columns,
-                filter: Some(&filter),
+                filter: filter.as_deref(),
                 parameters: &parameters,
                 batch_rows: 1,
                 memory_budget: crate::odbc_source::constants::DEFAULT_BATCH_MEMORY,

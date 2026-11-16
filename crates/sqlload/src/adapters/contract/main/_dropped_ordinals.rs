@@ -42,7 +42,7 @@ pub(in crate::adapters) fn dropped_ordinals<A: SqlAdapter + ?Sized>(
         built: request.built,
     };
     let source = adapter.render_qualified_name(staging);
-    let (kept, _) = ranked_source(adapter, &widened, (&source, &values))?;
+    let (kept, _) = ranked_source(adapter, &widened, (&source, &values), false)?;
     let ordinal = adapter.render_identifier(&dedupe.ordinal);
     Some(format!(
         "SELECT {} FROM {source} WHERE {ordinal} NOT IN (SELECT {ordinal} FROM {kept})",

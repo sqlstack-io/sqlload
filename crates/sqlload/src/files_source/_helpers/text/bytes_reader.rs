@@ -11,7 +11,8 @@ use encoding_rs::{DecoderResult, Encoding, WINDOWS_1252};
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::_helpers::archive::zip_archive::member_bytes;
 use crate::files_source::constants::{
-    CP1252_UNDEFINED, ENCODING_HINT, MAX_WHOLE_FILE_BYTES, READ_CHUNK_BYTES, UTF16_BOMS,
+    CP1252_UNDEFINED, ENCODING_HINT, LAST_C1_CONTROL, MAX_WHOLE_FILE_BYTES, READ_CHUNK_BYTES,
+    UTF8_SHARE, UTF16_BOMS,
 };
 use crate::files_source::models::{Charset, Codec};
 
@@ -31,6 +32,21 @@ pub(crate) struct BytesReader {
     skip: u64,
     /// Whether a skipped line ended in a line feed, and whether skipped text held a carriage return: lines ending in a bare `\r` never end a skipped line.
     skipped_breaks: (bool, bool),
+    /// What the bytes say about the encoding, under `csv.encoding_check` for `latin-1`, `cp1252` and `iso-8859-15`.
+    evidence: Option<EncodingEvidence>,
+}
+
+/// What a file's bytes say about its encoding as a single-byte encoding reads them: its bytes above 0x7F, how many lie in valid UTF-8 sequences, and the line and byte of the first such sequence and of the first C1 control character (with the byte).
+#[derive(Debug, Default)]
+struct EncodingEvidence {
+    /// Whether C1 control characters (0x80 to 0x9F) count: they do in `latin-1` and `iso-8859-15`, where no text holds them.
+    controls: bool,
+    high: u64,
+    utf8: u64,
+    first_utf8: Option<(u64, u64)>,
+    first_control: Option<(u64, u64, u8)>,
+    /// A UTF-8 sequence the last chunk ended inside.
+    carry: Vec<u8>,
 }
 
 impl BytesReader {
@@ -45,6 +61,7 @@ impl BytesReader {
             lines: 0,
             skip: 0,
             skipped_breaks: (false, false),
+            evidence: None,
         }
     }
 
@@ -65,10 +82,17 @@ impl BytesReader {
         }
     }
 
-    /// This reader, decoding the file from `charset` and dropping its first `skip_rows` lines.
-    pub(crate) fn decoding(mut self, charset: Charset, skip_rows: u64) -> Self {
+    /// This reader, decoding the file from `charset` and dropping its first `skip_rows` lines; with `check`, a file read as `latin-1`, `cp1252` or `iso-8859-15` whose bytes say it is UTF-8, or cp1252 (control characters), fails at its end.
+    pub(crate) fn decoding(mut self, charset: Charset, (skip_rows, check): (u64, bool)) -> Self {
         self.charset = charset;
         self.skip = skip_rows;
+        self.evidence = charset
+            .checked()
+            .filter(|_| check)
+            .map(|controls| EncodingEvidence {
+                controls,
+                ..EncodingEvidence::default()
+            });
         self
     }
 
@@ -120,6 +144,13 @@ impl BytesReader {
 
     /// `raw` decoded to UTF-8; `end` when it is the last of the file.
     fn decoded(&mut self, raw: Vec<u8>, end: bool) -> Result<Vec<u8>, String> {
+        if let Some(evidence) = self.evidence.as_mut() {
+            evidence.note(&raw, (self.read, self.lines), end);
+            let problem = end.then(|| evidence.problem(self.charset)).flatten();
+            if let Some(problem) = problem {
+                return Err(problem);
+            }
+        }
         let text = match self.charset {
             Charset::Utf8 => {
                 self.read += raw.len() as u64;
@@ -226,6 +257,84 @@ impl BytesReader {
             self.read + at as u64,
             shown.join(" ")
         )
+    }
+}
+
+impl EncodingEvidence {
+    /// Count the bytes of `raw`, the chunk after `read` bytes and `lines` line breaks; `end` when it is the file's last.
+    fn note(&mut self, raw: &[u8], (read, lines): (u64, u64), end: bool) {
+        let carried = self.carry.len() as u64;
+        let mut bytes = std::mem::take(&mut self.carry);
+        bytes.extend_from_slice(raw);
+        let mut breaks: u64 = 0;
+        let mut at = 0;
+        while at < bytes.len() {
+            let byte = bytes[at];
+            breaks += u64::from(byte == b'\n');
+            if byte.is_ascii() {
+                at += 1;
+                continue;
+            }
+            let place = (
+                lines + breaks + 1,
+                (read + at as u64).saturating_sub(carried),
+            );
+            let length = utf8_length(byte);
+            let rest = &bytes[at + 1..];
+            if !end
+                && length > 1 + rest.len()
+                && rest.iter().all(|next| (0x80..=0xBF).contains(next))
+            {
+                self.carry = bytes[at..].to_vec();
+                return;
+            }
+            let valid = match bytes.get(at..at + length) {
+                Some(sequence) if length > 0 => sequence
+                    .utf8_chunks()
+                    .all(|chunk| chunk.invalid().is_empty()),
+                Some(_) | None => false,
+            };
+            if valid {
+                self.high += length as u64;
+                self.utf8 += length as u64;
+                self.first_utf8.get_or_insert(place);
+                at += length;
+                continue;
+            }
+            self.high += 1;
+            if self.controls && byte <= LAST_C1_CONTROL {
+                self.first_control.get_or_insert((place.0, place.1, byte));
+            }
+            at += 1;
+        }
+    }
+
+    /// The error for a whole file read as `charset` whose bytes say otherwise: mostly UTF-8 sequences, or a C1 control character.
+    fn problem(&self, charset: Charset) -> Option<String> {
+        let name = match charset {
+            Charset::Other(encoding) => encoding.name(),
+            Charset::Utf8 | Charset::Latin1 | Charset::Ascii => "latin-1",
+        };
+        let utf8 = self.utf8 > 0 && self.utf8 as f64 >= self.high as f64 * UTF8_SHARE;
+        if let (true, Some((line, byte))) = (utf8, self.first_utf8) {
+            return Some(format!(
+                "line {line}, byte {byte}: the file's bytes above 0x7F are UTF-8 sequences, which {name} reads as two or three characters each; this file looks like UTF-8, so set csv.encoding = \"utf-8\", or csv.encoding_check = false to read it as {name}"
+            ));
+        }
+        let (line, byte, value) = self.first_control?;
+        Some(format!(
+            "line {line}, byte {byte}: 0x{value:02X} is a control character in {name}, which text never holds; this file is probably cp1252, so set csv.encoding = \"cp1252\", or csv.encoding_check = false to read it as {name}"
+        ))
+    }
+}
+
+/// How many bytes the UTF-8 sequence that `lead` starts takes; 0 for a byte that starts none.
+fn utf8_length(lead: u8) -> usize {
+    match lead {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => 0,
     }
 }
 

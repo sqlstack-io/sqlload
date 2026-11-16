@@ -297,7 +297,7 @@ fn rows_to_batch(rows: Rows) -> RecordBatch {
 }
 
 fn gather_and_type(rows: Rows) -> RecordBatch {
-    columns_batch(fixtures::gather(&rows)).unwrap_or_else(|error| panic!("{error}"))
+    columns_batch(fixtures::gather(&rows), false).unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn drifting() -> Vec<RecordBatch> {
@@ -367,7 +367,7 @@ fn json_bytes_to_batches(input: JsonInput) -> Vec<RecordBatch> {
 fn parse_json_bytes((bytes, read): JsonInput) -> Vec<RecordBatch> {
     let mut batches = Vec::new();
     json_rows(&bytes, &read, |columns| {
-        batches.push(columns_batch(columns)?);
+        batches.push(columns_batch(columns, false)?);
         Ok(())
     })
     .unwrap_or_else(|error| panic!("{error}"));

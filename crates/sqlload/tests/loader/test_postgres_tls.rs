@@ -205,7 +205,7 @@ fn given_each_sslmode_when_debugging_a_tls_only_and_a_plain_server_then_it_conne
             expected_text: "server does not support TLS",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let tls = start_postgres_tls().await?;
         let plain = start_postgres().await?;
         let ports = [tls.postgres.port, plain.port];
@@ -262,7 +262,7 @@ fn given_prefer_when_a_plain_server_is_planned_then_only_a_network_fallback_warn
             expected_warning: false,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let plain = start_postgres().await?;
         let tls = start_postgres_tls().await?;
         let addresses = [
@@ -372,7 +372,7 @@ fn given_the_replication_relay_when_opening_it_then_it_checks_like_a_direct_conn
             expected_error: "",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let tls = start_postgres_tls().await?;
         let plain = start_postgres().await?;
         let ports = [tls.postgres.port, plain.port];
@@ -430,7 +430,7 @@ fn given_a_relay_when_its_session_is_taken_then_its_socket_folder_is_gone() -> R
             expected_left: (false, false),
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let tls = start_postgres_tls().await?;
         let plain = start_postgres().await?;
         let ports = [tls.postgres.port, plain.port];
@@ -494,7 +494,7 @@ fn given_a_tls_only_server_when_capturing_changes_then_they_land_once() -> Resul
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let tls = start_postgres_tls().await?;
             let client = connect(&tls.postgres).await?;
             client

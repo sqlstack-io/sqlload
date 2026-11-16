@@ -4,7 +4,7 @@ use crate::helpers::{
     integration_and_orders, json_layouts, long_names, long_names_with_text, nanos_in_a_later_batch,
     nanos_newest, no_stage_or_channel, no_stage_or_host, no_user_stage, not_found, not_owned,
     nothing, old_leftovers, run_async, run_debug, run_route, similar_integration, stage_exists,
-    stage_on_other_integration, two_batches, two_days, with_text, words,
+    stage_on_other_integration, two_batches, two_days, unquoted_csv, with_text, words,
 };
 use crate::test_types::{
     DebugStageTestCase, MaskMatrixTestCase, RouteFileSet, RouteFiles, RouteTestCase,
@@ -284,6 +284,53 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
         RouteTestCase {
+            description: "csv escape and quote = false reach the direct COPY's file format",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\nformat = \"csv\"\ncsv = { escape = \"\\\\\" }",
+            files: RouteFiles::Bucket,
+            file_set: every_csv_type,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &["FIELD_OPTIONALLY_ENCLOSED_BY = '\"' ESCAPE = '\\\\'"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "csv quote = false copies with no enclosing character",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\nformat = \"csv\"\ncsv = { quote = false }",
+            files: RouteFiles::Bucket,
+            file_set: unquoted_csv,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &["FIELD_OPTIONALLY_ENCLOSED_BY = NONE ESCAPE = NONE"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "csv read as latin-1 goes through SQLLoad, whose encoding check reads the bytes",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\nformat = \"csv\"\ncsv = { encoding = \"latin-1\" }",
+            files: RouteFiles::Bucket,
+            file_set: unquoted_csv,
+            prepare: integration,
+            expected_plan: &[
+                READS,
+                "csv.encoding_check reads the bytes of each latin-1 file",
+            ],
+            expected_unsent: &["FIELD_DELIMITER"],
+            ..BASE
+        },
+        RouteTestCase {
+            description: "csv read as latin-1 with encoding_check = false loads directly",
+            stage: MANAGED,
+            settings: "write_strategy = \"append\"\nformat = \"csv\"\ncsv = { encoding = \"latin-1\", encoding_check = false }",
+            files: RouteFiles::Bucket,
+            file_set: every_csv_type,
+            prepare: integration,
+            expected_plan: &[PULLS],
+            expected_sent: &["ENCODING = 'ISO88591'"],
+            ..BASE
+        },
+        RouteTestCase {
             description: "path_columns captures and constant_columns load directly, as each file's literals",
             stage: MANAGED,
             settings: "write_strategy = \"append\"\npath_columns = \"day=*/part-{part:int}.parquet\"\nconstant_columns = { shop = \"main\", as_of = 2026-11-08 }",
@@ -551,7 +598,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_route(directory.path(), test_case).await?;
@@ -646,7 +693,7 @@ fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_stra
             expected_unplanned: &[READS],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             for ((format_name, format, (file_set, column)), strategy) in
                 FORMATS.iter().flat_map(|format| {
@@ -717,7 +764,7 @@ fn given_an_external_stage_when_debugging_then_its_state_is_reported() -> Result
             expected_sent: "SHOW STAGES",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let (lines, sent) = run_debug(MANAGED, test_case).await?;
             assert_eq!(

@@ -15,19 +15,18 @@ use crate::column_parse::main::column_parse::column_parse;
 use crate::column_parse::main::time_zone::time_zone;
 use crate::column_parse::models::ColumnParse;
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
-};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
 use crate::files_source::models::{
-    AfterLoad, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
+    AfterLoad, FilesOrder, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
 };
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
+use crate::loader::_helpers::destination::read_as_text;
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
@@ -48,9 +47,9 @@ use crate::postgres_source::models::{ReadColumn, WireType};
 use crate::project::constants::DEFAULT_MAX_DEPTH;
 use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, PathsSetting, ProjectConfig, SortDirection, SourceConfig, SourceKind,
-    StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
+    CdcMode, CursorBounds, Deletes, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    OnDuplicateKeys, PathsSetting, ProjectConfig, SourceConfig, SourceKind, StateMode,
+    TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::python_sources::types::PythonHost;
@@ -58,6 +57,8 @@ use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::models::{Flatten, Unnest};
+use crate::row_deletes::main::deletes_problems::deletes_problems;
+use crate::row_deletes::main::deletes_spec::deletes_spec;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
@@ -223,7 +224,8 @@ pub(crate) fn build_spec(
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let cursor = cursor(settings, defaults);
-    let cdc = cdc_spec(context);
+    let deletes = layered(&settings.deletes, &defaults.deletes);
+    let cdc = cdc_spec(context, deletes.map(|(value, _)| value));
     let (strategy, strategy_origin) = match (
         layered(&settings.write_strategy, &defaults.write_strategy),
         &cdc,
@@ -297,23 +299,29 @@ pub(crate) fn build_spec(
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
             }),
     );
-    let table_sorts = settings.dedup_sort.is_some();
+    let table_sorts = settings.newest_by.is_some();
     let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
     let table_fails = on_duplicate_keys == Some((OnDuplicateKeys::Fail, SettingOrigin::Table));
-    let dedup_sort = layered(&settings.dedup_sort, &defaults.dedup_sort)
+    let newest_by = layered(&settings.newest_by, &defaults.newest_by)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_fails))
         .map(|(value, _)| value);
-    let (dedup_sort, found) = dedupe_settings(
+    let (newest_by, found) = dedupe_settings(
         strategy,
         &unique_key,
         (
             on_duplicate_keys.map(|(value, _)| value),
-            dedup_sort.as_ref(),
+            newest_by.as_deref(),
         ),
         overrides,
     );
     problems.extend(found);
+    if context.source.order == FilesOrder::Path
+        && !(strategy == WriteStrategy::Merge
+            || (strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty()))
+    {
+        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
+    }
     let matched_key = match keyed {
         true => &replace_key,
         false => &unique_key,
@@ -326,12 +334,14 @@ pub(crate) fn build_spec(
             .map(|(value, _)| value),
     );
     problems.extend(found);
+    let deletes = deletes
+        .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || cdc.is_some())
+        .map(|(value, _)| value);
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
-    problems.extend(
-        checks
-            .iter()
-            .flat_map(|checks| check_problems(checks, (strategy, context.target.path.is_some()))),
-    );
+    problems.extend(checks.iter().flat_map(|checks| {
+        let target = (context.target.path.is_some(), deletes.is_some());
+        check_problems(checks, (strategy, target.0, target.1))
+    }));
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
@@ -365,11 +375,22 @@ pub(crate) fn build_spec(
         .unwrap_or_default();
     let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
+    let unnests = !matches!(nesting.unnest, Unnest::None);
+    let kind = (strategy, context.source.kind);
+    problems.extend(deletes_problems(
+        deletes,
+        kind,
+        context.target.warehouse,
+        unnests,
+    ));
+    let from = overrides.deletes_from.as_ref();
+    let (deletes, checks) = deletes_spec((deletes.filter(|_| cdc.is_none()), from), checks);
     if keyed && !matches!(nesting.unnest, Unnest::None) {
         problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
     }
     problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
+    let is_duckdb = sql_adapter(context.target.warehouse).parses_variant_pins();
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     let parses = table_parses(overrides).unwrap_or_else(|found| {
         problems.extend(found);
@@ -414,6 +435,7 @@ pub(crate) fn build_spec(
         compat: nesting.compat,
         send: layered(&settings.send, &defaults.send).map_or(context.target.send, |(send, _)| send),
         staging_dir: context.target.staging_dir.clone(),
+        variant_json: context.target.variant_json,
         names: LoadedNames::default(),
         name_rules: NameRules::default(),
         listed: None,
@@ -423,7 +445,7 @@ pub(crate) fn build_spec(
         null_keys,
         not_null_keys,
         replace_key,
-        dedup_sort,
+        newest_by,
         cursor,
         batch,
         constants,
@@ -438,7 +460,20 @@ pub(crate) fn build_spec(
             .pinned
             .iter()
             .filter(|(key, _)| !is_child_column(key, overrides))
-            .map(|(key, column_type)| (key.clone(), column_type.clone()))
+            .map(
+                |(key, column_type)| match is_duckdb && is_variant(column_type) {
+                    true => (key.clone(), ColumnType::Json),
+                    false => (key.clone(), column_type.clone()),
+                },
+            )
+            .collect(),
+        variants: columns
+            .pinned
+            .iter()
+            .filter(|(key, column_type)| {
+                is_duckdb && is_variant(column_type) && !is_child_column(key, overrides)
+            })
+            .map(|(key, _)| key.clone())
             .collect(),
         child_pinned: columns
             .pinned
@@ -456,6 +491,8 @@ pub(crate) fn build_spec(
             .unwrap_or_default(),
         auto_widen: layered(&settings.auto_widen, &defaults.auto_widen)
             .is_some_and(|(value, _)| value),
+        infer_types: layered(&settings.infer_types, &defaults.infer_types)
+            .is_none_or(|(value, _)| value),
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -469,6 +506,7 @@ pub(crate) fn build_spec(
         logged: layered(&settings.state, &defaults.state)
             .is_some_and(|(value, _)| value == StateMode::Logged),
         after_load: context.source.after_load.clone(),
+        files_order: context.source.order,
         approved: false,
         tunnel: None,
         new_tables: context.source.new_tables,
@@ -487,6 +525,8 @@ pub(crate) fn build_spec(
             rule: sheet_rule(context.source, &table.name),
         }),
         cdc,
+        deletes,
+        tombstones_of: overrides.tombstones_of.clone(),
         warehouse_source: match context.source.kind {
             SourceKind::Odbc => Some(WarehouseSource {
                 system: ODBC_SOURCE,
@@ -500,6 +540,9 @@ pub(crate) fn build_spec(
             }),
             _ => warehouse_source(context.source, overrides),
         },
+        row_filter: layered(&settings.row_filter, &defaults.row_filter)
+            .filter(|_| overrides.sql.is_none() && overrides.tombstones_of.is_none())
+            .map(|(value, _)| value),
         layout,
         transform: None,
         parses,
@@ -656,15 +699,15 @@ fn table_layout(table: &TableSettings, source: &TableSettings) -> TableLayout {
 }
 
 /// A `postgres_cdc` source's stream settings, with the default slot and publication names.
-fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
+fn cdc_spec(context: &SourceContext<'_>, deletes: Option<Deletes>) -> Option<CdcSpec> {
     let source = context.source;
     (source.kind == SourceKind::PostgresCdc).then(|| {
         let default_name = format!("sqlload_{}", context.name.to_lowercase());
         CdcSpec {
-            apply: match (source.cdc_mode, source.deletes) {
+            apply: match (source.cdc_mode, deletes.unwrap_or(Deletes::Soft)) {
                 (CdcMode::Changelog, _) => ChangeApply::Changelog,
-                (CdcMode::Merge, CdcDeletes::Soft) => ChangeApply::SoftDeletes,
-                (CdcMode::Merge, CdcDeletes::Hard) => ChangeApply::HardDeletes,
+                (CdcMode::Merge, Deletes::Soft) => ChangeApply::SoftDeletes,
+                (CdcMode::Merge, Deletes::Hard) => ChangeApply::HardDeletes,
             },
             slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
             publication: source.publication.clone().unwrap_or(default_name),
@@ -1049,58 +1092,54 @@ fn no_primary_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> S
     )
 }
 
-/// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.
+/// The `newest_by` columns of a merge, and the problems with `on_duplicate_keys` and `newest_by` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `newest_by` names columns that are neither in the key, masked nor repeated, and has nothing to pick under `on_duplicate_keys = "fail"`.
 fn dedupe_settings(
     strategy: WriteStrategy,
     unique_key: &[String],
-    (on_duplicate_keys, dedup_sort): (
-        Option<OnDuplicateKeys>,
-        Option<&BTreeMap<String, SortDirection>>,
-    ),
+    (on_duplicate_keys, newest_by): (Option<OnDuplicateKeys>, Option<&[String]>),
     overrides: &TableOverride,
-) -> (Option<(String, SortDirection)>, Vec<String>) {
+) -> (Vec<String>, Vec<String>) {
     let mut problems: Vec<String> = Vec::new();
     if strategy != WriteStrategy::Merge {
         problems.extend(
             [
                 on_duplicate_keys.map(|_| "on_duplicate_keys"),
-                dedup_sort.map(|_| "dedup_sort"),
+                newest_by.map(|_| "newest_by"),
             ]
             .into_iter()
             .flatten()
             .map(|name| format!("{name} is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row")),
         );
-        return (None, problems);
+        return (Vec::new(), problems);
     }
-    let Some(sort) = dedup_sort else {
-        return (None, problems);
+    let Some(columns) = newest_by else {
+        return (Vec::new(), problems);
     };
-    let mut entries = sort.iter();
-    let (column, direction) = match (entries.next(), entries.next()) {
-        (Some((column, direction)), None) => (column.clone(), *direction),
-        _ => {
-            problems.push(
-                "dedup_sort names one column and its direction, such as { updated_at = \"desc\" }"
-                    .to_owned(),
-            );
-            return (None, problems);
+    if columns.is_empty() {
+        problems.push("newest_by names a column, or a list compared in order, such as newest_by = \"updated_at\"".to_owned());
+    }
+    for (index, column) in columns.iter().enumerate() {
+        if columns[..index].contains(column) {
+            problems.push(format!(
+                "newest_by names {column} twice; name each column once"
+            ));
         }
-    };
-    if unique_key
-        .iter()
-        .any(|key| key.eq_ignore_ascii_case(&column))
-    {
-        problems.push(format!("dedup_sort column {column} is in the unique_key, so it is the same in every row it would rank; name another column"));
-    }
-    if overrides.mask.contains_key(&column) {
-        problems.push(format!(
-            "dedup_sort column {column} is masked, so its values cannot rank rows"
-        ));
+        if unique_key
+            .iter()
+            .any(|key| key.eq_ignore_ascii_case(column))
+        {
+            problems.push(format!("newest_by column {column} is in the unique_key, so it is the same in every row it would compare; name another column"));
+        }
+        if overrides.mask.contains_key(column) {
+            problems.push(format!(
+                "newest_by column {column} is masked, so its values cannot say which row is newer"
+            ));
+        }
     }
     if on_duplicate_keys == Some(OnDuplicateKeys::Fail) {
-        problems.push("dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
+        problems.push("newest_by picks the newest of the rows repeating a key, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
     }
-    (Some((column, direction)), problems)
+    (columns.to_vec(), problems)
 }
 
 /// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when `keyed`) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that matches no key.
@@ -1329,7 +1368,9 @@ pub(crate) async fn null_cursor_rows(
     let Some(expression) = source_cursor(spec, &table.read_columns, cursor_type) else {
         return Ok(None);
     };
-    let filter = format!("{expression} IS NULL");
+    let filter = spec
+        .read_filter(Some(format!("{expression} IS NULL")))
+        .unwrap_or_default();
     let sql = spec
         .warehouse_source
         .as_ref()
@@ -1826,35 +1867,6 @@ pub(crate) fn pinned_unsampled(
     Ok(unsampled)
 }
 
-/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
-pub(crate) fn files_read_as(
-    spec: &TableSpec,
-    read_columns: &[ReadColumn],
-    partition_types: &[(String, ColumnType)],
-) -> (Vec<DesiredColumn>, Vec<String>) {
-    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
-    let columns: Vec<DesiredColumn> = read_columns
-        .iter()
-        .map(|column| DesiredColumn {
-            name: spelled(&column.name),
-            column_type: column.output.clone(),
-            origin: ColumnOrigin::Source,
-        })
-        .collect();
-    let filled: Vec<&str> = partition_types
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-        .collect();
-    let inferred: Vec<String> = read_columns
-        .iter()
-        .filter(|column| !spec.pinned.contains_key(&column.name))
-        .map(|column| spelled(&column.name))
-        .filter(|name| !filled.contains(&name.as_str()))
-        .collect();
-    (columns, inferred)
-}
-
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading); a parsed column reads as text, for `parse` to convert.
 pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
@@ -1868,6 +1880,9 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
             _ if excluded => continue,
             _ if spec.parses.contains_key(&column.name) => ColumnType::Text,
             (Some(pinned), _) => pinned.clone(),
+            (None, Ok(column_type)) if read_as_text(spec, &column.name, column_type) => {
+                ColumnType::Text
+            }
             (None, Ok(column_type)) => column_type.clone(),
             (None, Err(reason)) => {
                 problems.push(format!("column {}: {reason}", column.name));

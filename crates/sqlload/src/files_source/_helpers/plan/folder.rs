@@ -75,6 +75,7 @@ pub(crate) async fn listed_table(
             key: &data.file.relative_key,
             replaced: &replaced,
             widen_numbers: text_format,
+            as_text: text_format && encoding.flatten.as_text,
         };
         let (merged, conflicts) = merge_columns(columns, found, merge);
         columns = merged;
@@ -147,19 +148,32 @@ pub(crate) async fn listed_files(
         0 => String::new(),
         count => format!("; {count} listed files do not match path_columns"),
     };
+    let (chosen, hint) = match (&encoding.pattern, listed.skipped) {
+        (Some(pattern), _) => (format!("files matching {}", pattern.text), ""),
+        (None, 0) => (format!("{} files", file_names(encoding)), ""),
+        (None, _) => (
+            format!("{} files", file_names(encoding)),
+            "; to read files of other names, set pattern, such as pattern = \"*.txt\"",
+        ),
+    };
     let reason = format!(
-        "no {} files found{unmatched}; check the source's path and format (an empty source never empties the destination)",
-        file_names(encoding)
+        "no {chosen} found{unmatched}; check the source's path and format (an empty source never empties the destination){hint}"
     );
     let key = folder.location.to_string();
-    let others = listed.skipped + listed.unmatched;
+    let others = match encoding.pattern {
+        Some(_) => listed.unmatched,
+        None => listed.skipped + listed.unmatched,
+    };
     match (
         listed.files.is_empty(),
         others,
         unreadable(&folder.location),
     ) {
         (false, _, _) => Ok(listed),
-        (true, 0, None) => Err(FilesError::NoFiles { key, reason }),
+        (true, 0, None) => Err(FilesError::NoFiles {
+            key,
+            reason: format!("{reason}; where an empty folder is normal, set on_empty = \"skip\""),
+        }),
         (true, _, None) => Err(FilesError::File { key, reason }),
         (true, _, Some(error)) => Err(FilesError::File {
             key,

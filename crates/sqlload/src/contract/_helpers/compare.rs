@@ -118,7 +118,11 @@ pub(crate) fn declared_columns(spec: &TableSpec) -> BTreeMap<String, ColumnType>
     let mut declared: BTreeMap<String, ColumnType> = added_constants(spec)
         .map(|(name, column_type, _)| (name.clone(), column_type.clone()))
         .collect();
-    declared.extend(spec.pinned.clone());
+    declared.extend(
+        spec.pinned
+            .iter()
+            .map(|(name, column_type)| (name.clone(), spec.loaded_type(name, column_type.clone()))),
+    );
     declared
 }
 

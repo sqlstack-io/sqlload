@@ -12,7 +12,7 @@ import sys
 import threading
 import traceback
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -21,9 +21,13 @@ from zoneinfo import ZoneInfo
 
 from sqlload._declare import Connection, Context, Source, Table
 from sqlload._http import Job
+from sqlload._data import checkpoint
 from sqlload._http_paths import literal_paths
 from sqlload._rename import RENAMES, Column, RenameContext, renamed
 from sqlload._transform import TRANSFORMS, TransformContext, returned_items
+
+#: What `page_items` yields after each page's items.
+PAGE_END = checkpoint(None)
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
@@ -188,6 +192,14 @@ def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None
 	modified_at = fields.get("modified_at")
 	ctx = TransformContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
 	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
+
+
+def page_items(next_page: Callable[[], Any]) -> Iterator[Any]:
+	"""Yield what an `sl.http` job's transform returns for each page `next_page` hands over, item by item, and
+	`sl.checkpoint(None)` after each page's items to mark where they end, until it hands over `None`."""
+	while (returned := next_page()) is not None:
+		yield from returned
+		yield PAGE_END
 
 
 def rename(name: str, columns: str | None, context: str) -> tuple[str | None, str | None]:

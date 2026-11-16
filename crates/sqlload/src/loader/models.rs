@@ -19,16 +19,16 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
-    AfterLoad, AfterLoadReport, FilesEncoding, FilesRead, FilesTable, Footer, LoadedFile,
-    TextChecks,
+    AfterLoad, AfterLoadReport, FilesEncoding, FilesOrder, FilesRead, FilesTable, Footer,
+    LoadedFile, PathValues, TextChecks,
 };
 use crate::loader::_helpers::render::problem_item;
 use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnCursorOutOfRange, OnDuplicateKeys,
-    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, SortDirection, TableChecks,
+    BatchStep, Contract, Deletes, NewTables, NullCursor, NullKeys, OnCursorOutOfRange,
+    OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, TableChecks,
     WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
@@ -145,8 +145,8 @@ pub struct TableSpec {
     pub not_null_keys: Vec<String>,
     /// Under `delete_insert`, the columns whose values each commit replaces whole: the rows holding a value of them that the commit's rows hold are deleted first. Empty otherwise.
     pub replace_key: Vec<String>,
-    /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
-    pub dedup_sort: Option<(String, SortDirection)>,
+    /// The columns, compared in order, whose higher values are a row's newer version (`newest_by`): a merge keeps the newest of the rows sharing a key and never overwrites a loaded row with an older one; empty, the last row read wins.
+    pub newest_by: Vec<String>,
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
@@ -169,6 +169,12 @@ pub struct TableSpec {
     pub on_schema_change: OnSchemaChange,
     /// `auto_widen = true`: an inferred column whose values outgrow it widens along the ladder instead of failing.
     pub auto_widen: bool,
+    /// `infer_types = false`: columns a files, Sheets or Python dict source would type by inference load as `text` instead.
+    pub infer_types: bool,
+    /// The target's `json_type = "variant"`: `json` columns are created as DuckDB `VARIANT` and load their values parsed.
+    pub variant_json: bool,
+    /// Columns pinned `native("VARIANT")` on a DuckDB or MotherDuck target: read as `json` (kept in `pinned` as `json`), loaded as `VARIANT`.
+    pub variants: Vec<String>,
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,
@@ -176,6 +182,8 @@ pub struct TableSpec {
     pub logged: bool,
     /// What a files source does with each file once its rows commit.
     pub after_load: AfterLoad,
+    /// The order a files source's merge applies its files in.
+    pub files_order: FilesOrder,
     /// Approved for loading as soon as it appears: named exactly in `include`, or declared (files and Python tables); a `[sources.*.tables]` entry alone never approves.
     pub approved: bool,
     pub new_tables: NewTables,
@@ -199,12 +207,18 @@ pub struct TableSpec {
     pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// What a merge does with rows whose key the source no longer holds; `None` without `deletes`.
+    pub deletes: Option<DeletesSpec>,
+    /// The table (its key under `tables`) whose `deletes_from` this table loads the tombstones of; `None` for other tables.
+    pub tombstones_of: Option<String>,
     /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
     pub tunnel: Option<String>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
     pub checks: Option<TableChecks>,
     /// How a warehouse source's table is read; `None` for other sources.
     pub warehouse_source: Option<WarehouseSource>,
+    /// The condition every read of the table is narrowed by (`where`, its own else its source's), in the source database's SQL; `None` without one, and for query tables and tombstone tables.
+    pub row_filter: Option<String>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
     /// How the table's and its columns' names load.
@@ -230,9 +244,37 @@ pub struct TableSpec {
 }
 
 impl TableSpec {
+    /// Whether the table keeps the rows it marks deleted, with `_sqlload_deleted_at` set (`deletes = "soft"` on a merge).
+    pub fn soft_deletes(&self) -> bool {
+        self.deletes
+            .as_ref()
+            .is_some_and(|deletes| deletes.apply == Deletes::Soft)
+    }
+
+    /// `filter` narrowed by the table's `where`: `(<where>) AND (<filter>)`, or either alone; the `where` closes on a line of its own, so a trailing `--` comment in it ends first.
+    pub fn read_filter(&self, filter: Option<String>) -> Option<String> {
+        match (&self.row_filter, filter) {
+            (Some(row_filter), Some(filter)) => Some(format!("({row_filter}\n) AND ({filter})")),
+            (Some(row_filter), None) => Some(format!("({row_filter}\n)")),
+            (None, filter) => filter,
+        }
+    }
+
     /// The zone the table's times without an offset are in: its `timezone`, else UTC.
     pub fn zone(&self) -> chrono_tz::Tz {
         self.timezone.map_or(chrono_tz::Tz::UTC, |(zone, _)| zone)
+    }
+
+    /// The type column `name` of `column_type` gets in the table: `native("VARIANT")` for `json` under the target's `json_type = "variant"` or a `native("VARIANT")` pin, else the type itself.
+    pub fn loaded_type(&self, name: &str, column_type: ColumnType) -> ColumnType {
+        match column_type {
+            ColumnType::Json
+                if self.variant_json || self.variants.iter().any(|pin| pin == name) =>
+            {
+                ColumnType::Native(crate::column_types::constants::VARIANT_TYPE.to_owned())
+            }
+            other => other,
+        }
     }
 }
 
@@ -290,6 +332,27 @@ impl TableLayout {
     }
 }
 
+/// A merge table's `deletes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletesSpec {
+    pub apply: Deletes,
+    /// The largest percentage of the table's rows one key scan marks: `checks.max_row_drop`, else 5.
+    pub max_drop: u8,
+    /// `--sync-deletes`: after its merge, the load reads every key from the source and marks the table's rows of the others.
+    pub scan: bool,
+    /// Its `deletes_from`: after each merge, the rows its tombstones name are marked.
+    pub from: Option<TombstoneSpec>,
+}
+
+/// A merge table's tombstone table (`deletes_from`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneSpec {
+    /// The tombstone table as the source names it (`audit.deleted_items`).
+    pub source_table: String,
+    /// Where it loads, and its `cursor_column` as loaded, once planned beside the table; `None` before.
+    pub loaded: Option<(TableName, String)>,
+}
+
 /// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CdcSpec {
@@ -333,6 +396,8 @@ pub struct FilesSource {
     pub partition_types: Vec<(String, ColumnType)>,
     /// The partition columns that are `constant_columns`, the same in every file.
     pub constants: Vec<String>,
+    /// How each file's key gives its partition, path and constant values.
+    pub paths: PathValues,
     pub encoding: FilesEncoding,
     /// Column names and patterns JSON and CSV reads check keys and headers against.
     pub checks: TextChecks,
@@ -702,6 +767,8 @@ pub struct PlanOptions {
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
     pub resnapshot: bool,
+    /// `--sync-deletes`: after each selected `deletes` table's merge, read every key from its source and mark its rows of the others.
+    pub sync_deletes: bool,
     /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
     pub fail_fast: bool,
     /// `--memory-per-table` (Linux): one table at a time, each table's peak memory measured.
@@ -968,6 +1035,8 @@ pub enum WholeReason {
     AppendWithoutCursor,
     /// `batch_size = "none"`.
     Chosen,
+    /// A key scan (`--sync-deletes`): its one commit marks the rows of every key it didn't read.
+    KeyScan,
     /// `single_file`: each file is written once, whole.
     SingleFile,
     /// The table cannot load, so it has no commits.
@@ -1049,6 +1118,10 @@ pub struct Publisher {
     pub merged_file: Option<String>,
     /// The `replace_key` values committed so far; `None` without a `replace_key`.
     pub replaced: Option<ReplacedKeys>,
+    /// The rows a key scan's commit marked deleted; `None` for other loads.
+    pub marked: Option<u64>,
+    /// The keys whose newest staged row a merge skipped so far, the table holding a newer one by `newest_by`.
+    pub older: u64,
     /// Every `replace_key` value a files source's commits inserted in this run, with the file it came from, which a later file of the run may not hold too.
     pub run_keys: std::collections::BTreeMap<String, String>,
     /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).

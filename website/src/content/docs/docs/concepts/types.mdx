@@ -28,7 +28,7 @@ columns = { total = "decimal(18,2)", closes_at = "timestamp_tz" }
 | `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `String` ¹ | `time` | `TIME` | `Time64` |
 | `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP` ¹ | `DateTime64(6, 'UTC')` ¹ | `timestamptz` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
 | `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `DATETIME` | `DateTime64(6)` ¹ | `timestamp` | `TIMESTAMP` | `Timestamp` |
-| `json` | `VARIANT` | `VARIANT` | `JSON` | `String` ¹ | `jsonb` ¹ | `JSON` | `Utf8` |
+| `json` | `VARIANT` | `VARIANT` | `JSON` | `String` ¹ | `jsonb` ¹ | `JSON` ⁴ | `Utf8` |
 | `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `STRING` ¹ | `UUID` | `uuid` | `UUID` | `Utf8` |
 | `binary` | `BINARY` | `BINARY` | `BYTES` | `String` | `bytea` | `BLOB` | `Binary` |
 | `native("...")` | passed through | passed through | passed through | passed through | passed through | passed through | not available |
@@ -47,6 +47,8 @@ keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` len
 ² `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9.
 
 ³ From 0.27.0. See [Arrays](#arrays).
+
+⁴ From 0.54.0, `VARIANT` with `json_type = "variant"` on the target. See [VARIANT columns](/docs/targets/duckdb/#variant-columns).
 
 Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 
@@ -99,11 +101,13 @@ loading as NULL. Elements convert as a pinned column of `T` would, so from 0.45.
 0.45.0, float elements of Arrow and Parquet lists pinned `array(int)` were cut to whole numbers
 (which `plan` noted), and extra decimal places were rounded to the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
 0.29.0, a list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
-converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values. In
-Python dicts, in Arrow lists that load as `json`, and in a table whose batches mix dicts and Arrow
-data, they load as NULL elements. Into Snowflake, NaN and infinities in a pinned Parquet list fail
-the load, and from 0.29.0 so do those in a pinned Arrow list; from dicts they
-load as NULL. Partition columns, path and constant columns, and Postgres change capture don't take
+converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values, and
+from 0.54.0 so do those in the lists of Python dicts. In Arrow lists that load as `json`, and in the
+Arrow batches of a table that mixes dicts and Arrow data, they load as NULL elements; a dict's list
+that loads as `json` fails the load instead, as JSON can't hold them (see
+[NaN and infinities](/docs/sources/python/#nan-and-infinities)). Into Snowflake, NaN and infinities
+in a pinned Parquet list fail the load, and from 0.29.0 so do those in a pinned Arrow list, and from
+0.54.0 those from dicts. Partition columns, path and constant columns, and Postgres change capture don't take
 arrays.
 
 ## Names SQLLoad accepts
@@ -160,9 +164,49 @@ Columns pinned in `columns` are read as the pinned type, when the source type ca
 
 ## Python and files
 
-Python values are typed as described in the [Python API](/docs/sources/python/#types). Parquet columns
+Python values are typed as described in the [Python API](/docs/sources/python/#types); from 0.54.0,
+NaN and infinite floats in dicts keep their values, as Postgres and Parquet floats do (see
+[NaN and infinities](/docs/sources/python/#nan-and-infinities)). Parquet columns
 keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
 want typed differently.
+
+### Loading every column as text
+
+From 0.54.0, `infer_types = false` on a source or table loads every column SQLLoad would infer as
+`text`. Use it for codes that are numeric in some rows and not in others, such as `1099999500115812`
+and `16ZN102RSC`, or that must keep their leading zeros. Columns pinned in `columns` keep their
+types:
+
+```toml
+[sources.products]
+kind = "files"
+path = "drop/products/"
+format = "csv"
+infer_types = false
+
+[sources.products.tables.products]
+columns = { price = "decimal(18,2)", updated = "date" }
+```
+
+Each value is the text a column pinned `text` gets: a CSV field exactly as written, the text a
+Google Sheets cell shows, a JSON number as written in the file, and a Python dict value as its text
+(`true`, `1.5`, a string as it is). Objects and lists stay `json`, so `flatten` and `unnest` work
+as usual, and the child tables `unnest` makes infer their columns. Files may disagree on a
+column's type, since every one loads as `text`.
+
+It applies to CSV, JSON, NDJSON, Excel and XML files, Google Sheets, and the dict rows of Python
+tables and transforms. Parquet files, Arrow tables and DataFrames, and database sources already
+carry declared types and keep them. `plan` says it on the table's `schema` line:
+
+```console
+    ├── schema  every column text except columns pinned, objects and lists (infer_types = false)
+```
+
+Turning it on for a table that exists changes its inferred columns to `text`, a type change that
+`plan` shows column by column and that runs as
+[`type_change_rebuild`](/docs/concepts/contracts/#changes-that-rebuild-a-table) allows. Values
+already loaded become their text in the warehouse, so `123` stays `123`; later loads keep a
+field's leading zeros.
 
 From 0.45.0, a value that a pinned `decimal(p,s)` or integer type can't hold exactly fails the read,
 naming the column and the value, on every source: `12.345` pinned `decimal(10,2)` and `1.5` pinned

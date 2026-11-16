@@ -14,5 +14,6 @@ pub(in crate::adapters::duckdb) fn shared_destination(
         connection: DuckDbConnection::Local(Arc::new(Mutex::new(connection))),
         ddl: Arc::default(),
         motherduck: false,
+        bridge_duckdb: String::new(),
     })
 }

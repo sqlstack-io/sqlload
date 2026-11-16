@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } } } }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: Char('\"'), escape: None, encoding_check: true, null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, pattern: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } }, as_text: false, nonfinite_null: false } }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -345,14 +345,14 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
         },
         ParseProjectErrorTestCase {
-            description: "after_load is not for a ZIP archive's members",
-            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
-            expected_message: "[sources.raw] after_load is not for compression = \"zip\"",
+            description: "after_load on ZIP archives another source on the connection also reads in an overlapping folder",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/orders/\"\nformat = \"csv\"\ncompression = \"zip\"\n",
+            expected_message: "[sources.raw] after_load moves or deletes each ZIP archive once its members load, and [sources.orders] reads ZIP archives in \"raw/orders/\" on the same connection, which may still need them",
         },
         ParseProjectErrorTestCase {
             description: "after_load is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.*\"]\nafter_load = \"delete\"\n",
-            expected_message: "copy_to_internal_stage and after_load are for kind = \"files\"",
+            expected_message: "copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "an unknown after_load is refused",
@@ -385,6 +385,31 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] csv delimiter must be one ASCII character other than a line break",
         },
         ParseProjectErrorTestCase {
+            description: "a pattern that isn't a glob is refused",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\npattern = \"file_[1.txt\"\n",
+            expected_message: "[sources.raw] pattern: error parsing glob 'file_[1.txt': unclosed character class",
+        },
+        ParseProjectErrorTestCase {
+            description: "pattern is for files sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\npattern = \"*.txt\"\n",
+            expected_message: "pattern, shape and record_column are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv quote = true names no character",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { quote = true }\n",
+            expected_message: "[sources.raw] csv quote = true names no character",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv escape needs quoted fields",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { quote = false, escape = \"\\\\\" }\n",
+            expected_message: "[sources.raw] csv escape works inside quoted fields, and quote = false has none; remove escape",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv escape is one ASCII character, not the delimiter",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { escape = \",\" }\n",
+            expected_message: "[sources.raw] csv delimiter must differ from quote and escape",
+        },
+        ParseProjectErrorTestCase {
             description: "an unknown csv option is rejected",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { seperator = \";\" }\n",
             expected_message: "unknown field `seperator`",
@@ -398,6 +423,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a query table is for snowflake, odbc and bigquery sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nsql = \"SELECT 1\"\n",
             expected_message: "[sources.app] sql is for kind = \"snowflake\", \"odbc\" and \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "where narrows a database table's SELECT, so a files source refuses it",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.raw] where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a postgres_cdc source captures every change, so it refuses where on a table",
+            text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"public.a\"]\n[sources.app.tables.\"public.a\"]\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.app] where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a query table takes its condition in its sql",
+            text: "[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\n[sources.erp.tables.recent]\nsql = \"SELECT 1 AS a\"\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.erp] [tables.recent] where narrows a table SQLLoad selects from, and recent is a query; put the condition in its sql",
         },
         ParseProjectErrorTestCase {
             description: "a source's project is for bigquery sources",
@@ -462,12 +502,12 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
-            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "batch_interval is for postgres_cdc sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_interval = \"1m\"\n",
-            expected_message: "[sources.app] publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\"",
+            expected_message: "[sources.app] publication, slot, cdc_mode and batch_interval are for kind = \"postgres_cdc\"",
         },
         ParseProjectErrorTestCase {
             description: "a batch_interval just under a second is refused",
@@ -477,7 +517,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "copy_to_internal_stage is for files sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ncopy_to_internal_stage = true\n",
-            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\"",
+            expected_message: "[sources.app] path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "a postgres_cdc source refuses constant_columns, at source level",
@@ -547,7 +587,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "shape is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshape = \"record\"\n",
-            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "unmatched_paths without path_columns is never silently ignored",
@@ -591,6 +631,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "naming takes snake_case or source; dlt is no naming",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nnaming = \"dlt\"\n",
             expected_message: "unknown variant `dlt`, expected `snake_case` or `source`",
+        },
+        ParseProjectErrorTestCase {
+            description: "deletes_from needs deletes to say what a tombstone does",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.items\"]\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes_from = { table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }\n",
+            expected_message: "[sources.app] table \"public.items\": deletes_from marks the rows its tombstones name, which needs deletes = \"soft\" or \"hard\" to say how",
+        },
+        ParseProjectErrorTestCase {
+            description: "a tombstone table loads only as one table's tombstones, not listed itself",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.items\"]\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"hard\"\ndeletes_from = { table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }\n[sources.app.tables.\"audit.deleted_items\"]\nwrite_strategy = \"append\"\n",
+            expected_message: "deletes_from table \"audit.deleted_items\" is also listed under tables",
         },
         ParseProjectErrorTestCase {
             description: "an xlsx header_row past the range's rows is refused",

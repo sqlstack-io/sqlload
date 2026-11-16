@@ -3,6 +3,7 @@ use crate::load_naming::models::NameChange;
 use crate::loader::constants::{FIX_LABEL, REASON_LABEL, ROUTE_LABEL, SOURCE_LABEL};
 use crate::loader::models::UnreadSource;
 use crate::project::models::CheckName;
+use crate::row_deletes::main::deletes_note::deletes_note;
 use crate::run_log::models::RunEvent;
 use crate::time_text::main::clock_time::clock_time;
 use crate::time_text::main::trimmed_time::trimmed_time;
@@ -20,9 +21,10 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::batch_plan::main::cursor_rules::cursor_rules;
 use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
+use crate::files_source::models::{FilesOrder, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
-use crate::loader::_helpers::publish::send_line;
+use crate::loader::_helpers::publish::send_lines;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
@@ -37,7 +39,7 @@ use crate::loader::constants::{
 use crate::loader::models::{
     CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
     ProjectPlan, PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan,
-    TableResult, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
+    TableResult, TableSpec, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
@@ -376,14 +378,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         } => {
             let repeats = match dedupe {
                 None => "; repeated keys fail".to_owned(),
-                Some(MergeDedupe {
-                    sort: Some((column, true)),
-                    ..
-                }) => format!("; repeated keys: highest {column} wins"),
-                Some(MergeDedupe {
-                    sort: Some((column, false)),
-                    ..
-                }) => format!("; repeated keys: lowest {column} wins"),
+                Some(MergeDedupe { newest_by, .. }) if !newest_by.is_empty() => {
+                    format!("; newest by {}", newest_by.join(", then "))
+                }
                 Some(_) => String::new(),
             };
             let origin = match spec.key_from_primary_key {
@@ -404,8 +401,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 _ => "",
             };
             format!(
-                "merge (unique_key: {}{origin}{repeats}{nulls}){rebuilt}",
-                unique_key.join(", ")
+                "merge (unique_key: {}{origin}{repeats}{nulls}){rebuilt}{}",
+                unique_key.join(", "),
+                deletes_note(spec)
             )
         }
         WriteMode::DeleteInsert {
@@ -440,6 +438,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         },
         WriteMode::Replace => "replace".to_owned(),
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
+        WriteMode::MarkMissing(_) => "mark the rows of keys the source no longer holds".to_owned(),
         WriteMode::Changes(change) => {
             let changes = match change.apply {
                 ChangeApply::SoftDeletes => format!(
@@ -516,7 +515,15 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     details.extend(
         spec.python
             .as_ref()
-            .map(|python| detail("schema", python_columns_line(table, python))),
+            .map(|python| detail("schema", python_columns_line(table, python)))
+            .into_iter()
+            .chain(text_columns_line(spec).map(|line| detail("schema", line)))
+            .chain(spec.flatten.nonfinite_null.then(|| {
+                detail(
+                    "schema",
+                    "NaN and infinite floats of dict rows load as NULL (on_nonfinite = \"null\")",
+                )
+            })),
     );
     let unnested: Option<Vec<String>> = match &spec.unnest {
         Unnest::Paths(paths) => Some(paths.clone()),
@@ -591,13 +598,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .zip(table.files.as_ref())
             .map(|(source, read)| {
-                let skipped = match source.table.skipped {
-                    0 => String::new(),
-                    count => format!(
-                        ", {count} skipped (names that do not fit {})",
-                        source.encoding
-                    ),
-                };
+                let skipped = source.encoding.skipped_text(source.table.skipped);
                 let unmatched = match source.table.unmatched {
                     0 => String::new(),
                     count => format!(", {count} skipped (paths that do not match path_columns)"),
@@ -623,9 +624,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{folders}{skipped}{unmatched}",
+                        "{} {fresh} of {} {}{folders}{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
-                        thousands(source.table.files.len() as u64)
+                        thousands(source.table.files.len() as u64),
+                        source.encoding.chosen_text()
                     ),
                 )
             }),
@@ -717,7 +719,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.push(detail("batch", batch_line(table)));
-    details.extend(send_line(table).map(|text| detail("send", text)));
+    details.extend(send_lines(table).map(|(label, text)| detail(label, text)));
     details.extend(
         spec.python
             .iter()
@@ -745,7 +747,14 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.extend(
-        (table.cursor_note.iter()).map(|note| detail("cursor", cursor_rules(table, note, true))),
+        (spec
+            .row_filter
+            .iter()
+            .map(|row_filter| detail("filter", row_filter)))
+        .chain(
+            (table.cursor_note.iter())
+                .map(|note| detail("cursor", cursor_rules(table, note, true))),
+        ),
     );
     details.extend(table.logged.as_ref().map(|logged| {
         detail(
@@ -819,10 +828,14 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
         }
         (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(
-                "{}, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                "{}, one commit each, {}, each recorded in the run log",
                 match groups.len() {
                     1 => "1 file".to_owned(),
                     count => format!("{count} files"),
+                },
+                match spec.files_order {
+                    FilesOrder::Modified => "oldest modified first (ties by path)",
+                    FilesOrder::Path => "in path order",
                 }
             )
         }
@@ -866,6 +879,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
             let why = match reason {
                 WholeReason::Chosen => "batch_size = \"none\"",
+                WholeReason::KeyScan => "a key scan marks the rows of every key it didn't read",
                 WholeReason::SingleFile => "single_file writes each file once, whole",
                 WholeReason::TextCursor => {
                     "a text cursor, which the source and destination may sort differently"
@@ -1107,6 +1121,24 @@ fn file_column_names(files: &FilesSource) -> Vec<String> {
         .iter()
         .map(|column| column.name.clone())
         .collect()
+}
+
+/// The `schema` line of a table under `infer_types = false` whose source would infer its columns' types.
+fn text_columns_line(spec: &TableSpec) -> Option<&'static str> {
+    let inferring = spec.sheet.is_some()
+        || spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.encoding.format != SourceFormat::Parquet);
+    match (spec.infer_types, &spec.python) {
+        (false, Some(_)) => Some(
+            "every column of dict rows text except columns pinned, objects and lists (infer_types = false)",
+        ),
+        (false, None) if inferring => {
+            Some("every column text except columns pinned, objects and lists (infer_types = false)")
+        }
+        _ => None,
+    }
 }
 
 /// Where a Python table's columns come from.

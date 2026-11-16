@@ -582,6 +582,100 @@ def test_given_a_dict_column_of_mixed_formats_in_paris_when_loading_with_parse_t
 	]
 
 
+def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column_but_the_pinned_one_loads_as_text(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', infer_types=False, columns={'amount': 'decimal(18,2)'})(rows)\n")
+	give(
+		project,
+		"rows",
+		[
+			{"id": 1, "code": 1099999500115812, "amount": "1.50", "seen": "2026-01-01T00:00:00Z", "meta": {"a": 1}, "ok": True},
+			{"id": 2, "code": "16ZN102RSC", "amount": 2, "seen": None, "meta": None, "ok": False},
+		],
+	)
+	planned = sqlload(project, "plan")
+	assert "every column of dict rows text except columns pinned, objects and lists (infer_types = false)" in planned.stdout, planned.stdout + planned.stderr
+	load(project)
+	assert query(project, 'SELECT typeof(id), typeof(code), typeof(amount), typeof(seen), typeof(meta), typeof(ok) FROM "RAW".shop__rows LIMIT 1') == [
+		("VARCHAR", "VARCHAR", "DECIMAL(18,2)", "VARCHAR", "JSON", "VARCHAR")
+	]
+	assert query(project, 'SELECT id, code, amount, seen, ok FROM "RAW".shop__rows ORDER BY id') == [
+		("1", "1099999500115812", Decimal("1.50"), "2026-01-01T00:00:00Z", "true"),
+		("2", "16ZN102RSC", Decimal("2.00"), None, "false"),
+	]
+
+
+NONFINITE_ROWS = [
+	{"id": 1, "f": float("nan"), "scores": [1.5, float("nan")]},
+	{"id": 2, "f": float("inf"), "scores": None},
+	{"id": 3, "f": float("-inf"), "scores": [float("-inf")]},
+]
+
+
+@pytest.mark.parametrize(
+	("settings", "expected", "plan_line"),
+	[
+		pytest.param("columns={'scores': 'array(float)'}", [(1, "nan", "[1.5, nan]"), (2, "inf", None), (3, "-inf", "[-inf]")], False, id="kept"),
+		pytest.param(
+			"columns={'scores': 'array(float)'}, on_nonfinite='null'", [(1, None, "[1.5, NULL]"), (2, None, None), (3, None, "[NULL]")], True, id="null"
+		),
+		pytest.param("columns={'f': 'decimal(10,2)', 'scores': 'array(float)'}", "column f: row 1 holds NaN, which decimal(10,2) can't hold", False, id="decimal"),
+		pytest.param("", "column scores: row 1 of a batch holds NaN inside a nested value, which json can't hold", False, id="json"),
+	],
+)
+def test_given_nan_and_infinities_in_dict_rows_when_loading_then_they_keep_their_values_or_fail_naming_the_column(
+	tmp_path: Path, settings: str, expected: Any, plan_line: bool
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
+	give(project, "rows", NONFINITE_ROWS)
+	planned = sqlload(project, "plan")
+	assert ('NaN and infinite floats of dict rows load as NULL (on_nonfinite = "null")' in planned.stdout) == plan_line, planned.stdout + planned.stderr
+	if isinstance(expected, str):
+		failed = sqlload(project, "load")
+		assert failed.returncode != 0 and expected in failed.stdout + failed.stderr, failed.stdout + failed.stderr
+		assert 'on_nonfinite = "null"' in failed.stdout + failed.stderr
+		return
+	load(project)
+	assert query(project, 'SELECT id, CAST(f AS VARCHAR), CAST(scores AS VARCHAR) FROM "RAW".shop__rows ORDER BY id') == expected
+
+
+@pytest.mark.parametrize(
+	("toml", "settings"),
+	[
+		(DUCKDB_PROJECT + 'json_type = "variant"\n', ""),
+		(DUCKDB_PROJECT, ", columns={'payload': 'native(\"VARIANT\")'}"),
+	],
+	ids=["json-type-variant", "native-variant-pin"],
+)
+def test_given_variant_json_on_duckdb_when_loading_dicts_then_values_keep_their_types(tmp_path: Path, toml: str, settings: str) -> None:
+	project = make_project(tmp_path, toml, f"shop.table(description='Test table.', write_strategy='merge', unique_key='id'{settings})(rows)\n")
+	give(project, "rows", [{"id": 1, "payload": {"user": {"id": 42}}}, {"id": 2, "payload": [1, "a"]}, {"id": 3, "payload": None}])
+	load(project)
+	give(project, "rows", [{"id": 2, "payload": {"user": {"id": 7}}}, {"id": 4, "payload": [True]}])
+	load(project)
+	assert query(project, 'SELECT id, variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM "RAW".shop__rows ORDER BY id') == [
+		(1, "OBJECT(user)", 42),
+		(2, "OBJECT(user)", 7),
+		(3, "VARIANT_NULL", None),
+		(4, "ARRAY(1)", None),
+	]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'payload'") == [("VARIANT",)]
+
+
+def test_given_a_json_column_when_json_type_turns_variant_then_plan_shows_the_rebuild_and_it_keeps_the_values(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
+	give(project, "rows", [{"id": 1, "payload": {"user": {"id": 42}}}])
+	load(project)
+	(project / "sqlload.toml").write_text(DUCKDB_PROJECT + 'json_type = "variant"\n')
+	give(project, "rows", [{"id": 2, "payload": {"user": {"id": 7}}}])
+	refused = sqlload(project, "load")
+	assert refused.returncode != 0 and "payload json -> native(\"VARIANT\") needs a table rebuild" in refused.stdout, refused.stdout + refused.stderr
+	load(project, "--allow-type-change-rebuild")
+	assert query(project, 'SELECT id, variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM "RAW".shop__rows ORDER BY id') == [
+		(1, "OBJECT(user)", 42),
+		(2, "OBJECT(user)", 7),
+	]
+
+
 PRICED_TABLE = """
 import decimal
 
@@ -1264,14 +1358,21 @@ def test_given_flatten_all_when_a_later_load_adds_an_object_field_then_it_become
 	assert query(project, 'SELECT id, customer__name, customer__address__city, tags::VARCHAR FROM "RAW".shop__rows ORDER BY id') == [(1, "Ann", None, None), (2, "Bo", "Leeds", '["x"]')]
 
 
-def test_given_flatten_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+@pytest.mark.parametrize(
+	("setting", "problem"),
+	[
+		('flatten = ["customer"]', "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON"),
+		('on_nonfinite = "null"', "on_nonfinite applies to the dict rows of Python tables and transforms; this source's floats load as they are read, so remove it"),
+	],
+)
+def test_given_a_dict_rows_setting_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path, setting: str, problem: str) -> None:
+	toml = DUCKDB_PROJECT + f'\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\n{setting}\n'
 	project = make_project(tmp_path, toml, "")
 	(project / "lake" / "events").mkdir()
 	(project / "lake" / "events" / "a.csv").write_text("id\n1\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
+	assert problem in done.stdout, done.stdout + done.stderr
 
 
 DATE_CURSOR_MODULE = '''
@@ -1434,13 +1535,16 @@ def test_given_a_table_yielding_its_constant_column_when_loading_then_it_fails_a
 	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
 
 
-def test_given_a_python_table_repeating_a_merge_key_when_loading_then_dedup_sort_picks_the_row_and_no_row_number_lands(tmp_path: Path) -> None:
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc'})(rows)\n")
+def test_given_a_python_table_repeating_a_merge_key_when_loading_then_newest_by_picks_the_row_keeps_it_against_older_loads_and_no_row_number_lands(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='v')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 1, "v": "a"}, {"id": 2, "v": "x"}])
 	load(project)
 	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "c"), (2, "x")]
 	columns = query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__rows' ORDER BY ordinal_position")
 	assert [name for (name,) in columns] == ["id", "v", "_sqlload_load_id", "_sqlload_loaded_at"]
+	give(project, "rows", [{"id": 1, "v": "a"}, {"id": 2, "v": "y"}])
+	load(project)
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "c"), (2, "y")]
 
 
 def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_load_names_the_key_and_merges_nothing(tmp_path: Path) -> None:
@@ -1455,15 +1559,16 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 @pytest.mark.parametrize(
 	("settings", "expected"),
 	[
-		("write_strategy='append', dedup_sort={'v': 'desc'}", 'dedup_sort is for write_strategy = "merge", which matches rows on unique_key; append keeps every row'),
-		("write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc', 'w': 'asc'}", 'dedup_sort names one column and its direction, such as { updated_at = "desc" }'),
-		("write_strategy='merge', unique_key='id', dedup_sort={'id': 'desc'}", "dedup_sort column id is in the unique_key"),
+		("write_strategy='append', newest_by='v'", 'newest_by is for write_strategy = "merge", which matches rows on unique_key; append keeps every row'),
+		("write_strategy='merge', unique_key='id', newest_by=['v', 'v']", "newest_by names v twice; name each column once"),
+		("write_strategy='merge', unique_key='id', newest_by='id'", "newest_by column id is in the unique_key"),
 		(
-			"write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc'}, on_duplicate_keys='fail'",
-			'dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = "fail" keeps none',
+			"write_strategy='merge', unique_key='id', newest_by='v', on_duplicate_keys='fail'",
+			'newest_by picks the newest of the rows repeating a key, but on_duplicate_keys = "fail" keeps none',
 		),
+		("write_strategy='merge', unique_key='id', dedup_sort={'v': 'desc'}", "setting(s): dedup_sort"),
 	],
-	ids=["not_merge", "two_columns", "key_column", "with_fail"],
+	ids=["not_merge", "repeated_column", "key_column", "with_fail", "old_name"],
 )
 def test_given_a_python_table_with_a_dedupe_setting_it_cannot_use_when_planning_then_plan_refuses_it(tmp_path: Path, settings: str, expected: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
@@ -1473,7 +1578,7 @@ def test_given_a_python_table_with_a_dedupe_setting_it_cannot_use_when_planning_
 
 
 def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tables_take_them_and_a_table_can_choose_fail(tmp_path: Path) -> None:
-	module = SHOP_MODULE.replace('sl.source("shop", write_strategy="replace", connection="shop")', 'sl.source("shop", write_strategy="replace", connection="shop", dedup_sort={"v": "desc"})')
+	module = SHOP_MODULE.replace('sl.source("shop", write_strategy="replace", connection="shop")', 'sl.source("shop", write_strategy="replace", connection="shop", newest_by="v")')
 	tables = (
 		"shop.table(description='Test table.', name='log', write_strategy='append')(rows)\n"
 		"shop.table(description='Test table.', name='kept', write_strategy='merge', unique_key='id')(rows)\n"
@@ -1491,9 +1596,9 @@ def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tab
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__strict"') == [(0,)]
 
 
-def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_dedup_sort_then_that_table_keeps_its_ranked_row(tmp_path: Path) -> None:
+def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_newest_by_then_that_table_keeps_its_newest_row(tmp_path: Path) -> None:
 	module = SHOP_MODULE.replace('sl.source("shop", write_strategy="replace", connection="shop")', 'sl.source("shop", write_strategy="replace", connection="shop", on_duplicate_keys="fail")')
-	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', dedup_sort={'v': 'asc'})(rows)\n", module=module)
-	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "a"}, {"id": 1, "v": "c"}])
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='v')(rows)\n", module=module)
+	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 1, "v": "a"}])
 	load(project)
-	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows"') == [(1, "a")]
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows"') == [(1, "c")]

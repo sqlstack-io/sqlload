@@ -31,7 +31,7 @@ fn given_files_a_files_target_wrote_when_a_files_source_loads_them_twice_then_th
         expected_plan: "note    dropped _sqlload_load_id, _sqlload_loaded_at from the files (replaced by this load's)",
         expected_check: "id,name,_sqlload_source_file,_sqlload_source_version,_sqlload_source_row,_sqlload_load_id,_sqlload_loaded_at|3|1|0",
     }];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let server = start_seaweedfs().await?;
@@ -100,7 +100,7 @@ fn given_a_files_source_when_loading_it_into_a_files_target_again_then_each_sour
             ..APPEND
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in &test_cases {

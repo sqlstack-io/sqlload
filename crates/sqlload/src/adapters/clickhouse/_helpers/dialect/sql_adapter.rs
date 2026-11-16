@@ -63,6 +63,11 @@ impl SqlAdapter for ClickHouseSql {
         )
     }
 
+    /// Not yet: ClickHouse changes rows by mutations, which run after the statement returns.
+    fn marks_deleted_rows(&self) -> bool {
+        false
+    }
+
     /// Not yet: changes would need merging into partitions batch by batch.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false
@@ -249,6 +254,41 @@ impl SqlAdapter for ClickHouseSql {
         staging: &TableName,
     ) -> Vec<String> {
         write_statements(self, request, staging)
+    }
+
+    /// [`SqlAdapter::render_newest_kept`] by a `LEFT JOIN` of the table, as ClickHouse can't run the correlated subquery over a window; `join_use_nulls` gives an unmatched key NULL columns, which are never newer.
+    fn render_newest_kept(
+        &self,
+        table: &TableName,
+        (ranked, names): (&str, &[String]),
+        (keys, newer): (&[(String, bool)], &str),
+        older: bool,
+    ) -> String {
+        let join: Vec<String> = keys
+            .iter()
+            .map(|(name, nullable)| {
+                let pair = (
+                    format!("__sqlload_ranked.{name}"),
+                    format!("__sqlload_newer.{name}"),
+                );
+                self.render_key_equality((&pair.0, &pair.1), *nullable)
+            })
+            .collect();
+        let picked: Vec<String> = names
+            .iter()
+            .map(|name| format!("__sqlload_ranked.{name} AS {name}"))
+            .collect();
+        let newer = format!("COALESCE({newer}, false)");
+        let keep = match older {
+            true => newer,
+            false => format!("NOT {newer}"),
+        };
+        format!(
+            "(SELECT {} FROM (SELECT * FROM {ranked} WHERE __sqlload_rank = 1) AS __sqlload_ranked LEFT JOIN {} AS __sqlload_newer ON {} WHERE {keep} SETTINGS join_use_nulls = 1) AS __sqlload_kept",
+            picked.join(", "),
+            self.render_qualified_name(table),
+            join.join(" AND ")
+        )
     }
 
     /// A key column that may be NULL compared with `isNotDistinctFrom`, which ClickHouse takes only in `JOIN ON`, where this is used; a merge's displaced keys are an `IN` that encodes NULLs itself (see `displaced_keys`).

@@ -125,6 +125,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         range_flags: RangeFlags::default(),
         concurrency: args.concurrency.map(usize::from),
         resnapshot: args.resnapshot,
+        sync_deletes: args.sync_deletes,
         fail_fast: args.fail_fast,
         memory_per_table: args.memory_per_table,
         batch_bytes: args

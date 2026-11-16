@@ -56,6 +56,7 @@ fn given_int_and_float_in_different_files_when_merging_then_text_formats_widen_a
             key: "a",
             replaced: &[],
             widen_numbers: test_case.widen_numbers,
+            as_text: false,
         };
         let (merged, problems) =
             merge_columns(column(test_case.newer), column(test_case.older), merge);

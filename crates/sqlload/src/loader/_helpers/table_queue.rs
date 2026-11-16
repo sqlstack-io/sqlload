@@ -126,6 +126,7 @@ pub(crate) fn strategy_name(table: &TablePlan) -> &'static str {
         WriteMode::Replace => "replace",
         WriteMode::Recreate => "recreate",
         WriteMode::Changes(_) => "changes",
+        WriteMode::MarkMissing(_) => "sync_deletes",
     }
 }
 
@@ -166,6 +167,21 @@ fn destination_key(table: &TablePlan) -> String {
         destination.schema,
         destination.table
     )
+}
+
+/// Whether `table`'s tombstone table (`deletes_from`) is among the `unfinished` tables, which must load before it.
+fn tombstones_loading(table: &TablePlan, unfinished: &[&TablePlan]) -> bool {
+    let from = table
+        .spec
+        .deletes
+        .as_ref()
+        .and_then(|deletes| deletes.from.as_ref());
+    let Some((destination, _)) = from.and_then(|from| from.loaded.as_ref()) else {
+        return false;
+    };
+    unfinished.iter().any(|other| {
+        other.spec.target == table.spec.target && other.spec.destination == *destination
+    })
 }
 
 /// The plan's unblocked tables as they load: which may start next, and the outcomes so far.
@@ -230,7 +246,7 @@ impl<'a> TableQueue<'a> {
         outcomes
     }
 
-    /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free, and whose destination table no other table is loading.
+    /// The next table that may start, with its place in the queue: the first waiting whose source's shared client (unless `parallel_tables`) is free, whose destination table no other table is loading, and whose tombstone table (`deletes_from`) has loaded, so the tombstones read this run mark rows after its merge.
     pub(crate) fn next(&mut self) -> Option<(usize, &'a TablePlan)> {
         if self.stopped.is_some() {
             return None;
@@ -238,10 +254,17 @@ impl<'a> TableQueue<'a> {
         let tables = &self.tables;
         let busy = &self.busy;
         let writing = &self.writing;
+        let unfinished: Vec<&TablePlan> = self
+            .waiting
+            .iter()
+            .chain(self.started.values())
+            .map(|index| tables[*index])
+            .collect();
         let position = self.waiting.iter().position(|index| {
             let table = tables[*index];
             !busy.contains(table.spec.source_name.as_str())
                 && !writing.contains(&destination_key(table))
+                && !tombstones_loading(table, &unfinished)
         })?;
         let index = self.waiting.remove(position);
         let table = self.tables[index];

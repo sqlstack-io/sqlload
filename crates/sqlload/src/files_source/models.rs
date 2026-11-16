@@ -20,7 +20,7 @@ pub struct DataFile {
 }
 
 /// The columns a files source fills from each file's path or its configuration rather than from the files.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PathValues {
     /// `partition_columns`: Hive `key=value` folders.
     pub partition_columns: Vec<String>,
@@ -58,6 +58,15 @@ pub struct PathTemplate {
     /// Each capture's column and type, in the order of the regex's groups.
     pub captures: Vec<(String, ColumnType)>,
 }
+
+/// Templates are equal when written alike, as their patterns are compiled from the text.
+impl PartialEq for PathTemplate {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.captures == other.captures
+    }
+}
+
+impl Eq for PathTemplate {}
 
 /// What a file whose key does not match `path_columns` does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -172,6 +181,8 @@ pub struct FileSelection<'a> {
     pub held: &'a [LoadedFile],
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
+    /// How a file's key gives its partition values, which the `held` files' names give too.
+    pub paths: &'a PathValues,
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
 }
@@ -224,6 +235,28 @@ pub enum AfterLoad {
     MoveTo(String),
 }
 
+/// The order a files source's merge applies its files in, and commits them one each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesOrder {
+    /// Oldest modified first, files modified at the same time in path order.
+    #[default]
+    Modified,
+    /// By full path below the source's `path` (a ZIP member's as `<archive>.zip/<member>`), in code point order, as text cursors compare.
+    Path,
+}
+
+/// What a load does when a files source's folder exists and holds no files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnEmpty {
+    /// Fail, as an empty folder can mean a broken mount (`after_load` still skips a folder it emptied).
+    #[default]
+    Fail,
+    /// Skip the table, leaving it as it is.
+    Skip,
+}
+
 /// How the files of a text format are compressed; Parquet compresses inside the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -254,8 +287,12 @@ pub struct CsvOptions {
     pub delimiter: char,
     /// Whether the first record holds the column names; without one, columns are `column_1`, `column_2`, ...
     pub header: bool,
-    /// The quote character, one ASCII character; a quote inside a quoted field is written twice.
-    pub quote: char,
+    /// The quote character, one ASCII character, whose quoted fields may hold the delimiter and line breaks (a quote inside one written twice, or after `escape`); `false` reads every quote as a plain character.
+    pub quote: CsvQuote,
+    /// Inside a quoted field, the character that makes the next one plain text, such as `\\` for `\"`; none by default.
+    pub escape: Option<char>,
+    /// Whether a file read as `latin-1`, `cp1252` or `iso-8859-15` fails when its bytes say it is in another encoding: control characters that mean cp1252, or mostly UTF-8 sequences.
+    pub encoding_check: bool,
     /// Field values read as NULL.
     pub null_values: Vec<String>,
     /// The files' character encoding, such as `utf-8` (the default), `cp1252` or `latin-1`; see [`text_charset`](crate::files_source::main::text_charset::text_charset).
@@ -272,11 +309,32 @@ impl Default for CsvOptions {
         Self {
             delimiter: ',',
             header: true,
-            quote: '"',
+            quote: CsvQuote::Char('"'),
+            escape: None,
+            encoding_check: true,
             null_values: vec![String::new()],
             encoding: DEFAULT_CSV_ENCODING.to_owned(),
             skip_rows: 0,
             column_names: None,
+        }
+    }
+}
+
+/// A CSV source's `quote` setting: the quote character, or `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum CsvQuote {
+    Char(char),
+    /// `false` turns quoting off; `true` is refused at plan, as it names no character.
+    Off(bool),
+}
+
+impl CsvQuote {
+    /// The quote character; `None` when quoting is off.
+    pub fn character(self) -> Option<char> {
+        match self {
+            Self::Char(character) => Some(character),
+            Self::Off(_) => None,
         }
     }
 }
@@ -292,6 +350,18 @@ pub enum Charset {
     Ascii,
     /// Any other encoding the WHATWG Encoding Standard names, such as windows-1252 or UTF-16LE.
     Other(&'static encoding_rs::Encoding),
+}
+
+impl Charset {
+    /// Whether `csv.encoding_check` checks files read in this charset (`latin-1`, `cp1252` and `iso-8859-15`), and if so whether C1 control characters count against it (`latin-1` and `iso-8859-15`, where no text holds them); `None` for any other.
+    pub fn checked(self) -> Option<bool> {
+        match self {
+            Self::Latin1 => Some(true),
+            Self::Other(encoding) if encoding == encoding_rs::ISO_8859_15 => Some(true),
+            Self::Other(encoding) if encoding == encoding_rs::WINDOWS_1252 => Some(false),
+            Self::Utf8 | Self::Ascii | Self::Other(_) => None,
+        }
+    }
 }
 
 /// Which rows of an Excel workbook load.
@@ -346,10 +416,65 @@ pub struct FilesEncoding {
     pub xml: XmlOptions,
     /// With `compression = "zip"`, a pattern the members' names must match, beyond the format's suffix.
     pub members: Option<String>,
+    /// The glob each file's path below `path` must match, in place of the format's name suffix.
+    pub pattern: Option<FilePattern>,
     /// With `shape = "record"`, the one column each JSON object or CSV line loads into whole; `None` for typed columns.
     pub record: Option<String>,
     /// Which of a JSON record's fields holding objects load as one column per key, `<field>__<key>` (none when a `transform` runs, whose output flattens instead).
     pub flatten: Flatten,
+}
+
+/// A files source's `pattern`: a glob over each file's path below `path`, `*` within one name and `**` across folders.
+#[derive(Debug, Clone)]
+pub struct FilePattern {
+    pub text: String,
+    matcher: globset::GlobMatcher,
+}
+
+impl PartialEq for FilePattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
+impl Eq for FilePattern {}
+
+impl FilePattern {
+    /// `text` as a pattern, or why it isn't a glob.
+    pub fn new(text: &str) -> Result<Self, globset::Error> {
+        let glob = globset::GlobBuilder::new(text)
+            .literal_separator(true)
+            .build()?;
+        Ok(Self {
+            text: text.to_owned(),
+            matcher: glob.compile_matcher(),
+        })
+    }
+
+    /// Whether the file at `key`, its path below the source's `path`, matches.
+    pub fn is_match(&self, key: &str) -> bool {
+        self.matcher.is_match(key)
+    }
+}
+
+impl FilesEncoding {
+    /// How the plan names the files a source chose: `listed`, or `matching <pattern>`.
+    pub fn chosen_text(&self) -> String {
+        match &self.pattern {
+            Some(pattern) => format!("matching {}", pattern.text),
+            None => "listed".to_owned(),
+        }
+    }
+
+    /// How the plan names the `count` files listing left out: those that are no data file of this format, or match no `pattern`.
+    pub fn skipped_text(&self, count: usize) -> String {
+        match (count, &self.pattern) {
+            (0, _) => String::new(),
+            (1, Some(_)) => ", 1 other file ignored".to_owned(),
+            (count, Some(_)) => format!(", {count} other files ignored"),
+            (count, None) => format!(", {count} skipped (names that do not fit {self})"),
+        }
+    }
 }
 
 /// How a JSON or CSV source's records load: as typed columns sampled from them, or each whole in one `json` column.

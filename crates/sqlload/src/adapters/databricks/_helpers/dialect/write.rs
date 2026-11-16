@@ -48,6 +48,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         }
         WriteMode::Replace => vec![format!("INSERT OVERWRITE {target} {insert_from}")],
         WriteMode::Append => vec![format!("INSERT INTO {target} {insert_from}")],
+        WriteMode::MarkMissing(mark) => vec![adapter.render_mark(request, mark, staging)],
         WriteMode::Changes(change) => adapter
             .render_changes(request, change, staging)
             .into_iter()

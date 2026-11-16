@@ -11,21 +11,23 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::{
-    admit_tables, destination_names, found_sources, spec_names, unmatched_selectors,
-    with_kept_names,
+    admit_tables, block_failing_reads, destination_names, found_sources, spec_names,
+    unmatched_selectors, with_kept_names,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::sources::with_fetch_memory;
 use crate::loader::_helpers::sources::{PLANNED_SOURCES, selected, source_ends};
-#[cfg(feature = "odbc")]
-use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table, skip_up_to_date};
+use crate::loader::constants::NO_DELETES_TABLES;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_mixed_cursors::block_mixed_cursors;
 use crate::loader::models::{
     FilesSource, FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec,
 };
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+#[cfg(feature = "odbc")]
+use crate::project::models::SourceKind;
+use crate::project::models::{ProjectConfig, SourceConfig};
+use crate::row_deletes::main::link_tombstones::link_tombstones;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -87,7 +89,7 @@ pub async fn plan_project(
     ))
 }
 
-/// One source's `specs`: the selected ones planned against their destinations, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.
+/// One source's `specs`: the selected ones (with the tombstone table of each selected `deletes_from`) planned against their destinations and tied to their tombstone tables, with each table blocked whose `where` fails on the source, or whose cursor bounds its ODBC driver refuses, and the others.
 async fn planned_tables(
     project: &ProjectConfig,
     (source_name, source, files): (&str, &SourceConfig, Option<FilesSource>),
@@ -98,10 +100,21 @@ async fn planned_tables(
     let paths = project.python_http_paths.get(source_name);
     let mut planned: Vec<TablePlan> = Vec::new();
     let mut unselected: Vec<TableSpec> = Vec::new();
+    let chosen: Vec<String> = specs
+        .iter()
+        .filter(|spec| selected(options, (source_name, &spec_names(spec))))
+        .map(|spec| spec.source_table.qualified_name())
+        .collect();
     for mut spec in specs {
         spec.files = files.clone();
         spec.python = module.map(|module| python_table(module, &spec.source_table, paths));
-        if !selected(options, (source_name, &spec_names(&spec))) {
+        if let Some(deletes) = &mut spec.deletes {
+            deletes.scan = options.sync_deletes;
+        }
+        let tombstones = spec.tombstones_of.as_ref();
+        if !selected(options, (source_name, &spec_names(&spec)))
+            && !tombstones.is_some_and(|main| chosen.contains(main))
+        {
             unselected.push(spec);
             continue;
         }
@@ -111,10 +124,8 @@ async fn planned_tables(
         let plan = plan_table(&spec, destination, options).await?;
         planned.push(Box::pin(with_kept_names(project, spec, plan, (destination, options))).await?);
     }
-    if source.kind == SourceKind::Odbc {
-        #[cfg(feature = "odbc")]
-        block_refused_bounds(project, (source_name, source), &mut planned).await?;
-    }
+    link_tombstones(&mut planned);
+    planned = block_failing_reads(project, (source_name, source), planned).await?;
     #[cfg(feature = "odbc")]
     if source.kind == SourceKind::Odbc {
         planned = with_fetch_memory(project, source, planned, options).await?;
@@ -122,7 +133,7 @@ async fn planned_tables(
     Ok((planned, unselected))
 }
 
-/// The plan with a warning for each selector matching none of the `configured` tables, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
+/// The plan with a warning for each selector matching none of the `configured` tables, a problem when `--sync-deletes` selects no table with `deletes`, every selected files table blocked whose folder clashes with any other configured table's, every selected table blocked whose destination table it shares with configured tables it could remove or overwrite rows of (see [`block_shared_destinations`]), and every cursor table blocked when a cursor range meets cursors of different kinds.
 fn block_conflicts(
     mut plan: ProjectPlan,
     (claims, configured, drained): (&[FolderClaim], &[TableSpec], &[String]),
@@ -132,6 +143,10 @@ fn block_conflicts(
     names.extend(drained.iter().cloned());
     plan.warnings
         .extend(unmatched_selectors(project, options, &names));
+    let scans = plan.tables.iter().any(|table| table.spec.deletes.is_some());
+    if options.sync_deletes && !scans {
+        plan.problems.push(NO_DELETES_TABLES.to_owned());
+    }
     #[cfg(feature = "odbc")]
     {
         let fetches: Vec<(usize, &str, Option<u64>)> = plan

@@ -56,7 +56,7 @@ INSERT INTO public.type_matrix VALUES
 #[test]
 fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exactly()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -239,7 +239,7 @@ fn given_a_postgres_table_of_every_type_when_copied_then_each_value_arrives_exac
 #[test]
 fn given_a_table_over_the_split_size_when_copied_then_each_reader_takes_a_range_and_every_row_arrives_once()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let watcher = connect(&postgres).await?;

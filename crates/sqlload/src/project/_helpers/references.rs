@@ -2,17 +2,20 @@ use crate::files_source::constants::LOADER_COLUMNS;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
-use crate::files_source::models::{AfterLoad, Compression, RecordShape, SourceFormat};
+use crate::files_source::models::{
+    AfterLoad, Compression, CsvQuote, FilePattern, FilesOrder, OnEmpty, RecordShape, SourceFormat,
+};
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
+use crate::project::_helpers::tombstones::tombstone_problems;
 use crate::project::constants::{
     FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
     TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, RenameSetting,
+    CdcMode, ConnectionConfig, ConstantColumns, Deletes, ProjectConfig, RenameSetting,
     SourceConfig, SourceKind, TableSettings, WriteStrategy,
 };
 use crate::sheets_source::main::a1_range::a1_range;
@@ -95,6 +98,8 @@ fn odbc_connection_problems(name: &str, connection: &ConnectionConfig) -> Vec<St
 fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let place = source_place(project, name);
+    problems.extend(after_load_problems(project, (name, &place), source));
+    problems.extend(tombstone_problems(&place, source));
     let (kinds, expected): (&[&str], &str) = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => (&["postgres"], "postgres"),
         SourceKind::Snowflake => (&["snowflake"], "snowflake"),
@@ -204,11 +209,10 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let cdc_only = source.publication.is_some()
         || source.slot.is_some()
         || source.cdc_mode != CdcMode::Merge
-        || source.deletes != CdcDeletes::Soft
         || source.batch_interval.is_some();
     if cdc_only && source.kind != SourceKind::PostgresCdc {
         problems.push(format!(
-            "{place} publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\""
+            "{place} publication, slot, cdc_mode and batch_interval are for kind = \"postgres_cdc\""
         ));
     }
     if source.kind == SourceKind::PostgresCdc {
@@ -262,6 +266,22 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::Snowflake {
         problems.extend(unload_stage_problems(place, source));
     }
+    let selects = matches!(
+        source.kind,
+        SourceKind::Postgres | SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery
+    );
+    if !selects && sheet_settings(source).any(|settings| settings.row_filter.is_some()) {
+        problems.push(format!(
+            "{place} where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\", whose tables SQLLoad reads with a SELECT"
+        ));
+    }
+    problems.extend(
+        (source.tables.iter())
+            .filter(|(_, table)| table.sql.is_some() && table.settings.row_filter.is_some())
+            .map(|(name, _)| {
+                format!("{place} [tables.{name}] where narrows a table SQLLoad selects from, and {name} is a query; put the condition in its sql")
+            }),
+    );
     let sheets_only = source.spreadsheet_id.is_some()
         || !source.ranges.is_empty()
         || sheet_settings(source)
@@ -305,7 +325,6 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             }
             problems.extend(encoding_problems(place, source));
             problems.extend(path_value_problems(place, source));
-            problems.extend(after_load_problems(place, source));
         }
         SourceKind::GoogleSheets => {
             if source.ranges.len() != 1 && !template.contains(TABLE_PLACEHOLDER) {
@@ -368,9 +387,11 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || source.unmatched_paths.is_some()
         || source.copy_to_internal_stage
         || source.after_load != AfterLoad::Keep
+        || source.order != FilesOrder::default()
+        || source.on_empty != OnEmpty::default()
     {
         problems.push(format!(
-            "{place} path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage and after_load are for kind = \"files\""
+            "{place} path, partition_columns, path_columns, unmatched_paths, copy_to_internal_stage, after_load, order and on_empty are for kind = \"files\""
         ));
     }
     if source.format != SourceFormat::Parquet
@@ -379,11 +400,12 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || source.xlsx.is_some()
         || source.xml.is_some()
         || source.members.is_some()
+        || source.pattern.is_some()
         || source.shape != RecordShape::Columns
         || source.record_column.is_some()
     {
         problems.push(format!(
-            "{place} format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\""
+            "{place} format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\""
         ));
     }
     problems
@@ -650,14 +672,47 @@ fn constant_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     problems
 }
 
-/// A files source's `after_load` that cannot apply to a ZIP archive's members, which share their archive (another source may still read it); where `move_to` may go is checked once `path` is resolved.
-fn after_load_problems(place: &str, source: &SourceConfig) -> Vec<String> {
-    match source.after_load != AfterLoad::Keep && source.compression == Some(Compression::Zip) {
-        true => vec![format!(
-            "{place} after_load is not for compression = \"zip\": an archive's members load one by one, and another source may read the same archive"
-        )],
-        false => Vec::new(),
+/// A ZIP files source's `after_load` while another files source over the same connection reads ZIP archives under an overlapping `path`, which may still need an archive this one moves or deletes; where `move_to` may go is checked once `path` is resolved.
+fn after_load_problems(
+    project: &ProjectConfig,
+    (name, place): (&str, &str),
+    source: &SourceConfig,
+) -> Vec<String> {
+    if source.kind != SourceKind::Files
+        || source.after_load == AfterLoad::Keep
+        || source.compression != Some(Compression::Zip)
+    {
+        return Vec::new();
     }
+    let folder = |source: &SourceConfig| {
+        let path = source.path.as_deref().unwrap_or_default();
+        let path = path.strip_prefix("./").unwrap_or(path);
+        path.trim_matches('/').to_owned()
+    };
+    let inside = |inner: &str, outer: &str| {
+        outer.is_empty() || inner == outer || inner.starts_with(&format!("{outer}/"))
+    };
+    let mine = folder(source);
+    project
+        .sources
+        .iter()
+        .filter(|(other_name, other)| {
+            other_name.as_str() != name
+                && other.kind == SourceKind::Files
+                && other.connection == source.connection
+                && other.compression == Some(Compression::Zip)
+        })
+        .filter(|(_, other)| {
+            let theirs = folder(other);
+            inside(&mine, &theirs) || inside(&theirs, &mine)
+        })
+        .map(|(other_name, other)| {
+            format!(
+                "{place} after_load moves or deletes each ZIP archive once its members load, and [sources.{other_name}] reads ZIP archives in {:?} on the same connection, which may still need them; remove after_load, or give the sources folders apart",
+                other.path.as_deref().unwrap_or_default()
+            )
+        })
+        .collect()
 }
 
 /// Settings of the xlsx and xml formats and of ZIP archives that do not fit the source.
@@ -701,6 +756,9 @@ fn container_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} format = \"xml\" needs xml.record_path, the element names from the root to each row's element, such as \"orders/order\""
         )),
         _ => {}
+    }
+    if let Some(Err(error)) = source.pattern.as_deref().map(FilePattern::new) {
+        problems.push(format!("{place} pattern: {error}"));
     }
     match (&source.members, zip) {
         (Some(_), false) => problems.push(format!("{place} members is for compression = \"zip\"")),
@@ -774,15 +832,34 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     match (&source.csv, source.format) {
         (None, _) => {}
         (Some(csv), SourceFormat::Csv) => {
-            for (setting, character) in [("delimiter", csv.delimiter), ("quote", csv.quote)] {
-                if !character.is_ascii() || character == '\n' || character == '\r' {
+            let quote = csv.quote.character();
+            let characters = [
+                ("delimiter", Some(csv.delimiter)),
+                ("quote", quote),
+                ("escape", csv.escape),
+            ];
+            for (setting, character) in characters {
+                if let Some(character) = character
+                    && (!character.is_ascii() || character == '\n' || character == '\r')
+                {
                     problems.push(format!(
                         "{place} csv {setting} must be one ASCII character other than a line break, not {character:?}"
                     ));
                 }
             }
-            if csv.delimiter == csv.quote {
-                problems.push(format!("{place} csv delimiter and quote must differ"));
+            if quote == Some(csv.delimiter) || csv.escape == Some(csv.delimiter) {
+                problems.push(format!(
+                    "{place} csv delimiter must differ from quote and escape"
+                ));
+            }
+            match (csv.quote, csv.escape) {
+                (CsvQuote::Off(true), _) => problems.push(format!(
+                    "{place} csv quote = true names no character; write it, such as '\"', or false to read every quote as a plain character"
+                )),
+                (CsvQuote::Off(false), Some(_)) => problems.push(format!(
+                    "{place} csv escape works inside quoted fields, and quote = false has none; remove escape"
+                )),
+                _ => {}
             }
             if let Err(problem) = text_charset(&csv.encoding) {
                 problems.push(format!("{place} {problem}"));
@@ -810,10 +887,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             || settings.on_duplicate_keys.is_some()
             || settings.null_keys.is_some()
             || settings.replace_key.is_some()
-            || settings.dedup_sort.is_some()
+            || settings.newest_by.is_some()
         {
             problems.push(format!(
-                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state, checks, on_duplicate_keys, null_keys, replace_key or dedup_sort; choose cdc_mode = \"merge\" or \"changelog\""
+                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state, checks, on_duplicate_keys, null_keys, replace_key or newest_by; choose cdc_mode = \"merge\" or \"changelog\""
             ));
             break;
         }
@@ -826,7 +903,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} batch_interval must be at least 1s, or `load --follow` would write a batch for almost every change"
         ));
     }
-    if source.deletes == CdcDeletes::Hard && source.cdc_mode == CdcMode::Changelog {
+    let hard = std::iter::once(&source.defaults)
+        .chain(source.tables.values().map(|table| &table.settings))
+        .any(|settings| settings.deletes == Some(Deletes::Hard));
+    if hard && source.cdc_mode == CdcMode::Changelog {
         problems.push(format!(
             "{place} deletes = \"hard\" applies to cdc_mode = \"merge\"; a changelog keeps every delete as a row"
         ));

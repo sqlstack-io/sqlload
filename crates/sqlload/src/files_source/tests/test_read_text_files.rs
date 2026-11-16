@@ -1,5 +1,5 @@
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::{CsvOptions, FilesEncoding, SourceFormat};
+use crate::files_source::models::{CsvOptions, CsvQuote, FilesEncoding, SourceFormat};
 use crate::files_source::tests::helpers::{
     block_on, csv_encoding, decoded, encoding, read_rows, record_encoding,
 };
@@ -155,7 +155,7 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             description: "csv: no header, a custom quote, and no NULL markers keeps empty text",
             encoding: csv_encoding(CsvOptions {
                 header: false,
-                quote: '\'',
+                quote: CsvQuote::Char('\''),
                 null_values: Vec::new(),
                 ..CsvOptions::default()
             }),
@@ -182,6 +182,88 @@ fn given_json_and_csv_files_when_reading_then_rows_convert_strictly_and_errors_n
             exclude: &[],
             pinned: &[],
             expected_rows: Err("a.csv: line 3: unterminated quoted field"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: escape = \\ makes a backslashed quote plain text, and a doubled quote still works",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                escape: Some('\\'),
+                ..CsvOptions::default()
+            }),
+            files: &[(
+                "a.csv",
+                "1,\"said \\\"hi\\\", ok\",x\n2,\"a \"\"b\"\"\",y\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|said \"hi\", ok|x\n2|a \"b\"|y"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: a backslashed quote without escape fails as text after a closing quote, with both hints",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "1,\"said \\\"hi\\\", ok\",x\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.csv: line 1: text after a closing quote; if this file escapes quotes with a backslash, set csv = { escape = \"\\\\\" }; if it never quotes values, set csv = { quote = false }",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: text after a closing quote fails naming the line, and with escape set the hint only suggests quote = false",
+            encoding: csv_encoding(CsvOptions {
+                escape: Some('\\'),
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "id,v,w\n1,\"ab\"c,x\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.csv: line 2: text after a closing quote; if it never quotes values, set csv = { quote = false }",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: a quote inside an unquoted field is plain text",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "1,12\" pipe,x\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|12\" pipe|x"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: quote = false reads every quote as plain text, splitting on the delimiter only",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                quote: CsvQuote::Off(false),
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "1,\"Big\" deal,x\n2,\"a,b\",y\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("a.csv: incorrect number of fields for line 2, expected 3 got 4"),
+        },
+        ReadTextFilesTestCase {
+            description: "csv: quote = false loads a field as written, quotes and all",
+            encoding: csv_encoding(CsvOptions {
+                header: false,
+                quote: CsvQuote::Off(false),
+                ..CsvOptions::default()
+            }),
+            files: &[("a.csv", "1,\"Big\" deal,x\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|\"Big\" deal|x"),
         },
         ReadTextFilesTestCase {
             description: "csv: a closed quote at the end of the file is fine",
@@ -537,8 +619,11 @@ fn given_csv_files_in_other_encodings_or_with_leading_lines_when_reading_then_te
             expected_rows: Ok("1|Caf\u{e9} \u{20ac}5"),
         },
         ReadTextFilesTestCase {
-            description: "latin-1 is ISO-8859-1 byte for byte: 0x80 stays U+0080, unlike cp1252",
-            encoding: csv_encoding(decoded("Latin-1", 0)),
+            description: "latin-1 is ISO-8859-1 byte for byte: 0x80 stays U+0080, unlike cp1252, once encoding_check is off",
+            encoding: csv_encoding(CsvOptions {
+                encoding_check: false,
+                ..decoded("Latin-1", 0)
+            }),
             files: &[("a.raw.csv", "id,name\n1,Caf\u{e9} \u{80}5\n")],
             unsampled: &[],
             exclude: &[],
@@ -596,7 +681,10 @@ fn given_csv_files_in_other_encodings_or_with_leading_lines_when_reading_then_te
         },
         ReadTextFilesTestCase {
             description: "iso88591, Snowflake's spelling, is latin-1 too, not cp1252",
-            encoding: csv_encoding(decoded("iso88591", 0)),
+            encoding: csv_encoding(CsvOptions {
+                encoding_check: false,
+                ..decoded("iso88591", 0)
+            }),
             files: &[("a.raw.csv", "id,name\n1,\u{81}\u{80}\n")],
             unsampled: &[],
             exclude: &[],
@@ -673,6 +761,76 @@ fn given_csv_files_in_other_encodings_or_with_leading_lines_when_reading_then_te
             exclude: &[],
             pinned: &[],
             expected_rows: Err("line 4"),
+        },
+        ReadTextFilesTestCase {
+            description: "encoding_check: a cp1252 file read as latin-1 fails at its first control character, suggesting cp1252",
+            encoding: csv_encoding(decoded("latin-1", 0)),
+            files: &[(
+                "a.raw.csv",
+                "id,name\n1,don\u{92}t pay \u{80}12 \u{96} ok\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.raw.csv: line 2, byte 13: 0x92 is a control character in latin-1, which text never holds; this file is probably cp1252, so set csv.encoding = \"cp1252\", or csv.encoding_check = false to read it as latin-1",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "encoding_check: a UTF-8 file read as cp1252 fails, suggesting utf-8",
+            encoding: csv_encoding(decoded("cp1252", 0)),
+            files: &[(
+                "a.csv",
+                "id,name\n1,Soci\u{e9}t\u{e9} / don\u{2019}t pay \u{20ac}12\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err(
+                "a.csv: line 2, byte 14: the file's bytes above 0x7F are UTF-8 sequences, which windows-1252 reads as two or three characters each; this file looks like UTF-8, so set csv.encoding = \"utf-8\", or csv.encoding_check = false to read it as windows-1252",
+            ),
+        },
+        ReadTextFilesTestCase {
+            description: "encoding_check: a UTF-8 file read as latin-1 gets the UTF-8 hint, though its sequences hold C1 bytes",
+            encoding: csv_encoding(decoded("latin-1", 0)),
+            files: &[("a.csv", "id,name\n1,don\u{2019}t \u{e9}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Err("this file looks like UTF-8"),
+        },
+        ReadTextFilesTestCase {
+            description: "encoding_check: a true latin-1 file holding one literal \u{c3}\u{a9} among other accents loads",
+            encoding: csv_encoding(decoded("latin-1", 0)),
+            files: &[(
+                "a.raw.csv",
+                "id,name\n1,Soci\u{e9}t\u{e9} \u{c3}\u{a9} caf\u{e9}\n",
+            )],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|Soci\u{e9}t\u{e9} \u{c3}\u{a9} caf\u{e9}"),
+        },
+        ReadTextFilesTestCase {
+            description: "encoding_check = false loads a UTF-8 file read as cp1252 as it reads",
+            encoding: csv_encoding(CsvOptions {
+                encoding_check: false,
+                ..decoded("cp1252", 0)
+            }),
+            files: &[("a.csv", "id,name\n1,Soci\u{e9}t\u{e9}\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|Soci\u{c3}\u{a9}t\u{c3}\u{a9}"),
+        },
+        ReadTextFilesTestCase {
+            description: "an ISO-8859-15 file read as iso-8859-15 keeps \u{152}, \u{153} and the euro sign",
+            encoding: csv_encoding(decoded("iso-8859-15", 0)),
+            files: &[("a.raw.csv", "id,name\n1,B\u{bc}UF b\u{bd}uf \u{a4}5\n")],
+            unsampled: &[],
+            exclude: &[],
+            pinned: &[],
+            expected_rows: Ok("1|B\u{152}UF b\u{153}uf \u{20ac}5"),
         },
         ReadTextFilesTestCase {
             description: "a skipped cp1252 file still counts skipped lines in where a byte fails",

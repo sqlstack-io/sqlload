@@ -34,16 +34,25 @@ use crate::test_types::{
     TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
-/// Run an async test body on a fresh multi-threaded runtime whose threads have the stack a command runs on, as `load` gives the threads tables load on.
-pub(crate) fn run_async<F: std::future::Future<Output = Result<(), String>>>(
-    body: F,
-) -> Result<(), String> {
+/// Run the async test body `body` makes on a fresh multi-threaded runtime whose threads have the stack a command runs on, as `load` gives the threads tables load on; the body is made and polled on a thread of that stack too, as every command runs on one, rather than on the test's 2 MiB.
+pub(crate) fn run_async<B, F>(body: B) -> Result<(), String>
+where
+    B: FnOnce() -> F + Send,
+    F: std::future::Future<Output = Result<(), String>>,
+{
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(COMMAND_STACK_BYTES)
         .build()
         .map_err(|error| error.to_string())?;
-    runtime.block_on(body)
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(COMMAND_STACK_BYTES)
+            .spawn_scoped(scope, || runtime.block_on(body()))
+            .map_err(|error| format!("cannot start the test body's thread: {error}"))?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 /// Every value of `column` across `batches`, as Arrow displays it.
@@ -479,6 +488,14 @@ pub(crate) fn gzip(text: &str) -> Result<bytes::Bytes, String> {
 pub(crate) fn after_sample(text: &str) -> Result<bytes::Bytes, String> {
     let padding: String = (0..10_000).map(|id| format!("{{\"id\":{id}}}\n")).collect();
     gzip(&format!("{padding}{text}"))
+}
+
+/// A CSV of `code,amount` whose sampled rows hold numeric codes, then `text`.
+pub(crate) fn codes_after_sample(text: &str) -> Result<bytes::Bytes, String> {
+    let sampled: String = (0..10_000)
+        .map(|row| format!("{},1.00\n", 1_099_999_500_115_812_i64 + row))
+        .collect();
+    plain(&format!("code,amount\n{sampled}{text}"))
 }
 
 /// A file zstd-compressed.
@@ -933,6 +950,14 @@ pub(crate) fn json_layouts() -> Result<Vec<(String, bytes::Bytes)>, String> {
 /// CSV of every inferred type.
 pub(crate) fn every_csv_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
     fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::CsvValues)
+}
+
+/// One CSV file that quotes no value, though one holds a quote.
+pub(crate) fn unquoted_csv() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![(
+        "day=2026-11-01/part-0.csv".to_owned(),
+        bytes::Bytes::from_static(b"id,s\n1,12\" pipe\n2,y\n"),
+    )])
 }
 
 /// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.

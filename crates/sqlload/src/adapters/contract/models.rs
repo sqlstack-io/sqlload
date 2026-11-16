@@ -44,6 +44,38 @@ pub enum WriteMode {
     Recreate,
     /// Captured changes (`kind = "postgres_cdc"`), applied only where their `_sqlload_lsn` is newer than what the table holds, so a replayed batch changes nothing.
     Changes(ChangeWrite),
+    /// The staged rows are every key the source holds (`load --sync-deletes`): the table's rows loaded before `before` whose key none of them holds are marked deleted, matched as a merge matches keys.
+    MarkMissing(MarkWrite),
+}
+
+/// How a table's tombstones (`deletes_from`) mark its rows: those whose key a tombstone holds, deleted at or after the row's cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneWrite {
+    /// The loaded tombstone table, holding the table's `unique_key` columns under the same names.
+    pub tombstones: TableName,
+    /// The tombstone table's column holding when each key was deleted.
+    pub deleted_at: String,
+    /// The table's `cursor_column`, every column of a coalesced one in order, whose first non-NULL value a tombstone's time must not be before.
+    pub cursor: Vec<String>,
+    pub unique_key: Vec<String>,
+    /// The key columns whose values are never NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
+    /// `_sqlload_deleted_at` is set, on a row it is NULL on, to the latest time of the tombstones marking it, the same each time the row is marked again; otherwise the row is removed.
+    pub soft: bool,
+}
+
+/// How a key scan marks the table's rows whose key the source no longer holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkWrite {
+    pub unique_key: Vec<String>,
+    /// The key columns whose staged values are never NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
+    /// `_sqlload_deleted_at` is set to `before` on a row it is NULL on; otherwise the row is removed.
+    pub soft: bool,
+    /// When the key read started, RFC 3339 UTC: a row loaded since (its `_sqlload_loaded_at` not before it) may hold a key the read missed, so it stays.
+    pub before: String,
+    /// The most percent of the table's rows (those not marked yet) one scan may mark; more fails the table, marking none.
+    pub max_drop: u8,
 }
 
 impl WriteMode {
@@ -58,7 +90,7 @@ impl WriteMode {
         }
     }
 
-    /// The key columns a merge, a change apply or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
+    /// The key columns a merge, a change apply, a key scan or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
     pub fn matched_keys(&self) -> Vec<(&str, bool)> {
         let (unique_key, not_null_keys) = match self {
             WriteMode::Merge {
@@ -67,6 +99,7 @@ impl WriteMode {
                 ..
             } => (unique_key, not_null_keys),
             WriteMode::Changes(change) => (&change.unique_key, &change.not_null_keys),
+            WriteMode::MarkMissing(mark) => (&mark.unique_key, &mark.not_null_keys),
             WriteMode::DeleteInsert {
                 replace_key,
                 not_null_keys,
@@ -81,13 +114,13 @@ impl WriteMode {
     }
 }
 
-/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
+/// Which of a commit's staged rows sharing a merge key is kept: the newest by `newest_by` (the first column decides, the next breaks ties; a NULL loses to any value, two NULLs tie), then the one with the largest `ordinal`, the last in source order; and, with `newest_by`, none older than the table's row of its key, which it would overwrite. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeDedupe {
     /// The staged column numbering rows in source order.
     pub ordinal: String,
-    /// The `dedup_sort` column, and `true` when its highest value wins.
-    pub sort: Option<(String, bool)>,
+    /// The columns whose higher values are newer, compared in order; empty, the last row read wins and every row overwrites.
+    pub newest_by: Vec<String>,
 }
 
 /// How a batch of captured changes is applied.

@@ -72,7 +72,7 @@ pub(crate) fn write_statements(
         .collect();
     let staged = adapter.render_qualified_name(staging);
     let (from, values) =
-        ranked_source(adapter, request, (&staged, &values)).unwrap_or((staged, values));
+        ranked_source(adapter, request, (&staged, &values), false).unwrap_or((staged, values));
     let values: Vec<String> = values
         .iter()
         .zip(&names)
@@ -80,7 +80,7 @@ pub(crate) fn write_statements(
         .collect();
     let displaced = match request.mode {
         WriteMode::Replace | WriteMode::Recreate => None,
-        WriteMode::Append => None,
+        WriteMode::Append | WriteMode::MarkMissing(_) => None,
         WriteMode::Merge { .. } => {
             let keys = displaced_keys(adapter, request.mode);
             Some(format!("({keys}) IN (SELECT {keys} FROM {delta})"))

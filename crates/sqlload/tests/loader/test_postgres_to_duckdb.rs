@@ -79,7 +79,8 @@ Loads (1)                                           sqlload load
     ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
     ├── reads   updated_at: first run, everything
     ├── columns 5
-    └── commits once, at the end of the read (updated_at isn't read in order)
+    ├── commits once, at the end of the read (updated_at isn't read in order)
+    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
 
@@ -94,7 +95,8 @@ Loads (1)                                           sqlload load
     ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
     ├── reads   updated_at >= 2026-11-02 10:00:00.000+00 (warehouse maximum)
     ├── columns 5
-    └── commits once, at the end of the read (updated_at isn't read in order)
+    ├── commits once, at the end of the read (updated_at isn't read in order)
+    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
 
 ✓ Plan complete  1 selected, 1 to load";
 
@@ -213,6 +215,7 @@ Loads (1)                                           sqlload load
     ├── reads   seq >= 0 (first run, from cursor_start)
     ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
+    ├── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
@@ -227,6 +230,7 @@ Loads (1)                                           sqlload load
     ├── reads   seq >= 2 (warehouse maximum)
     ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
+    ├── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 to load";
@@ -236,7 +240,7 @@ const DLT_DESCRIBE: &str = "order_id BIGINT|seq BIGINT|unit_price DECIMAL(10,2)|
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -334,7 +338,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
 #[test]
 fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_its_plan_columns_and_rows_stay_byte_identical()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -411,7 +415,7 @@ fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_i
 #[test]
 fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from_its_own_maximum_and_never_touches_the_others_rows()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -525,7 +529,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
 #[test]
 fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_keeps_the_destination_maximum()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -575,7 +579,7 @@ fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_k
 #[test]
 fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_never_replace_or_remove_other_rows()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -679,7 +683,7 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
 #[test]
 fn given_quoted_source_names_under_dlt_naming_when_loading_twice_then_the_table_and_columns_load_snake_cased_and_merge_by_the_renamed_key()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client

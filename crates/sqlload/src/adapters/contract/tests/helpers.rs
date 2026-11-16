@@ -26,7 +26,7 @@ pub(crate) fn columns() -> Vec<DesiredColumn> {
     ];
     columns.extend(metadata_columns(
         crate::load_naming::models::Compat::Sqlload,
-        false,
+        (false, false),
     ));
     columns
 }
@@ -161,7 +161,7 @@ pub(crate) fn mixed_merge() -> crate::adapters::contract::models::WriteMode {
         not_null_keys: vec!["id".to_owned()],
         dedupe: Some(crate::adapters::contract::models::MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
-            sort: None,
+            newest_by: Vec::new(),
         }),
     }
 }

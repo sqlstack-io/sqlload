@@ -6,11 +6,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use arrow_array::RecordBatch;
-use arrow_schema::Schema;
+use arrow_pyarrow::{IntoPyArrow, Table};
+use arrow_schema::{Schema, SchemaRef};
+use pyo3::exceptions::PyValueError;
+use pyo3::types::{PyAnyMethods, PyCFunction};
+use pyo3::{Bound, PyAny, PyResult, Python};
 use sqlload::http_source::main::run_http_job::run_http_job;
 use sqlload::http_source::models::{HttpJob, HttpPage, PageTransform};
 use sqlload::load_naming::main::loaded_name::loaded_name;
-use sqlload::python_sources::models::{TransformCall, TransformContext};
+use sqlload::python_sources::models::TransformContext;
 use sqlload::row_batches::main::columns_batch::columns_batch;
 use sqlload::row_batches::main::flatten_batch::flatten_batch;
 use sqlload::row_batches::main::json_rows::json_rows;
@@ -21,11 +25,12 @@ use sqlload::row_batches::models::{JsonLayout, JsonRead, Projection};
 use crate::crossing::constants::PAGE_POLL;
 use crate::crossing::errors::CrossError;
 use crate::crossing::main::crossing_options::crossing_options;
-use crate::crossing::main::returned_batches::returned_batches;
+use crate::crossing::main::table_batches::table_batches;
 use crate::crossing::models::{
     Crossed, CrossingOptions, CrossingStats, Dispatch, PanicSite, ParseJob, Parsed, Polled,
-    ReadContext,
+    ReadContext, TableBatches,
 };
+use crate::host::constants::RUNTIME_MODULE;
 
 /// Where one piece's batches go, and the read's counters.
 struct Output {
@@ -33,6 +38,20 @@ struct Output {
     stats: Arc<CrossingStats>,
     /// The objects to flatten and the connections an `sl.http` job may use.
     context: Arc<ReadContext>,
+}
+
+/// One page's rows on their way to its job's `transform`, with the call's `ctx` as JSON.
+struct PageRows {
+    rows: Vec<RecordBatch>,
+    schema: SchemaRef,
+    context: String,
+}
+
+/// A job's `transform` run over all its pages through one crossing: each page's rows go to `pages`, and what the call returns or yields crosses into `batches`, each page's output closed by a state marker; `problem` keeps why a call's return can't load.
+struct PageCrossing {
+    pages: SyncSender<PageRows>,
+    batches: std::cell::RefCell<TableBatches>,
+    problem: Arc<Mutex<Option<String>>>,
 }
 
 /// Start parser threads and one passing their batches to `sender` in yield order; each channel holds one batch and `max_queued + parse_threads - 2` pieces wait behind the one being passed on, so at most `max_queued + parse_threads` batches are in flight.
@@ -201,7 +220,8 @@ impl Output {
         let started = Instant::now();
         match crossed {
             Crossed::Columns(columns) => {
-                let batch = columns_batch(columns).map_err(CrossError::Data)?;
+                let batch = columns_batch(columns, self.context.flatten.as_text)
+                    .map_err(CrossError::Data)?;
                 open = self.send(batch, started);
             }
             Crossed::Json { bytes, read } => {
@@ -218,7 +238,10 @@ impl Output {
                 }
                 let mut started = started;
                 json_rows(&bytes, &read, &mut |columns| {
-                    let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
+                    let batch = flatten_batch(
+                        &columns_batch(columns, self.context.flatten.as_text)?,
+                        &self.context.flatten,
+                    )?;
                     open = open && self.send(batch, started);
                     started = Instant::now();
                     match open {
@@ -282,6 +305,10 @@ impl Output {
                 ));
             }
         };
+        let crossing = match &transform {
+            Some(transform) => Some(self.page_crossing(transform).map_err(CrossError::Python)?),
+            None => None,
+        };
         let mut open = true;
         let mut failed: Option<String> = None;
         run_http_job(
@@ -289,7 +316,7 @@ impl Output {
             &self.context.connections,
             self.context.rules(),
             |page| {
-                match self.page_rows(&page, transform.as_ref()) {
+                match self.page_rows(&page, transform.as_ref().zip(crossing.as_ref())) {
                     Ok(still) => open = still,
                     Err(reason) => failed = Some(format!("{}: {reason}", page.source)),
                 }
@@ -297,9 +324,98 @@ impl Output {
             },
         )
         .map_err(CrossError::Http)?;
-        match failed {
-            Some(reason) => Err(CrossError::Data(reason)),
-            None => Ok(open),
+        match (failed, crossing) {
+            (Some(reason), _) => Err(CrossError::Data(reason)),
+            (None, Some(crossing)) if open => self.finish_pages(crossing).map_err(CrossError::Data),
+            (None, _) => Ok(open),
+        }
+    }
+
+    /// Start the crossing `transform` runs in over a job's pages: its function called on each page's rows as they arrive (see [`PageRows`]), what it returns crossing as a table function's yields cross, with `sl.checkpoint(None)` after each page's output to mark where it ends.
+    fn page_crossing(&self, transform: &PageTransform) -> PyResult<PageCrossing> {
+        let (pages, received) = sync_channel::<PageRows>(0);
+        let received = Mutex::new(received);
+        let problem: Arc<Mutex<Option<String>>> = Arc::default();
+        let noted = problem.clone();
+        let function = transform.function.clone();
+        let context = ReadContext {
+            flatten: self.context.flatten.clone(),
+            masked: self.context.masked.clone(),
+            arrays: self.context.arrays.clone(),
+            naming: self.context.naming,
+            ..ReadContext::default()
+        };
+        let options = CrossingOptions {
+            parse_threads: 1,
+            ..crossing_options()
+        };
+        let batches = Python::attach(|py| -> PyResult<TableBatches> {
+            let feed = PyCFunction::new_closure(py, None, None, move |args, _| {
+                let py = args.py();
+                let page = py.detach(|| match received.lock() {
+                    Ok(receiver) => match receiver.recv() {
+                        Ok(page) => Some(page),
+                        Err(_) => None,
+                    },
+                    Err(_) => None,
+                });
+                let Some(page) = page else {
+                    return Ok(None);
+                };
+                let table = Table::try_new(page.rows, page.schema)
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?
+                    .into_pyarrow(py)?;
+                let (returned, problem): (Option<Bound<'_, PyAny>>, Option<String>) = py
+                    .import(RUNTIME_MODULE)?
+                    .call_method1("call_transform", (function.as_str(), table, page.context))?
+                    .extract()?;
+                match returned {
+                    Some(returned) => PyResult::Ok(Some(returned.unbind())),
+                    None => {
+                        let problem =
+                            problem.unwrap_or_else(|| "it returned nothing that loads".to_owned());
+                        if let Ok(mut slot) = noted.lock() {
+                            *slot = Some(problem.clone());
+                        }
+                        Err(PyValueError::new_err(problem))
+                    }
+                }
+            })?;
+            let items = py
+                .import(RUNTIME_MODULE)?
+                .call_method1("page_items", (feed,))?;
+            let snapshot =
+                PyCFunction::new_closure(py, None, None, |_, _| PyResult::Ok(None::<String>))?;
+            Ok(table_batches(
+                &items,
+                Some(snapshot.as_any()),
+                options,
+                context,
+            ))
+        })?;
+        Ok(PageCrossing {
+            pages,
+            batches: std::cell::RefCell::new(batches),
+            problem,
+        })
+    }
+
+    /// End `crossing` once its job has no more pages, passing on anything it still holds; `Ok(false)` once the consumer has gone.
+    fn finish_pages(&self, crossing: PageCrossing) -> Result<bool, String> {
+        let PageCrossing { pages, batches, .. } = crossing;
+        drop(pages);
+        let mut batches = batches.into_inner();
+        loop {
+            match batches.poll(PAGE_POLL) {
+                Polled::Batch(batch) => {
+                    if !self.send(batch, Instant::now()) {
+                        return Ok(false);
+                    }
+                }
+                Polled::Finished => return Ok(true),
+                Polled::Failed(error) => return Err(error.to_string()),
+                Polled::State(_) | Polled::Pending => {}
+            }
         }
     }
 
@@ -307,7 +423,7 @@ impl Output {
     fn page_rows(
         &self,
         page: &HttpPage,
-        transform: Option<&PageTransform>,
+        transform: Option<(&PageTransform, &PageCrossing)>,
     ) -> Result<bool, String> {
         let read = JsonRead {
             layout: JsonLayout::Document,
@@ -318,7 +434,7 @@ impl Output {
         let mut open = true;
         let mut held: Vec<RecordBatch> = Vec::new();
         let parsed = json_rows(&page.bytes, &read, &mut |columns| {
-            let batch = columns_batch(columns)?;
+            let batch = columns_batch(columns, self.context.flatten.as_text)?;
             if transform.is_some() {
                 held.push(batch);
                 return Ok(());
@@ -333,44 +449,39 @@ impl Output {
         match (parsed, open, transform) {
             (Err(reason), true, _) => Err(reason),
             (_, false, _) | (Ok(()), true, None) => Ok(open),
-            (Ok(()), true, Some(transform)) => self
-                .transformed_page((transform, page), held)
+            (Ok(()), true, Some((transform, crossing))) => self
+                .transformed_page((transform, page), crossing, held)
                 .map_err(|reason| format!("transform {} failed: {reason}", transform.name)),
         }
     }
 
-    /// Call `transform` once on one page's `rows`, with the page's number and fan-out key as its `ctx`, and pass on what it returns or yields as it crosses; `Ok(false)` once the consumer has gone.
+    /// Call `transform` once on one page's `rows` through `crossing`, with the page's number and fan-out key as its `ctx`, and pass on what it returns or yields as it crosses, until the page's end marker; `Ok(false)` once the consumer has gone.
     fn transformed_page(
         &self,
         (transform, page): (&PageTransform, &HttpPage),
+        crossing: &PageCrossing,
         rows: Vec<RecordBatch>,
     ) -> Result<bool, String> {
         let schema = rows
             .first()
             .map_or_else(|| Arc::new(Schema::empty()), RecordBatch::schema);
-        let call = TransformCall {
-            function: transform.function.clone(),
-            context: TransformContext {
-                unit: "page",
-                table: self.context.table.clone(),
-                page: Some(page.number),
-                key: (!page.key.is_empty()).then(|| page.key.clone()),
-                ..TransformContext::default()
-            },
-            masked: self.context.masked.clone(),
-            arrays: self.context.arrays.clone(),
-            naming: self.context.naming,
-            flatten: self.context.flatten.clone(),
+        let context = TransformContext {
+            unit: "page",
+            table: self.context.table.clone(),
+            page: Some(page.number),
+            key: (!page.key.is_empty()).then(|| page.key.clone()),
+            ..TransformContext::default()
         };
-        let options = CrossingOptions {
-            parse_threads: 1,
-            ..crossing_options()
-        };
-        let (mut batches, _returned) = returned_batches(
-            &call,
-            (rows, schema),
-            (options, self.context.flatten.clone()),
-        )?;
+        let context = serde_json::to_string(&context).map_err(|error| error.to_string())?;
+        let sent = crossing.pages.send(PageRows {
+            rows,
+            schema,
+            context,
+        });
+        if sent.is_err() {
+            return Err(format!("{} stopped before this page", transform.name));
+        }
+        let mut batches = crossing.batches.borrow_mut();
         loop {
             match batches.poll(PAGE_POLL) {
                 Polled::Batch(batch) => {
@@ -378,9 +489,18 @@ impl Output {
                         return Ok(false);
                     }
                 }
-                Polled::Finished => return Ok(true),
-                Polled::Failed(error) => return Err(error.to_string()),
-                Polled::State(_) | Polled::Pending => {}
+                Polled::State(_) => return Ok(true),
+                Polled::Failed(error) => {
+                    let problem = match crossing.problem.lock() {
+                        Ok(slot) => slot.clone(),
+                        Err(_) => None,
+                    };
+                    return Err(problem.unwrap_or_else(|| error.to_string()));
+                }
+                Polled::Finished => {
+                    return Err(format!("{} stopped before this page ended", transform.name));
+                }
+                Polled::Pending => {}
             }
         }
     }

@@ -8,6 +8,7 @@ use crate::adapters::contract::_helpers::identifiers::{
     exact_identifier, qualified, source_expression_cast, staging_type, string_literal,
 };
 use crate::adapters::contract::_helpers::logged::{commit_statements, logged_statements};
+use crate::adapters::contract::_helpers::promote::same_value;
 use crate::adapters::contract::_helpers::promote::{
     drop_and_rename, merge_statement, swap_statements,
 };
@@ -21,12 +22,16 @@ use crate::adapters::contract::_helpers::schema::{
     staging_table,
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
-use crate::adapters::contract::_helpers::write::{replaced_rows, write_statements};
+use crate::adapters::contract::_helpers::write::{
+    mark_statement, marked_counts, replaced_rows, tombstone_statements, write_statements,
+};
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
+use crate::adapters::contract::main::_kept_row_ids::kept_row_ids;
+use crate::adapters::contract::main::_older_rows::older_rows;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
-    ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
-    WriteMode, WriteStatementsRequest, WriteTarget,
+    ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, MarkWrite,
+    TableName, TombstoneWrite, WriteMode, WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -41,6 +46,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether the destination runs SQL; a files target writes Parquet and alters nothing in place.
     fn runs_sql(&self) -> bool {
         true
+    }
+
+    /// What a load's peak memory on this target scales with, for `plan`, where it doesn't follow the source's fetch budget; `None` elsewhere.
+    fn memory_note(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Whether a merge table's `deletes` may mark its rows in place (`load --sync-deletes`): every SQL warehouse that updates and deletes rows by a correlated subquery.
+    fn marks_deleted_rows(&self) -> bool {
+        self.runs_sql()
     }
 
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
@@ -122,6 +137,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         ColumnType::Native(live.data_type.clone())
     }
 
+    /// Whether a column pinned `native("VARIANT")` reads as `json` and loads its values parsed into the warehouse's `VARIANT` (DuckDB), rather than passing the type through.
+    fn parses_variant_pins(&self) -> bool {
+        false
+    }
+
     /// Whether the warehouse changes a `live` column to `target` without rewriting the table.
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         false
@@ -198,6 +218,39 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
             true => format!("{left} IS NOT DISTINCT FROM {right}"),
             false => format!("{left} = {right}"),
         }
+    }
+
+    /// Under `newest_by`, the rows of `ranked` (a subquery aliased `__sqlload_ranked`, its rows ranked by `__sqlload_rank`) ranked first of their key whose key's row in `table` (aliased `__sqlload_newer`, matched on `keys`, each rendered with whether it may be NULL) isn't `newer`; or (`older`) only those whose row is. A subquery aliased `__sqlload_kept` selecting `names`.
+    fn render_newest_kept(
+        &self,
+        table: &TableName,
+        (ranked, names): (&str, &[String]),
+        (keys, newer): (&[(String, bool)], &str),
+        older: bool,
+    ) -> String {
+        let join: Vec<String> = keys
+            .iter()
+            .map(|(name, nullable)| {
+                let pair = (
+                    format!("__sqlload_newer.{name}"),
+                    format!("__sqlload_ranked.{name}"),
+                );
+                same_value(pair, *nullable)
+            })
+            .collect();
+        let exists = format!(
+            "EXISTS (SELECT 1 FROM {} AS __sqlload_newer WHERE {} AND {newer})",
+            self.render_qualified_name(table),
+            join.join(" AND ")
+        );
+        let keep = match older {
+            true => exists,
+            false => format!("NOT {exists}"),
+        };
+        format!(
+            "(SELECT {} FROM {ranked} WHERE __sqlload_rank = 1 AND {keep}) AS __sqlload_kept",
+            names.join(", ")
+        )
     }
 
     /// `value`, a merge key of `column_type`, as a window can be partitioned by it.
@@ -345,6 +398,25 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         drop_and_rename(self, target, build, indexes)
     }
 
+    /// Under `newest_by`, a query counting, as text, the keys of `staging` whose newest row the merge of `request` skips, as the table holds a newer one; `None` without `newest_by`.
+    fn render_older_rows(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+    ) -> Option<String> {
+        older_rows(self, request, staging)
+    }
+
+    /// A query of the ids (`row_id`) of the rows of `staging` the merge of `request` writes, whose child tables' rows it replaces.
+    fn render_kept_row_ids(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+        row_id: &str,
+    ) -> String {
+        kept_row_ids(self, request, (staging, row_id))
+    }
+
     /// Under a merge that dedupes, a query of the ordinal (as text) of each row of `staging` the merge of `request` drops, so the rows hanging off them (child tables' rows) are dropped too; `None` without `dedupe`.
     fn render_dropped_ordinals(
         &self,
@@ -408,6 +480,31 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> Vec<String> {
         change_statements(self, request, change, staging)
+    }
+
+    /// A key scan's (`mark`) one statement marking the table's rows of the keys `staging` doesn't hold.
+    fn render_mark(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        mark: &MarkWrite,
+        staging: &TableName,
+    ) -> String {
+        mark_statement(self, request, mark, staging)
+    }
+
+    /// Under a key scan (`mark`), the queries counting the table's rows it would mark and those it may mark from, each one count as text, for its `max_row_drop` limit.
+    fn render_marked_counts(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        mark: &MarkWrite,
+        staging: &TableName,
+    ) -> [String; 2] {
+        marked_counts(self, request, mark, staging)
+    }
+
+    /// A table's tombstones (`deletes_from`): the query counting the rows they mark, as text, then the statement marking them.
+    fn render_tombstones(&self, table: &TableName, tombstones: &TombstoneWrite) -> [String; 2] {
+        tombstone_statements(self, table, tombstones)
     }
 
     /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.

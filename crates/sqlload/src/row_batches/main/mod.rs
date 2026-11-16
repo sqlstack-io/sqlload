@@ -13,6 +13,7 @@ pub mod merge_schema;
 pub mod normalise_batch;
 pub mod projection;
 pub mod projection_problem;
+pub mod read_types;
 pub mod settled_schema;
 pub mod text_rows;
 pub mod unnest_batch;

@@ -128,35 +128,39 @@ From 0.39.0, when the rows of one commit hold a `unique_key` value more than
 once, `merge` keeps one row for each value. The destination never gets the key twice, and the load
 never fails on the warehouse's own error about it.
 
-- Without `dedup_sort`, the row read last wins: the last one the source returned, or the last row
-  of a file.
-- With `dedup_sort = { updated_at = "desc" }`, the row with the highest `updated_at` wins, and
-  `"asc"` keeps the lowest. A NULL loses to any value, and a tie goes to the row read later.
-  `dedup_sort` takes one column, which can't be in the key, masked, JSON or an array.
+- Without `newest_by`, the row read last wins, and every row overwrites the table's row of its
+  key: the last one the source returned, or the last row of a file.
+- From 0.54.0, `newest_by = "updated_at"` names the column whose higher value is the newer version
+  of a row. Of a commit's rows sharing a key, the newest wins; a NULL loses to any value, and a tie
+  goes to the row read later. It also applies against the table: a row only overwrites the table's
+  row of its key when it isn't older, so older data arriving late, such as a file coming back or a
+  later `batch_size` window, never replaces newer data. A tie overwrites, any value overwrites a
+  NULL, and a NULL never overwrites a value. The load says how many keys it left alone, as in
+  `(12 older rows skipped: newest_by updated_at)`.
+- `newest_by = ["mod_date", "mod_time"]` compares in order, for sources that keep a change's date
+  and time in two columns: the first column decides, and the next breaks a tie. NULLs follow the
+  same rule in each column, two NULLs tying and moving on to the next.
+- `newest_by` columns can't be in the key, masked, JSON or an array, or repeated, and need a
+  `merge` table. A higher value is always newer, so `newest_by` takes no direction.
 - From 0.51.0, a NULL in a key column counts as a value: rows whose keys hold the same values and
   NULLs in the same columns are collapsed like any other repeat, by the same rule. Before 0.51.0
   each of them was inserted.
-- Rows are ranked within one commit. A load that commits more than once, by `batch_size` window,
-  about every 1 GB, or one file at a time, merges each commit on its own. So with `dedup_sort`, a
-  later batch in the same load still overwrites an earlier one, whatever its `dedup_sort` value.
-  `plan` warns when a table can commit more than once, and `batch_size = "none"` loads a database
-  or Python table in one commit.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
   columns and examples, before it writes the commit's rows. Commits before it stay. From 0.51.0
   it compares NULLs in the key too.
 - Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
-  other from its source, so a table can choose `"fail"` under a source's `dedup_sort`, or the
+  other from its source, so a table can choose `"fail"` under a source's `newest_by`, or the
   reverse.
 
 ```toml
 [sources.app.tables."public.readings"]
 write_strategy = "merge"
 unique_key = ["sensor_id"]
-dedup_sort = { read_at = "desc" }
+newest_by = "read_at"
 ```
 
 The plan line names the rule when it isn't the default, as in
-`merge (unique_key: sensor_id; repeated keys: highest read_at wins)` or
+`merge (unique_key: sensor_id; newest by read_at)`, `newest by mod_date, then mod_time`, or
 `merge (unique_key: sensor_id; repeated keys fail)`.
 
 ### NULLs in keys
@@ -230,6 +234,100 @@ WHERE rowid IN (
 ```
 
 `PARTITION BY` puts NULLs together, so each key, NULLs included, keeps one row.
+
+### Rows deleted at the source
+
+From 0.54.0, `deletes` makes a `merge` table drop or mark the rows whose key the source no
+longer holds. A merge alone never sees a deleted row: its key just stops arriving. Postgres,
+ODBC, Snowflake and BigQuery sources take it; files, Python and Google Sheets sources, which can't
+list every key, don't.
+
+```toml
+[sources.erp.tables."pub.stock_item"]
+write_strategy = "merge"
+cursor_column = "updated_at"
+unique_key = ["company_no", "item_no"]
+deletes = "soft"            # or "hard"; unset, rows are never marked
+checks = { max_row_drop = "10%" }
+```
+
+A plain `load` only merges. `sqlload load --sync-deletes` merges, then reads every key of the
+source table (from its `sql` query, when it has one) and marks the table's rows of the keys it
+didn't read. Your orchestrator decides how often to scan, such as a load every 15 minutes and a
+nightly `--sync-deletes`, so SQLLoad keeps no schedule.
+
+- `soft` sets `_sqlload_deleted_at` to the time the scan started, the column
+  [`postgres_cdc`](/docs/sources/postgres-cdc/) sets. When a key comes back, the merge clears it.
+  The table gets the column when it first loads with `deletes = "soft"`.
+- `hard` removes the row.
+- Only rows loaded before the key read started are marked (`_sqlload_loaded_at` earlier than the
+  scan's start), so a row a concurrent load writes while the scan reads is never marked.
+- The scan marks at most `checks.max_row_drop` of the table's rows (those not already marked), or
+  5% without it. A scan that would mark more, as an empty view or a changed permission would,
+  fails the table and marks nothing.
+- `--sync-deletes` fails `plan` when none of the selected tables sets `deletes`.
+- A table with `unnest`, or one sharing its destination with other tables through
+  `constant_columns`, can't take `deletes`. Neither can a ClickHouse or files target.
+
+`plan` shows the cost on the table's line, and the result shows how many rows were marked:
+
+```console
+$ sqlload plan --sync-deletes
+…
+└── raw.erp__stock_item   merge (unique_key: company_no, item_no), then a full key scan of pub.stock_item soft-deletes the rows of keys it no longer holds (at most 10% of the table)
+…
+$ sqlload load --sync-deletes
+…
+loaded  raw.erp__stock_item  1,204 rows (key scan of 48,112 keys: 37 rows soft-deleted)  6.3s
+```
+
+#### Deletes from a tombstone table
+
+A table too big to scan can take its deletes from a table where the source records them, such as
+one a trigger or the application writes each deleted key into, with the time:
+
+```toml
+[sources.erp.tables."pub.stock_item"]
+write_strategy = "merge"
+cursor_column = "updated_at"
+unique_key = ["company_no", "item_no"]
+deletes = "soft"
+deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
+```
+
+- Every load, with no flag, appends the new tombstones to a table of their own beside the merged
+  one, `<table>__sqlload_deletes`: only the `unique_key` columns and `deleted_at`, read from where
+  the last load stopped, as for any `cursor_column`. `plan` lists it like any other table. It keeps
+  every tombstone; trim it yourself if it grows too big.
+- The tombstone table loads first. Then, once the merge commits, the rows whose key a tombstone
+  holds, deleted at or after the row's own `cursor_column` (a coalesced one's first non-NULL
+  column), are marked as `deletes` says. A tombstone read in a run marks rows in that run.
+  `deletes = "soft"` sets `_sqlload_deleted_at` to the latest such tombstone's time.
+- A key deleted and then created again stays: its row's cursor is after the tombstone. A row
+  arriving late, after its tombstone loaded, is marked by the next load, as every tombstone is
+  checked each time. Marking again changes nothing.
+- A marked row the merge reads again, such as one at the cursor's maximum, is written by the merge
+  and marked again in the same load, with the same time. Between the two it shows as live.
+- Tombstones are read after the latest `deleted_at` already loaded. A tombstone that becomes
+  visible later with an earlier time, such as one written by a long transaction, is not read.
+- The tombstone table must hold every `unique_key` column, under the same names; `plan` fails
+  otherwise. `deletes_from` needs `deletes` and a `cursor_column`, and the tombstone table can't
+  also be listed under `tables`. Under `deletes = "soft"` its `cursor_column` must be a timestamp;
+  `hard` takes any column that compares with the table's cursor, such as a sequence number.
+
+```console
+$ sqlload plan
+…
+├── raw.erp__stock_item                  merge (unique_key: company_no, item_no), then soft-deletes the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)
+└── raw.erp__stock_item__sqlload_deletes  append (cursor: deleted_at)
+…
+$ sqlload load
+…
+loaded  raw.erp__stock_item  1,204 rows (tombstones: 12 rows soft-deleted)  2.1s
+```
+
+On a [`postgres_cdc`](/docs/sources/postgres-cdc/) source, `deletes` is how captured deletes are
+applied instead, `soft` by default.
 
 ## delete_insert
 

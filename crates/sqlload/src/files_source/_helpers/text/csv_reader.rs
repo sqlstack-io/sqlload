@@ -6,8 +6,8 @@ use arrow_schema::{DataType, Field, Schema};
 use regex::Regex;
 
 use crate::files_source::_helpers::text::bytes_reader::BytesReader;
-use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
-use crate::files_source::constants::{ENCODING_HINT, MAX_RECORD_BYTES};
+use crate::files_source::_helpers::text::csv_records::{CsvQuoting, FirstRecord, QuoteTracker};
+use crate::files_source::constants::{ENCODING_HINT, MAX_RECORD_BYTES, QUOTE_OFF_BYTE};
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::CsvOptions;
 use crate::load_naming::main::numbered_header::numbered_header;
@@ -57,11 +57,13 @@ impl CsvReader {
         (options, batch_rows): (&CsvOptions, usize),
         named: bool,
     ) -> Result<Self, String> {
-        let delimiter = ascii(options.delimiter, "delimiter")?;
-        let quote = ascii(options.quote, "quote")?;
+        let quoting = quoting(options)?;
         let skipped = options.skip_rows;
-        let mut bytes = bytes.decoding(text_charset(&options.encoding)?, skipped);
-        let mut first_record = FirstRecord::new(delimiter, quote, MAX_RECORD_BYTES);
+        let mut bytes = bytes.decoding(
+            text_charset(&options.encoding)?,
+            (skipped, options.encoding_check),
+        );
+        let mut first_record = FirstRecord::new(quoting, MAX_RECORD_BYTES);
         let mut pending: Vec<u8> = Vec::new();
         let (first, at_end) = loop {
             let chunk = bytes.next_chunk().await?;
@@ -81,12 +83,12 @@ impl CsvReader {
                 .unzip();
         let decoder = match names.is_empty() {
             true => None,
-            false => Some(decoder(&names, options, batch_rows)?),
+            false => Some(decoder(&names, (options, quoting), batch_rows)?),
         };
         Ok(Self {
             bytes,
             decoder,
-            tracker: QuoteTracker::new(delimiter, quote, MAX_RECORD_BYTES),
+            tracker: QuoteTracker::new(quoting, MAX_RECORD_BYTES),
             pending,
             offset: 0,
             at_end,
@@ -150,16 +152,24 @@ impl CsvReader {
 }
 
 /// An arrow-csv decoder reading every column as text, skipping the header itself so its line numbers count it.
-fn decoder(names: &[String], options: &CsvOptions, batch_rows: usize) -> Result<Decoder, String> {
+fn decoder(
+    names: &[String],
+    (options, quoting): (&CsvOptions, CsvQuoting),
+    batch_rows: usize,
+) -> Result<Decoder, String> {
     let fields: Vec<Field> = names
         .iter()
         .map(|name| Field::new(name, DataType::Utf8, true))
         .collect();
     let format = Format::default()
         .with_header(options.header)
-        .with_delimiter(ascii(options.delimiter, "delimiter")?)
-        .with_quote(ascii(options.quote, "quote")?)
+        .with_delimiter(quoting.delimiter)
+        .with_quote(quoting.quote.unwrap_or(QUOTE_OFF_BYTE))
         .with_null_regex(null_regex(&options.null_values)?);
+    let format = match quoting.escape {
+        Some(escape) => format.with_escape(escape),
+        None => format,
+    };
     Ok(ReaderBuilder::new(Arc::new(Schema::new(fields)))
         .with_format(format)
         .with_batch_size(batch_rows)
@@ -179,6 +189,22 @@ fn null_regex(null_values: &[String]) -> Result<Regex, String> {
         }
     };
     Regex::new(&pattern).map_err(|error| format!("csv null_values: {error}"))
+}
+
+/// `options`' delimiter, quote and escape as bytes; arrow-csv can't turn quoting off, so with `quote = false` it gets [`QUOTE_OFF_BYTE`] as the quote.
+fn quoting(options: &CsvOptions) -> Result<CsvQuoting, String> {
+    Ok(CsvQuoting {
+        delimiter: ascii(options.delimiter, "delimiter")?,
+        quote: options
+            .quote
+            .character()
+            .map(|quote| ascii(quote, "quote"))
+            .transpose()?,
+        escape: options
+            .escape
+            .map(|escape| ascii(escape, "escape"))
+            .transpose()?,
+    })
 }
 
 fn ascii(character: char, setting: &str) -> Result<u8, String> {

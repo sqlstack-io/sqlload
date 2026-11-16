@@ -204,6 +204,9 @@ pub struct LoaderArgs {
     /// postgres_cdc sources: drop and recreate the replication slot, then copy every table again (after a snapshot stopped part-way, or a lost slot); asks first unless --yes.
     #[arg(long)]
     pub resnapshot: bool,
+    /// After each selected table with `deletes` merges, read every key from its source and mark the table's rows whose key it no longer holds.
+    #[arg(long, conflicts_with = "follow")]
+    pub sync_deletes: bool,
     /// Backfill from this cursor value instead of the destination's maximum, typed from each selected table's cursor (an integer, or RFC 3339 or a date).
     #[arg(long, value_name = "VALUE")]
     pub start_cursor: Option<String>,

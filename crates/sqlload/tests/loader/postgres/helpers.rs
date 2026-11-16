@@ -159,7 +159,8 @@ pub(crate) fn run_cdc_scenario(
     setup: &str,
 ) -> Result<String, String> {
     let mut observed = String::new();
-    run_async(async {
+    let result = &mut observed;
+    run_async(|| async move {
         let postgres = start_postgres_version(test_case.tag).await?;
         let client = connect(&postgres).await?;
         client
@@ -194,7 +195,7 @@ pub(crate) fn run_cdc_scenario(
                 step.expected_output
             );
         }
-        observed = duckdb_text(&database, test_case.check_query)?;
+        *result = duckdb_text(&database, test_case.check_query)?;
         Ok(())
     })?;
     Ok(observed)

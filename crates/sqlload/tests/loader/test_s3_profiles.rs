@@ -44,7 +44,7 @@ fn given_keys_only_in_a_shared_credentials_file_when_loading_from_s3_then_the_co
             expected_ok: false,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         let directory = tempfile::tempdir().map_err(|error| error.to_string())?;

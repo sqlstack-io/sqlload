@@ -7,16 +7,17 @@ use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::PlanOptions;
+use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
-use crate::helpers::{described_project, load_selected, load_with_options, words};
+use crate::helpers::{described_project, load_selected, words};
 use crate::test_types::{
     DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, NullKeyTargetTestCase,
-    ReplaceKeyTargetTestCase,
+    ReplaceKeyTargetTestCase, SyncDeletesTestCase,
 };
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
@@ -43,16 +44,16 @@ const RULES: [DedupeRule; 4] = [
         expected_plan: "merge (unique_key: sensor; NULLs in keys match)",
     },
     DedupeRule {
-        description: "dedup_sort desc keeps the latest seen_at, a NULL seen_at losing, and plan warns that a later commit still overwrites",
-        settings: "dedup_sort = { seen_at = \"desc\" }",
+        description: "newest_by keeps the latest seen_at, a NULL seen_at losing, and plan says so",
+        settings: "newest_by = \"seen_at\"",
         expected_error: "",
-        expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits about every 1 GB: a later commit still overwrites a key an earlier one wrote, whatever its seen_at value",
+        expected_plan: "merge (unique_key: sensor; newest by seen_at; NULLs in keys match)",
     },
     DedupeRule {
-        description: "dedup_sort asc keeps the earliest seen_at, a NULL seen_at still losing",
-        settings: "dedup_sort = { seen_at = \"asc\" }",
+        description: "newest_by across commits: a later window's older s1 row and NULL seen_at s2 row leave the rows an earlier window loaded, while two NULL seen_at rows tie, so the later overwrites",
+        settings: "newest_by = \"seen_at\"\nbatch_size = 2\ncursor_start = \"1\"",
         expected_error: "",
-        expected_plan: "repeated keys: lowest seen_at wins",
+        expected_plan: "merge (unique_key: sensor; newest by seen_at; NULLs in keys match)",
     },
     DedupeRule {
         description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
@@ -377,7 +378,7 @@ pub(crate) async fn run_merge_case(
         .map_err(|error| error.to_string())
 }
 
-/// Plan and apply once (with `--reload` when `reload`), then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
+/// Plan and apply once (with `--reload` when `reload`), then load only when `loads` (otherwise as `sqlload apply`): the rendered plan and each table's load note, one per line, or the error text.
 async fn run_step(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
@@ -397,6 +398,381 @@ async fn run_step(
         .await
         .map_err(|error| error.to_string())?;
     plan.tables.retain(|_| loads);
-    load_with_options(&project, &plan, destinations, &options).await?;
-    Ok(lines.join("\n"))
+    let run = LoadRun {
+        project: &project,
+        destinations,
+        host: None,
+        options: &options,
+    };
+    let mut said = lines;
+    for outcome in load_tables(&run, &plan, None).await {
+        said.push(
+            outcome
+                .loaded
+                .map(|loaded| loaded.note.unwrap_or_default())?,
+        );
+    }
+    Ok(said.join("\n"))
+}
+
+/// `public.items`, five items, each updated at its own time.
+const ITEMS_SETUP: &str = "
+DROP TABLE IF EXISTS public.items;
+CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz NOT NULL);
+INSERT INTO public.items SELECT id, id * 10, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' FROM generate_series(1, 5) AS id;
+";
+
+/// The key scan steps, each the source's change, the target's (`{schema}` its schema), and whether the load runs with `--sync-deletes`: a first load; item 2 deleted at the source and scanned; a row a later load wrote (its `_sqlload_loaded_at` after the scan's read started), whose key the source never held, left alone by the next scan; item 2 back at the source, merged by a load without a scan; every item deleted at the source, more than the scan may mark, so it marks none; and three items back, so it marks the other two.
+const SYNC_STEPS: [(&str, &str, bool); 6] = [
+    ("", "", false),
+    ("DELETE FROM public.items WHERE id = 2", "", true),
+    (
+        "",
+        "INSERT INTO {schema}.app__items (id, qty, updated_at, _sqlload_load_id, _sqlload_loaded_at) VALUES (9, 90, TIMESTAMPTZ '2026-11-01 09:00:00+00', 'later', TIMESTAMPTZ '2100-01-01 00:00:00+00')",
+        true,
+    ),
+    (
+        "INSERT INTO public.items VALUES (2, 21, '2026-11-02 00:00:00+00')",
+        "DELETE FROM {schema}.app__items WHERE id = 9",
+        false,
+    ),
+    ("DELETE FROM public.items", "", true),
+    (
+        "INSERT INTO public.items VALUES (1, 11, '2026-11-03 00:00:00+00'), (2, 22, '2026-11-03 00:00:00+00'), (3, 33, '2026-11-03 00:00:00+00')",
+        "",
+        true,
+    ),
+];
+
+/// Run [`SYNC_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `coalesce(updated_at, created_at)` with `target.deletes`, the scan marking at most half the table: after each step, `target.check_query`'s rows, then ` | ` and the scan's note, or the load's error.
+pub(crate) async fn run_sync_deletes(
+    target: &SyncDeletesTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"{}\"\nchecks = {{ max_row_drop = \"50%\" }}\n",
+        target.connection, target.schema, target.deletes
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let run_target = |sql: &[&str]| {
+        execute(
+            destination,
+            sql.iter()
+                .filter(|sql| !sql.is_empty())
+                .map(|sql| sql.replace("{schema}", target.schema))
+                .collect(),
+        )
+    };
+    run_target(target.reset)
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(ITEMS_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut steps = Vec::new();
+    for (source_change, target_change, sync_deletes) in SYNC_STEPS {
+        source
+            .batch_execute(source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_target(&[target_change])
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions {
+            sync_deletes,
+            ..PlanOptions::default()
+        };
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        let scan = format!(
+            "then a full key scan of public.items {} the rows of keys it no longer holds (at most 50% of the table)",
+            target.marks
+        );
+        assert_eq!(
+            words(&lines.join("\n")).contains(&scan),
+            sync_deletes,
+            "{}: {lines:?}",
+            target.description
+        );
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let run = LoadRun {
+            project: &project,
+            destinations: &destinations,
+            host: None,
+            options: &options,
+        };
+        let said = load_tables(&run, &plan, None)
+            .await
+            .pop()
+            .ok_or_else(|| "no table loaded".to_owned())?
+            .loaded
+            .map_or_else(|error| error, |loaded| loaded.note.unwrap_or_default());
+        let rows = single_text(destination, target.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        steps.push(format!("{rows} | {said}"));
+    }
+    source
+        .batch_execute("DROP TABLE public.items")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(steps)
+}
+
+/// The plan of `public.estimates` from Postgres on `postgres_port` (reached by `source`) into an in-memory DuckDB by `delete_insert` with `settings` added, with `--sync-deletes` when `sync_deletes`.
+pub(crate) async fn sync_deletes_plan(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    (settings, sync_deletes): (&str, bool),
+) -> Result<String, String> {
+    let text = estimates_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        settings,
+    );
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let options = PlanOptions {
+        sync_deletes,
+        ..PlanOptions::default()
+    };
+    let plan = plan_project(&project, &destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
+}
+
+/// The key scan refusing to mark every row: more than the table's `max_row_drop` of 50%.
+const REFUSED: &str = "checks.max_row_drop failed: the key scan would mark 5 of the table's 5 rows deleted, more than 50%, so it marks none. Fix: check that the source still lists every row (an empty view or a changed permission reads fewer keys), or raise checks.max_row_drop";
+
+/// What each of [`SYNC_STEPS`] leaves under `deletes = "soft"`: item 2 marked, the row a later load wrote left alone, item 2 back, nothing marked when every key is gone, then items 4 and 5 marked.
+pub(crate) fn soft_steps() -> Vec<String> {
+    [
+        "1:live,2:live,3:live,4:live,5:live | ",
+        "1:live,2:deleted,3:live,4:live,5:live | (key scan of 4 keys: 1 row soft-deleted)",
+        "1:live,2:deleted,3:live,4:live,5:live,9:live | (key scan of 4 keys: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | ",
+        &format!("1:live,2:live,3:live,4:live,5:live | {REFUSED}"),
+        "1:live,2:live,3:live,4:deleted,5:deleted | (key scan of 3 keys: 2 rows soft-deleted)",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// What each of [`SYNC_STEPS`] leaves under `deletes = "hard"`: the same rows removed rather than marked.
+pub(crate) fn hard_steps() -> Vec<String> {
+    [
+        "1,2,3,4,5 | ",
+        "1,3,4,5 | (key scan of 4 keys: 1 row deleted)",
+        "1,3,4,5,9 | (key scan of 4 keys: 0 rows deleted)",
+        "1,2,3,4,5 | ",
+        &format!("1,2,3,4,5 | {REFUSED}"),
+        "1,2,3 | (key scan of 3 keys: 2 rows deleted)",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// `public.items`, five items each created and updated at its own time, and `audit.deleted_items`, where the source records the items it deleted, empty.
+const TOMBSTONES_SETUP: &str = "
+DROP TABLE IF EXISTS public.items;
+DROP SCHEMA IF EXISTS audit CASCADE;
+CREATE SCHEMA audit;
+CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz, created_at timestamptz NOT NULL);
+CREATE TABLE audit.deleted_items (id int8, reason text, deleted_at timestamptz NOT NULL);
+INSERT INTO public.items SELECT id, id * 10, at, at FROM (SELECT id, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' AS at FROM generate_series(1, 5) AS id) AS times;
+";
+
+/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, never updated, so only its `created_at` (the coalesced cursor's second column) is after the tombstone, and it stays; a tombstone for item 6, which the table doesn't hold yet; item 6 arriving late, updated before its tombstone, so the next load marks it; and nothing new, so the merge reads item 6 again at the cursor's maximum and it is marked again the same.
+const TOMBSTONE_STEPS: [&str; 7] = [
+    "",
+    "DELETE FROM public.items WHERE id = 2; INSERT INTO audit.deleted_items VALUES (2, 'gone', '2026-11-02 00:00:00+00')",
+    "",
+    "INSERT INTO public.items VALUES (2, 21, NULL, '2026-11-03 00:00:00+00')",
+    "INSERT INTO audit.deleted_items VALUES (6, 'gone', '2026-11-05 00:00:00+00')",
+    "INSERT INTO public.items VALUES (6, 60, '2026-11-04 00:00:00+00', '2026-11-04 00:00:00+00')",
+    "",
+];
+
+/// A project merging `public.items` from Postgres on `postgres_port` into `connection`'s `schema` by `coalesce(updated_at, created_at)` with `deletes` and `deletes_from` its tombstones in `audit.deleted_items`, by `deleted_at`.
+pub(crate) fn tombstones_project(
+    (connection, schema): (&str, &str),
+    postgres_port: u16,
+    deletes: &str,
+) -> String {
+    format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = [\"updated_at\", \"created_at\"]\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }}\n",
+        connection, schema, deletes
+    )
+}
+
+/// The plan of [`tombstones_project`] into DuckDB with `deletes`, its tombstones' `deleted_at` of `deleted_at_type`.
+pub(crate) async fn tombstones_plan(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    (deletes, deleted_at_type): (&str, &str),
+) -> Result<String, String> {
+    source
+        .batch_execute(&format!(
+            "{TOMBSTONES_SETUP} ALTER TABLE audit.deleted_items ALTER COLUMN deleted_at TYPE {deleted_at_type} USING NULL;"
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = tombstones_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        deletes,
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let plan = plan_project(&project, &destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.items; DROP SCHEMA audit CASCADE")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
+}
+
+/// Run [`TOMBSTONE_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `coalesce(updated_at, created_at)` with `target.deletes` and `deletes_from` its tombstones in `audit.deleted_items`: after each step, `target.check_query`'s rows, then ` | ` and the items load's note, or its error.
+pub(crate) async fn run_tombstones(
+    target: &SyncDeletesTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = tombstones_project(
+        (&target.connection, target.schema),
+        postgres_port,
+        target.deletes,
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(TOMBSTONES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let note = format!(
+        "then {} the rows whose key audit.deleted_items lists deleted at or after the row's coalesce(updated_at, created_at) (its tombstones load first)",
+        target.marks
+    );
+    let mut steps = Vec::new();
+    for source_change in TOMBSTONE_STEPS {
+        source
+            .batch_execute(source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions::default();
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        let shown = words(&lines.join("\n"));
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        assert!(
+            shown.contains(&note) && shown.contains("app__items__sqlload_deletes"),
+            "{}: {lines:?}",
+            target.description
+        );
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let run = LoadRun {
+            project: &project,
+            destinations: &destinations,
+            host: None,
+            options: &options,
+        };
+        let said = load_tables(&run, &plan, None)
+            .await
+            .into_iter()
+            .find(|outcome| !outcome.table.contains("delete"))
+            .ok_or_else(|| "public.items did not load".to_owned())?
+            .loaded
+            .map_or_else(|error| error, |loaded| loaded.note.unwrap_or_default());
+        let rows = single_text(destination, target.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        steps.push(format!("{rows} | {said}"));
+    }
+    let kept = format!(
+        "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = '{}' AND table_name = 'app__items__sqlload_deletes' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\'",
+        target.schema
+    );
+    let kept = single_text(destination, kept)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    steps.push(format!("tombstone columns: {kept}"));
+    source
+        .batch_execute("DROP TABLE public.items; DROP SCHEMA audit CASCADE")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(steps)
+}
+
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, each mark shown as its UTC date, then the tombstone table's own columns: item 2 marked with its tombstone's time in the run that read it, nothing more on the next, item 2 back, the late item 6 marked once it arrives, and marked again with the same time when read again.
+pub(crate) fn soft_tombstone_steps() -> Vec<String> {
+    [
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:2026-11-02,3:live,4:live,5:live | (tombstones: 1 row soft-deleted)",
+        "1:live,2:2026-11-02,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
+        "tombstone columns: deleted_at,id",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "hard"`: the same rows removed rather than marked.
+pub(crate) fn hard_tombstone_steps() -> Vec<String> {
+    [
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,3,4,5 | (tombstones: 1 row deleted)",
+        "1,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 1 row deleted)",
+        "1,2,3,4,5 | (tombstones: 1 row deleted)",
+        "tombstone columns: deleted_at,id",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }

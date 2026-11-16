@@ -191,7 +191,7 @@ fn given_an_sftp_server_when_loading_files_then_new_files_load_once_and_unknown_
             expected_result: "3,3,1794200000000|1794200100000",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let bastion = start_bastion().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
         let database = folder.path().join("out.duckdb");
@@ -242,7 +242,7 @@ fn given_sftp_files_and_a_snowflake_target_when_planning_then_sqlload_reads_them
             expected_output: "copy_to_internal_stage is not for an sftp connection",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let bastion = start_bastion().await?;
         let fake =
             sqlload_testkit::fake_snowflake::main::start_fake_snowflake::start_fake_snowflake()

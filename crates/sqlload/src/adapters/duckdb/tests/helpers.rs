@@ -124,6 +124,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             connection: DuckDbConnection::Local(Arc::new(Mutex::new(connection))),
             ddl: Arc::new(tokio::sync::Mutex::new(())),
             motherduck: false,
+            bridge_duckdb: String::new(),
         },
         open_transaction: false,
     };
@@ -231,9 +232,9 @@ pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> Str
     )
 }
 
-/// The rows, as `id:name` sorted, of `raw.app__accounts (id, name, score)` holding `existing` after DuckDB runs the merge on `id` that SQLLoad renders, with dedupe on (ranking by `_sqlload_row`, and by `score` when `sort` says which end wins), from a staging table holding `staged` with its `_sqlload_row`.
+/// The rows, as `id:name` sorted, of `raw.app__accounts (id, name, score)` holding `existing` after DuckDB runs the merge on `id` that SQLLoad renders, with dedupe on (ranking by `_sqlload_row`, and by `newest_by`, newest first, which also keeps out a row older than the table's), from a staging table holding `staged` with its `_sqlload_row`.
 pub(crate) fn merged_rows(
-    sort: Option<bool>,
+    newest_by: &[&str],
     (existing, staged): (&[&str], &[&str]),
 ) -> Result<Vec<String>, String> {
     use crate::adapters::contract::models::{
@@ -262,7 +263,10 @@ pub(crate) fn merged_rows(
         not_null_keys: Vec::new(),
         dedupe: Some(MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
-            sort: sort.map(|highest| ("score".to_owned(), highest)),
+            newest_by: newest_by
+                .iter()
+                .map(|column| (*column).to_owned())
+                .collect(),
         }),
     };
     let statements = sql_adapter(Warehouse::DuckDb).render_commit(

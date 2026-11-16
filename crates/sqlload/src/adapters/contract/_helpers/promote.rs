@@ -44,7 +44,7 @@ pub(crate) fn merge_statement<A: SqlAdapter + ?Sized>(
     (source, values): (&str, &[String]),
 ) -> String {
     let target = adapter.render_qualified_name(request.table);
-    let ranked = ranked_source(adapter, request, (source, values));
+    let ranked = ranked_source(adapter, request, (source, values), false);
     let (source, values) = ranked.as_ref().map_or((source, values), |(source, names)| {
         (source.as_str(), names.as_slice())
     });
@@ -124,4 +124,12 @@ pub(crate) fn swap_statements<A: SqlAdapter + ?Sized>(
         format!("ALTER TABLE {target} SWAP WITH {swap}"),
         format!("DROP TABLE IF EXISTS {swap}"),
     ]
+}
+
+/// `left = right`, NULL-safely when `nullable` (two NULLs match), in plain SQL every warehouse runs in a `WHERE`, where ClickHouse refuses its `isNotDistinctFrom`.
+pub(crate) fn same_value((left, right): (String, String), nullable: bool) -> String {
+    match nullable {
+        true => format!("({left} = {right} OR ({left} IS NULL AND {right} IS NULL))"),
+        false => format!("{left} = {right}"),
+    }
 }

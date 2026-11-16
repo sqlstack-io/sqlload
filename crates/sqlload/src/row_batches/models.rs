@@ -16,7 +16,7 @@ pub enum Cell {
     Bool(bool),
     /// A 64-bit integer.
     Int(i64),
-    /// A finite 64-bit float.
+    /// A 64-bit float, NaN and infinities included.
     Float(f64),
     /// A number that is neither a 64-bit integer nor a finite float, as its text; it makes a `text` column.
     Number(String),
@@ -336,6 +336,10 @@ pub struct Flatten {
     pub naming: Naming,
     /// The table's `exclude_columns` patterns: one matching an object flattening would replace, but not its `<object>__<key>` columns, fails rather than let those columns load.
     pub excluded: ExcludePatterns,
+    /// `infer_types = false`: the keys of JSON objects flattening reads, and dict rows, load as `text` rather than typed by inference.
+    pub as_text: bool,
+    /// `on_nonfinite = "null"`: NaN and infinite floats in dict rows read as NULL, rather than kept as floats (and refused where a `json` value would hold them).
+    pub nonfinite_null: bool,
 }
 
 /// A table's `exclude_columns` patterns, matched as one set.
@@ -433,6 +437,17 @@ impl Flatten {
                     .is_some_and(|start| start.eq_ignore_ascii_case(&prefix))
             }),
         }
+    }
+
+    /// Whether the column at `path` is pinned as an `array(...)`, whose elements read one by one, so a NaN or infinite element can keep its value.
+    pub fn pins_array(&self, path: &[&str]) -> bool {
+        self.pinned.iter().any(|(pinned, column_type)| {
+            column_type
+                .trim()
+                .to_ascii_lowercase()
+                .starts_with("array(")
+                && self.same_parts(pinned.split(FLATTEN_SEPARATOR), path)
+        })
     }
 
     /// Whether the object at `path` is kept whole: `keep` names it, its parts joined by `__`.

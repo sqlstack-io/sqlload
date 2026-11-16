@@ -35,7 +35,7 @@ use crate::files_source::main::select_files::select_files;
 use crate::files_source::main::shape_rows::shape_rows;
 use crate::files_source::models::{
     AfterLoad, BatchFooters, DataFile, FileColumn, FileSelection, FilesEncoding, FilesRead,
-    FilesTable, LoadedFile, StoredRead, TextChecks,
+    FilesTable, LoadedFile, OnEmpty, StoredRead, TextChecks,
 };
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -44,9 +44,10 @@ use crate::load_events::main::step_doing::step_doing;
 use crate::load_events::models::{Role, StepEnd};
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
+use crate::loader::_helpers::destination::files_read_as;
 use crate::loader::_helpers::destination::nanosecond_columns;
+use crate::loader::_helpers::python::read_schema;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
-use crate::loader::_helpers::python::{read_schema, read_types};
 use crate::loader::_helpers::resolve::{
     display_name, resolve_tables, source_target, spec_names, target_display_name,
 };
@@ -54,10 +55,10 @@ use crate::loader::_helpers::run_log::{
     file_column_problem, loaded_file, logs_files, merge_ledger, reload_order,
 };
 use crate::loader::_helpers::specs::integer_cursor;
-use crate::loader::_helpers::specs::{files_read_as, path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{
     flattened_object_problems, referenced_columns, table_compat, table_name, table_naming,
 };
+use crate::loader::_helpers::specs::{path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 use crate::loader::constants::NO_TRANSFORM_HOST;
 use crate::loader::constants::{
@@ -93,6 +94,7 @@ use crate::python_sources::main::transform_range::transform_range;
 use crate::python_sources::models::{TransformCall, TransformContext, TransformFiles};
 use crate::python_sources::types::PythonHost;
 use crate::row_batches::main::loaded_batch::loaded_batch;
+use crate::row_batches::main::read_types::read_types;
 use crate::schema_plan::models::LiveColumn;
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::a1_width::a1_width;
@@ -301,7 +303,8 @@ pub(crate) async fn source_tables(
                 {
                     Ok((table, files)) => Ok((vec![table], Some(files), Vec::new())),
                     Err(LoaderError::Files(FilesError::NoFiles { .. }))
-                        if source.after_load != AfterLoad::Keep =>
+                        if source.after_load != AfterLoad::Keep
+                            || source.on_empty == OnEmpty::Skip =>
                     {
                         Ok((Vec::new(), None, Vec::new()))
                     }
@@ -696,7 +699,27 @@ async fn sheets_tables(
         {
             column.column_type = Err(problem);
         }
+        if let Some(column) = read
+            .columns
+            .iter()
+            .find(|column| column.name.eq_ignore_ascii_case(SOURCE_ROW_COLUMN))
+        {
+            problems.push(format!(
+                "tab {:?}: column {} has the name of the column SQLLoad adds with each row's number in the sheet; rename it in the header",
+                grid.title, column.name
+            ));
+            continue;
+        }
         warnings.extend(read.warnings);
+        let row_column = SourceColumn {
+            name: SOURCE_ROW_COLUMN.to_owned(),
+            postgres_type: SHEET_COLUMN_KIND.to_owned(),
+            pg_type: PgType::Other,
+            column_type: Ok(ColumnType::Int),
+            nullable: false,
+            source_spelling: None,
+            repeat_of: None,
+        };
         tables.push(SourceTable {
             split_pages: None,
             schema: String::new(),
@@ -717,6 +740,7 @@ async fn sheets_tables(
                     source_spelling: None,
                     repeat_of: column.repeat_of,
                 })
+                .chain([row_column])
                 .collect(),
             primary_key: Vec::new(),
             indexed_columns: Vec::new(),
@@ -855,11 +879,15 @@ async fn sheet_rows(
             .await
             .map_err(LoaderError::Invalid)?;
         let mut typed: Vec<RecordBatch> = Vec::with_capacity(batches.len());
+        let mut rows: u64 = 0;
         for batch in &batches {
             unplanned_column(batch, &table.spec, &time.file).map_err(LoaderError::Invalid)?;
             let loaded =
                 loaded_batch(batch, &table.spec.source_table).map_err(LoaderError::Invalid)?;
-            typed.push(read_types(&loaded, &read_schema(table))?);
+            typed.push(
+                read_types(&loaded, &read_schema(table), rows).map_err(LoaderError::Invalid)?,
+            );
+            rows += batch.num_rows() as u64;
         }
         run.times
             .lock()
@@ -1181,7 +1209,12 @@ pub(crate) fn files_source_parts(
             location,
             table,
             partition_types,
-            constants: values.constants.into_iter().map(|(name, _)| name).collect(),
+            constants: values
+                .constants
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+            paths: values,
             encoding,
             checks,
             notes,
@@ -1334,6 +1367,7 @@ pub(crate) async fn plan_files(
         removed: spec.after_load != AfterLoad::Keep,
         held: &held,
         cursor,
+        paths: &request.files.paths,
         from: request.bounds.0,
         to: request.bounds.1,
     };
@@ -1345,10 +1379,13 @@ pub(crate) async fn plan_files(
     };
     let nanos = nanosecond_columns(spec, &request.files.table.columns, request.live);
     let ordered = select_files(&selection).map(|files| match &merged {
-        Some((_, recorded)) if request.options.reload => {
-            reload_order(files, &location, recorded, request.files.archive.as_ref())
-        }
-        Some(_) => merge_order(files),
+        Some((_, recorded)) if request.options.reload => reload_order(
+            files,
+            &location,
+            recorded,
+            (request.files.archive.as_ref(), spec.files_order),
+        ),
+        Some(_) => merge_order(files, spec.files_order),
         None => files,
     });
     Ok(ordered.map(|files| FilesRead {
@@ -1463,7 +1500,9 @@ async fn read_each(
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),
-                filter: part.filter.or_else(|| table.source_filter.clone()),
+                filter: table
+                    .spec
+                    .read_filter(part.filter.or_else(|| table.source_filter.clone())),
                 order_by: part.order_by,
                 batch_rows: SOURCE_BATCH_ROWS,
                 batch_bytes: part
@@ -1500,7 +1539,9 @@ async fn read_each(
             Ok(read_files(folder, &read, &part.footers, loaded).await?)
         }
         (SourceReader::Snowflake(snowflake), _) => {
-            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
             let request = unload_request(table, filter.as_deref());
             Ok(unload_rows(snowflake, &request, on_batch).await?)
         }
@@ -1510,6 +1551,7 @@ async fn read_each(
                 Some(filter) => (Some(filter), &part.parameters[..]),
                 None => (table.source_filter.clone(), &table.source_parameters[..]),
             };
+            let filter = table.spec.read_filter(filter);
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &table.spec.source_table,
                 sql: table
@@ -1529,7 +1571,9 @@ async fn read_each(
             Ok(crate::odbc_source::main::read_rows::read_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::BigQuery(reader), _) => {
-            let filter = part.filter.or_else(|| table.source_filter.clone());
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
             let request = BigQueryReadRequest {
                 table: &table.spec.source_table,
                 sql: table
@@ -1539,6 +1583,7 @@ async fn read_each(
                     .and_then(|source| source.sql.as_deref()),
                 columns: &table.read_columns,
                 filter: filter.as_deref(),
+                filtered: table.spec.row_filter.is_some(),
             };
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }
@@ -1673,7 +1718,9 @@ pub(crate) async fn unload_source<T>(
             table.spec.source_table.qualified_name()
         )));
     };
-    let filter = part.filter.or_else(|| table.source_filter.clone());
+    let filter = table
+        .spec
+        .read_filter(part.filter.or_else(|| table.source_filter.clone()));
     unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
 }
 
@@ -1771,7 +1818,7 @@ pub(crate) async fn scoped_tables(
     Ok(Ok((resolved, files)))
 }
 
-/// A files source whose `after_load` emptied its folder, which a load leaves alone until new files come, as with `keep` every file in the folder is already loaded: its destination table, which [`found_sources`] checks exists before skipping it (when the selection in `options` takes it).
+/// A files source whose existing folder holds no files, as `after_load` leaves it (every file it read is already loaded, as with `keep`) or as `on_empty = "skip"` accepts, which a load leaves alone until new files come: its destination table, which [`found_sources`] checks exists before skipping it under `after_load` (when the selection in `options` takes it).
 fn drained_files(
     (project, options): (&ProjectConfig, &PlanOptions),
     (source_name, source): (&str, &SourceConfig),
@@ -1838,7 +1885,12 @@ fn drained_files(
                 source_name: source_name.to_owned(),
                 source_table: source_name.to_owned(),
                 destination: shown,
-                reason: format!("no files to load in {path}{DRAINED_REASON}"),
+                reason: match (source.on_empty, &source.after_load) {
+                    (OnEmpty::Skip, AfterLoad::Keep) => {
+                        format!("no files to load in {path} (on_empty = \"skip\")")
+                    }
+                    _ => format!("no files to load in {path}{DRAINED_REASON}"),
+                },
             },
             problem: format!(
                 "[sources.{source_name}]: no files to load in {path}, and {} was never loaded: after_load skips an emptied folder only once its table exists; check the source's path and connection",

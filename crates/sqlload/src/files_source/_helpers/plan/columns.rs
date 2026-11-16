@@ -269,6 +269,8 @@ pub(crate) struct ColumnMerge<'a> {
     pub(crate) replaced: &'a [&'a str],
     /// Whether an int column in one file and a float column in another make a float column (JSON and CSV, whose types are inferred) rather than a problem.
     pub(crate) widen_numbers: bool,
+    /// `infer_types = false`: scalar columns load as text, so files may disagree on their types.
+    pub(crate) as_text: bool,
 }
 
 /// `columns` plus `found`'s new columns, and a problem for each column whose type differs from an earlier file's.
@@ -307,6 +309,11 @@ pub(crate) fn merge_columns(
                 if merge.widen_numbers && is_number(seen) && is_number(&found_type) =>
             {
                 existing.column_type = Some(Ok(ColumnType::Float));
+            }
+            (Some(Ok(seen)), Some(Ok(found_type)))
+                if merge.as_text && ![seen, &found_type].contains(&&ColumnType::Json) =>
+            {
+                existing.column_type = Some(Ok(ColumnType::Text));
             }
             (Some(seen), Some(found_type)) => problems.push(format!(
                 "column {} is {} in newer files but {} in {}; pin a type that holds both",
@@ -372,6 +379,7 @@ pub(crate) fn merge_schema(
         key,
         replaced,
         widen_numbers: false,
+        as_text: false,
     };
     let (merged, problems) = merge_columns(seen, schema_columns(schema), merge);
     (file_columns(merged), problems)

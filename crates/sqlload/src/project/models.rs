@@ -7,8 +7,8 @@ use serde::Deserialize;
 use crate::config::models::{AuthConfig, ByteSize};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    AfterLoad, Compression, CsvOptions, FilesEncoding, RecordShape, SourceFormat, UnmatchedPaths,
-    XlsxOptions, XmlOptions,
+    AfterLoad, Compression, CsvOptions, FilePattern, FilesEncoding, FilesOrder, OnEmpty,
+    RecordShape, SourceFormat, UnmatchedPaths, XlsxOptions, XmlOptions,
 };
 use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
@@ -370,6 +370,20 @@ pub struct TargetConfig {
     /// The folder `send = "at_commit"` holds a commit's rows in until it is sent; the system's temporary folder when unset.
     #[serde(default)]
     pub staging_dir: Option<std::path::PathBuf>,
+    /// The type `json` columns get on a DuckDB or MotherDuck target: `JSON` text (default) or `VARIANT`.
+    #[serde(default)]
+    pub json_type: Option<JsonType>,
+}
+
+/// The type `json` columns get on a DuckDB or MotherDuck target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonType {
+    /// DuckDB's `JSON`, which holds each value as its JSON text.
+    #[default]
+    Json,
+    /// DuckDB's `VARIANT`, which keeps each value's objects, arrays, numbers and booleans typed.
+    Variant,
 }
 
 /// When a table's rows reach its target.
@@ -456,9 +470,18 @@ pub struct SourceConfig {
     /// With `compression = "zip"`, a pattern the members' names must match (files sources).
     #[serde(default)]
     pub members: Option<String>,
+    /// A glob each file's path below `path` must match, such as `"file_*.txt"`, in place of the format's name suffix (files sources).
+    #[serde(default)]
+    pub pattern: Option<String>,
     /// What to do with each file once its rows commit (files sources).
     #[serde(default)]
     pub after_load: AfterLoad,
+    /// The order a merge applies files in: oldest modified first (default) or by path (files sources).
+    #[serde(default)]
+    pub order: FilesOrder,
+    /// What a load does when the folder exists and holds no files: fail (default) or skip the table (files sources).
+    #[serde(default)]
+    pub on_empty: OnEmpty,
     /// Typed columns (default), or each JSON object or CSV line whole in one `json` column (files sources with a text format).
     #[serde(default)]
     pub shape: RecordShape,
@@ -510,9 +533,6 @@ pub struct SourceConfig {
     /// How captured changes are written (`postgres_cdc`).
     #[serde(default)]
     pub cdc_mode: CdcMode,
-    /// What a captured delete does to a merged row (`postgres_cdc` with `cdc_mode = "merge"`).
-    #[serde(default)]
-    pub deletes: CdcDeletes,
     /// How often `load --follow` writes the changes it has read (`postgres_cdc`); 10 seconds when omitted.
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub batch_interval: Option<Duration>,
@@ -568,17 +588,6 @@ pub enum CdcMode {
     Changelog,
 }
 
-/// What a captured delete does under `cdc_mode = "merge"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CdcDeletes {
-    /// The row stays, with `_sqlload_deleted_at` set.
-    #[default]
-    Soft,
-    /// The row is removed.
-    Hard,
-}
-
 impl SourceConfig {
     /// The `constant_columns` of table `table` (its key under `tables`): its own map, else the source's; a table's map replaces the source's.
     pub fn table_constants(&self, table: &str) -> BTreeMap<String, toml::Value> {
@@ -632,6 +641,10 @@ impl SourceConfig {
             },
             xml,
             members: self.members.clone(),
+            pattern: match self.pattern.as_deref().map(FilePattern::new) {
+                Some(Ok(pattern)) => Some(pattern),
+                Some(Err(_)) | None => None,
+            },
             record: (self.shape == RecordShape::Record).then(|| {
                 self.record_column
                     .clone()
@@ -798,6 +811,12 @@ pub struct TableSettings {
     pub on_schema_change: Option<OnSchemaChange>,
     #[serde(default)]
     pub auto_widen: Option<bool>,
+    /// `infer_types = false`: every column whose type SQLLoad would infer from sampled values loads as `text` (objects and lists stay `json`); pinned columns keep their types.
+    #[serde(default)]
+    pub infer_types: Option<bool>,
+    /// What the dict rows of a Python table or transform do with a NaN or infinite float: keep it where the column holds it and fail where it can't (default), or load it as NULL.
+    #[serde(default)]
+    pub on_nonfinite: Option<OnNonFinite>,
     #[serde(default)]
     pub type_change_rebuild: Option<Policy>,
     /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.
@@ -852,9 +871,9 @@ pub struct TableSettings {
     /// The columns whose values `delete_insert` replaces whole: each commit first deletes the rows holding a value of them that its rows hold.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub replace_key: Option<Vec<String>>,
-    /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
-    #[serde(default)]
-    pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
+    /// The column, or columns compared in order, whose higher value is the newer version of a row: of the rows sharing a `unique_key` a merge keeps the newest, and never overwrites a loaded row with an older one.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub newest_by: Option<Vec<String>>,
     /// How the table and its columns are named: snake_case (default) or as the source spells them; overrides the target's.
     #[serde(default)]
     pub naming: Option<Naming>,
@@ -873,9 +892,15 @@ pub struct TableSettings {
     /// The IANA time zone, such as `Europe/Paris`, of the times without an offset that `parse` reads in a column without its own `tz` (UTC when unset).
     #[serde(default)]
     pub timezone: Option<String>,
+    /// A condition in the source database's SQL (`where`), ANDed into every read of a table SQLLoad selects from, next to its cursor filter; a table's own replaces its source's.
+    #[serde(default, rename = "where")]
+    pub row_filter: Option<String>,
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
+    /// What a merge does with a row whose key the source no longer holds (`soft` sets `_sqlload_deleted_at`, `hard` removes it; unset, rows are never marked), and a captured delete under `cdc_mode = "merge"` (soft when unset).
+    #[serde(default)]
+    pub deletes: Option<Deletes>,
     /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
     #[serde(default)]
     pub transform: Option<String>,
@@ -893,11 +918,21 @@ pub enum RenameSetting {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnDuplicateKeys {
-    /// Keep one row per key: the last in source order, or the one `dedup_sort` ranks first.
+    /// Keep one row per key: the last in source order, or the newest by `newest_by`.
     #[default]
     Dedupe,
     /// Fail the commit, naming some of the repeated keys.
     Fail,
+}
+
+/// What a merge does with a row whose key the source no longer holds, found by `load --sync-deletes`, or a captured delete does to a merged row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Deletes {
+    /// The row stays, with `_sqlload_deleted_at` set; a merge clears it when the key comes back.
+    Soft,
+    /// The row is removed.
+    Hard,
 }
 
 /// What a merge does with a NULL in a `unique_key` column.
@@ -909,23 +944,6 @@ pub enum NullKeys {
     Match,
     /// Fail the commit holding it, naming the key's columns and some of the keys.
     Fail,
-}
-
-/// Which way `dedup_sort` ranks its column: `desc` keeps the highest value, `asc` the lowest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
-impl std::fmt::Display for SortDirection {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Asc => "asc",
-            Self::Desc => "desc",
-        })
-    }
 }
 
 /// `constant_columns`: each column's value as written, by name.
@@ -1013,6 +1031,17 @@ pub enum OnCursorOutOfRange {
     Warn,
 }
 
+/// What the dict rows of a Python table or transform do with NaN, `inf` and `-inf` floats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnNonFinite {
+    /// Load them as floats, and fail naming the column where its type can't hold them (a decimal or integer, a `json` value).
+    #[default]
+    Keep,
+    /// Load them as NULL.
+    Null,
+}
+
 /// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lookback {
@@ -1069,6 +1098,22 @@ pub struct TableOverride {
     /// Text columns read as times, by column name: `"epoch_ms"`, or `{ timestamp = ["iso", "%m/%d/%Y %H:%M"], tz = "Europe/Paris", on_error = "null" }` (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
     #[serde(default)]
     pub parse: BTreeMap<String, serde_json::Value>,
+    /// Where a source records the keys it deleted (`deletes_from = { table, cursor_column }`), which mark the table's rows under `deletes`.
+    #[serde(default)]
+    pub deletes_from: Option<DeletesFrom>,
+    /// The key under `tables` of the table this one holds the tombstones of: set on the table SQLLoad adds for a `deletes_from`, never read from the project.
+    #[serde(skip)]
+    pub tombstones_of: Option<String>,
+}
+
+/// A source table recording deleted keys: each row a deleted row's `unique_key` values and when it was deleted.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeletesFrom {
+    /// The tombstone table, as `schema.table`.
+    pub table: String,
+    /// Its column holding when each key was deleted, read incrementally as a cursor.
+    pub cursor_column: String,
 }
 
 /// A table's `unnest` or `flatten` as written: a word (`"all"`) or a list of dotted paths.

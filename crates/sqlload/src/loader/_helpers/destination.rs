@@ -27,10 +27,14 @@ use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::NANOSECOND_SCALE;
+use crate::files_source::constants::{
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
+};
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{DataFile, LoadedFile};
-use crate::files_source::models::{FileColumn, StoredRead};
+use crate::files_source::models::{FileColumn, SourceFormat, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
@@ -38,11 +42,12 @@ use crate::loader::models::{CommitRange, Publisher};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
+use crate::postgres_source::models::ReadColumn;
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
-use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn, TableAction};
 use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
@@ -316,6 +321,16 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             removing.strategy
         ));
     }
+    if let Some(deleting) = std::iter::once(spec)
+        .chain(others.iter().copied())
+        .find(|each| each.deletes.is_some())
+    {
+        problems.push(format!(
+            "{place}; {}.{} sets deletes, which would mark the other tables' rows deleted, as its source holds none of their keys: remove deletes",
+            deleting.source_name,
+            deleting.source_table.qualified_name()
+        ));
+    }
     if table.mode == WriteMode::Recreate || table.schema.action == TableAction::Recreate {
         problems.push(format!(
             "{place}; --reload would drop the other tables' rows"
@@ -447,6 +462,57 @@ pub(crate) async fn give_back(folder: &OpenFolder, lease: &Lease) {
     if let Err(error) = release_lease(folder, lease).await {
         tracing::warn!(%error, folder = %folder.location, "cannot release the table's lease; it expires on its own");
     }
+}
+
+/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned, not read as text under `infer_types = false` and not filled from the path (`partition_types`) or the file.
+pub(crate) fn files_read_as(
+    spec: &TableSpec,
+    read_columns: &[ReadColumn],
+    partition_types: &[(String, ColumnType)],
+) -> (Vec<DesiredColumn>, Vec<String>) {
+    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
+    let columns: Vec<DesiredColumn> = read_columns
+        .iter()
+        .map(|column| DesiredColumn {
+            name: spelled(&column.name),
+            column_type: column.output.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let filled: Vec<&str> = partition_types
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
+        .collect();
+    let inferred: Vec<String> = read_columns
+        .iter()
+        .filter(|column| !spec.pinned.contains_key(&column.name))
+        .filter(|column| spec.infer_types || column.output == ColumnType::Json)
+        .map(|column| spelled(&column.name))
+        .filter(|name| !filled.contains(&name.as_str()))
+        .collect();
+    (columns, inferred)
+}
+
+/// Whether unpinned column `name` of `column_type` reads as `text` under `infer_types = false`: a scalar SQLLoad's files or Sheets reader would type by inference (Parquet, a `transform`'s output and columns filled from the path or file keep their types).
+pub(crate) fn read_as_text(spec: &TableSpec, name: &str, column_type: &ColumnType) -> bool {
+    let reader_inferred = match (&spec.files, &spec.sheet) {
+        (Some(files), _) => {
+            files.encoding.format != SourceFormat::Parquet
+                && files.transform.is_none()
+                && !files
+                    .partition_types
+                    .iter()
+                    .any(|(partition, _)| partition == spec.source_table.spelling(name))
+        }
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    !spec.infer_types
+        && reader_inferred
+        && !matches!(column_type, ColumnType::Json | ColumnType::Array(_))
+        && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
+            .contains(&spec.source_table.spelling(name))
 }
 
 /// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.
@@ -809,4 +875,19 @@ impl Publisher {
             ))
         })
     }
+}
+
+/// Why a files table's CSV files go through SQLLoad: `csv.encoding_check` reads the bytes of files read as `latin-1`, `cp1252` or `iso-8859-15`, which no destination's own read checks.
+pub(crate) fn checked_encoding(spec: &TableSpec) -> Option<String> {
+    let files = spec.files.as_ref()?;
+    let csv = &files.encoding.csv;
+    let checked = files.encoding.format == SourceFormat::Csv
+        && csv.encoding_check
+        && text_charset(&csv.encoding).is_ok_and(|charset| charset.checked().is_some());
+    checked.then(|| {
+        format!(
+            "csv.encoding_check reads the bytes of each {} file, which no destination's own read checks; csv.encoding_check = false lets it read them",
+            csv.encoding
+        )
+    })
 }

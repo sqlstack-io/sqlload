@@ -16,6 +16,7 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             },
             strategy: WriteStrategy::Replace,
             files_target: false,
+            deletes: false,
             expected_problems: &[],
         },
         CheckProblemsTestCase {
@@ -27,6 +28,7 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             },
             strategy: WriteStrategy::Merge,
             files_target: false,
+            deletes: false,
             expected_problems: &[],
         },
         CheckProblemsTestCase {
@@ -38,6 +40,7 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             },
             strategy: WriteStrategy::DeleteInsert,
             files_target: false,
+            deletes: false,
             expected_problems: &[
                 "only write_strategy = \"replace\" publishes the whole table in one commit, so only it takes checks.min_rows and checks.max_row_drop; other strategies publish batch by batch, so check those batches with unique and not_null",
             ],
@@ -51,6 +54,7 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             },
             strategy: WriteStrategy::Append,
             files_target: false,
+            deletes: false,
             expected_problems: &[
                 "checks.unique needs at least one column",
                 "checks.warn lists not_null, which the table does not check",
@@ -61,6 +65,7 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             checks: TableChecks::default(),
             strategy: WriteStrategy::Replace,
             files_target: false,
+            deletes: false,
             expected_problems: &["checks sets no check; add one, or remove checks"],
         },
         CheckProblemsTestCase {
@@ -71,8 +76,23 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
             },
             strategy: WriteStrategy::Replace,
             files_target: true,
+            deletes: false,
             expected_problems: &[
                 "checks run on the staged rows of a database target before they are published; a files target has none, so remove checks",
+            ],
+        },
+        CheckProblemsTestCase {
+            description: "a merge with deletes takes max_row_drop, the most a key scan marks, but not min_rows",
+            checks: TableChecks {
+                min_rows: Some(1),
+                max_row_drop: Some(10),
+                ..TableChecks::default()
+            },
+            strategy: WriteStrategy::Merge,
+            files_target: false,
+            deletes: true,
+            expected_problems: &[
+                "only write_strategy = \"replace\" publishes the whole table in one commit, so only it takes checks.min_rows; other strategies publish batch by batch, so check those batches with unique and not_null",
             ],
         },
     ];
@@ -80,7 +100,11 @@ fn given_a_tables_checks_when_validating_them_then_only_runnable_checks_pass() {
         assert_eq!(
             check_problems(
                 &test_case.checks,
-                (test_case.strategy, test_case.files_target)
+                (
+                    test_case.strategy,
+                    test_case.files_target,
+                    test_case.deletes
+                )
             ),
             test_case.expected_problems,
             "{}",

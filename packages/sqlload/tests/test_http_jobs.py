@@ -543,12 +543,22 @@ def orders(ctx):
 	assert len(pages) % 2 == 0 and pages[: len(pages) // 2] == pages[len(pages) // 2 :], pages
 
 
-def test_given_a_page_transform_that_raises_when_loading_then_the_table_fails_naming_the_page(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	module = """
+@pytest.mark.parametrize(
+	("failure", "expected_text"),
+	[
+		("raise ValueError('page 2 is malformed')", "ValueError: page 2 is malformed"),
+		("return 42", "it returned int; return or yield"),
+	],
+	ids=["raises", "returns-what-cannot-load"],
+)
+def test_given_a_page_transform_that_fails_on_one_page_when_loading_then_the_table_fails_naming_the_page(
+	tmp_path: Path, api: ThreadingHTTPServer, failure: str, expected_text: str
+) -> None:
+	module = f"""
 @sl.transform
 def strict_page(rows, ctx):
     if ctx.page == 2:
-        raise ValueError("page 2 is malformed")
+        {failure}
     return rows
 
 @shop.table(description='Orders.')
@@ -559,7 +569,7 @@ def orders(ctx):
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	output = done.stdout + done.stderr
-	assert "GET http://" in output and "/v1/pages?p=2: transform strict_page failed: ValueError: page 2 is malformed" in output, output
+	assert "GET http://" in output and f"/v1/pages?p=2: transform strict_page failed: {expected_text}" in output, output
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__orders') == [(0,)]
 
 

@@ -117,7 +117,7 @@ description = "Stores, in a database that cannot exchange tables."
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let clickhouse = start_clickhouse().await?;
         let client = connect(&postgres).await?;
@@ -277,7 +277,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
 #[test]
 fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was_never_half_published_and_converges()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let clickhouse = start_clickhouse().await?;
         let client = connect(&postgres).await?;

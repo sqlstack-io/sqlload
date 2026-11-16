@@ -772,8 +772,11 @@ impl CdcSource<'_> {
             let mut plan = (*table).clone();
             plan.mode = WriteMode::Replace;
             plan.commits = CommitRule::Whole(WholeReason::Chosen);
-            plan.read_columns =
-                with_snapshot_columns(&plan.read_columns, self.cdc, snapshot_lsn - 1);
+            plan.read_columns = with_snapshot_columns(
+                &plan.read_columns,
+                cdc_of(table, self.cdc),
+                snapshot_lsn - 1,
+            );
             let written = self.copy_table(client, plan).await?;
             crash_point(&format!("{stage}-before-record"));
             let catalog = catalog_columns(client, &table.spec.source_table).await?;
@@ -1061,15 +1064,16 @@ impl CdcSource<'_> {
             let mut spill = spilled.remove(&oid);
             refuse_renamed(changes, spill.as_mut(), (&table.read_columns, &gone))
                 .map_err(LoaderError::Invalid)?;
+            let apply = cdc_of(table, self.cdc).apply;
             let (mut parts, truncated) = change_parts(
                 changes,
                 (spill, spill_bytes()),
-                (self.cdc.apply, &table.spec.unique_key),
+                (apply, &table.spec.unique_key),
             )
             .map_err(LoaderError::Invalid)?;
             let mut plan = (*table).clone();
             plan.mode = WriteMode::Changes(ChangeWrite {
-                apply: self.cdc.apply,
+                apply,
                 unique_key: table.spec.unique_key.clone(),
                 not_null_keys: table.spec.not_null_keys.clone(),
                 truncated,
@@ -1214,6 +1218,11 @@ fn postgres_now_micros() -> i64 {
         .map(|elapsed| i64::try_from(elapsed.as_micros()).unwrap_or(i64::MAX))
         .unwrap_or_default();
     unix.saturating_sub(POSTGRES_EPOCH_MICROS)
+}
+
+/// How `table`'s captured changes are written: its own `cdc`, as its `deletes` may differ from the other tables', else the source's `source_cdc`.
+fn cdc_of<'a>(table: &'a TablePlan, source_cdc: &'a CdcSpec) -> &'a CdcSpec {
+    table.spec.cdc.as_ref().unwrap_or(source_cdc)
 }
 
 /// The read columns with the change columns read as the snapshot's constants, the columns the table has (a merged table keeps no unchanged-value flags).

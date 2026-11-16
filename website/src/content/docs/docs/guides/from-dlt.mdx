@@ -29,10 +29,12 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 | A resource's table name | `{source}__{table}` by default. `table_name = "{table}"` on the source names it as dlt does. |
 | `write_disposition="append"` or `"replace"` | `write_strategy = "append"` or `"replace"`. |
 | `write_disposition="merge"` with `primary_key` | `write_strategy = "merge"` with `unique_key`. See [merge](/docs/concepts/write-strategies/#merge). |
+| `dedup_sort = ("updated_at", "desc")` on a merge resource | From 0.54.0, `newest_by = "updated_at"`. Unlike dlt's, it also applies across loads: a row older than the table's row of its key never overwrites it. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | A sentinel such as `""` filled into a key column that can be empty, as dlt makes `primary_key` columns `NOT NULL` | Not needed: from 0.51.0 `merge` matches a NULL in a key column with a NULL. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
 | `merge_key`, dlt's `delete-insert` of the partitions a load holds | From 0.51.0, `write_strategy = "delete_insert"` with `replace_key` set to the `merge_key` columns: each commit deletes the rows holding a key value it read, then inserts. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). Without a `cursor_column`: each load reads the whole source, as `plan` refuses the two together. Where the partition is a cursor range, `cursor_column` alone does it. |
 | `dlt.sources.incremental("updated_at", initial_value=...)` | `cursor_column = "updated_at"` and `cursor_start`, with `ctx.cursor_value` in a Python table. `lag` is `lookback`. See [Cursors](/docs/concepts/cursors/). |
 | `incremental(..., on_cursor_value_missing=...)` | `null_cursor`: `"include"` is `null_cursor = "include"` and `"exclude"` is `null_cursor = "ignore"`. dlt's default, `"raise"`, raises on a row it reads with no cursor, but its `sql_database` filters later runs with `cursor >= last_value` in SQL, so it never reads those rows to raise on ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/sql_database/helpers.py#L196-L207)). SQLLoad's default, `fail`, counts them and fails the load. See [NULL cursor values](/docs/concepts/cursors/#null-cursor-values). |
+| A `sql_database` table's `query_adapter_callback` that adds a `WHERE` | From 0.54.0, `where = "status <> 'X'"` on the table, or on the source for every table it reads. The table keeps its primary key and cursor. See [Filtering rows](/docs/sources/postgres/#filtering-rows). |
 | Pipeline state (`_dlt_pipeline_state`) | The destination's own maximum of `cursor_column`, read each run. `state = "logged"` keeps a position for the tables that need one. |
 | The stored schema (`_dlt_version`) | The live table, read each run. See [Contracts](/docs/concepts/contracts/). |
 | `max_table_nesting` and child tables | `unnest` and `max_depth`. See [Nested data](/docs/concepts/nested-data/). |
@@ -151,6 +153,10 @@ table is named after the source:
   deletes it. See [Deleting or moving loaded files](/docs/sources/files/#deleting-or-moving-loaded-files).
 - `format` is `parquet`, `csv`, `json`, `ndjson`, `xlsx` or `xml`, and the files can be on S3 or an
   SFTP server.
+- A `filesystem` source's `file_glob` is `pattern`, from 0.54.0, which chooses files of any name, such
+  as `pattern = "file_*.txt"`. See [Choosing files](/docs/sources/files/#choosing-files).
+- A CSV reader's `escape_char` is `csv = { escape = "\\" }`, and `quote_char: null` is
+  `csv = { quote = false }`, from 0.54.0. See [Quotes and escapes](/docs/sources/files/#quotes-and-escapes).
 - An Excel template read as a cell range without a header row, with its own column names
   (`sheet_range: A:C` and `column_names: [metric, category, value]` in a pipeline's settings), is
   `xlsx = { range = "A:C", header = false }` and `column_names = ["metric", "category", "value"]`
@@ -257,7 +263,18 @@ Under `compat = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
   [contract](/docs/concepts/contracts/) allows. dlt adds a variant column such as `amount__v_text`
   ([schema.md](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/docs/website/docs/general-usage/schema.md#L172-L204)).
 - A field listed in `unnest` is always a child table, even when an XML element appears only once;
-  dlt keeps a single match as a column of the parent.
+  dlt keeps a single match as a column of the parent, so its schema changes with the data. Models
+  that read dlt's column can read a view over the child table instead, as long as each parent has
+  at most one match (a second one repeats the parent row):
+
+  ```sql
+  create view raw.orders_with_customer as
+  select o.*, c.name as customer__name, c.email as customer__email
+  from raw.orders o
+  left join raw.orders__customer c on c._sqlload_parent_id = o._sqlload_row_id
+  ```
+
+  With dlt's names the link columns are `_dlt_parent_id` and `_dlt_id`.
 - Two columns whose names normalise to one are numbered (`order_id`, `order_id_1`), where dlt keeps
   one of them. See [on_duplicate_names](/docs/concepts/nested-data/#on_duplicate_names).
 - Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,

@@ -23,7 +23,6 @@ use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::combined_type::combined_type;
-use crate::column_types::main::exact_cast::exact_cast;
 use crate::column_types::models::ColumnType;
 use crate::http_source::main::literal_path_problems::literal_path_problems;
 use crate::http_source::models::LiteralPaths;
@@ -88,8 +87,8 @@ use crate::python_sources::types::Streamed;
 use crate::row_batches::main::choose_lists::choose_lists;
 use crate::row_batches::main::conform_batch::conform_batch;
 use crate::row_batches::main::flattened_columns::flattened_columns;
-use crate::row_batches::main::json_lists::json_lists;
 use crate::row_batches::main::merge_schema::merge_schema;
+use crate::row_batches::main::read_types::read_types;
 use crate::row_batches::main::settled_schema::settled_schema;
 use crate::row_batches::models::ChildBatch;
 use crate::row_batches::models::Flatten;
@@ -104,7 +103,6 @@ use crate::schema_plan::models::SchemaPlan;
 use crate::schema_plan::models::TableAction;
 use crate::similar_names::main::close_name::close_name;
 use arrow_array::Array;
-use arrow_array::ArrayRef;
 use arrow_array::BooleanArray;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
@@ -661,7 +659,8 @@ pub(crate) fn typed_batch(
     (rows_before, seen): (u64, OutsideRows),
 ) -> Result<WindowRows, LoaderError> {
     let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
-    let typed = read_types(&conformed, &read_schema(table))?;
+    let typed =
+        read_types(&conformed, &read_schema(table), rows_before).map_err(LoaderError::Invalid)?;
     let cursor = table.spec.cursor.as_ref();
     let include = cursor.is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
     let warns = cursor.is_some_and(|cursor| cursor.out_of_range == OnCursorOutOfRange::Warn);
@@ -700,45 +699,6 @@ pub(crate) fn read_schema(table: &TablePlan) -> SchemaRef {
         })
         .collect();
     Arc::new(Schema::new(fields))
-}
-
-/// `batch` with the target's columns (excluded columns dropped), each converted to its planned type (an array from the list, or from the JSON text a list arrives as); a value that does not convert is an error naming the column.
-pub(crate) fn read_types(
-    batch: &RecordBatch,
-    target: &SchemaRef,
-) -> Result<RecordBatch, LoaderError> {
-    let arrays: Vec<ArrayRef> = target
-        .fields()
-        .iter()
-        .map(|field| {
-            let column = batch
-                .column_by_name(field.name())
-                .cloned()
-                .unwrap_or_else(|| {
-                    arrow_array::new_null_array(field.data_type(), batch.num_rows())
-                });
-            match (field.data_type(), column.data_type()) {
-                (arrow_schema::DataType::List(_), arrow_schema::DataType::Utf8) => {
-                    json_lists(&column, field.data_type()).map_err(|error| {
-                        LoaderError::Invalid(format!("column {}: {error}", field.name()))
-                    })
-                }
-                _ => exact_cast(&column, field.data_type()).map_err(|error| {
-                    LoaderError::Invalid(format!(
-                        "column {}: {error}; pin a type for {} in columns that holds every value",
-                        field.name(),
-                        field.name()
-                    ))
-                }),
-            }
-        })
-        .collect::<Result<_, LoaderError>>()?;
-    let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-    RecordBatch::try_new_with_options(target.clone(), arrays, &options).map_err(invalid)
-}
-
-fn invalid(error: impl std::fmt::Display) -> LoaderError {
-    LoaderError::Invalid(error.to_string())
 }
 
 impl PythonFeed {
@@ -1345,7 +1305,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         unique_key: Vec::new(),
         not_null_keys: Vec::new(),
         replace_key: Vec::new(),
-        dedup_sort: None,
+        newest_by: Vec::new(),
         cursor: None,
         batch: None,
         constants: Vec::new(),
@@ -1771,8 +1731,8 @@ impl ChildTables {
                     .unwrap_or_default()
             ),
             _ => format!(
-                "{root} IN (SELECT {row_id} FROM {})",
-                adapter.render_qualified_name(staging)
+                "{root} IN ({})",
+                adapter.render_kept_row_ids(&request, staging, row_id_name)
             ),
         };
         if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {

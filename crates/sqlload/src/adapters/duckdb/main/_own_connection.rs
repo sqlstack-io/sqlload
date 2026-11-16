@@ -24,5 +24,6 @@ pub(in crate::adapters) fn own_connection(
         connection,
         ddl: destination.ddl.clone(),
         motherduck: destination.motherduck,
+        bridge_duckdb: destination.bridge_duckdb.clone(),
     })
 }

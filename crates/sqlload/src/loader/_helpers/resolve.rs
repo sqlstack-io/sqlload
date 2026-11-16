@@ -5,7 +5,7 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::models::AfterLoad;
+use crate::files_source::models::{AfterLoad, OnEmpty};
 use crate::load_events::main::begin_step::begin_step;
 use crate::load_events::main::end_step::end_step;
 use crate::load_events::models::StepEnd;
@@ -27,13 +27,15 @@ use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, layered, pinned_types,
     table_compat, table_naming,
 };
+#[cfg(feature = "odbc")]
+use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, plan_table};
 use crate::loader::constants::{
     DATE_TEXT_LENGTH, NO_RENAME_HOST, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER,
-    RANGE_NEEDS_CURSOR,
+    RANGE_NEEDS_CURSOR, TOMBSTONE_SUFFIX,
 };
 use crate::loader::errors::LoaderError;
-use crate::loader::models::{DrainedFiles, FoundSource, FoundSources};
+use crate::loader::models::{DrainedFiles, FoundSource, FoundSources, SourceReader};
 use crate::loader::models::{
     PlanOptions, ProjectPlan, RangeFlags, ResolvedTables, SkippedTable, TablePlan, TableSpec,
     TableTransform, TypedCursors, UnreadSource,
@@ -42,7 +44,7 @@ use crate::postgres_source::models::SourceTable;
 use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, PathsSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, JsonType, NewTables, NullCursor, PathsSetting,
     ProjectConfig, RenameSetting, SendMode, SourceConfig, SourceKind, TableOverride, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
@@ -86,9 +88,13 @@ pub(crate) fn resolve_known(
     for table in discovered {
         let qualified = table.qualified_name();
         let overrides = source.tables.get(&qualified).cloned().unwrap_or_default();
+        let bare = overrides.tombstones_of.as_ref().map(|_| SourceConfig {
+            defaults: TableSettings::default(),
+            ..source.clone()
+        });
         let context = SourceContext {
             name: source_name,
-            source,
+            source: bare.as_ref().unwrap_or(source),
             target: &target,
         };
         let shown = || {
@@ -166,20 +172,64 @@ pub(crate) fn resolve_known(
             }
         }
     }
+    tombstone_destinations(&mut resolved.specs);
     resolved
         .problems
         .extend(merged_names(source_name, source, &resolved.specs));
-    for listed in source.tables.keys() {
-        if !discovered
+    for (listed, table) in &source.tables {
+        if discovered
             .iter()
-            .any(|table| table.qualified_name() == *listed)
+            .any(|found| found.qualified_name() == *listed)
         {
-            resolved.problems.push(format!(
-                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
-            ));
+            continue;
         }
+        resolved.problems.push(match &table.tombstones_of {
+            Some(main) => format!(
+                "{main}: deletes_from table {listed:?} not found in the source (or excluded by exclude)"
+            ),
+            None => format!(
+                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
+            ),
+        });
     }
     resolved
+}
+
+/// Each tombstone table among `specs` loading beside the table whose `deletes_from` it is, as `<table>__sqlload_deletes`, with only that table's `unique_key` columns and its own cursor.
+fn tombstone_destinations(specs: &mut [TableSpec]) {
+    let named: Vec<(String, TableName, Vec<String>)> = specs
+        .iter()
+        .map(|spec| {
+            let key = spec.source_table.qualified_name();
+            (key, spec.destination.clone(), spec.unique_key.clone())
+        })
+        .collect();
+    for spec in specs.iter_mut() {
+        let main = spec.tombstones_of.as_ref();
+        let Some((_, destination, unique_key)) = named.iter().find(|(key, ..)| Some(key) == main)
+        else {
+            continue;
+        };
+        spec.destination = TableName {
+            table: format!("{}{TOMBSTONE_SUFFIX}", destination.table),
+            ..destination.clone()
+        };
+        let cursor = spec.cursor.as_ref().map(|cursor| cursor.column.clone());
+        let dropped: Vec<(String, String)> = spec
+            .source_table
+            .columns
+            .iter()
+            .filter(|column| {
+                !unique_key.contains(&column.name) && Some(&column.name) != cursor.as_ref()
+            })
+            .filter(|column| !is_excluded(&spec.excluded_columns, &column.name))
+            .map(|column| {
+                let reason = "deletes_from keeps only the unique_key columns and the cursor";
+                (column.name.clone(), reason.to_owned())
+            })
+            .collect();
+        spec.excluded_columns.extend(dropped);
+    }
 }
 
 /// The `transform` a table runs (its own, else its source's) with the version `project` imported it at, or why it cannot run.
@@ -553,6 +603,8 @@ pub(crate) struct ResolvedTarget {
     pub(crate) send: SendMode,
     /// Where `send = "at_commit"` holds a commit's rows.
     pub(crate) staging_dir: Option<std::path::PathBuf>,
+    /// `json_type = "variant"`: `json` columns are DuckDB `VARIANT` columns.
+    pub(crate) variant_json: bool,
 }
 
 /// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
@@ -629,6 +681,7 @@ pub(crate) fn source_target(
             compat: target.compat,
             send: target.send.unwrap_or(SendMode::PerBatch),
             staging_dir: target.staging_dir.clone(),
+            variant_json: false,
         });
     }
     let schema = source
@@ -661,6 +714,7 @@ pub(crate) fn source_target(
             },
         ),
         staging_dir: target.staging_dir.clone(),
+        variant_json: target.json_type == Some(JsonType::Variant),
     })
 }
 
@@ -705,7 +759,7 @@ pub(crate) fn loaded_overrides(
     }
 }
 
-/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
+/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, newest_by columns, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
 pub(crate) fn loaded_settings(
     settings: &TableSettings,
     name: &dyn Fn(&str) -> String,
@@ -742,10 +796,7 @@ pub(crate) fn loaded_settings(
             .constant_columns
             .as_ref()
             .map(|constants| ConstantColumns(renamed_keys(&constants.0, &name))),
-        dedup_sort: settings
-            .dedup_sort
-            .as_ref()
-            .map(|sort| renamed_keys(sort, &name)),
+        newest_by: settings.newest_by.as_ref().map(names),
         checks,
         order_by: settings.order_by.as_ref().map(keys),
         primary_key: settings.primary_key.as_ref().map(keys),
@@ -1424,8 +1475,8 @@ pub(crate) async fn found_sources<'a>(
         };
         let path = source.source.path.as_deref().unwrap_or_default();
         let problem = match (exists, shared, options.reload) {
-            (false, _, _) => Some(drained.problem),
-            (true, true, _) => Some(format!(
+            (false, _, _) if source.source.on_empty == OnEmpty::Fail => Some(drained.problem),
+            (_, true, _) => Some(format!(
                 "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
                 source.name, drained.table.table, source.name
             )),
@@ -1433,7 +1484,7 @@ pub(crate) async fn found_sources<'a>(
                 "[sources.{}]: --reload would rebuild the table from the files still in its folder, and after_load has deleted or moved the ones already loaded",
                 source.name
             )),
-            (true, false, _) => None,
+            _ => None,
         };
         match problem {
             Some(problem) => source.resolved.problems.push(problem),
@@ -1442,4 +1493,73 @@ pub(crate) async fn found_sources<'a>(
     }
     found.configured.extend(drained_specs);
     Ok(found)
+}
+
+/// `planned`, each table blocked whose `where` fails on source `source_name`: the table's read narrowed to no rows (`(<where>) AND (1 = 0)`, which a database answers without scanning the table) is counted, or dry-run on BigQuery, so nothing is billed; the source is opened only when an unblocked table has a `where`. Then, on an ODBC source, each table still unblocked whose cursor bounds its driver refuses (see `block_refused_bounds`).
+pub(crate) async fn block_failing_reads(
+    project: &ProjectConfig,
+    (source_name, source): (&str, &SourceConfig),
+    mut planned: Vec<TablePlan>,
+) -> Result<Vec<TablePlan>, LoaderError> {
+    let filtered =
+        |table: &TablePlan| table.schema.blocked.is_none() && table.spec.row_filter.is_some();
+    let reader = match planned.iter().any(filtered) {
+        true => Some(crate::loader::_helpers::sources::open_source(project, source, 1).await?),
+        false => None,
+    };
+    for table in planned.iter_mut().filter(|table| filtered(table)) {
+        let spec = &table.spec;
+        let filter = spec
+            .read_filter(Some(crate::loader::constants::NO_ROWS.to_owned()))
+            .unwrap_or_default();
+        if let Some(error) = failed_count(reader.as_ref(), &spec.source_table, &filter).await {
+            let row_filter = spec.row_filter.clone().unwrap_or_default();
+            table.schema = blocked_plan(vec![format!(
+                "where {row_filter:?} fails on the source: {error}"
+            )]);
+        }
+    }
+    #[cfg(feature = "odbc")]
+    if source.kind == crate::project::models::SourceKind::Odbc {
+        block_refused_bounds(project, (source_name, source), &mut planned).await?;
+    }
+    #[cfg(not(feature = "odbc"))]
+    let _ = source_name;
+    Ok(planned)
+}
+
+/// Why counting the rows of `table` that `filter` selects fails on `reader`'s database (a dry run on BigQuery), or `None` when it runs, or there is no database to ask.
+async fn failed_count(
+    reader: Option<&SourceReader>,
+    table: &SourceTable,
+    filter: &str,
+) -> Option<String> {
+    match reader? {
+        SourceReader::Postgres(client, _) => {
+            crate::postgres_source::main::count_rows::count_rows(client, table, filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::Snowflake(snowflake) => {
+            crate::snowflake_source::main::count_rows::count_rows(snowflake, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::BigQuery(bigquery) => {
+            crate::bigquery_source::main::dry_count::dry_count(bigquery, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        #[cfg(feature = "odbc")]
+        SourceReader::Odbc(odbc) => {
+            crate::odbc_source::main::count_rows::count_rows(odbc, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
+        SourceReader::Files(_) | SourceReader::Sheets(..) => None,
+    }
 }

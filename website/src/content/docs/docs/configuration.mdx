@@ -200,6 +200,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `compat` | warehouses | From 0.53.0. `sqlload` (default) or `dlt`: the names of the columns a load adds and of the child tables `unnest` makes. A source or table may override it. See [compat](/docs/concepts/nested-data/#compat). |
 | `send` | warehouses | From 0.53.0. `at_commit` or `per_batch`: whether each commit's rows wait locally and reach the target in one burst at the commit, or each batch goes as it's read. Default `at_commit` on Snowflake, Databricks and MotherDuck, `per_batch` elsewhere. A source or table may override it. See [Sending rows at commit](/docs/targets/#sending-rows-at-commit). |
 | `staging_dir` | warehouses | From 0.53.0. The folder `send = "at_commit"` holds rows in until their commit. Default: the system's temporary folder. |
+| `json_type` | DuckDB, MotherDuck | From 0.54.0. `json` (default) or `variant`: whether `json` columns are DuckDB `JSON` or `VARIANT`. See [VARIANT columns](/docs/targets/duckdb/#variant-columns). |
 
 ## Sources
 
@@ -214,7 +215,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
 | `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc, bigquery | `schema.table` patterns to sync and to leave out (`dataset.table` for bigquery). |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
-| `cdc_mode`, `deletes`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
+| `cdc_mode`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
@@ -227,12 +228,15 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |
-| `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. |
+| `csv` | files | `{ delimiter, header, quote, null_values }`; defaults `","`, `true`, `'"'`, `[""]`. From 0.54.0, also `escape` (none by default), `quote = false` and `encoding_check` (`true`). See [Quotes and escapes](/docs/sources/files/#quotes-and-escapes). |
+| `pattern` | files | From 0.54.0. A glob each file's path below `path` must match, such as `"file_*.txt"`, in place of the format's name suffix. See [Choosing files](/docs/sources/files/#choosing-files). |
 | `shape` | files | From 0.27.0. `columns` (default) or `record`: each JSON object or CSV line whole in one `json` column. See [Whole records](/docs/sources/files/#whole-records). |
 | `record_column` | files | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | files | Hive `key=value` folders as typed columns, such as `{ dt = "date" }`. |
 | `path_columns` | files | From 0.26.0. A path template whose captures load as typed columns, such as `"{region}/{day:date}/*"`. See [Columns from paths](/docs/sources/files/#columns-from-paths). |
 | `unmatched_paths` | files | From 0.26.0. `fail` (default) or `skip`: what a file whose path doesn't match `path_columns` does. |
+| `order` | files | From 0.54.0. `modified` (default) or `path`: the order a `merge` or `delete_insert` by `replace_key` applies files in, one commit each. See [Merging files](/docs/sources/files/#merging-files). |
+| `on_empty` | files | From 0.54.0. `fail` (default) or `skip`: what a load does when the folder exists and holds no files. See [Empty folders](/docs/sources/files/#empty-folders). |
 | `copy_to_internal_stage` | files into Snowflake | Upload files no external stage covers to `@~`. Much slower. |
 | `[sources.NAME.tables."schema.table"]` | all | Per-table settings. A files source's table is named after the source. |
 
@@ -248,7 +252,7 @@ A [`postgres_cdc`](/docs/sources/postgres-cdc/) source takes these:
 | `connection` | | A `postgres` connection. |
 | `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
 | `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. A files target takes `changelog` only. |
-| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
+| `deletes` | `soft` | `cdc_mode = "merge"` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. A [table setting](#table-settings), so a table may override it. |
 | `slot` | `sqlload_<source>` | The replication slot. |
 | `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
 | `batch_interval` | `10s`, `1m` into files | With [`load --follow`](/docs/guides/postgres-cdc/#keep-streaming): how often it writes what it has read. At least `1s`. |
@@ -268,13 +272,16 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `on_duplicate_keys` | `dedupe` | From 0.39.0. What `merge` does with rows of one commit that repeat a key: `dedupe` keeps one row per key, `fail` refuses the commit. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | `null_keys` | `match` | From 0.51.0. What `merge` does with a NULL in a `unique_key` column, and `delete_insert` in a `replace_key` column: `match` matches it with a NULL, so the row is updated rather than inserted again; `fail` refuses a commit holding one. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
 | `replace_key` | none | From 0.51.0. A column or list of columns whose values `delete_insert` replaces whole: each commit deletes the rows holding a value its rows hold, then inserts them. Not unique. Only for `delete_insert`, and not with a `cursor_column`: each load reads the whole source, or a files source's new and changed files. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). |
-| `dedup_sort` | none | From 0.39.0. Which repeated row `merge` keeps: `{ column = "desc" }` the highest value, `"asc"` the lowest; without it, the row read last. |
+| `deletes` | none | From 0.54.0. `soft` or `hard`: what `load --sync-deletes` does with the rows of a `merge` table whose key the source no longer holds (Postgres, ODBC, Snowflake and BigQuery sources). `soft` sets `_sqlload_deleted_at`; `hard` removes the row. A `postgres_cdc` source applies captured deletes this way, `soft` by default. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
+| `deletes_from` | none | From 0.54.0. Tables only: `{ table = "audit.deleted_items", cursor_column = "deleted_at" }`, a source table recording deleted keys. Every load appends its new rows to `<table>__sqlload_deletes` and marks the rows they name, as `deletes` says. See [Deletes from a tombstone table](/docs/concepts/write-strategies/#deletes-from-a-tombstone-table). |
+| `newest_by` | none | From 0.54.0, replacing `dedup_sort`. A column, or a list compared in order, whose higher value is a row's newer version: `merge` keeps the newest of a commit's rows sharing a key, and never overwrites the table's row with an older one. Without it, the row read last wins. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | `cursor_column` | none | The column runs continue from. From 0.51.0, a list such as `["updated_at", "created_at"]` reads the first non-NULL column of each row. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum: a duration on a date or timestamp cursor, such as `"2h"`; from 0.52.0, a number of cursor units on an integer cursor, such as `1`. See [Cursors](/docs/concepts/cursors/#fiscal-year-tables). |
 | `lookback_from` | `destination` | From 0.26.0. `destination` (the destination's maximum) or `now`: what `lookback` counts back from. See [Reload a window](/docs/guides/reload-a-window/). |
 | `lookahead` | none | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. |
 | `append_cursor_inclusive` | `false` | Whether `append` reads from the maximum itself (inserting its rows again) rather than after it. |
+| `where` | none | From 0.54.0, Postgres, ODBC, Snowflake and BigQuery tables, including those `include` matches; not query tables (put the condition in their `sql`). A condition in the source database's SQL, such as `"status <> 'X' AND site = 'BE01'"`, ANDed into every `SELECT` SQLLoad reads the table with, next to the cursor filter, so the table keeps its primary key and the database can use its indexes. A table's own replaces its source's. `plan` checks it on the source and shows it on a `filter` line. A row that later stops matching isn't removed from a `merge`, `append` or `delete_insert` table; `replace` and [deletes](/docs/concepts/write-strategies/#rows-deleted-at-the-source) remove it. See [Filtering rows](/docs/sources/postgres/#filtering-rows). |
 | `cursor_bounds` | `parameters` | From 0.47.0, ODBC sources only. `parameters` binds the cursor's bounds as typed parameters; `literals` writes them into the query as ODBC escapes (`{ts '…'}`, `{d '…'}`), for a driver that refuses a bound value. See [Cursor bounds](/docs/sources/odbc/#cursor-bounds). |
 | `on_cursor_out_of_range` | `fail` | From 0.53.0, Python tables with a cursor only. What a load does with rows the function returns outside the window it was asked for: `fail` fails the table, naming them and their likely cause; `skip` drops them; `warn` loads them. The load report counts them under `skip` and `warn`. See [Rows outside the window](/docs/concepts/cursors/#rows-outside-the-window). |
 | `null_cursor` | `fail` | From 0.51.0. What an incremental read does with source rows whose cursor is NULL: `fail` fails the load when there are any, `include` reads them on every run (`merge` only), `ignore` skips them. See [NULL cursor values](/docs/concepts/cursors/#null-cursor-values). |
@@ -282,6 +289,8 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
 | `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |
 | `auto_widen` | `false` | Widen inferred columns along `bool` → `int` → `decimal`, `timestamp_ntz` → `timestamp_tz`. |
+| `infer_types` | `true` | From 0.54.0. `false` loads every column SQLLoad would infer (files but Parquet, Google Sheets, Python dict rows) as `text`; pinned `columns` keep their types. See [Loading every column as text](/docs/concepts/types/#loading-every-column-as-text). |
+| `on_nonfinite` | `keep` | From 0.54.0, Python tables and tables with a `transform` only. `null` loads NaN and infinite floats in dict rows as NULL; `keep` keeps them where the column holds them and fails the table, naming the column and row, where it can't. See [NaN and infinities](/docs/sources/python/#nan-and-infinities). |
 | `type_change_rebuild` | `require_confirmation` | `allow`, `require_confirmation` or `deny`. |
 | `checks` | none | `{ unique, not_null, min_rows, max_row_drop, warn }`, run on the staged rows before they're published. See [Checks before publish](/docs/concepts/checks/). |
 | `constant_columns` | none | The same value in every row, such as `{ tenant_id = "acme" }`, typed by its TOML value or `{ value, type }`. From 0.26.0 on files sources; from 0.37.0 on every source but `postgres_cdc`, and per table, where a table's map replaces its source's. A files source replaces a file column of the same name, and `plan` notes it; every other source fails at `plan` when it already has a column of the name, ignoring case, before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |

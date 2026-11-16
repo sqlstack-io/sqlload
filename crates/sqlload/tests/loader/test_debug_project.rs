@@ -55,7 +55,7 @@ fn given_a_loader_project_when_debugging_then_every_connection_is_checked_and_re
             expected_ok: true,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let directory =
             std::env::temp_dir().join(format!("sqlload-debug-{}", uuid::Uuid::new_v4()));

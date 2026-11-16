@@ -4,6 +4,7 @@ use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS, UTC_OFFSET};
 use crate::adapters::duckdb::models::DuckDbSql;
+use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
@@ -29,6 +30,10 @@ pub(crate) fn pull_insert(
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
     let cast = |value: String, column: &DesiredColumn| {
+        let value = match is_variant(&column.column_type) {
+            true => format!("CAST({value} AS JSON)"),
+            false => value,
+        };
         format!(
             "CAST({value} AS {})",
             DuckDbSql

@@ -13,7 +13,7 @@ use crate::bigquery_source::constants::{BATCHES_AHEAD, READ_STREAMS};
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
 use crate::http::errors::ApiError;
 
-/// A session reading `request`'s columns: on the table itself as of the reader's instant, with the filter as its row restriction; or, for a view or a query table, on the result table of a query job that applies the filter.
+/// A session reading `request`'s columns: on the table itself as of the reader's instant, with the filter as its row restriction; or, for a view, a query table or a table with a `where`, on the result table of a query job that applies the filter.
 pub(crate) async fn read_session(
     reader: &BigQueryReader,
     request: &BigQueryReadRequest<'_>,
@@ -23,7 +23,7 @@ pub(crate) async fn read_session(
         .iter()
         .map(|column| request.table.spelling(&column.name).to_owned())
         .collect();
-    let direct = request.sql.is_none() && request.table.estimated_bytes >= 0;
+    let direct = request.sql.is_none() && request.table.estimated_bytes >= 0 && !request.filtered;
     let (table, restriction, snapshot_ms) = match direct {
         true => (
             format!(

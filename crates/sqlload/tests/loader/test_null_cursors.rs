@@ -78,7 +78,7 @@ const RELOAD_RUNS: &[BatchedRun] = &[
 #[test]
 fn given_source_rows_with_a_null_cursor_when_loading_incrementally_then_each_null_cursor_rule_holds()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let test_cases = [
@@ -245,7 +245,7 @@ fn given_a_null_cursor_rule_when_planning_then_the_reads_line_names_it_and_inclu
             expected_plan: "cursor_column coalesces updated_at (timestamp_tz) and v (text), which are different kinds of value",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client

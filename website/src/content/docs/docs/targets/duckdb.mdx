@@ -32,3 +32,42 @@ from the environment or, from 0.27.0, the shared credentials file. Without
 either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.
+
+## VARIANT columns
+
+From 0.54.0, `json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
+DuckDB's `VARIANT` instead of `JSON`, which holds each value as its text:
+
+```toml
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+json_type = "variant"
+```
+
+Each value loads parsed, so objects, arrays, numbers and booleans keep their types:
+`variant_typeof(payload)` is `OBJECT(user)` and `payload.user.id` is `42`. It applies to every
+`json` column: Python dicts and lists, JSON and NDJSON objects, `shape = "record"` records, nested
+values not unnested, and lists loaded as `json`. A column pinned `native("VARIANT")` loads the same
+way on any DuckDB or MotherDuck target. The default, `json_type = "json"`, keeps `JSON`.
+
+Changing `json_type` for a table that exists changes its `json` columns' type. `plan` shows each one,
+such as `payload json -> native("VARIANT") needs a table rebuild`, and it runs as
+[`type_change_rebuild`](/docs/concepts/contracts/#changes-that-rebuild-a-table) allows: by default
+with `--allow-type-change-rebuild`. The column keeps its values.
+
+## Memory
+
+DuckDB writes a full row group, 122,880 rows, to the database file as rows arrive. Until a commit,
+it holds the rows short of a full row group in memory, and at commit it copies them into its
+write-ahead log in memory as well. Most tables don't notice: rows of a few hundred bytes fill row
+groups quickly. A table of few rows with large values does. Loading 300 rows of 1 MB each
+(286 MB) in one commit peaks at about 1.2 GB, whatever the source's fetch budget, as measured with
+DuckDB 2.0. The same 286 MB as three million short rows peaks at about 300 MB.
+
+So for such a table, peak memory is about four times the bytes of the largest commit, plus the
+blocks DuckDB keeps cached, up to its memory limit (80% of the machine's memory by default). It
+doesn't follow the source's `max_batch_memory`, and smaller commits alone don't lower it: DuckDB's
+cache fills to its limit either way. `plan` notes this on each DuckDB table. A Postgres target stays
+bounded: the same 286 MB loads in about 225 MB with `send = "at_commit"` and 410 MB with
+`send = "per_batch"`.

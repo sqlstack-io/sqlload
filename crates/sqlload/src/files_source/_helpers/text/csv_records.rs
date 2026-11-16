@@ -1,7 +1,7 @@
 use csv_core::ReadRecordResult;
 
 use crate::files_source::_helpers::text::bytes_reader::too_long;
-use crate::files_source::constants::ENCODING_HINT;
+use crate::files_source::constants::{ENCODING_HINT, ESCAPE_HINT, QUOTE_OFF_BYTE, QUOTE_OFF_HINT};
 
 /// Where a [`QuoteTracker`] is within a record, as csv-core reads it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,15 +9,24 @@ enum Position {
     FieldStart,
     Unquoted,
     Quoted,
+    /// The escape character inside a quoted field: the next character is plain text.
+    Escaped,
     /// A quote inside a quoted field: it ends the field, or is the first of a doubled quote.
     QuoteInQuoted,
 }
 
-/// Follows the bytes a CSV decoder consumes, so a quoted field the file never closes, or an endless record, is an error instead of one huge field.
+/// How a CSV file quotes its fields: the delimiter, the quote (`None` with quoting off) and the escape inside quoted fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CsvQuoting {
+    pub(crate) delimiter: u8,
+    pub(crate) quote: Option<u8>,
+    pub(crate) escape: Option<u8>,
+}
+
+/// Follows the bytes a CSV decoder consumes, so a quoted field the file never closes, text after a closing quote, or an endless record, is an error instead of a misread value or one huge field.
 #[derive(Debug)]
 pub(crate) struct QuoteTracker {
-    delimiter: u8,
-    quote: u8,
+    quoting: CsvQuoting,
     max_record_bytes: usize,
     position: Position,
     record_bytes: usize,
@@ -26,10 +35,9 @@ pub(crate) struct QuoteTracker {
 }
 
 impl QuoteTracker {
-    pub(crate) fn new(delimiter: u8, quote: u8, max_record_bytes: usize) -> Self {
+    pub(crate) fn new(quoting: CsvQuoting, max_record_bytes: usize) -> Self {
         Self {
-            delimiter,
-            quote,
+            quoting,
             max_record_bytes,
             position: Position::FieldStart,
             record_bytes: 0,
@@ -37,10 +45,20 @@ impl QuoteTracker {
         }
     }
 
-    /// Follow `bytes`; a record longer than the limit is an error.
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<(), String> {
-        for byte in bytes {
-            self.position = self.next(*byte);
+    /// Follow `bytes`; text after a closing quote, or a record longer than the limit, is an error.
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Result<(), String> {
+        while let Some(&byte) = bytes.first() {
+            let plain = self.plain_run(bytes);
+            match plain {
+                0 => {
+                    self.position = self.next(byte)?;
+                    bytes = &bytes[1..];
+                }
+                _ => {
+                    self.record_bytes += plain;
+                    bytes = &bytes[plain..];
+                }
+            }
             if self.record_bytes > self.max_record_bytes {
                 return Err(too_long(self.records + 1, self.max_record_bytes));
             }
@@ -48,45 +66,93 @@ impl QuoteTracker {
         Ok(())
     }
 
+    /// How many of `bytes`, from the start, are plain text of the field being read, which [`Self::next`] would only count: in an unquoted field, all but a line end, the delimiter and, with quoting off, its stand-in quote; in a quoted field, all but the quote and the escape.
+    fn plain_run(&self, bytes: &[u8]) -> usize {
+        let CsvQuoting {
+            delimiter,
+            quote,
+            escape,
+        } = self.quoting;
+        let quoting_off = quote.is_none();
+        let special = match self.position {
+            Position::Unquoted => bytes.iter().position(|&byte| {
+                byte == b'\n'
+                    || byte == b'\r'
+                    || byte == delimiter
+                    || (quoting_off && byte == QUOTE_OFF_BYTE)
+            }),
+            Position::Quoted => bytes
+                .iter()
+                .position(|&byte| Some(byte) == quote || Some(byte) == escape),
+            Position::FieldStart | Position::Escaped | Position::QuoteInQuoted => Some(0),
+        };
+        special.unwrap_or(bytes.len())
+    }
+
     /// At the end of the file: an error when it ends inside a quoted field.
     pub(crate) fn finish(&self) -> Result<(), String> {
         match self.position {
-            Position::Quoted => Err(format!(
-                "line {}: unterminated quoted field",
-                self.records + 1
+            Position::Quoted | Position::Escaped => Err(format!(
+                "line {}: unterminated quoted field; {}",
+                self.records + 1,
+                self.hint()
             )),
             Position::FieldStart | Position::Unquoted | Position::QuoteInQuoted => Ok(()),
         }
     }
 
-    fn next(&mut self, byte: u8) -> Position {
-        let unquoted = match self.position {
-            Position::Quoted | Position::QuoteInQuoted if byte == self.quote => {
-                self.record_bytes += 1;
-                return match self.position {
+    /// The settings that may fix a quoting error: an escape when none is set, or no quoting.
+    fn hint(&self) -> String {
+        match self.quoting.escape {
+            None => format!("{ESCAPE_HINT}; {QUOTE_OFF_HINT}"),
+            Some(_) => QUOTE_OFF_HINT.to_owned(),
+        }
+    }
+
+    fn next(&mut self, byte: u8) -> Result<Position, String> {
+        let quote = self.quoting.quote;
+        let quoted = match self.position {
+            Position::Escaped => Some(Position::Quoted),
+            Position::Quoted | Position::QuoteInQuoted if Some(byte) == quote => {
+                Some(match self.position {
                     Position::Quoted => Position::QuoteInQuoted,
                     _ => Position::Quoted,
-                };
+                })
             }
-            Position::Quoted => {
-                self.record_bytes += 1;
-                return Position::Quoted;
-            }
-            Position::FieldStart | Position::Unquoted | Position::QuoteInQuoted => {
-                self.position == Position::FieldStart
-            }
+            Position::Quoted if Some(byte) == self.quoting.escape => Some(Position::Escaped),
+            Position::Quoted => Some(Position::Quoted),
+            Position::FieldStart | Position::Unquoted | Position::QuoteInQuoted => None,
         };
-        match byte {
+        if let Some(position) = quoted {
+            self.record_bytes += 1;
+            return Ok(position);
+        }
+        let closed = self.position == Position::QuoteInQuoted;
+        let unquoted = self.position == Position::FieldStart;
+        Ok(match byte {
             b'\r' | b'\n' => {
                 self.records += u64::from(self.record_bytes > 0);
                 self.record_bytes = 0;
                 Position::FieldStart
             }
-            _ if byte == self.delimiter => {
+            _ if byte == self.quoting.delimiter => {
                 self.record_bytes += 1;
                 Position::FieldStart
             }
-            _ if unquoted && byte == self.quote => {
+            _ if closed => {
+                return Err(format!(
+                    "line {}: text after a closing quote; {}",
+                    self.records + 1,
+                    self.hint()
+                ));
+            }
+            QUOTE_OFF_BYTE if quote.is_none() => {
+                return Err(format!(
+                    "line {}: 0x{QUOTE_OFF_BYTE:02X} is not valid UTF-8; {ENCODING_HINT}",
+                    self.records + 1
+                ));
+            }
+            _ if unquoted && Some(byte) == quote => {
                 self.record_bytes += 1;
                 Position::Quoted
             }
@@ -94,7 +160,7 @@ impl QuoteTracker {
                 self.record_bytes += 1;
                 Position::Unquoted
             }
-        }
+        })
     }
 }
 
@@ -111,11 +177,13 @@ pub(crate) struct FirstRecord {
 }
 
 impl FirstRecord {
-    pub(crate) fn new(delimiter: u8, quote: u8, max_record_bytes: usize) -> Self {
+    pub(crate) fn new(quoting: CsvQuoting, max_record_bytes: usize) -> Self {
         Self {
             reader: csv_core::ReaderBuilder::new()
-                .delimiter(delimiter)
-                .quote(quote)
+                .delimiter(quoting.delimiter)
+                .quote(quoting.quote.unwrap_or(QUOTE_OFF_BYTE))
+                .quoting(quoting.quote.is_some())
+                .escape(quoting.escape)
                 .build(),
             max_record_bytes,
             output: Vec::new(),

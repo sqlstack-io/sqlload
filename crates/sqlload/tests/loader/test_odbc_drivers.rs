@@ -131,7 +131,7 @@ fn given_each_odbc_driver_when_a_millisecond_timestamp_cursor_and_a_date_cursor_
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(test_case.database).await?;
             odbc_execute(&server.connection_string, test_case.setup)?;
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
@@ -254,7 +254,7 @@ fn given_each_odbc_driver_when_tables_merge_on_a_primary_key_it_does_not_report_
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(test_case.database).await?;
             odbc_execute(&server.connection_string, test_case.setup)?;
             let (tested, other) = test_case.driver;
