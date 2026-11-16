@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.58.0](https://github.com/sqlstack-io/sqlload/compare/v0.57.0...v0.58.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** sqlload plan, and the plan summary load and apply print, show only the lines a table has of its own or that ask for action. Use plan -v for the previous output. The closing line no longer counts selected tables.
+
+### Features
+
+* **cli:** plan shows each table's own lines grouped by source; -v shows every line ([5c13a38](https://github.com/sqlstack-io/sqlload/commit/5c13a3892a9e40659117ac70ffc7d5e9ec17783e))
+
 ## [0.57.0](https://github.com/sqlstack-io/sqlload/compare/v0.56.0...v0.57.0) (2026-11-16)
 
 
