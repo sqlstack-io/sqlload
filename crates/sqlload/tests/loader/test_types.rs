@@ -1494,3 +1494,31 @@ pub(crate) struct PhaseTimesTestCase {
     pub(crate) pointer: &'static str,
     pub(crate) expected_phases: Vec<(String, String, String, bool, bool)>,
 }
+
+/// One target's run of the key scan steps: a merge of `public.items` with `deletes` set, each step's rows and what its load said.
+pub(crate) struct SyncDeletesTestCase {
+    pub(crate) description: &'static str,
+    /// The target connection's TOML lines.
+    pub(crate) connection: String,
+    pub(crate) schema: &'static str,
+    /// Statements run on the target before the first load, so it starts from no table.
+    pub(crate) reset: &'static [&'static str],
+    /// `deletes = "soft"` or `"hard"`.
+    pub(crate) deletes: &'static str,
+    /// What the plan says the scan does to those rows: `soft-deletes` or `deletes`.
+    pub(crate) marks: &'static str,
+    /// The table's rows as one text value, `id:state` ordered by id.
+    pub(crate) check_query: &'static str,
+    /// After each step: `check_query`'s rows, then ` | ` and the key scan's note, or the load's error.
+    pub(crate) expected_steps: Vec<String>,
+}
+
+/// A plan of `public.estimates` (a `delete_insert`) with settings and flags `plan` refuses.
+pub(crate) struct SyncDeletesRefusalTestCase {
+    pub(crate) description: &'static str,
+    /// TOML lines added to the table's entry.
+    pub(crate) settings: &'static str,
+    pub(crate) sync_deletes: bool,
+    /// Text the failed plan must show, compared as words.
+    pub(crate) expected_error: &'static str,
+}

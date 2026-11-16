@@ -7,16 +7,17 @@ use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
+use sqlload::loader::main::load_tables::load_tables;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
-use sqlload::loader::models::PlanOptions;
+use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
 use crate::helpers::{described_project, load_selected, load_with_options, words};
 use crate::test_types::{
     DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, NullKeyTargetTestCase,
-    ReplaceKeyTargetTestCase,
+    ReplaceKeyTargetTestCase, SyncDeletesTestCase,
 };
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
@@ -399,4 +400,184 @@ async fn run_step(
     plan.tables.retain(|_| loads);
     load_with_options(&project, &plan, destinations, &options).await?;
     Ok(lines.join("\n"))
+}
+
+/// `public.items`, five items, each updated at its own time.
+const ITEMS_SETUP: &str = "
+DROP TABLE IF EXISTS public.items;
+CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz NOT NULL);
+INSERT INTO public.items SELECT id, id * 10, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' FROM generate_series(1, 5) AS id;
+";
+
+/// The key scan steps, each the source's change, the target's (`{schema}` its schema), and whether the load runs with `--sync-deletes`: a first load; item 2 deleted at the source and scanned; a row a later load wrote (its `_sqlload_loaded_at` after the scan's read started), whose key the source never held, left alone by the next scan; item 2 back at the source, merged by a load without a scan; every item deleted at the source, more than the scan may mark, so it marks none; and three items back, so it marks the other two.
+const SYNC_STEPS: [(&str, &str, bool); 6] = [
+    ("", "", false),
+    ("DELETE FROM public.items WHERE id = 2", "", true),
+    (
+        "",
+        "INSERT INTO {schema}.app__items (id, qty, updated_at, _sqlload_load_id, _sqlload_loaded_at) VALUES (9, 90, TIMESTAMPTZ '2026-11-01 09:00:00+00', 'later', TIMESTAMPTZ '2100-01-01 00:00:00+00')",
+        true,
+    ),
+    (
+        "INSERT INTO public.items VALUES (2, 21, '2026-11-02 00:00:00+00')",
+        "DELETE FROM {schema}.app__items WHERE id = 9",
+        false,
+    ),
+    ("DELETE FROM public.items", "", true),
+    (
+        "INSERT INTO public.items VALUES (1, 11, '2026-11-03 00:00:00+00'), (2, 22, '2026-11-03 00:00:00+00'), (3, 33, '2026-11-03 00:00:00+00')",
+        "",
+        true,
+    ),
+];
+
+/// Run [`SYNC_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `updated_at` with `target.deletes`, the scan marking at most half the table: after each step, `target.check_query`'s rows, then ` | ` and the scan's note, or the load's error.
+pub(crate) async fn run_sync_deletes(
+    target: &SyncDeletesTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"{}\"\nchecks = {{ max_row_drop = \"50%\" }}\n",
+        target.connection, target.schema, target.deletes
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let run_target = |sql: &[&str]| {
+        execute(
+            destination,
+            sql.iter()
+                .filter(|sql| !sql.is_empty())
+                .map(|sql| sql.replace("{schema}", target.schema))
+                .collect(),
+        )
+    };
+    run_target(target.reset)
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(ITEMS_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut steps = Vec::new();
+    for (source_change, target_change, sync_deletes) in SYNC_STEPS {
+        source
+            .batch_execute(source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        run_target(&[target_change])
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions {
+            sync_deletes,
+            ..PlanOptions::default()
+        };
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        let scan = format!(
+            "then a full key scan of public.items {} the rows of keys it no longer holds (at most 50% of the table)",
+            target.marks
+        );
+        assert_eq!(
+            words(&lines.join("\n")).contains(&scan),
+            sync_deletes,
+            "{}: {lines:?}",
+            target.description
+        );
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let run = LoadRun {
+            project: &project,
+            destinations: &destinations,
+            host: None,
+            options: &options,
+        };
+        let said = load_tables(&run, &plan, None)
+            .await
+            .pop()
+            .ok_or_else(|| "no table loaded".to_owned())?
+            .loaded
+            .map_or_else(|error| error, |loaded| loaded.note.unwrap_or_default());
+        let rows = single_text(destination, target.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        steps.push(format!("{rows} | {said}"));
+    }
+    source
+        .batch_execute("DROP TABLE public.items")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(steps)
+}
+
+/// The plan of `public.estimates` from Postgres on `postgres_port` (reached by `source`) into an in-memory DuckDB by `delete_insert` with `settings` added, with `--sync-deletes` when `sync_deletes`.
+pub(crate) async fn sync_deletes_plan(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    (settings, sync_deletes): (&str, bool),
+) -> Result<String, String> {
+    let text = estimates_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        settings,
+    );
+    source
+        .batch_execute(ESTIMATES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let options = PlanOptions {
+        sync_deletes,
+        ..PlanOptions::default()
+    };
+    let plan = plan_project(&project, &destinations, &options)
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.estimates")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
+}
+
+/// The key scan refusing to mark every row: more than the table's `max_row_drop` of 50%.
+const REFUSED: &str = "checks.max_row_drop failed: the key scan would mark 5 of the table's 5 rows deleted, more than 50%, so it marks none. Fix: check that the source still lists every row (an empty view or a changed permission reads fewer keys), or raise checks.max_row_drop";
+
+/// What each of [`SYNC_STEPS`] leaves under `deletes = "soft"`: item 2 marked, the row a later load wrote left alone, item 2 back, nothing marked when every key is gone, then items 4 and 5 marked.
+pub(crate) fn soft_steps() -> Vec<String> {
+    [
+        "1:live,2:live,3:live,4:live,5:live | ",
+        "1:live,2:deleted,3:live,4:live,5:live | (key scan of 4 keys: 1 row soft-deleted)",
+        "1:live,2:deleted,3:live,4:live,5:live,9:live | (key scan of 4 keys: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | ",
+        &format!("1:live,2:live,3:live,4:live,5:live | {REFUSED}"),
+        "1:live,2:live,3:live,4:deleted,5:deleted | (key scan of 3 keys: 2 rows soft-deleted)",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// What each of [`SYNC_STEPS`] leaves under `deletes = "hard"`: the same rows removed rather than marked.
+pub(crate) fn hard_steps() -> Vec<String> {
+    [
+        "1,2,3,4,5 | ",
+        "1,3,4,5 | (key scan of 4 keys: 1 row deleted)",
+        "1,3,4,5,9 | (key scan of 4 keys: 0 rows deleted)",
+        "1,2,3,4,5 | ",
+        &format!("1,2,3,4,5 | {REFUSED}"),
+        "1,2,3 | (key scan of 3 keys: 2 rows deleted)",
+    ]
+    .map(str::to_owned)
+    .to_vec()
 }

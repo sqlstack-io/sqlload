@@ -21,12 +21,14 @@ use crate::adapters::contract::_helpers::schema::{
     staging_table,
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
-use crate::adapters::contract::_helpers::write::{replaced_rows, write_statements};
+use crate::adapters::contract::_helpers::write::{
+    mark_statement, marked_counts, replaced_rows, write_statements,
+};
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
-    ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, TableName,
-    WriteMode, WriteStatementsRequest, WriteTarget,
+    ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, MarkWrite,
+    TableName, WriteMode, WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -41,6 +43,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// Whether the destination runs SQL; a files target writes Parquet and alters nothing in place.
     fn runs_sql(&self) -> bool {
         true
+    }
+
+    /// Whether a merge table's `deletes` may mark its rows in place (`load --sync-deletes`): every SQL warehouse that updates and deletes rows by a correlated subquery.
+    fn marks_deleted_rows(&self) -> bool {
+        self.runs_sql()
     }
 
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
@@ -408,6 +415,26 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> Vec<String> {
         change_statements(self, request, change, staging)
+    }
+
+    /// A key scan's (`mark`) one statement marking the table's rows of the keys `staging` doesn't hold.
+    fn render_mark(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        mark: &MarkWrite,
+        staging: &TableName,
+    ) -> String {
+        mark_statement(self, request, mark, staging)
+    }
+
+    /// Under a key scan (`mark`), the queries counting the table's rows it would mark and those it may mark from, each one count as text, for its `max_row_drop` limit.
+    fn render_marked_counts(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        mark: &MarkWrite,
+        staging: &TableName,
+    ) -> [String; 2] {
+        marked_counts(self, request, mark, staging)
     }
 
     /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.

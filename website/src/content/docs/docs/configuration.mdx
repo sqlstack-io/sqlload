@@ -214,7 +214,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
 | `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc, bigquery | `schema.table` patterns to sync and to leave out (`dataset.table` for bigquery). |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
-| `cdc_mode`, `deletes`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
+| `cdc_mode`, `slot`, `publication`, `batch_interval` | postgres_cdc | See [Postgres CDC settings](#postgres-cdc-settings). |
 | `exclude_columns`, `allow_columns` | all | Column patterns to leave out, and to keep anyway. |
 | `skip_tables_with_columns` | postgres | Leave out tables with a column matching one of these patterns. |
 | `mask_key` | all | The key for `hmac` masks, normally `${ENV:MASK_KEY}`. |
@@ -250,7 +250,7 @@ A [`postgres_cdc`](/docs/sources/postgres-cdc/) source takes these:
 | `connection` | | A `postgres` connection. |
 | `include`, `exclude` | | `schema.table` patterns, as for a [Postgres source](/docs/sources/postgres/#choosing-tables). |
 | `cdc_mode` | `merge` | `merge` keeps one row per key; `changelog` appends every change. A files target takes `changelog` only. |
-| `deletes` | `soft` | `merge` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. |
+| `deletes` | `soft` | `cdc_mode = "merge"` only: `soft` marks a deleted row with `_sqlload_deleted_at`; `hard` removes it. A [table setting](#table-settings), so a table may override it. |
 | `slot` | `sqlload_<source>` | The replication slot. |
 | `publication` | `sqlload_<source>` | The publication. SQLLoad creates `sqlload_<source>` when it's missing. |
 | `batch_interval` | `10s`, `1m` into files | With [`load --follow`](/docs/guides/postgres-cdc/#keep-streaming): how often it writes what it has read. At least `1s`. |
@@ -270,6 +270,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `on_duplicate_keys` | `dedupe` | From 0.39.0. What `merge` does with rows of one commit that repeat a key: `dedupe` keeps one row per key, `fail` refuses the commit. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | `null_keys` | `match` | From 0.51.0. What `merge` does with a NULL in a `unique_key` column, and `delete_insert` in a `replace_key` column: `match` matches it with a NULL, so the row is updated rather than inserted again; `fail` refuses a commit holding one. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
 | `replace_key` | none | From 0.51.0. A column or list of columns whose values `delete_insert` replaces whole: each commit deletes the rows holding a value its rows hold, then inserts them. Not unique. Only for `delete_insert`, and not with a `cursor_column`: each load reads the whole source, or a files source's new and changed files. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). |
+| `deletes` | none | From 0.54.0. `soft` or `hard`: what `load --sync-deletes` does with the rows of a `merge` table whose key the source no longer holds (Postgres, ODBC, Snowflake and BigQuery sources). `soft` sets `_sqlload_deleted_at`; `hard` removes the row. A `postgres_cdc` source applies captured deletes this way, `soft` by default. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
 | `dedup_sort` | none | From 0.39.0. Which repeated row `merge` keeps: `{ column = "desc" }` the highest value, `"asc"` the lowest; without it, the row read last. |
 | `cursor_column` | none | The column runs continue from. From 0.51.0, a list such as `["updated_at", "created_at"]` reads the first non-NULL column of each row. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |

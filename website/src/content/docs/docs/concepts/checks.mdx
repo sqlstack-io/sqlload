@@ -18,7 +18,7 @@ checks = { unique = ["customer_id"], not_null = ["customer_id", "email"], min_ro
 | `unique` | No two rows share these columns' values. Rows with a NULL in them are skipped, as in SQL; add the columns to `not_null` to forbid NULLs too. | All |
 | `not_null` | None of these columns holds a NULL. | All |
 | `min_rows` | At least this many rows are loaded. | `replace` |
-| `max_row_drop` | The table loses at most this share of its rows, compared with what it holds now. A whole percentage from `"0%"` to `"100%"`. | `replace` |
+| `max_row_drop` | The table loses at most this share of its rows, compared with what it holds now. A whole percentage from `"0%"` to `"100%"`. On a `merge` with `deletes`, from 0.54.0, the most a key scan marks. | `replace`, `merge` with `deletes` |
 | `warn` | A list of the checks above that only log their failure, such as `warn = ["max_row_drop"]`. | |
 
 ## When a check fails
@@ -41,7 +41,9 @@ Each commit is checked by itself. A load that commits batch by batch (`append`, 
 place. The message then says how many rows earlier commits published.
 
 `min_rows` and `max_row_drop` describe the whole table, so only `replace`, which commits once,
-takes them. `plan` fails for them under another strategy. `max_row_drop` has nothing to compare
+takes them. `plan` fails for them under another strategy, except `max_row_drop` on a `merge` with
+[`deletes`](/docs/concepts/write-strategies/#rows-deleted-at-the-source), where it limits what
+each key scan marks (5% when unset). `max_row_drop` has nothing to compare
 with on the first load, when the table doesn't exist yet.
 
 ## Where checks apply

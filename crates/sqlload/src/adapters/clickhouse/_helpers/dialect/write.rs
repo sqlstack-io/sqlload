@@ -80,7 +80,7 @@ pub(crate) fn write_statements(
         .collect();
     let displaced = match request.mode {
         WriteMode::Replace | WriteMode::Recreate => None,
-        WriteMode::Append => None,
+        WriteMode::Append | WriteMode::MarkMissing(_) => None,
         WriteMode::Merge { .. } => {
             let keys = displaced_keys(adapter, request.mode);
             Some(format!("({keys}) IN (SELECT {keys} FROM {delta})"))

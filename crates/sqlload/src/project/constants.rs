@@ -38,6 +38,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "timezone",
     "row_id",
     "transform",
+    "deletes",
     #[cfg(feature = "container-tests")]
     "test_loader_route",
 ];
@@ -78,7 +79,6 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "publication",
     "slot",
     "cdc_mode",
-    "deletes",
     "batch_interval",
     "warehouse",
     "stage",

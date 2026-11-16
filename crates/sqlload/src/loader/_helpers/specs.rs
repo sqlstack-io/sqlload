@@ -48,7 +48,7 @@ use crate::postgres_source::models::{ReadColumn, WireType};
 use crate::project::constants::DEFAULT_MAX_DEPTH;
 use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
-    CdcDeletes, CdcMode, CursorBounds, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
+    CdcMode, CursorBounds, Deletes, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
     OnDuplicateKeys, PathsSetting, ProjectConfig, SortDirection, SourceConfig, SourceKind,
     StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
@@ -58,6 +58,8 @@ use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::models::{Flatten, Unnest};
+use crate::row_deletes::main::deletes_problems::deletes_problems;
+use crate::row_deletes::main::deletes_spec::deletes_spec;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
@@ -223,7 +225,8 @@ pub(crate) fn build_spec(
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
     let cursor = cursor(settings, defaults);
-    let cdc = cdc_spec(context);
+    let deletes = layered(&settings.deletes, &defaults.deletes);
+    let cdc = cdc_spec(context, deletes.map(|(value, _)| value));
     let (strategy, strategy_origin) = match (
         layered(&settings.write_strategy, &defaults.write_strategy),
         &cdc,
@@ -332,12 +335,14 @@ pub(crate) fn build_spec(
             .map(|(value, _)| value),
     );
     problems.extend(found);
+    let deletes = deletes
+        .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || cdc.is_some())
+        .map(|(value, _)| value);
     let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
-    problems.extend(
-        checks
-            .iter()
-            .flat_map(|checks| check_problems(checks, (strategy, context.target.path.is_some()))),
-    );
+    problems.extend(checks.iter().flat_map(|checks| {
+        let target = (context.target.path.is_some(), deletes.is_some());
+        check_problems(checks, (strategy, target.0, target.1))
+    }));
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
     let uses_key = strategy == WriteStrategy::Merge;
     problems.extend(overrides.mask.keys().filter_map(|masked| {
@@ -371,6 +376,15 @@ pub(crate) fn build_spec(
         .unwrap_or_default();
     let (nesting, found) = nesting(context, overrides, strategy);
     problems.extend(found);
+    let unnests = !matches!(nesting.unnest, Unnest::None);
+    let kind = (strategy, context.source.kind);
+    problems.extend(deletes_problems(
+        deletes,
+        kind,
+        context.target.warehouse,
+        unnests,
+    ));
+    let (deletes, checks) = deletes_spec(deletes.filter(|_| cdc.is_none()), checks);
     if keyed && !matches!(nesting.unnest, Unnest::None) {
         problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
     }
@@ -494,6 +508,7 @@ pub(crate) fn build_spec(
             rule: sheet_rule(context.source, &table.name),
         }),
         cdc,
+        deletes,
         warehouse_source: match context.source.kind {
             SourceKind::Odbc => Some(WarehouseSource {
                 system: ODBC_SOURCE,
@@ -663,15 +678,15 @@ fn table_layout(table: &TableSettings, source: &TableSettings) -> TableLayout {
 }
 
 /// A `postgres_cdc` source's stream settings, with the default slot and publication names.
-fn cdc_spec(context: &SourceContext<'_>) -> Option<CdcSpec> {
+fn cdc_spec(context: &SourceContext<'_>, deletes: Option<Deletes>) -> Option<CdcSpec> {
     let source = context.source;
     (source.kind == SourceKind::PostgresCdc).then(|| {
         let default_name = format!("sqlload_{}", context.name.to_lowercase());
         CdcSpec {
-            apply: match (source.cdc_mode, source.deletes) {
+            apply: match (source.cdc_mode, deletes.unwrap_or(Deletes::Soft)) {
                 (CdcMode::Changelog, _) => ChangeApply::Changelog,
-                (CdcMode::Merge, CdcDeletes::Soft) => ChangeApply::SoftDeletes,
-                (CdcMode::Merge, CdcDeletes::Hard) => ChangeApply::HardDeletes,
+                (CdcMode::Merge, Deletes::Soft) => ChangeApply::SoftDeletes,
+                (CdcMode::Merge, Deletes::Hard) => ChangeApply::HardDeletes,
             },
             slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
             publication: source.publication.clone().unwrap_or(default_name),

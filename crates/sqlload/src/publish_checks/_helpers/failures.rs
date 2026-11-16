@@ -178,7 +178,10 @@ async fn counts_of(
 }
 
 /// The single count `query` returns.
-async fn single_count(commit: &CheckedCommit<'_>, query: String) -> Result<u64, LoaderError> {
+pub(crate) async fn single_count(
+    commit: &CheckedCommit<'_>,
+    query: String,
+) -> Result<u64, LoaderError> {
     let values = text_values(commit.destination, query)
         .await
         .map_err(|error| could_not_run(commit, &error))?;

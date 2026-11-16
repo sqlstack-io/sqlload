@@ -113,6 +113,7 @@ use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
 use crate::publish_checks::main::key_sources::key_sources;
+use crate::publish_checks::main::marked_rows::marked_rows;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
@@ -121,6 +122,7 @@ use crate::publish_checks::models::CheckedCommit;
 use crate::row_batches::main::unnest_batch::unnest_batch;
 use crate::row_batches::models::Unnest;
 use crate::row_batches::models::UnnestRequest;
+use crate::row_deletes::main::marked_note::marked_note;
 use crate::row_ids::main::key_row_ids::key_row_ids;
 use crate::row_ids::main::random_row_ids::random_row_ids;
 use crate::run_log::main::insert_run::insert_run;
@@ -128,7 +130,7 @@ use crate::run_log::main::runs_table::runs_table;
 use crate::run_log::models::RunOutcome;
 use crate::run_log::models::RunRecord;
 use crate::schema_plan::constants::{
-    CDC_LSN_COLUMN, CDC_SEQ_COLUMN, MERGE_ROW_COLUMN, ROOT_ROW_COLUMN,
+    CDC_DELETED_AT_COLUMN, CDC_LSN_COLUMN, CDC_SEQ_COLUMN, MERGE_ROW_COLUMN, ROOT_ROW_COLUMN,
 };
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
@@ -389,11 +391,11 @@ pub(crate) fn with_constants(
     RecordBatch::try_new(Arc::new(schema), columns).map_err(|error| error.to_string())
 }
 
-/// `batch` with this load's id and load time added under `compat`, so the staged files carry them, then each row's id from `row_ids` when the table gives rows one, and with `first_row` its rows numbered from it in `_sqlload_row`.
+/// `batch` with this load's id and load time added under `compat`, so the staged files carry them, then each row's id from `row_ids` when the table gives rows one, a NULL `_sqlload_deleted_at` when it soft-deletes rows (`soft_deletes`), so a merge clears it on a row whose key came back, and with `first_row` its rows numbered from it in `_sqlload_row`.
 fn with_metadata(
     batch: &RecordBatch,
     ((compat, load_id), row_ids): ((Compat, &str), Option<Vec<String>>),
-    (loaded_at_micros, first_row): (i64, Option<i64>),
+    (loaded_at_micros, first_row, soft_deletes): (i64, Option<i64>, bool),
 ) -> Result<RecordBatch, String> {
     let rows = batch.num_rows();
     let schema = batch.schema();
@@ -420,6 +422,15 @@ fn with_metadata(
             true,
         )));
         columns.push(Arc::new(StringArray::from(ids)));
+    }
+    if soft_deletes {
+        let deleted_at = TimestampMicrosecondArray::new_null(rows).with_timezone("UTC");
+        fields.push(Arc::new(Field::new(
+            CDC_DELETED_AT_COLUMN,
+            deleted_at.data_type().clone(),
+            true,
+        )));
+        columns.push(Arc::new(deleted_at));
     }
     if let Some(first) = first_row {
         fields.push(Arc::new(Field::new(
@@ -646,6 +657,7 @@ impl Publisher {
             files,
             merged_file: None,
             replaced: None,
+            marked: None,
             run_keys: Default::default(),
             fed_files: Vec::new(),
             settled_files: Vec::new(),
@@ -737,7 +749,7 @@ impl Publisher {
         let batch = with_metadata(
             &masked,
             ((self.table.spec.compat, &self.load_id), ids),
-            (micros, first_row),
+            (micros, first_row, self.table.spec.soft_deletes()),
         )
         .map_err(LoaderError::Invalid)?;
         let batch = match roots {
@@ -840,6 +852,7 @@ impl Publisher {
             || self.at_end
             || empty_range
             || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
+            || matches!(self.table.mode, WriteMode::MarkMissing(_))
             || self.leftover_deletes();
         if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
@@ -1246,6 +1259,9 @@ impl Publisher {
         if let Some(checks) = &spec.checks {
             run_checks(&checked, checks).await?;
         }
+        if let WriteMode::MarkMissing(mark) = &mode {
+            self.marked = Some(marked_rows(&checked, mark).await?);
+        }
         let replaced = match &mode {
             WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
                 let limit = file
@@ -1604,13 +1620,21 @@ pub(crate) async fn publish_table(
     Ok(TableLoaded {
         rows,
         changes: publisher.child_changes(),
-        note: None,
+        note: marked(table, (rows, publisher.marked)),
         after_load: report,
         replaced_keys: publisher.replaced.clone(),
         transforms,
         names: name_lines(&table.spec.names.columns),
         warnings: Vec::new(),
     })
+}
+
+/// What `table`'s key scan did, reading `keys` keys and marking `marked` rows; `None` for other loads.
+fn marked(table: &TablePlan, (keys, marked): (u64, Option<u64>)) -> Option<String> {
+    let WriteMode::MarkMissing(mark) = &table.mode else {
+        return None;
+    };
+    Some(marked_note(mark.soft, (keys, marked.unwrap_or_default())))
 }
 
 /// Pass the rows to `publisher`, cutting commits where the plan says; returns the publisher for its clean-up, and the rows committed.

@@ -516,9 +516,6 @@ pub struct SourceConfig {
     /// How captured changes are written (`postgres_cdc`).
     #[serde(default)]
     pub cdc_mode: CdcMode,
-    /// What a captured delete does to a merged row (`postgres_cdc` with `cdc_mode = "merge"`).
-    #[serde(default)]
-    pub deletes: CdcDeletes,
     /// How often `load --follow` writes the changes it has read (`postgres_cdc`); 10 seconds when omitted.
     #[serde(default, deserialize_with = "deserialize_optional_duration")]
     pub batch_interval: Option<Duration>,
@@ -572,17 +569,6 @@ pub enum CdcMode {
     Merge,
     /// Every change as a row of its own.
     Changelog,
-}
-
-/// What a captured delete does under `cdc_mode = "merge"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CdcDeletes {
-    /// The row stays, with `_sqlload_deleted_at` set.
-    #[default]
-    Soft,
-    /// The row is removed.
-    Hard,
 }
 
 impl SourceConfig {
@@ -882,6 +868,9 @@ pub struct TableSettings {
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,
+    /// What a merge does with a row whose key the source no longer holds (`soft` sets `_sqlload_deleted_at`, `hard` removes it; unset, rows are never marked), and a captured delete under `cdc_mode = "merge"` (soft when unset).
+    #[serde(default)]
+    pub deletes: Option<Deletes>,
     /// The name `@sl.transform` registered a Python function under, found on `python_paths`, run on each file's rows (files) or each range's (`google_sheets`) before they load.
     #[serde(default)]
     pub transform: Option<String>,
@@ -904,6 +893,16 @@ pub enum OnDuplicateKeys {
     Dedupe,
     /// Fail the commit, naming some of the repeated keys.
     Fail,
+}
+
+/// What a merge does with a row whose key the source no longer holds, found by `load --sync-deletes`, or a captured delete does to a merged row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Deletes {
+    /// The row stays, with `_sqlload_deleted_at` set; a merge clears it when the key comes back.
+    Soft,
+    /// The row is removed.
+    Hard,
 }
 
 /// What a merge does with a NULL in a `unique_key` column.

@@ -21,7 +21,7 @@ pub fn plan_replaced_files(request: &ReplaceRequest<'_>) -> Result<ReplacedFiles
                 ..ReplacedFiles::default()
             });
         }
-        WriteMode::Merge { .. } => {
+        WriteMode::Merge { .. } | WriteMode::MarkMissing(_) => {
             return Err("merge is not supported for files targets".to_owned());
         }
         WriteMode::DeleteInsert { from, to, .. } => (from.as_deref(), to.as_deref()),

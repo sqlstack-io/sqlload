@@ -126,6 +126,7 @@ pub(crate) fn strategy_name(table: &TablePlan) -> &'static str {
         WriteMode::Replace => "replace",
         WriteMode::Recreate => "recreate",
         WriteMode::Changes(_) => "changes",
+        WriteMode::MarkMissing(_) => "sync_deletes",
     }
 }
 

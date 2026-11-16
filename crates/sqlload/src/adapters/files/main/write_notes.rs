@@ -21,6 +21,6 @@ pub fn write_notes(mode: &WriteMode, folder: &Location) -> Vec<String> {
         WriteMode::DeleteInsert { .. } => vec![
             "each partition written or in the window gets its new files first, then its older files are deleted; not atomic, so a reader in between sees both".to_owned(),
         ],
-        WriteMode::Merge { .. } => Vec::new(),
+        WriteMode::Merge { .. } | WriteMode::MarkMissing(_) => Vec::new(),
     }
 }

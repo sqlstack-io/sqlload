@@ -3,6 +3,7 @@ use crate::load_naming::models::NameChange;
 use crate::loader::constants::{FIX_LABEL, REASON_LABEL, ROUTE_LABEL, SOURCE_LABEL};
 use crate::loader::models::UnreadSource;
 use crate::project::models::CheckName;
+use crate::row_deletes::main::deletes_note::deletes_note;
 use crate::run_log::models::RunEvent;
 use crate::time_text::main::clock_time::clock_time;
 use crate::time_text::main::trimmed_time::trimmed_time;
@@ -405,8 +406,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 _ => "",
             };
             format!(
-                "merge (unique_key: {}{origin}{repeats}{nulls}){rebuilt}",
-                unique_key.join(", ")
+                "merge (unique_key: {}{origin}{repeats}{nulls}){rebuilt}{}",
+                unique_key.join(", "),
+                deletes_note(spec)
             )
         }
         WriteMode::DeleteInsert {
@@ -441,6 +443,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         },
         WriteMode::Replace => "replace".to_owned(),
         WriteMode::Recreate => "recreate from the whole source (--reload)".to_owned(),
+        WriteMode::MarkMissing(_) => "mark the rows of keys the source no longer holds".to_owned(),
         WriteMode::Changes(change) => {
             let changes = match change.apply {
                 ChangeApply::SoftDeletes => format!(
@@ -871,6 +874,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             let large = !table.exists && (spec.python.is_some() || estimated > BATCH_BYTES as u64);
             let why = match reason {
                 WholeReason::Chosen => "batch_size = \"none\"",
+                WholeReason::KeyScan => "a key scan marks the rows of every key it didn't read",
                 WholeReason::SingleFile => "single_file writes each file once, whole",
                 WholeReason::TextCursor => {
                     "a text cursor, which the source and destination may sort differently"

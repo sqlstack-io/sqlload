@@ -42,6 +42,7 @@ selects a table by name, since that table could be one of its own.
 | `--follow` | `load` of one `postgres_cdc` source only: keep streaming after catching up, writing a batch every `batch_interval`, until `--max-duration` passes or Ctrl-C or SIGTERM. See [Keep streaming](/docs/guides/postgres-cdc/#keep-streaming). |
 | `--max-duration <DURATION>` | With `--follow`: stop after this long, such as `10m`, once the changes read so far are written. |
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
+| `--sync-deletes` | From 0.54.0. After each selected table with `deletes` merges, read every key of its source and mark its rows of the keys the source no longer holds. Fails when no selected table sets `deletes`. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
 | `--memory-per-table` | From 0.52.0, Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |

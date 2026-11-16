@@ -1,4 +1,4 @@
-//! Load one table: read its source (a Python table through the host) and commit its rows batch by batch.
+//! Load one table: read its source (a Python table through the host) and commit its rows batch by batch, then, under `--sync-deletes`, scan its source's keys and mark its rows of the others.
 
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::{open_source, source_readers};
@@ -6,6 +6,8 @@ use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
 use crate::loader::models::{LoadRun, PythonLoad, TableLoaded, TablePlan};
+use crate::row_deletes::main::scan_plan::scan_plan;
+use crate::time_text::main::now_utc_text::now_utc_text;
 
 /// Load one table; returns its name as reported and what the load did.
 pub(in crate::loader) async fn load_one(
@@ -40,7 +42,18 @@ pub(in crate::loader) async fn load_one(
         (Some(_), None) => return Err(LoaderError::Invalid(NO_PYTHON_HOST.to_owned())),
         (None, _) => {
             let reader = open_source(project, source, source_readers(planned)).await?;
-            publish_table(&reader, planned, (destination, run)).await?
+            let loaded = publish_table(&reader, planned, (destination, run)).await?;
+            match scan_plan(planned, &now_utc_text()) {
+                Some(scan) => {
+                    let scanned =
+                        Box::pin(publish_table(&reader, &scan, (destination, run))).await?;
+                    TableLoaded {
+                        note: scanned.note,
+                        ..loaded
+                    }
+                }
+                None => loaded,
+            }
         }
     };
     Ok((name, loaded))

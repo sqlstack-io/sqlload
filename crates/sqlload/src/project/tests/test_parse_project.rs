@@ -467,7 +467,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "batch_interval is for postgres_cdc sources, never silently ignored",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_interval = \"1m\"\n",
-            expected_message: "[sources.app] publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\"",
+            expected_message: "[sources.app] publication, slot, cdc_mode and batch_interval are for kind = \"postgres_cdc\"",
         },
         ParseProjectErrorTestCase {
             description: "a batch_interval just under a second is refused",
