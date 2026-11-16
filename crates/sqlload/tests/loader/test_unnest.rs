@@ -488,7 +488,7 @@ fn given_nesting_settings_a_table_cannot_use_when_planning_then_plan_names_each_
             test_case.settings
         );
         std::fs::write(&config, text).map_err(|error| error.to_string())?;
-        let (ok, output) = run_sqlload(&config, &["plan"], ("", ""))?;
+        let (ok, output) = run_sqlload(&config, &["plan", "-v"], ("", ""))?;
         assert_eq!(
             (
                 ok,
