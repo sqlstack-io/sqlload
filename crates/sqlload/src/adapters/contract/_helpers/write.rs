@@ -159,55 +159,86 @@ fn marked_rows<A: SqlAdapter + ?Sized>(
     )
 }
 
-/// A query counting, as text, the rows of `table` its tombstones (`tombstones`) mark, then the statement marking them: rows not marked yet when soft-deleting, whose key a tombstone holds, deleted at or after the row's cursor (or of a row without one). Run again, both find nothing more.
+/// A query counting, as text, the rows of `table` its tombstones (`tombstones`) mark, then the statement marking them: rows not marked yet when soft-deleting, whose key a tombstone holds, deleted at or after the row's cursor (or of a row without one). A soft mark sets the latest tombstone of the row's key through a grouped join rather than a correlated subquery, which Snowflake can't always evaluate, on exactly the rows the count counts. Run again, both find nothing more.
 pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     table: &TableName,
     tombstones: &TombstoneWrite,
 ) -> [String; 2] {
     let name = |alias: &str, column: &str| format!("{alias}.{}", adapter.render_identifier(column));
-    let keys: Vec<String> = tombstones
-        .unique_key
-        .iter()
-        .map(|key| {
-            let nullable = !tombstones.not_null_keys.contains(key);
-            let (row, tombstone) = (name("__target", key), name("__tombstone", key));
-            adapter.render_key_equality((&row, &tombstone), nullable)
-        })
-        .collect();
-    let cursors: Vec<String> = tombstones
-        .cursor
-        .iter()
-        .map(|column| name("__target", column))
-        .collect();
-    let cursor = match cursors.as_slice() {
-        [one] => one.clone(),
-        _ => format!("COALESCE({})", cursors.join(", ")),
+    let keys = |row: &str, other: &str| -> String {
+        tombstones
+            .unique_key
+            .iter()
+            .map(|key| {
+                let nullable = !tombstones.not_null_keys.contains(key);
+                adapter.render_key_equality((&name(row, key), &name(other, key)), nullable)
+            })
+            .collect::<Vec<String>>()
+            .join(" AND ")
     };
-    let deleted_at = name("__tombstone", &tombstones.deleted_at);
-    let matching = format!(
-        "FROM {} AS __tombstone WHERE {} AND ({cursor} IS NULL OR {deleted_at} >= {cursor})",
-        adapter.render_qualified_name(&tombstones.tombstones),
-        keys.join(" AND ")
-    );
+    let applies = |row: &str| -> String {
+        let cursors: Vec<String> = tombstones
+            .cursor
+            .iter()
+            .map(|column| name(row, column))
+            .collect();
+        let cursor = match cursors.as_slice() {
+            [one] => one.clone(),
+            _ => format!("COALESCE({})", cursors.join(", ")),
+        };
+        let deleted_at = name("__tombstone", &tombstones.deleted_at);
+        format!(
+            "{} AND ({cursor} IS NULL OR {deleted_at} >= {cursor})",
+            keys(row, "__tombstone")
+        )
+    };
+    let tombstone_table = adapter.render_qualified_name(&tombstones.tombstones);
+    let unmarked = |row: &str| format!("{} IS NULL", name(row, CDC_DELETED_AT_COLUMN));
     let mut conditions: Vec<String> = Vec::new();
     if tombstones.soft {
-        conditions.push(format!(
-            "{} IS NULL",
-            name("__target", CDC_DELETED_AT_COLUMN)
-        ));
+        conditions.push(unmarked("__target"));
     }
-    conditions.push(format!("EXISTS (SELECT 1 {matching})"));
-    let target = format!("{} AS __target", adapter.render_qualified_name(table));
+    conditions.push(format!(
+        "EXISTS (SELECT 1 FROM {tombstone_table} AS __tombstone WHERE {})",
+        applies("__target")
+    ));
+    let qualified = adapter.render_qualified_name(table);
+    let target = format!("{qualified} AS __target");
     let condition = conditions.join(" AND ");
     let mark = match tombstones.soft {
-        true => format!(
-            "UPDATE {target} SET {} = (SELECT CAST(MAX({deleted_at}) AS {}) {matching}) WHERE {condition}",
-            adapter.render_identifier(CDC_DELETED_AT_COLUMN),
-            adapter
-                .render_loader_logical_type(&ColumnType::TimestampTz)
-                .sql
-        ),
+        true => {
+            let row_keys: Vec<String> = tombstones
+                .unique_key
+                .iter()
+                .map(|key| name("__row", key))
+                .collect();
+            let selected: Vec<String> = tombstones
+                .unique_key
+                .iter()
+                .map(|key| {
+                    format!(
+                        "{} AS {}",
+                        name("__row", key),
+                        adapter.render_identifier(key)
+                    )
+                })
+                .collect();
+            let column = adapter.render_identifier(CDC_DELETED_AT_COLUMN);
+            format!(
+                "UPDATE {target} SET {column} = __marks.{column} FROM (SELECT {}, CAST(MAX({}) AS {}) AS {column} FROM {qualified} AS __row JOIN {tombstone_table} AS __tombstone ON {} WHERE {} GROUP BY {}) AS __marks WHERE {} AND {}",
+                selected.join(", "),
+                name("__tombstone", &tombstones.deleted_at),
+                adapter
+                    .render_loader_logical_type(&ColumnType::TimestampTz)
+                    .sql,
+                applies("__row"),
+                unmarked("__row"),
+                row_keys.join(", "),
+                keys("__target", "__marks"),
+                condition
+            )
+        }
         false => format!("DELETE FROM {target} WHERE {condition}"),
     };
     let count = adapter.render_text_cast("COUNT(*)");

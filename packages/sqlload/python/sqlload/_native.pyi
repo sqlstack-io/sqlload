@@ -4,6 +4,9 @@ from typing import Any, Literal
 def run_cli(argv: list[str]) -> int:
 	"""Run the `sqlload` command line `argv` (the program name first); return its exit code."""
 
+def run_cli_captured(argv: list[str]) -> tuple[int, str]:
+	"""`run_cli`, returning what the command would write to stdout along with its exit code."""
+
 def cross(
 	source: Iterable[Any],
 	*,

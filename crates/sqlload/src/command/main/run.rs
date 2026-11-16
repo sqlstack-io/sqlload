@@ -6,5 +6,5 @@ use crate::command::main::run_args_with_host::run_args_with_host;
 
 /// The `sqlload` entry point: run one subcommand and write its output (projects with Python sources need the `sqlload` Python package).
 pub fn run() -> ExitCode {
-    ExitCode::from(run_args_with_host(std::env::args_os(), None))
+    ExitCode::from(run_args_with_host(std::env::args_os(), None, false).0)
 }

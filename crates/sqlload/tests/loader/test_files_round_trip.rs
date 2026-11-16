@@ -18,6 +18,7 @@ const APPEND: FilesToFilesTestCase = FilesToFilesTestCase {
     settings: "write_strategy = \"append\"",
     runs: &[two_days, no_files, third_day],
     expected_held: &["6|1", "6|1", "8|2"],
+    expected_reads: "",
 };
 
 #[test]
@@ -79,6 +80,7 @@ fn given_a_files_source_when_loading_it_into_a_files_target_again_then_each_sour
             settings: "write_strategy = \"append\"\ncursor_column = \"day\"\ndestination_path = \"PREFIX/out/{table}/day={cursor:date}/\"",
             runs: &[two_days, late_and_new, no_files],
             expected_held: &["6|1", "8|2", "8|2"],
+            expected_reads: "reads   day >= 2026-11-02 (maximum in the newest load's files)",
             ..APPEND
         },
         FilesToFilesTestCase {
@@ -105,8 +107,21 @@ fn given_a_files_source_when_loading_it_into_a_files_target_again_then_each_sour
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-            let held = run_files_to_files(&server.endpoint, directory.path(), test_case).await?;
-            assert_eq!(held, test_case.expected_held, "{}", test_case.description);
+            let (held, plan) =
+                run_files_to_files(&server.endpoint, directory.path(), test_case).await?;
+            assert_eq!(
+                (held, plan.contains(test_case.expected_reads)),
+                (
+                    test_case
+                        .expected_held
+                        .iter()
+                        .map(|held| (*held).to_owned())
+                        .collect::<Vec<String>>(),
+                    true
+                ),
+                "{}: {plan}",
+                test_case.description
+            );
         }
         Ok(())
     })

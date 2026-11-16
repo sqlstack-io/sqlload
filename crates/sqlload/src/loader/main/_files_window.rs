@@ -14,7 +14,7 @@ use crate::loader::models::CursorBinding;
 use crate::loader::models::FilesWindowRequest;
 use crate::project::models::WriteStrategy;
 
-/// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`).
+/// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`; from it for a files source, which picks whole files of the newest partition on).
 pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Result<Window, String> {
     let (spec, options) = (request.spec, request.options);
     let backfill = options.start_cursor.is_some() || options.end_cursor.is_some();
@@ -87,7 +87,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             let maximum = match (&start, newest) {
                 (None, Some(newest)) => {
                     newest_maximum(request, partition.by, newest)?.map(|(maximum, from)| {
-                        let bound = match cursor.inclusive {
+                        let bound = match cursor.inclusive || request.spec.files.is_some() {
                             true => "from",
                             false => "after",
                         };
