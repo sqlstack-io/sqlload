@@ -85,7 +85,8 @@ def main() -> None:
 				stream.flush()
 		os.dup2(saved, 1)
 		os.close(saved)
-	# A reader that has gone keeps the command's exit code, as the native command ignores a closed stdout.
-	with contextlib.suppress(BrokenPipeError), open(1, "wb", closefd=False) as stdout:
+	# A reader that has gone keeps the command's exit code, as the native command ignores a closed stdout (on Windows
+	# that can be an OSError other than BrokenPipeError).
+	with contextlib.suppress(OSError), open(1, "wb", closefd=False) as stdout:
 		stdout.write(document.encode())
 	sys.exit(code)

@@ -13,6 +13,7 @@ pub async fn hold_slot(
     (slot, publication): (&str, &str),
     seconds: u64,
 ) -> Result<(), String> {
+    released(client, slot).await?;
     let script = format!(
         "pg_recvlogical -U {USER} -d {DATABASE} --slot {slot} --start -o proto_version=1 -o publication_names={publication} -f /dev/null & sleep {seconds}; kill $!"
     );
@@ -36,4 +37,23 @@ pub async fn hold_slot(
         tokio::time::sleep(SLOT_RETRY_DELAY).await;
     }
     Err(format!("pg_recvlogical never held slot {slot}"))
+}
+
+/// Wait until no session holds slot `slot`, so `pg_recvlogical` takes it at once rather than retrying a few seconds later.
+async fn released(client: &Client, slot: &str) -> Result<(), String> {
+    for _ in 0..SLOT_ATTEMPTS {
+        let active: bool = client
+            .query_opt(
+                "SELECT active FROM pg_replication_slots WHERE slot_name = $1",
+                &[&slot],
+            )
+            .await
+            .map_err(|error| error.to_string())?
+            .is_some_and(|row| row.get(0));
+        if !active {
+            return Ok(());
+        }
+        tokio::time::sleep(SLOT_RETRY_DELAY).await;
+    }
+    Err(format!("slot {slot} stayed active"))
 }
