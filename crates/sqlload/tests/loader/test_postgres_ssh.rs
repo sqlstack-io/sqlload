@@ -121,7 +121,7 @@ fn given_a_bastion_when_debugging_then_it_names_the_hop_that_failed() -> Result<
             expected_text: ":5432/app via ssh loader@127.0.0.1:",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let bastion = start_bastion().await?;
         let tls = start_postgres_tls().await?;
         let plain = start_postgres().await?;
@@ -180,7 +180,7 @@ fn given_a_bastion_when_capturing_changes_then_they_land_once() -> Result<(), St
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let bastion = start_bastion().await?;
             let tls = start_postgres_tls().await?;
             let plain = start_postgres().await?;
@@ -248,7 +248,7 @@ fn given_a_load_through_a_bastion_when_the_tunnel_drops_then_the_table_fails_nam
         expected_text: "the SSH tunnel through ssh loader@127.0.0.1:SSH_PORT closed",
     }];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let bastion = start_bastion().await?;
             let plain = start_postgres().await?;
             behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;
@@ -299,7 +299,7 @@ fn given_a_follow_through_a_bastion_when_the_tunnel_drops_then_it_fails_naming_i
         expected_text: "logical replication: the SSH tunnel through ssh loader@127.0.0.1:SSH_PORT closed",
     }];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let bastion = start_bastion().await?;
             let plain = start_postgres().await?;
             behind_bastion(&bastion, plain.container.id(), HOSTS[1])?;

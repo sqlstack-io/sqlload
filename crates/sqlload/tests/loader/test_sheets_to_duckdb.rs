@@ -12,7 +12,7 @@ const LOCATIONS: &str = "SELECT string_agg(Code || ':' || coalesce(Name, '') || 
 #[test]
 fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_and_replaces_its_table()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_sheets().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
         let database = folder.path().join("out.duckdb");
@@ -81,7 +81,7 @@ fn given_a_google_sheets_source_when_loading_then_each_tab_or_range_loads_typed_
 #[test]
 fn given_a_sheet_s_date_time_column_when_loading_with_parse_and_tz_then_its_wall_clock_times_load_as_instants()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_sheets().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
         let database = folder.path().join("out.duckdb");
@@ -123,7 +123,7 @@ fn given_a_sheet_s_date_time_column_when_loading_with_parse_and_tz_then_its_wall
 #[test]
 fn given_a_sheet_range_under_infer_types_false_when_loading_then_every_column_but_the_pinned_one_is_text()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_sheets().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
         let database = folder.path().join("out.duckdb");
@@ -163,7 +163,7 @@ fn given_a_sheet_range_under_infer_types_false_when_loading_then_every_column_bu
 #[test]
 fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_repeated_merge_key_are_refused()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_sheets().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
         let config = folder.path().join("sqlload.toml");
@@ -212,7 +212,7 @@ fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_rep
 #[test]
 fn given_a_google_user_connection_when_loading_then_its_refresh_token_reads_and_a_refused_one_fails_for_good()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_sheets().await?;
         fake.place("fake-sheet", first_tabs());
         let test_cases = [

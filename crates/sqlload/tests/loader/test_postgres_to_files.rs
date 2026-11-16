@@ -130,7 +130,7 @@ fn given_a_batch_finer_than_the_partition_when_a_window_fails_then_the_partition
             expected_files: "day=2026-11-03 run3 1:a2,2:b",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         for test_case in &test_cases {
@@ -517,7 +517,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let server = start_seaweedfs().await?;
@@ -629,7 +629,7 @@ fn given_postgres_tables_when_loading_into_csv_files_then_each_strategy_writes_c
             expected_keys: &[],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let server = start_seaweedfs().await?;
@@ -681,7 +681,7 @@ fn given_partition_values_that_need_escaping_when_read_back_by_the_files_source_
         partition_column: "code",
         expected_values: &[".hidden", "50%", "_draft", "a/b", "k=v"],
     }];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         for test_case in &test_cases {

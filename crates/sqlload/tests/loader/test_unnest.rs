@@ -838,7 +838,7 @@ fn given_roots_whose_ids_their_keys_did_not_give_when_merging_into_postgres_then
             expected_result: "3/2/2/1:d:5,3:e:6",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let connection = format!(
@@ -925,7 +925,7 @@ fn given_unnest_when_loading_into_postgres_then_lists_become_child_tables_linked
             expected_result: "2:t/1:a:1@0,1:a:2@1",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let connection = format!(
@@ -1021,7 +1021,7 @@ fn given_unnest_when_loading_into_clickhouse_then_lists_become_child_tables_link
             expected_result: "order_id, cityHash64(order_id)/region/2",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let clickhouse = start_clickhouse().await?;
         let connection = format!(
             "kind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"",
@@ -1087,7 +1087,7 @@ fn given_merged_roots_when_clearing_child_tables_loaded_to_clickhouse_then_only_
             expected_staged: "r9",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let clickhouse = start_clickhouse().await?;
         let project = described_project(&format!(
             "[connections.wh]\nkind = \"clickhouse\"\nhost = \"127.0.0.1\"\nport = {}\nuser = \"{CLICKHOUSE_USER}\"\npassword = \"{CLICKHOUSE_PASSWORD}\"\n\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"raw\"\n",
@@ -1348,7 +1348,7 @@ fn given_tables_named_like_child_tables_when_unnest_all_replaces_then_only_its_o
             .map(|statement| statement.replace("{parent_id}", parent_id))
             .collect()
     };
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let postgres_connection = format!(

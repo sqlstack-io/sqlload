@@ -2,6 +2,7 @@
 
 use crate::adapters::contract::models::{TableName, WriteMode};
 use crate::adapters::dispatch::models::Destination;
+#[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_variant_problems::variant_problems;
 use crate::adapters::postgres::main::session::_write_problems::write_problems as postgres_write_problems;
 use crate::loader::errors::LoaderError;
@@ -12,10 +13,13 @@ pub async fn write_problems(
     table: &TableName,
     (mode, exists, variants): (&WriteMode, bool, bool),
 ) -> Result<(Vec<String>, Vec<String>), LoaderError> {
+    #[cfg(not(feature = "duckdb"))]
+    let _ = variants;
     match destination {
         Destination::Postgres(postgres) => {
             postgres_write_problems(postgres, table, (mode, exists)).await
         }
+        #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) if variants => Ok(variant_problems(duckdb).await),
         _ => Ok((Vec::new(), Vec::new())),
     }

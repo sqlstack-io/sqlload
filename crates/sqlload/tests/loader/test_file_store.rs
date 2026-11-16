@@ -39,7 +39,7 @@ fn given_a_store_when_writing_and_listing_files_then_data_files_round_trip_and_h
             expected_keys: DATA_KEYS,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         let directory = std::env::temp_dir().join(format!("sqlload-store-{}", std::process::id()));

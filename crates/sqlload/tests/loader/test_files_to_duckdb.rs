@@ -305,7 +305,7 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "0",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in test_cases {
@@ -334,7 +334,7 @@ fn given_a_partition_of_more_than_1000_files_when_delete_insert_loads_it_then_it
         expected_plan: "batch_size is ignored: a files source commits in batches of whole partitions",
         expected_result: "1003,1001,1002,7/8/9",
     }];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             assert_eq!(
                 run_large_partition(directory.path(), test_case)
@@ -363,7 +363,7 @@ fn given_files_when_loading_them_then_each_row_carries_its_number_in_its_file() 
         check_query: "SELECT string_agg(id || ':' || _sqlload_source_row, ',' ORDER BY id) FROM raw.scores",
         expected_result: "1:1,2:2,5:1",
     }];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let result = run_files_scenario("", directory.path(), test_case).await?;
@@ -401,7 +401,7 @@ fn given_a_table_from_before_source_rows_when_loading_again_then_the_column_is_a
             expected_rows: "1:-,2:-",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             assert_eq!(
@@ -536,7 +536,7 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
             expected_result: PATH_RESULT,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in test_cases {
@@ -556,7 +556,7 @@ fn given_files_in_plain_folders_when_path_columns_capture_a_date_then_delete_ins
 #[test]
 fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_and_each_file_merges_once()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
                 description: "a key repeated across files ends with the newest modified file's value, whatever the names",
@@ -1065,7 +1065,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
 #[test]
 fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_order_into_a_new_table_swapped_in_with_its_records()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
                 description: "--reload merges every file oldest first into a new table, records a reset and each file with the swap, and the next load reads none",
@@ -1213,7 +1213,7 @@ fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_orde
 #[test]
 fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_as_before_and_writes_no_run_log()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [FilesMergeTestCase {
             description: "append ignores modified times and keeps no run log",
             settings: "write_strategy = \"append\"\n",
@@ -1260,7 +1260,7 @@ fn given_files_appended_when_their_modified_times_are_shuffled_then_the_load_is_
 #[test]
 fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_table_fails_naming_the_fixes_instead_of_skipping_it()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
                 description: "P01 sent again after P02 lies below the cursor read from P02, so the table fails naming replace_key, --start-cursor and --reload, and keeps its rows",
@@ -1407,7 +1407,7 @@ fn given_a_resent_older_file_when_delete_insert_follows_a_path_cursor_then_the_t
 #[test]
 fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_holds_the_rows_of_its_newest_file()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
                 description: "across runs, P01 sent again without line C replaces P01's rows whole, P02 stays, and a run with no new file loads nothing again",
@@ -1658,7 +1658,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
 #[test]
 fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it_naming_the_fix()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
                 description: "replace_key with merge",
@@ -1823,7 +1823,7 @@ fn given_delete_insert_by_replace_key_when_loading_with_json_then_each_table_rep
 #[test]
 fn given_a_partition_cursor_without_the_source_file_column_when_reloading_then_only_runs_that_check_below_the_range_refuse_it()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [AfterLoadTestCase {
             description: "--reload rebuilds the table without finding files below a range, so it loads without _sqlload_source_file; a run from the table's maximum needs the column and is refused, naming it",
             settings: "write_strategy = \"delete_insert\"\npath_columns = \"{file_version}/*.csv\"\ncursor_column = \"file_version\"\nexclude_columns = [\"_sqlload_source_file\"]\n",
@@ -1917,7 +1917,7 @@ fn given_a_later_batch_holding_a_column_duckdb_cannot_read_exactly_when_duckdb_r
         check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores",
         expected_result: "1000",
     }];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             assert_eq!(
                 run_file_set(directory.path(), test_case).await?.as_deref(),

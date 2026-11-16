@@ -14,7 +14,7 @@ const ORDERS: &str = "SELECT string_agg(CAST(id AS VARCHAR) || ':' || label || '
 #[test]
 fn given_a_bigquery_source_when_loading_then_its_read_streams_load_every_row_once_and_the_cursor_reads_only_new_ones()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let fake = start_fake_bigquery().await?;
         fake.place_table(
             "marts.orders",
@@ -87,7 +87,7 @@ fn given_a_bigquery_source_when_loading_then_its_read_streams_load_every_row_onc
 #[test]
 fn given_text_and_decimal_cursors_when_loading_from_bigquery_then_their_bounds_are_googlesql_literals_that_compare_exactly()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let test_cases = [
             BigQueryCursorTestCase {
                 description: "a text maximum holding a quote and a backslash is escaped with backslashes, so it neither breaks nor ends the string",
@@ -181,7 +181,7 @@ fn given_a_bigquery_row_whose_cursor_is_null_when_loading_incrementally_then_the
             expected_values: "a,b,NULL",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in test_cases {
             let fake = start_fake_bigquery().await?;
             fake.place_table("marts.values", &[("label", "STRING")]);

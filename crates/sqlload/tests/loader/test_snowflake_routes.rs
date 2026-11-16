@@ -598,7 +598,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
             ..BASE
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_route(directory.path(), test_case).await?;
@@ -693,7 +693,7 @@ fn given_files_a_warehouse_reads_itself_when_planning_every_format_type_and_stra
             expected_unplanned: &[READS],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             for ((format_name, format, (file_set, column)), strategy) in
                 FORMATS.iter().flat_map(|format| {
@@ -764,7 +764,7 @@ fn given_an_external_stage_when_debugging_then_its_state_is_reported() -> Result
             expected_sent: "SHOW STAGES",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let (lines, sent) = run_debug(MANAGED, test_case).await?;
             assert_eq!(

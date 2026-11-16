@@ -82,7 +82,7 @@ fn given_an_odbc_source_when_loading_through_its_driver_then_tables_and_queries_
             expected_result: "2:3.750000",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -141,7 +141,7 @@ fn given_an_odbc_database_that_reads_backslash_escapes_when_a_text_cursor_maximu
             expected_result: r"a,o'brien\,p|a,zz\'x,zz\'y",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -219,7 +219,7 @@ fn given_an_odbc_source_with_rows_whose_cursor_is_null_when_loading_incrementall
             expected_result: "1:a2,2:b2,3:c,4:d,5:e,6:f",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -323,7 +323,7 @@ fn given_where_on_a_database_source_and_its_table_when_loading_then_every_read_s
             expected_result: "1:open|1|a",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client

@@ -498,7 +498,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             expected_result: "0",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in test_cases {

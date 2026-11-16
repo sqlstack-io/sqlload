@@ -43,7 +43,7 @@ const REPLACE_KEY_PLAN: &str = "delete_insert (replace_key: le_version; NULLs in
 #[test]
 fn given_a_merge_key_with_null_parts_when_loading_three_times_into_each_target_then_each_key_keeps_one_row_with_the_latest_values()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let postgres = start_postgres_version("15-alpine").await?;
@@ -122,7 +122,7 @@ fn given_a_merge_key_with_null_parts_when_loading_three_times_into_each_target_t
 #[test]
 fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_row_per_key_stays_by_the_chosen_rule()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let clickhouse = start_clickhouse().await?;
         let client = connect(&postgres).await?;
@@ -189,7 +189,7 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
 #[test]
 fn given_a_newest_by_column_it_cannot_compare_when_planning_then_plan_refuses_the_table()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -263,7 +263,7 @@ fn given_a_newest_by_column_it_cannot_compare_when_planning_then_plan_refuses_th
 #[test]
 fn given_a_database_source_with_a_replace_key_and_no_cursor_when_loading_into_each_target_then_every_row_of_the_read_versions_is_replaced()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let clickhouse = start_clickhouse().await?;
@@ -314,7 +314,7 @@ fn given_a_database_source_with_a_replace_key_and_no_cursor_when_loading_into_ea
 #[test]
 fn given_a_cursor_column_with_a_replace_key_on_a_database_source_when_planning_then_plan_refuses_it_naming_the_full_read()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let test_cases = [

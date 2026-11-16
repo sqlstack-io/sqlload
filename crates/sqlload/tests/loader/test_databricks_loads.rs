@@ -173,7 +173,7 @@ fn given_a_databricks_target_when_loading_files_then_each_batch_is_staged_copied
             ..BASE
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_databricks(directory.path(), test_case).await?;
@@ -289,7 +289,7 @@ fn given_a_live_databricks_workspace_when_loading_with_each_strategy_then_rows_l
             ..LIVE_APPEND
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let api = live_databricks_client(&live)?;
         reset_live_databricks(&api, &live).await?;
         let schema = format!("`{}`.`{}`", live.catalog, live.schema);
@@ -333,7 +333,7 @@ fn given_databricks_answers_after_polls_or_in_chunks_when_reading_them_then_ever
             expected_columns: &["id", "amount", "note"],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let columns = databricks_columns(test_case).await?;
             let names: Vec<&str> = columns

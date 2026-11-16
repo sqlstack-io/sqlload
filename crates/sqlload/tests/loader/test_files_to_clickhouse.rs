@@ -17,7 +17,7 @@ const EVENTS: &str = "SELECT toString(count()) || '|' || toString(countIf(_sqllo
 #[test]
 fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_files_itself_exactly()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let (clickhouse, seaweedfs) = tokio::try_join!(start_clickhouse(), start_seaweedfs())?;
         create_bucket(&seaweedfs, PULL_BUCKET).await?;
         let endpoint = shared_s3_endpoint(&seaweedfs).await?;
@@ -127,7 +127,7 @@ fn given_parquet_in_s3_when_loading_into_clickhouse_then_clickhouse_reads_the_fi
 #[test]
 fn given_a_pull_stopped_at_every_statement_when_it_runs_again_then_the_table_was_never_half_published_and_converges()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let (clickhouse, seaweedfs) = tokio::try_join!(start_clickhouse(), start_seaweedfs())?;
         create_bucket(&seaweedfs, PULL_BUCKET).await?;
         let endpoint = shared_s3_endpoint(&seaweedfs).await?;

@@ -24,7 +24,7 @@ const CUSTOMERS: &str = "SELECT string_agg(CAST(id AS VARCHAR) || ':' || email, 
 fn given_tables_with_checks_when_loading_then_failing_rows_are_never_published()
 -> Result<(), String> {
     for target in ["app_pg", "local"] {
-        run_async(async {
+        run_async(|| async move {
             let postgres = start_postgres().await?;
             let client = connect(&postgres).await?;
             client

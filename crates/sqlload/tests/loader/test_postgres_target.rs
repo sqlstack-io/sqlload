@@ -40,7 +40,7 @@ GRANT SELECT ON mart.stores TO reader;
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_a_postgres_target_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -256,7 +256,7 @@ fn given_a_tls_only_server_when_loading_into_a_postgres_target_then_the_target_c
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let tls = start_postgres_tls().await?;
             let client = connect(&tls.postgres).await?;
             client
@@ -307,7 +307,7 @@ fn given_a_tls_only_server_when_loading_into_a_postgres_target_then_the_target_c
 #[test]
 fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins_and_each_file_merges_once()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let target = format!(

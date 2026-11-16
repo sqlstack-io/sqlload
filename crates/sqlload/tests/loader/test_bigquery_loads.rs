@@ -103,7 +103,7 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BASE
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
             let outcome = run_bigquery(directory.path(), test_case).await?;
@@ -220,7 +220,7 @@ fn given_a_live_bigquery_dataset_when_streaming_arrow_rows_then_they_appear_only
             expected_rows: "",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let client = live_bigquery_client(&live)?;
         reset_live_bigquery(&client, &live).await?;
         let run = std::time::SystemTime::now()
@@ -324,7 +324,7 @@ fn given_a_live_bigquery_dataset_when_loading_each_strategy_then_rows_land_and_n
             ..LIVE_APPEND
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let client = live_bigquery_client(&live)?;
         let dataset = format!("`{}`.`{}_load`", live.project, live.dataset);
         run_query(&client, &format!("DROP SCHEMA IF EXISTS {dataset} CASCADE"))

@@ -104,7 +104,7 @@ fn given_zip_archives_with_after_load_when_their_members_load_then_each_archive_
             expected_files: &["drop/2026/batch.zip=zip"],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let files = run_after_load_case(test_case).await?;
             assert_eq!(files, test_case.expected_files, "{}", test_case.description);
@@ -481,7 +481,7 @@ fn given_after_load_when_files_load_then_only_committed_files_are_deleted_or_mov
             expected_files: &["drop/a.csv=id,v\\n1,a\\n1,b\\n"],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         for test_case in &test_cases {
             let files = run_after_load_case(test_case).await?;
             assert_eq!(files, test_case.expected_files, "{}", test_case.description);
@@ -526,7 +526,7 @@ fn given_files_on_s3_when_after_load_acts_then_they_move_server_side_or_are_dele
             expected_files: &["drop/a.csv=a, longer now"],
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "after-load-test").await?;
         for test_case in &test_cases {

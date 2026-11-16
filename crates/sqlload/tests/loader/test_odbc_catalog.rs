@@ -280,7 +280,7 @@ write_strategy = "replace"
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(test_case.database).await?;
             odbc_execute(&server.connection_string, test_case.setup)?;
             let (tested, other) = test_case.driver;

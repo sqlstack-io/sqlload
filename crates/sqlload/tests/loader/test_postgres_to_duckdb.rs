@@ -236,7 +236,7 @@ const DLT_DESCRIBE: &str = "order_id BIGINT|seq BIGINT|unit_price DECIMAL(10,2)|
 #[test]
 fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_keeps_the_table_right()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -334,7 +334,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
 #[test]
 fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_its_plan_columns_and_rows_stay_byte_identical()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -411,7 +411,7 @@ fn given_a_table_without_constant_columns_when_planning_and_loading_twice_then_i
 #[test]
 fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from_its_own_maximum_and_never_touches_the_others_rows()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -525,7 +525,7 @@ fn given_two_tenants_merging_into_one_table_when_each_loads_then_each_reads_from
 #[test]
 fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_keeps_the_destination_maximum()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -575,7 +575,7 @@ fn given_a_table_of_its_own_with_rows_when_a_constant_is_added_then_its_cursor_k
 #[test]
 fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_never_replace_or_remove_other_rows()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client
@@ -679,7 +679,7 @@ fn given_constant_columns_when_planning_and_loading_then_they_are_typed_and_neve
 #[test]
 fn given_quoted_source_names_under_dlt_naming_when_loading_twice_then_the_table_and_columns_load_snake_cased_and_merge_by_the_renamed_key()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         client

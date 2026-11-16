@@ -63,7 +63,7 @@ fn given_each_odbc_driver_when_a_table_has_an_unbounded_text_column_then_every_v
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(test_case.database).await?;
             odbc_execute(&server.connection_string, test_case.setup)?;
             let (tested, other) = test_case.driver;
@@ -118,7 +118,7 @@ fn given_a_mysql_table_of_265_text_columns_when_loading_then_it_reads_value_by_v
         expected_wide: "5000 | v265-4321 | id,c001,c002,c264,c265",
     }];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(OdbcDatabase::MySql).await?;
             let (count, rows) = test_case.wide;
             let columns: String = (1..=count)
@@ -225,7 +225,7 @@ fn given_a_mysql_table_with_a_few_very_large_text_values_when_loading_then_fetch
         expected_values: "200:24000000:6",
     }];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let server = start_odbc_server(OdbcDatabase::MySql).await?;
             odbc_execute(&server.connection_string, test_case.setup)?;
             let folder = tempfile::tempdir().map_err(|error| error.to_string())?;

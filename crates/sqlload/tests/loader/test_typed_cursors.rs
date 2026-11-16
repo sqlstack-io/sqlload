@@ -70,7 +70,7 @@ const WITHOUT_LOOKBACK: [TypedCursorRun; 2] = [
 #[test]
 fn given_typed_cursor_flags_when_planning_then_each_table_takes_its_cursor_family_flag()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let test_cases = [
@@ -182,7 +182,7 @@ fn given_typed_cursor_flags_when_planning_then_each_table_takes_its_cursor_famil
 #[test]
 fn given_a_fiscal_year_cursor_when_last_year_changes_after_the_year_end_then_lookback_one_reloads_it()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let test_cases = [
@@ -233,7 +233,7 @@ cursor_column = "fiscal_year"
 #[test]
 fn given_a_lookback_that_does_not_fit_the_cursor_when_planning_then_plan_refuses_it()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let test_cases = [

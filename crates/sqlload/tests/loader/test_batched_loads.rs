@@ -153,7 +153,7 @@ INSERT INTO public.c_raw VALUES (1, 0);
 #[test]
 fn given_loads_that_commit_in_batches_when_a_batch_fails_then_earlier_batches_stay_and_the_next_run_resumes()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres().await?;
         let client = connect(&postgres).await?;
         let test_cases = [

@@ -364,7 +364,7 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             expected_result: CHANGELOG_RESULT,
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let server = start_seaweedfs().await?;
         create_bucket(&server, "example-bucket-test").await?;
         for test_case in test_cases {

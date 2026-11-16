@@ -34,16 +34,25 @@ use crate::test_types::{
     TextFilesScenarioTestCase, WrittenPartition, WrittenRow, WrittenRun,
 };
 
-/// Run an async test body on a fresh multi-threaded runtime whose threads have the stack a command runs on, as `load` gives the threads tables load on.
-pub(crate) fn run_async<F: std::future::Future<Output = Result<(), String>>>(
-    body: F,
-) -> Result<(), String> {
+/// Run the async test body `body` makes on a fresh multi-threaded runtime whose threads have the stack a command runs on, as `load` gives the threads tables load on; the body is made and polled on a thread of that stack too, as every command runs on one, rather than on the test's 2 MiB.
+pub(crate) fn run_async<B, F>(body: B) -> Result<(), String>
+where
+    B: FnOnce() -> F + Send,
+    F: std::future::Future<Output = Result<(), String>>,
+{
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(COMMAND_STACK_BYTES)
         .build()
         .map_err(|error| error.to_string())?;
-    runtime.block_on(body)
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(COMMAND_STACK_BYTES)
+            .spawn_scoped(scope, || runtime.block_on(body()))
+            .map_err(|error| format!("cannot start the test body's thread: {error}"))?
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 /// Every value of `column` across `batches`, as Arrow displays it.
