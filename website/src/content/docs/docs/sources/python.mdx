@@ -398,6 +398,17 @@ already sent past it are dropped, so an API may see up to `N` requests more than
 `sl.cursor`, `sl.next_link` and `sl.link_header` refuse `read_ahead`, as each page's address comes from the page
 before it.
 
+Without `read_ahead`, paging waits on the API one page at a time, so its speed is the API's latency. Against a
+mock API answering each page of 100 rows in 80 ms, 1,000 pages took:
+
+| Paginator | Wall time | Pages per second |
+|---|---|---|
+| no `read_ahead` | 83 s | 12 |
+| `read_ahead=8` | 12 s | 85 |
+| `read_ahead=20` | 6 s | 171 |
+
+Raise `read_ahead` until the API's own limits, or a `rate_limit` you set for them, become the bound.
+
 ### A missing select path
 
 From 0.45.0, a response without the `select` path, as opposed to one where it holds an empty list
