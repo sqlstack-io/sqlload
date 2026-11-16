@@ -89,7 +89,9 @@ fn given_plan_piped_when_connecting_and_discovering_then_timed_phase_lines_and_r
             expected_stderr: &[],
             unexpected_stderr: &[],
             least_running_rows: 0,
-            expected_stdout: &["delete_insert on day   day \u{2265} 2026-11-01 (--start-cursor) \u{b7} 1 new of 1 files"],
+            expected_stdout: &[
+                "delete_insert on day   day \u{2265} 2026-11-01 (--start-cursor) \u{b7} 1 new of 1 files",
+            ],
         },
     ];
     let config = root.join("sqlload.toml");

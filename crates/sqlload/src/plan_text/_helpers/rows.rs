@@ -151,9 +151,7 @@ fn logged_reads(table: &TablePlan) -> String {
 pub(crate) fn files_read(loaded: &LoadedTable<'_>) -> (Option<String>, Vec<PlanDetail>) {
     let mut details: Vec<PlanDetail> = loaded.item.details.clone();
     let count = |text: &str| {
-        text.ends_with(" listed")
-            && text.contains(" of ")
-            && !text.contains([',', ':', '('])
+        text.ends_with(" listed") && text.contains(" of ") && !text.contains([',', ':', '('])
     };
     let Some(index) = details
         .iter()
