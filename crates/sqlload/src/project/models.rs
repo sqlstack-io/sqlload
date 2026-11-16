@@ -7,8 +7,8 @@ use serde::Deserialize;
 use crate::config::models::{AuthConfig, ByteSize};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::models::{
-    AfterLoad, Compression, CsvOptions, FilesEncoding, FilesOrder, OnEmpty, RecordShape,
-    SourceFormat, UnmatchedPaths, XlsxOptions, XmlOptions,
+    AfterLoad, Compression, CsvOptions, FilePattern, FilesEncoding, FilesOrder, OnEmpty,
+    RecordShape, SourceFormat, UnmatchedPaths, XlsxOptions, XmlOptions,
 };
 use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
@@ -470,6 +470,9 @@ pub struct SourceConfig {
     /// With `compression = "zip"`, a pattern the members' names must match (files sources).
     #[serde(default)]
     pub members: Option<String>,
+    /// A glob each file's path below `path` must match, such as `"file_*.txt"`, in place of the format's name suffix (files sources).
+    #[serde(default)]
+    pub pattern: Option<String>,
     /// What to do with each file once its rows commit (files sources).
     #[serde(default)]
     pub after_load: AfterLoad,
@@ -638,6 +641,10 @@ impl SourceConfig {
             },
             xml,
             members: self.members.clone(),
+            pattern: match self.pattern.as_deref().map(FilePattern::new) {
+                Some(Ok(pattern)) => Some(pattern),
+                Some(Err(_)) | None => None,
+            },
             record: (self.shape == RecordShape::Record).then(|| {
                 self.record_column
                     .clone()

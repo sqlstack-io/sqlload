@@ -33,6 +33,7 @@ cursor_column = "dt"
 | `xlsx` | From 0.35.0. `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. From 0.49.0, also `range` and `header_row`; see [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
 | `xml` | From 0.35.0. `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
 | `members` | From 0.35.0. With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
+| `pattern` | From 0.54.0. A glob each file's path below `path` must match, such as `"file_*.txt"` or `"**/*.dat"`, in place of the format's name suffix. See [Choosing files](#choosing-files). |
 | `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
 | `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
@@ -412,6 +413,40 @@ old one in one commit at the end; until then readers see the old table.
   ├── route   read parquet into Arrow -> DuckDB takes Arrow (--reload also reads the files after_load moved to ./done/scores/)
   ```
 - With `after_load = "delete"`, `--reload` is still refused: the files loaded before are gone.
+
+## Choosing files
+
+Without `pattern`, a files source reads the files whose names end in its format's suffix: `.csv`,
+`.csv.gz` and `.csv.zst` for `format = "csv"`, and so on. From 0.54.0, `pattern` chooses them
+instead, by a glob over each file's path below `path`, so files of any name load as the source's
+`format`, such as the pipe-delimited `.txt` exports an ERP drops beside other files:
+
+```toml
+[sources.exports]
+kind = "files"
+connection = "drop"
+path = "erp/"
+pattern = "file_*.txt"
+format = "csv"
+csv = { delimiter = "|" }
+write_strategy = "merge"
+unique_key = ["id"]
+```
+
+`*` matches within one name and `**` across folders, as in `path_columns` and `members`:
+`"file_*.txt"` reads `file_1.txt` but not `old/file_2.txt`, which `"**/file_*.txt"` reads too.
+Compression still follows the name (`.gz`, `.zst`) unless `compression` sets it, and with
+`compression = "zip"` the pattern picks the archives while `members` picks their members. A file
+must match `pattern` before `path_columns` captures from its path. Files that don't match are
+never read, moved or deleted, and a folder holding only such files counts as empty for `on_empty`
+and `after_load`. `plan` says what it chose:
+
+```console
+├── files   2 new of 2 matching file_*.txt, 1 other file ignored
+```
+
+Without `pattern`, a folder of `.txt` files fails `plan` with the suffixes it looked for, suggesting
+`pattern`. A destination that reads the files itself gets the same files, each named in its `COPY`.
 
 ## Which files load
 

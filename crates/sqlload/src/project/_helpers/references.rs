@@ -3,7 +3,7 @@ use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{
-    AfterLoad, Compression, CsvQuote, FilesOrder, OnEmpty, RecordShape, SourceFormat,
+    AfterLoad, Compression, CsvQuote, FilePattern, FilesOrder, OnEmpty, RecordShape, SourceFormat,
 };
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
@@ -384,11 +384,12 @@ fn files_only_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         || source.xlsx.is_some()
         || source.xml.is_some()
         || source.members.is_some()
+        || source.pattern.is_some()
         || source.shape != RecordShape::Columns
         || source.record_column.is_some()
     {
         problems.push(format!(
-            "{place} format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\""
+            "{place} format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\""
         ));
     }
     problems
@@ -739,6 +740,9 @@ fn container_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} format = \"xml\" needs xml.record_path, the element names from the root to each row's element, such as \"orders/order\""
         )),
         _ => {}
+    }
+    if let Some(Err(error)) = source.pattern.as_deref().map(FilePattern::new) {
+        problems.push(format!("{place} pattern: {error}"));
     }
     match (&source.members, zip) {
         (Some(_), false) => problems.push(format!("{place} members is for compression = \"zip\"")),

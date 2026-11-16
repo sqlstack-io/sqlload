@@ -63,6 +63,7 @@ pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "xlsx",
     "xml",
     "members",
+    "pattern",
     "after_load",
     "order",
     "on_empty",

@@ -598,13 +598,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .zip(table.files.as_ref())
             .map(|(source, read)| {
-                let skipped = match source.table.skipped {
-                    0 => String::new(),
-                    count => format!(
-                        ", {count} skipped (names that do not fit {})",
-                        source.encoding
-                    ),
-                };
+                let skipped = source.encoding.skipped_text(source.table.skipped);
                 let unmatched = match source.table.unmatched {
                     0 => String::new(),
                     count => format!(", {count} skipped (paths that do not match path_columns)"),
@@ -630,9 +624,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
                 detail(
                     "files",
                     format!(
-                        "{} {fresh} of {} listed{folders}{skipped}{unmatched}",
+                        "{} {fresh} of {} {}{folders}{skipped}{unmatched}",
                         thousands(read.files.len() as u64),
-                        thousands(source.table.files.len() as u64)
+                        thousands(source.table.files.len() as u64),
+                        source.encoding.chosen_text()
                     ),
                 )
             }),

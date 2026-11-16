@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: Char('\"'), escape: None, encoding_check: true, null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } }, as_text: false, nonfinite_null: false } }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: Char('\"'), escape: None, encoding_check: true, null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, pattern: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } }, as_text: false, nonfinite_null: false } }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -385,6 +385,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] csv delimiter must be one ASCII character other than a line break",
         },
         ParseProjectErrorTestCase {
+            description: "a pattern that isn't a glob is refused",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\npattern = \"file_[1.txt\"\n",
+            expected_message: "[sources.raw] pattern: error parsing glob 'file_[1.txt': unclosed character class",
+        },
+        ParseProjectErrorTestCase {
+            description: "pattern is for files sources",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\npattern = \"*.txt\"\n",
+            expected_message: "pattern, shape and record_column are for kind = \"files\"",
+        },
+        ParseProjectErrorTestCase {
             description: "csv quote = true names no character",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { quote = true }\n",
             expected_message: "[sources.raw] csv quote = true names no character",
@@ -477,7 +487,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "format settings are for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nformat = \"csv\"\n",
-            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "batch_interval is for postgres_cdc sources, never silently ignored",
@@ -562,7 +572,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "shape is for files sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nshape = \"record\"\n",
-            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, shape and record_column are for kind = \"files\"",
+            expected_message: "[sources.app] format, compression, csv, xlsx, xml, members, pattern, shape and record_column are for kind = \"files\"",
         },
         ParseProjectErrorTestCase {
             description: "unmatched_paths without path_columns is never silently ignored",
