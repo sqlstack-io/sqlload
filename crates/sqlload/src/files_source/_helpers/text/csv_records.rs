@@ -46,14 +46,47 @@ impl QuoteTracker {
     }
 
     /// Follow `bytes`; text after a closing quote, or a record longer than the limit, is an error.
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<(), String> {
-        for byte in bytes {
-            self.position = self.next(*byte)?;
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Result<(), String> {
+        while let Some(&byte) = bytes.first() {
+            let plain = self.plain_run(bytes);
+            match plain {
+                0 => {
+                    self.position = self.next(byte)?;
+                    bytes = &bytes[1..];
+                }
+                _ => {
+                    self.record_bytes += plain;
+                    bytes = &bytes[plain..];
+                }
+            }
             if self.record_bytes > self.max_record_bytes {
                 return Err(too_long(self.records + 1, self.max_record_bytes));
             }
         }
         Ok(())
+    }
+
+    /// How many of `bytes`, from the start, are plain text of the field being read, which [`Self::next`] would only count: in an unquoted field, all but a line end, the delimiter and, with quoting off, its stand-in quote; in a quoted field, all but the quote and the escape.
+    fn plain_run(&self, bytes: &[u8]) -> usize {
+        let CsvQuoting {
+            delimiter,
+            quote,
+            escape,
+        } = self.quoting;
+        let quoting_off = quote.is_none();
+        let special = match self.position {
+            Position::Unquoted => bytes.iter().position(|&byte| {
+                byte == b'\n'
+                    || byte == b'\r'
+                    || byte == delimiter
+                    || (quoting_off && byte == QUOTE_OFF_BYTE)
+            }),
+            Position::Quoted => bytes
+                .iter()
+                .position(|&byte| Some(byte) == quote || Some(byte) == escape),
+            Position::FieldStart | Position::Escaped | Position::QuoteInQuoted => Some(0),
+        };
+        special.unwrap_or(bytes.len())
     }
 
     /// At the end of the file: an error when it ends inside a quoted field.
