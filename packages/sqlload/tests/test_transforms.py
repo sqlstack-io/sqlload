@@ -271,7 +271,7 @@ def metric_rows(rows, ctx):
 """
 	project = make_project(tmp_path, module, format="parquet")
 	pq.write_table(pa.table({"name": ["sales"], "jan": [1.5], "feb": [2.5]}), project / "drop" / "a.parquet")
-	planned = sqlload(project, "plan")
+	planned = sqlload(project, "plan", "-v")
 	assert planned.returncode == 0, planned.stdout + planned.stderr
 	lines = [line.strip("│├└─ ") for line in planned.stdout.splitlines()]
 	assert [line.split()[0] for line in lines if line.split()[:1] in (["metric"], ["month"], ["value"])] == ["metric", "month", "value"], planned.stdout
@@ -279,7 +279,7 @@ def metric_rows(rows, ctx):
 	assert any(line.startswith("source") and line.endswith("transform metric_rows") for line in lines), planned.stdout
 	plain = project / "plain.toml"
 	plain.write_text((project / "sqlload.toml").read_text().replace('transform = "metric_rows"', ""))
-	direct = sqlload(project, "plan", "-c", str(plain))
+	direct = sqlload(project, "plan", "-v", "-c", str(plain))
 	route = [line for line in lines if line.startswith("route")]
 	assert route != [line.strip("│├└─ ") for line in direct.stdout.splitlines() if line.strip("│├└─ ").startswith("route")], direct.stdout
 	assert route == ["route   read parquet into Arrow -> DuckDB takes Arrow"], planned.stdout
@@ -300,7 +300,7 @@ def metric_rows(rows, ctx):
 	table = 'flatten = ["customer", "customer.address"]\n' if compat == "sqlload" else ""
 	project = make_project(tmp_path, module, format="ndjson", settings=f'write_strategy = "append"\ncompat = "{compat}"\n', table=table)
 	give(project, "a.ndjson", '{"id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds"}}}\n')
-	planned = sqlload(project, "plan")
+	planned = sqlload(project, "plan", "-v")
 	assert planned.returncode == 0, planned.stdout + planned.stderr
 	assert "customer__address__city" in planned.stdout, planned.stdout
 	load(project)
@@ -382,15 +382,15 @@ def test_a_changed_transform_reloads_a_merge_table_with_moved_files_into_one_row
 	module = project / "transforms" / "metrics.py"
 	module.write_text(module.read_text().replace('"v": row["v"]', '"v": row["v"].upper()'))
 	give(project, "c.csv", "id,v\n3,c\n", modified=now)
-	assert "transform  changed: 2 files loaded under an earlier version" in sqlload(project, "plan").stdout
-	planned = sqlload(project, "plan", "--reload")
+	assert "transform  changed: 2 files loaded under an earlier version" in sqlload(project, "plan", "-v").stdout
+	planned = sqlload(project, "plan", "-v", "--reload")
 	assert "files   3 to read of 3 listed: 1 in ./drop/, 2 in ./done/" in planned.stdout, planned.stdout
 	load(project, "--reload", "--yes")
 	rows = query(project, "SELECT id, v, file FROM RAW.metrics ORDER BY id")
 	assert rows == [(1, "B", "./drop/b.csv"), (2, "A", "./drop/a.csv"), (3, "C", "./drop/c.csv")]
 	assert sorted(path.name for path in (project / "done").iterdir()) == ["a.csv", "b.csv", "c.csv"]
 	give(project, "d.csv", "id,v\n4,d\n")
-	after = sqlload(project, "plan").stdout
+	after = sqlload(project, "plan", "-v").stdout
 	assert "1 new of 1 listed" in after and "transform  changed" not in after, after
 
 #: The `KPIs` tab, as the Sheets API writes it: a merged title row, a header row, label-only rows, KPI blocks with measures below each, a note and an `IFERROR` "" here and there.

@@ -1,7 +1,7 @@
 //! What a table's line and its child lines say.
 
 use crate::adapters::contract::models::{MergeDedupe, WriteMode};
-use crate::loader::models::{CommitRule, PlanDetail, PlanItem, TablePlan};
+use crate::loader::models::{CommitRule, PlanDetail, TablePlan};
 use crate::number_text::main::memory_text::memory_text;
 use crate::plan_text::constants::{
     BATCH, FILES, INFERRED_SCHEMA, MAXIMUM, MIB, OWN_ROUTES, QUIET_LABELS, ROUTE, SCHEMA,
@@ -147,12 +147,18 @@ fn logged_reads(table: &TablePlan) -> String {
     )
 }
 
-/// A files table's count of files to read, for its line, as `12 new of 340 files`, and its other details; the count stays a detail when it says more, such as how many are in archives.
-pub(crate) fn files_read(item: &PlanItem) -> (Option<String>, Vec<PlanDetail>) {
-    let mut details: Vec<PlanDetail> = item.details.clone();
+/// A files source's count of files to read, for its table's line, as `12 new of 340 files`, and its other details; the count stays a detail when it says more, such as how many are in archives. A files target's `files` line, its output folder, is not a count and stays a detail.
+pub(crate) fn files_read(loaded: &LoadedTable<'_>) -> (Option<String>, Vec<PlanDetail>) {
+    let mut details: Vec<PlanDetail> = loaded.item.details.clone();
+    let count = |text: &str| {
+        text.ends_with(" listed")
+            && text.contains(" of ")
+            && !text.contains([',', ':', '('])
+    };
     let Some(index) = details
         .iter()
-        .position(|detail| detail.label == FILES && !detail.text.contains([',', ':', '(']))
+        .position(|detail| detail.label == FILES && count(&detail.text))
+        .filter(|_| loaded.table.spec.files.is_some())
     else {
         return (None, details);
     };

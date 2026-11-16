@@ -606,14 +606,7 @@ fn watch_steps(
     let mut reported: (u64, u128) = (0, 0);
     loop {
         let finished = done.load(std::sync::atomic::Ordering::Relaxed);
-        let ProgressView {
-            mut lines,
-            quiet,
-            step,
-        } = progress_view();
-        if verbose {
-            lines.extend(quiet);
-        }
+        let ProgressView { mut lines, step } = progress_view(verbose);
         let row;
         (reported, row) = running_row(step.as_ref(), every, reported);
         lines.extend(row);

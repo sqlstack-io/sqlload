@@ -169,7 +169,7 @@ Loads (2)  into DuckDB local                                                    
 ├── app postgres  into raw
 │   └── orders   merge on order_id     updated_at: first run, everything
 └── events ./lake/events/  into raw
-    └── events   delete_insert on dt   3 new of 3 files
+    └── events   delete_insert on dt   dt: first run, everything · 3 new of 3 files
         └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
 
 Errors (1)
@@ -194,7 +194,7 @@ Loads (3)  into DuckDB local                                                    
 │   ├── customers   merge on customer_id
 │   └── orders      merge on order_id     updated_at ≥ 2026-11-02 08:04:00+00 (max)
 └── events ./lake/events/  into raw
-    └── events      delete_insert on dt   2 new of 4 files
+    └── events      delete_insert on dt   dt ≥ 2026-11-03 (max) · 2 new of 4 files
         └── route  <span class="ok">DuckDB reads directly from ./lake/events/ (nothing through the loader)</span>
 
 <span class="cmd">sqlload load</span>

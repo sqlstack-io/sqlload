@@ -69,16 +69,17 @@ Loads (3)  into DuckDB local                                                    
 │   ├── customers   merge on customer_id
 │   └── orders      merge on order_id     updated_at: first run, everything
 └── events ./lake/events/  into raw
-    └── events      delete_insert on dt   3 new of 3 files
+    └── events      delete_insert on dt   dt: first run, everything · 3 new of 3 files
         └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
 
 ✓ Plan complete  3 objects to create, 3 to load
 ```
 
 `Loads` names the target, then each source with its kind (or its Python file or folder) and the
-schema its tables land in, when that isn't the source's name. Each table's line has its write
-strategy and key, then where its read starts. Once a table has rows, an incremental table's read
-starts at the warehouse's maximum:
+schema its tables land in, when that isn't the source's name, and the target, when the plan has
+more than one. Each table's line has its write strategy and key, then where its read starts, and
+for a files table, after `·`, how many of the files it lists it reads. Once a table has rows, an
+incremental table's read starts at the warehouse's maximum:
 
 ```console
 $ sqlload plan
@@ -90,7 +91,7 @@ Loads (3)  into DuckDB local                                                    
 │   ├── customers   merge on customer_id
 │   └── orders      merge on order_id     updated_at ≥ 2026-11-02 08:04:00+00 (max)
 └── events ./lake/events/  into raw
-    └── events      delete_insert on dt   1 new of 3 files
+    └── events      delete_insert on dt   dt ≥ 2026-11-03 (max) · 1 new of 3 files
         └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
 
 ✓ Plan complete  3 to load

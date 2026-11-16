@@ -15,13 +15,12 @@ pub(crate) struct Step {
     pub(crate) started: Instant,
 }
 
-/// The steps' state: whether they are tracked (only while the command line listens for load events), the one running, the phase lines not shown yet (`lines` of steps that failed or took [`SLOW_STEP`](crate::load_events::constants::SLOW_STEP) or longer, `quiet` of the others), every phase's time, and what the summary lines say: each connection opened, as `erp PostgreSQL`, and the time they took, and the tables, sources and time of the discoveries that ended well.
+/// The steps' state: whether they are tracked (only while the command line listens for load events), the one running, the phase lines not shown yet in the order the steps ended, each quiet unless its step failed or took [`SLOW_STEP`](crate::load_events::constants::SLOW_STEP) or longer, every phase's time, and what the summary lines say: each connection opened, as `erp PostgreSQL`, and the time they took, and the tables, sources and time of the discoveries that ended well.
 #[derive(Debug, Default)]
 pub(crate) struct Steps {
     pub(crate) tracking: bool,
     pub(crate) current: Option<Step>,
-    pub(crate) lines: Vec<String>,
-    pub(crate) quiet: Vec<String>,
+    pub(crate) lines: Vec<(String, bool)>,
     pub(crate) timings: Vec<PhaseTiming>,
     pub(crate) next_id: u64,
     pub(crate) connected: Vec<String>,
@@ -34,7 +33,6 @@ pub(crate) static STEPS: Mutex<Steps> = Mutex::new(Steps {
     tracking: false,
     current: None,
     lines: Vec::new(),
-    quiet: Vec::new(),
     timings: Vec::new(),
     next_id: 0,
     connected: Vec::new(),

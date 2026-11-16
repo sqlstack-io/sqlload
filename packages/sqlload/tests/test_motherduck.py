@@ -451,7 +451,7 @@ def test_given_send_when_planning_then_each_table_says_how_its_rows_are_sent(tmp
 		(project / "sqlload.toml").read_text().replace('[targets.local]\nconnection = "wh"\n', '[targets.local]\nconnection = "wh"\nsend = "at_commit"\n')
 		+ '\n[connections.files]\nkind = "filesystem"\nroot = "."\n\n[sources.drop]\nkind = "files"\ndescription = "Dropped files."\nconnection = "files"\npath = "drop/"\nformat = "parquet"\nwrite_strategy = "append"\ndestination = "local"\n'
 	)
-	done = sqlload(project, "plan", "failing", "drop")
+	done = sqlload(project, "plan", "-v", "failing", "drop")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert "send    at commit: staged locally, then one burst" in done.stdout, done.stdout
 	assert "send    n/a: DuckDB reads the files itself" in done.stdout, done.stdout

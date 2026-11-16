@@ -43,8 +43,12 @@ fn heading(ready: &[LoadedTable<'_>]) -> String {
     format!("Loads ({})  into {}{sent}", ready.len(), targets.join(", "))
 }
 
-/// The tables `ready` to load by source, in order of the sources' names, each table's row sorted by name.
+/// The tables `ready` to load by source, in order of the sources' names, each table's row sorted by name; with more than one target, each source names its own.
 fn source_groups(ready: &[LoadedTable<'_>]) -> Vec<SourceGroup> {
+    let first = ready.first().map(|loaded| &loaded.table.spec.target);
+    let one_target = ready
+        .iter()
+        .all(|loaded| Some(&loaded.table.spec.target) == first);
     let mut by_source: BTreeMap<&str, Vec<&LoadedTable<'_>>> = BTreeMap::new();
     for loaded in ready {
         by_source
@@ -56,17 +60,26 @@ fn source_groups(ready: &[LoadedTable<'_>]) -> Vec<SourceGroup> {
     for (source, tables) in by_source {
         let (schema, names) = table_names(source, &tables);
         let line = source_line(source, tables[0].table);
-        let line = match schema {
-            Some(schema) => format!("{line}  into {schema}"),
-            None => line,
+        let target = &tables[0].table.spec.target;
+        let line = match (schema, one_target) {
+            (Some(schema), true) => format!("{line}  into {schema}"),
+            (None, true) => line,
+            (Some(schema), false) => format!("{line}  into {schema} on {target}"),
+            (None, false) => format!("{line}  on {target}"),
         };
         let mut rows: Vec<TableRow> = Vec::new();
         for (loaded, name) in tables.iter().zip(names) {
-            let (read, details) = files_read(&loaded.item);
+            let (files, details) = files_read(loaded);
+            let start = reads(loaded);
+            let reads = match (start.is_empty(), files) {
+                (_, None) => start,
+                (true, Some(files)) => files,
+                (false, Some(files)) => format!("{start} \u{b7} {files}"),
+            };
             rows.push(TableRow {
                 name,
                 action: action(loaded),
-                reads: read.unwrap_or_else(|| reads(loaded)),
+                reads,
                 details: children(loaded.table, &details),
             });
         }

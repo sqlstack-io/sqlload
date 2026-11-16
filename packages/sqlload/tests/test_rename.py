@@ -84,7 +84,7 @@ def columns(project: Path, table: str) -> list[tuple[Any, ...]]:
 
 def test_a_rename_function_tells_repeated_headers_apart_by_position(tmp_path: Path) -> None:
 	project = make_project(tmp_path)
-	planned = sqlload(project, "plan")
+	planned = sqlload(project, "plan", "-v")
 	assert planned.returncode == 0, planned.stdout + planned.stderr
 	assert "Qty (column 3) -> qty_returned (rename)" in planned.stdout, planned.stdout
 	loaded = sqlload(project, "load")
