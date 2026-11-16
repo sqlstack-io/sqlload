@@ -581,3 +581,139 @@ pub(crate) fn hard_steps() -> Vec<String> {
     .map(str::to_owned)
     .to_vec()
 }
+
+/// `public.items`, five items each updated at its own time, and `audit.deleted_items`, where the source records the items it deleted, empty.
+const TOMBSTONES_SETUP: &str = "
+DROP TABLE IF EXISTS public.items;
+DROP SCHEMA IF EXISTS audit CASCADE;
+CREATE SCHEMA audit;
+CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz NOT NULL);
+CREATE TABLE audit.deleted_items (id int8, reason text, deleted_at timestamptz NOT NULL);
+INSERT INTO public.items SELECT id, id * 10, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' FROM generate_series(1, 5) AS id;
+";
+
+/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, which stays; a tombstone for item 6, which the table doesn't hold yet; and item 6 arriving late, updated before its tombstone, so the next load marks it.
+const TOMBSTONE_STEPS: [&str; 6] = [
+    "",
+    "DELETE FROM public.items WHERE id = 2; INSERT INTO audit.deleted_items VALUES (2, 'gone', '2026-11-02 00:00:00+00')",
+    "",
+    "INSERT INTO public.items VALUES (2, 21, '2026-11-03 00:00:00+00')",
+    "INSERT INTO audit.deleted_items VALUES (6, 'gone', '2026-11-05 00:00:00+00')",
+    "INSERT INTO public.items VALUES (6, 60, '2026-11-04 00:00:00+00')",
+];
+
+/// Run [`TOMBSTONE_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `updated_at` with `target.deletes` and `deletes_from` its tombstones in `audit.deleted_items`: after each step, `target.check_query`'s rows, then ` | ` and the items load's note, or its error.
+pub(crate) async fn run_tombstones(
+    target: &SyncDeletesTestCase,
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+) -> Result<Vec<String>, String> {
+    let text = format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }}\n",
+        target.connection, target.schema, target.deletes
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    execute(
+        destination,
+        target.reset.iter().map(|sql| (*sql).to_owned()).collect(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    source
+        .batch_execute(TOMBSTONES_SETUP)
+        .await
+        .map_err(|error| error.to_string())?;
+    let note = format!(
+        "then {} the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)",
+        target.marks
+    );
+    let mut steps = Vec::new();
+    for source_change in TOMBSTONE_STEPS {
+        source
+            .batch_execute(source_change)
+            .await
+            .map_err(|error| error.to_string())?;
+        let options = PlanOptions::default();
+        let plan = plan_project(&project, &destinations, &options)
+            .await
+            .map_err(|error| error.to_string())?;
+        let (lines, ok) = render_plan(&plan);
+        let shown = words(&lines.join("\n"));
+        ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
+        assert!(
+            shown.contains(&note) && shown.contains("app__items__sqlload_deletes"),
+            "{}: {lines:?}",
+            target.description
+        );
+        apply_project(&plan, &destinations)
+            .await
+            .map_err(|error| error.to_string())?;
+        let run = LoadRun {
+            project: &project,
+            destinations: &destinations,
+            host: None,
+            options: &options,
+        };
+        let said = load_tables(&run, &plan, None)
+            .await
+            .into_iter()
+            .find(|outcome| !outcome.table.contains("delete"))
+            .ok_or_else(|| "public.items did not load".to_owned())?
+            .loaded
+            .map_or_else(|error| error, |loaded| loaded.note.unwrap_or_default());
+        let rows = single_text(destination, target.check_query.to_owned())
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        steps.push(format!("{rows} | {said}"));
+    }
+    let kept = format!(
+        "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = '{}' AND table_name = 'app__items__sqlload_deletes' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\'",
+        target.schema
+    );
+    let kept = single_text(destination, kept)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    steps.push(format!("tombstone columns: {kept}"));
+    source
+        .batch_execute("DROP TABLE public.items; DROP SCHEMA audit CASCADE")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(steps)
+}
+
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, then the tombstone table's own columns: item 2 marked in the run that read its tombstone, nothing more on the next, item 2 back, and the late item 6 marked once it arrives.
+pub(crate) fn soft_tombstone_steps() -> Vec<String> {
+    [
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:deleted,3:live,4:live,5:live | (tombstones: 1 row soft-deleted)",
+        "1:live,2:deleted,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live,6:deleted | (tombstones: 1 row soft-deleted)",
+        "tombstone columns: deleted_at,id",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "hard"`: the same rows removed rather than marked.
+pub(crate) fn hard_tombstone_steps() -> Vec<String> {
+    [
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,3,4,5 | (tombstones: 1 row deleted)",
+        "1,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 1 row deleted)",
+        "tombstone columns: deleted_at,id",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}

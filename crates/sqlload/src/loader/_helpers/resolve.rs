@@ -30,7 +30,7 @@ use crate::loader::_helpers::specs::{
 use crate::loader::_helpers::table_plan::{blocked_plan, blocked_table, plan_table};
 use crate::loader::constants::{
     DATE_TEXT_LENGTH, NO_RENAME_HOST, NO_TRANSFORM_HOST, PRIMARY_KEY_PLACEHOLDER,
-    RANGE_NEEDS_CURSOR,
+    RANGE_NEEDS_CURSOR, TOMBSTONE_SUFFIX,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{DrainedFiles, FoundSource, FoundSources};
@@ -86,9 +86,13 @@ pub(crate) fn resolve_known(
     for table in discovered {
         let qualified = table.qualified_name();
         let overrides = source.tables.get(&qualified).cloned().unwrap_or_default();
+        let bare = overrides.tombstones_of.as_ref().map(|_| SourceConfig {
+            defaults: TableSettings::default(),
+            ..source.clone()
+        });
         let context = SourceContext {
             name: source_name,
-            source,
+            source: bare.as_ref().unwrap_or(source),
             target: &target,
         };
         let shown = || {
@@ -166,20 +170,64 @@ pub(crate) fn resolve_known(
             }
         }
     }
+    tombstone_destinations(&mut resolved.specs);
     resolved
         .problems
         .extend(merged_names(source_name, source, &resolved.specs));
-    for listed in source.tables.keys() {
-        if !discovered
+    for (listed, table) in &source.tables {
+        if discovered
             .iter()
-            .any(|table| table.qualified_name() == *listed)
+            .any(|found| found.qualified_name() == *listed)
         {
-            resolved.problems.push(format!(
-                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
-            ));
+            continue;
         }
+        resolved.problems.push(match &table.tombstones_of {
+            Some(main) => format!(
+                "{main}: deletes_from table {listed:?} not found in the source (or excluded by exclude)"
+            ),
+            None => format!(
+                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
+            ),
+        });
     }
     resolved
+}
+
+/// Each tombstone table among `specs` loading beside the table whose `deletes_from` it is, as `<table>__sqlload_deletes`, with only that table's `unique_key` columns and its own cursor.
+fn tombstone_destinations(specs: &mut [TableSpec]) {
+    let named: Vec<(String, TableName, Vec<String>)> = specs
+        .iter()
+        .map(|spec| {
+            let key = spec.source_table.qualified_name();
+            (key, spec.destination.clone(), spec.unique_key.clone())
+        })
+        .collect();
+    for spec in specs.iter_mut() {
+        let main = spec.tombstones_of.as_ref();
+        let Some((_, destination, unique_key)) = named.iter().find(|(key, ..)| Some(key) == main)
+        else {
+            continue;
+        };
+        spec.destination = TableName {
+            table: format!("{}{TOMBSTONE_SUFFIX}", destination.table),
+            ..destination.clone()
+        };
+        let cursor = spec.cursor.as_ref().map(|cursor| cursor.column.clone());
+        let dropped: Vec<(String, String)> = spec
+            .source_table
+            .columns
+            .iter()
+            .filter(|column| {
+                !unique_key.contains(&column.name) && Some(&column.name) != cursor.as_ref()
+            })
+            .filter(|column| !is_excluded(&spec.excluded_columns, &column.name))
+            .map(|column| {
+                let reason = "deletes_from keeps only the unique_key columns and the cursor";
+                (column.name.clone(), reason.to_owned())
+            })
+            .collect();
+        spec.excluded_columns.extend(dropped);
+    }
 }
 
 /// The `transform` a table runs (its own, else its source's) with the version `project` imported it at, or why it cannot run.

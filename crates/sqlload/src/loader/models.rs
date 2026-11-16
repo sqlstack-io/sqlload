@@ -203,6 +203,8 @@ pub struct TableSpec {
     pub cdc: Option<CdcSpec>,
     /// What a merge does with rows whose key the source no longer holds; `None` without `deletes`.
     pub deletes: Option<DeletesSpec>,
+    /// The table (its key under `tables`) whose `deletes_from` this table loads the tombstones of; `None` for other tables.
+    pub tombstones_of: Option<String>,
     /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
     pub tunnel: Option<String>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
@@ -309,6 +311,17 @@ pub struct DeletesSpec {
     pub max_drop: u8,
     /// `--sync-deletes`: after its merge, the load reads every key from the source and marks the table's rows of the others.
     pub scan: bool,
+    /// Its `deletes_from`: after each merge, the rows its tombstones name are marked.
+    pub from: Option<TombstoneSpec>,
+}
+
+/// A merge table's tombstone table (`deletes_from`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneSpec {
+    /// The tombstone table as the source names it (`audit.deleted_items`).
+    pub source_table: String,
+    /// Where it loads, and its `cursor_column` as loaded, once planned beside the table; `None` before.
+    pub loaded: Option<(TableName, String)>,
 }
 
 /// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.

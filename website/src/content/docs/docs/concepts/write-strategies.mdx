@@ -277,6 +277,45 @@ $ sqlload load --sync-deletes
 loaded  raw.erp__stock_item  1,204 rows (key scan of 48,112 keys: 37 rows soft-deleted)  6.3s
 ```
 
+#### Deletes from a tombstone table
+
+A table too big to scan can take its deletes from a table where the source records them, such as
+one a trigger or the application writes each deleted key into, with the time:
+
+```toml
+[sources.erp.tables."pub.stock_item"]
+write_strategy = "merge"
+cursor_column = "updated_at"
+unique_key = ["company_no", "item_no"]
+deletes = "soft"
+deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
+```
+
+- Every load, with no flag, appends the new tombstones to a table of their own beside the merged
+  one, `<table>__sqlload_deletes`: only the `unique_key` columns and `deleted_at`, read from where
+  the last load stopped, as for any `cursor_column`. `plan` lists it like any other table. It keeps
+  every tombstone; trim it yourself if it grows too big.
+- The tombstone table loads first. Then, once the merge commits, the rows whose key a tombstone
+  holds, deleted at or after the row's own `cursor_column`, are marked as `deletes` says. A
+  tombstone read in a run marks rows in that run.
+- A key deleted and then created again stays: its row's cursor is after the tombstone. A row
+  arriving late, after its tombstone loaded, is marked by the next load, as every tombstone is
+  checked each time. Marking again changes nothing.
+- The tombstone table must hold every `unique_key` column, under the same names; `plan` fails
+  otherwise. `deletes_from` needs `deletes` and a `cursor_column`, and the tombstone table can't
+  also be listed under `tables`.
+
+```console
+$ sqlload plan
+…
+├── raw.erp__stock_item                  merge (unique_key: company_no, item_no), then soft-deletes the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)
+└── raw.erp__stock_item__sqlload_deletes  append (cursor: deleted_at)
+…
+$ sqlload load
+…
+loaded  raw.erp__stock_item  1,204 rows (tombstones: 12 rows soft-deleted)  2.1s
+```
+
 On a [`postgres_cdc`](/docs/sources/postgres-cdc/) source, `deletes` is how captured deletes are
 applied instead, `soft` by default.
 

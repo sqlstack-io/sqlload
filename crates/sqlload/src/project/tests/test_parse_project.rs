@@ -593,6 +593,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "unknown variant `dlt`, expected `snake_case` or `source`",
         },
         ParseProjectErrorTestCase {
+            description: "deletes_from needs deletes to say what a tombstone does",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.items\"]\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes_from = { table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }\n",
+            expected_message: "[sources.app] table \"public.items\": deletes_from marks the rows its tombstones name, which needs deletes = \"soft\" or \"hard\" to say how",
+        },
+        ParseProjectErrorTestCase {
+            description: "a tombstone table loads only as one table's tombstones, not listed itself",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"public.items\"]\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"hard\"\ndeletes_from = { table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }\n[sources.app.tables.\"audit.deleted_items\"]\nwrite_strategy = \"append\"\n",
+            expected_message: "deletes_from table \"audit.deleted_items\" is also listed under tables",
+        },
+        ParseProjectErrorTestCase {
             description: "an xlsx header_row past the range's rows is refused",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"xlsx\"\nxlsx = { range = \"A1:C5\", header_row = 10 }\n",
             expected_message: "[sources.raw] xlsx.header_row 10 is past the range's 5 rows",

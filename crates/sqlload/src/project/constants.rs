@@ -125,6 +125,7 @@ pub const TABLE_ONLY_KEYS: &[&str] = &[
     "unnest",
     "max_depth",
     "parse",
+    "deletes_from",
 ];
 
 /// Top-level keys that mark a file as a loader project rather than an exporter configuration.

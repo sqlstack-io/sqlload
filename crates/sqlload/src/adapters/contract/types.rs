@@ -22,13 +22,13 @@ use crate::adapters::contract::_helpers::schema::{
 };
 use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::{
-    mark_statement, marked_counts, replaced_rows, write_statements,
+    mark_statement, marked_counts, replaced_rows, tombstone_statements, write_statements,
 };
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, MarkWrite,
-    TableName, WriteMode, WriteStatementsRequest, WriteTarget,
+    TableName, TombstoneWrite, WriteMode, WriteStatementsRequest, WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -435,6 +435,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> [String; 2] {
         marked_counts(self, request, mark, staging)
+    }
+
+    /// A table's tombstones (`deletes_from`): the query counting the rows they mark, as text, then the statement marking them.
+    fn render_tombstones(&self, table: &TableName, tombstones: &TombstoneWrite) -> [String; 2] {
+        tombstone_statements(self, table, tombstones)
     }
 
     /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.
