@@ -55,3 +55,18 @@ Changing `json_type` for a table that exists changes its `json` columns' type. `
 such as `payload json -> native("VARIANT") needs a table rebuild`, and it runs as
 [`type_change_rebuild`](/docs/concepts/contracts/#changes-that-rebuild-a-table) allows: by default
 with `--allow-type-change-rebuild`. The column keeps its values.
+
+## Memory
+
+DuckDB writes a full row group, 122,880 rows, to the database file as rows arrive. Until a commit,
+it holds the rows short of a full row group in memory, and at commit it copies them into its
+write-ahead log in memory as well. Most tables don't notice: rows of a few hundred bytes fill row
+groups quickly. A table of few rows with large values does. Loading 300 rows of 1 MB each
+(286 MB) in one commit peaks at about 1.2 GB, whatever the source's fetch budget, as measured with
+DuckDB 2.0. The same 286 MB as three million short rows peaks at about 300 MB.
+
+So for such a table, peak memory scales with the bytes of the largest commit, about four times
+over, and not with the source's `max_batch_memory`. `batch_size` cuts a cursor table's load into
+smaller commits. DuckDB also keeps the blocks it wrote cached, up to its memory limit (80% of the
+machine's memory by default), so a long load's memory can grow past its largest commit until DuckDB
+needs the room.
