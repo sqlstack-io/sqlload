@@ -378,14 +378,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         } => {
             let repeats = match dedupe {
                 None => "; repeated keys fail".to_owned(),
-                Some(MergeDedupe {
-                    sort: Some((column, true)),
-                    ..
-                }) => format!("; repeated keys: highest {column} wins"),
-                Some(MergeDedupe {
-                    sort: Some((column, false)),
-                    ..
-                }) => format!("; repeated keys: lowest {column} wins"),
+                Some(MergeDedupe { newest_by, .. }) if !newest_by.is_empty() => {
+                    format!("; newest by {}", newest_by.join(", then "))
+                }
                 Some(_) => String::new(),
             };
             let origin = match spec.key_from_primary_key {

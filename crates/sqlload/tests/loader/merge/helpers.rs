@@ -14,7 +14,7 @@ use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::models::ProjectConfig;
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
-use crate::helpers::{described_project, load_selected, load_with_options, words};
+use crate::helpers::{described_project, load_selected, words};
 use crate::test_types::{
     DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, NullKeyTargetTestCase,
     ReplaceKeyTargetTestCase, SyncDeletesTestCase,
@@ -44,16 +44,16 @@ const RULES: [DedupeRule; 4] = [
         expected_plan: "merge (unique_key: sensor; NULLs in keys match)",
     },
     DedupeRule {
-        description: "dedup_sort desc keeps the latest seen_at, a NULL seen_at losing, and plan warns that a later commit still overwrites",
-        settings: "dedup_sort = { seen_at = \"desc\" }",
+        description: "newest_by keeps the latest seen_at, a NULL seen_at losing, and plan says so",
+        settings: "newest_by = \"seen_at\"",
         expected_error: "",
-        expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits about every 1 GB: a later commit still overwrites a key an earlier one wrote, whatever its seen_at value",
+        expected_plan: "merge (unique_key: sensor; newest by seen_at; NULLs in keys match)",
     },
     DedupeRule {
-        description: "dedup_sort asc keeps the earliest seen_at, a NULL seen_at still losing",
-        settings: "dedup_sort = { seen_at = \"asc\" }",
+        description: "newest_by across commits: a later window's older s1 row and NULL seen_at s2 row leave the rows an earlier window loaded, while two NULL seen_at rows tie, so the later overwrites",
+        settings: "newest_by = \"seen_at\"\nbatch_size = 2\ncursor_start = \"1\"",
         expected_error: "",
-        expected_plan: "repeated keys: lowest seen_at wins",
+        expected_plan: "merge (unique_key: sensor; newest by seen_at; NULLs in keys match)",
     },
     DedupeRule {
         description: "on_duplicate_keys = \"fail\" refuses the load, naming the repeated keys, and merges nothing",
@@ -378,7 +378,7 @@ pub(crate) async fn run_merge_case(
         .map_err(|error| error.to_string())
 }
 
-/// Plan and apply once (with `--reload` when `reload`), then load only when `loads` (otherwise as `sqlload apply`): the rendered plan, or the error text.
+/// Plan and apply once (with `--reload` when `reload`), then load only when `loads` (otherwise as `sqlload apply`): the rendered plan and each table's load note, one per line, or the error text.
 async fn run_step(
     project_text: &str,
     destinations: &BTreeMap<String, Destination>,
@@ -398,8 +398,21 @@ async fn run_step(
         .await
         .map_err(|error| error.to_string())?;
     plan.tables.retain(|_| loads);
-    load_with_options(&project, &plan, destinations, &options).await?;
-    Ok(lines.join("\n"))
+    let run = LoadRun {
+        project: &project,
+        destinations,
+        host: None,
+        options: &options,
+    };
+    let mut said = lines;
+    for outcome in load_tables(&run, &plan, None).await {
+        said.push(
+            outcome
+                .loaded
+                .map(|loaded| loaded.note.unwrap_or_default())?,
+        );
+    }
+    Ok(said.join("\n"))
 }
 
 /// `public.items`, five items, each updated at its own time.

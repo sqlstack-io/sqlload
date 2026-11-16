@@ -1345,7 +1345,7 @@ fn child_plan(parent: &TablePlan, (path, table): (&str, &str)) -> TablePlan {
         unique_key: Vec::new(),
         not_null_keys: Vec::new(),
         replace_key: Vec::new(),
-        dedup_sort: None,
+        newest_by: Vec::new(),
         cursor: None,
         batch: None,
         constants: Vec::new(),
@@ -1771,8 +1771,8 @@ impl ChildTables {
                     .unwrap_or_default()
             ),
             _ => format!(
-                "{root} IN (SELECT {row_id} FROM {})",
-                adapter.render_qualified_name(staging)
+                "{root} IN ({})",
+                adapter.render_kept_row_ids(&request, staging, row_id_name)
             ),
         };
         if let Some(rekeyed) = adapter.render_rekeyed_row_ids(&request, staging, row_id_name) {

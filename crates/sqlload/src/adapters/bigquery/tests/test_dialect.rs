@@ -32,7 +32,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
         not_null_keys: Vec::new(),
         dedupe: Some(MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
-            sort: None,
+            newest_by: Vec::new(),
         }),
     };
     let test_cases = [

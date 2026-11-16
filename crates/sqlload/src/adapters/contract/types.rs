@@ -8,6 +8,7 @@ use crate::adapters::contract::_helpers::identifiers::{
     exact_identifier, qualified, source_expression_cast, staging_type, string_literal,
 };
 use crate::adapters::contract::_helpers::logged::{commit_statements, logged_statements};
+use crate::adapters::contract::_helpers::promote::same_value;
 use crate::adapters::contract::_helpers::promote::{
     drop_and_rename, merge_statement, swap_statements,
 };
@@ -25,6 +26,8 @@ use crate::adapters::contract::_helpers::write::{
     mark_statement, marked_counts, replaced_rows, tombstone_statements, write_statements,
 };
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
+use crate::adapters::contract::main::_kept_row_ids::kept_row_ids;
+use crate::adapters::contract::main::_older_rows::older_rows;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, MarkWrite,
@@ -207,6 +210,39 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         }
     }
 
+    /// Under `newest_by`, the rows of `ranked` (a subquery aliased `__sqlload_ranked`, its rows ranked by `__sqlload_rank`) ranked first of their key whose key's row in `table` (aliased `__sqlload_newer`, matched on `keys`, each rendered with whether it may be NULL) isn't `newer`; or (`older`) only those whose row is. A subquery aliased `__sqlload_kept` selecting `names`.
+    fn render_newest_kept(
+        &self,
+        table: &TableName,
+        (ranked, names): (&str, &[String]),
+        (keys, newer): (&[(String, bool)], &str),
+        older: bool,
+    ) -> String {
+        let join: Vec<String> = keys
+            .iter()
+            .map(|(name, nullable)| {
+                let pair = (
+                    format!("__sqlload_newer.{name}"),
+                    format!("__sqlload_ranked.{name}"),
+                );
+                same_value(pair, *nullable)
+            })
+            .collect();
+        let exists = format!(
+            "EXISTS (SELECT 1 FROM {} AS __sqlload_newer WHERE {} AND {newer})",
+            self.render_qualified_name(table),
+            join.join(" AND ")
+        );
+        let keep = match older {
+            true => exists,
+            false => format!("NOT {exists}"),
+        };
+        format!(
+            "(SELECT {} FROM {ranked} WHERE __sqlload_rank = 1 AND {keep}) AS __sqlload_kept",
+            names.join(", ")
+        )
+    }
+
     /// `value`, a merge key of `column_type`, as a window can be partitioned by it.
     fn render_partition_key(&self, value: &str, _column_type: &ColumnType) -> String {
         value.to_owned()
@@ -350,6 +386,25 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         indexes: &[String],
     ) -> Vec<String> {
         drop_and_rename(self, target, build, indexes)
+    }
+
+    /// Under `newest_by`, a query counting, as text, the keys of `staging` whose newest row the merge of `request` skips, as the table holds a newer one; `None` without `newest_by`.
+    fn render_older_rows(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+    ) -> Option<String> {
+        older_rows(self, request, staging)
+    }
+
+    /// A query of the ids (`row_id`) of the rows of `staging` the merge of `request` writes, whose child tables' rows it replaces.
+    fn render_kept_row_ids(
+        &self,
+        request: &WriteStatementsRequest<'_>,
+        staging: &TableName,
+        row_id: &str,
+    ) -> String {
+        kept_row_ids(self, request, (staging, row_id))
     }
 
     /// Under a merge that dedupes, a query of the ordinal (as text) of each row of `staging` the merge of `request` drops, so the rows hanging off them (child tables' rows) are dropped too; `None` without `dedupe`.

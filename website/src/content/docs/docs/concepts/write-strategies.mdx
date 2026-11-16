@@ -128,35 +128,39 @@ From 0.39.0, when the rows of one commit hold a `unique_key` value more than
 once, `merge` keeps one row for each value. The destination never gets the key twice, and the load
 never fails on the warehouse's own error about it.
 
-- Without `dedup_sort`, the row read last wins: the last one the source returned, or the last row
-  of a file.
-- With `dedup_sort = { updated_at = "desc" }`, the row with the highest `updated_at` wins, and
-  `"asc"` keeps the lowest. A NULL loses to any value, and a tie goes to the row read later.
-  `dedup_sort` takes one column, which can't be in the key, masked, JSON or an array.
+- Without `newest_by`, the row read last wins, and every row overwrites the table's row of its
+  key: the last one the source returned, or the last row of a file.
+- From 0.54.0, `newest_by = "updated_at"` names the column whose higher value is the newer version
+  of a row. Of a commit's rows sharing a key, the newest wins; a NULL loses to any value, and a tie
+  goes to the row read later. It also applies against the table: a row only overwrites the table's
+  row of its key when it isn't older, so older data arriving late, such as a file coming back or a
+  later `batch_size` window, never replaces newer data. A tie overwrites, any value overwrites a
+  NULL, and a NULL never overwrites a value. The load says how many keys it left alone, as in
+  `(12 older rows skipped: newest_by updated_at)`.
+- `newest_by = ["mod_date", "mod_time"]` compares in order, for sources that keep a change's date
+  and time in two columns: the first column decides, and the next breaks a tie. NULLs follow the
+  same rule in each column, two NULLs tying and moving on to the next.
+- `newest_by` columns can't be in the key, masked, JSON or an array, or repeated, and need a
+  `merge` table. A higher value is always newer, so `newest_by` takes no direction.
 - From 0.51.0, a NULL in a key column counts as a value: rows whose keys hold the same values and
   NULLs in the same columns are collapsed like any other repeat, by the same rule. Before 0.51.0
   each of them was inserted.
-- Rows are ranked within one commit. A load that commits more than once, by `batch_size` window,
-  about every 1 GB, or one file at a time, merges each commit on its own. So with `dedup_sort`, a
-  later batch in the same load still overwrites an earlier one, whatever its `dedup_sort` value.
-  `plan` warns when a table can commit more than once, and `batch_size = "none"` loads a database
-  or Python table in one commit.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
   columns and examples, before it writes the commit's rows. Commits before it stay. From 0.51.0
   it compares NULLs in the key too.
 - Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
-  other from its source, so a table can choose `"fail"` under a source's `dedup_sort`, or the
+  other from its source, so a table can choose `"fail"` under a source's `newest_by`, or the
   reverse.
 
 ```toml
 [sources.app.tables."public.readings"]
 write_strategy = "merge"
 unique_key = ["sensor_id"]
-dedup_sort = { read_at = "desc" }
+newest_by = "read_at"
 ```
 
 The plan line names the rule when it isn't the default, as in
-`merge (unique_key: sensor_id; repeated keys: highest read_at wins)` or
+`merge (unique_key: sensor_id; newest by read_at)`, `newest by mod_date, then mod_time`, or
 `merge (unique_key: sensor_id; repeated keys fail)`.
 
 ### NULLs in keys

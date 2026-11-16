@@ -29,7 +29,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_duplicate_keys",
     "null_keys",
     "replace_key",
-    "dedup_sort",
+    "newest_by",
     "naming",
     "compat",
     "send",

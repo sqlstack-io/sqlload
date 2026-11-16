@@ -49,8 +49,8 @@ use crate::project::constants::DEFAULT_MAX_DEPTH;
 use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
     CdcMode, CursorBounds, Deletes, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, PathsSetting, ProjectConfig, SortDirection, SourceConfig, SourceKind,
-    StateMode, TableOverride, TableSettings, UnloadStage, WriteStrategy,
+    OnDuplicateKeys, PathsSetting, ProjectConfig, SourceConfig, SourceKind, StateMode,
+    TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
 use crate::publish_checks::main::check_problems::check_problems;
 use crate::python_sources::types::PythonHost;
@@ -300,19 +300,19 @@ pub(crate) fn build_spec(
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
             }),
     );
-    let table_sorts = settings.dedup_sort.is_some();
+    let table_sorts = settings.newest_by.is_some();
     let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
     let table_fails = on_duplicate_keys == Some((OnDuplicateKeys::Fail, SettingOrigin::Table));
-    let dedup_sort = layered(&settings.dedup_sort, &defaults.dedup_sort)
+    let newest_by = layered(&settings.newest_by, &defaults.newest_by)
         .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_fails))
         .map(|(value, _)| value);
-    let (dedup_sort, found) = dedupe_settings(
+    let (newest_by, found) = dedupe_settings(
         strategy,
         &unique_key,
         (
             on_duplicate_keys.map(|(value, _)| value),
-            dedup_sort.as_ref(),
+            newest_by.as_deref(),
         ),
         overrides,
     );
@@ -444,7 +444,7 @@ pub(crate) fn build_spec(
         null_keys,
         not_null_keys,
         replace_key,
-        dedup_sort,
+        newest_by,
         cursor,
         batch,
         constants,
@@ -1073,58 +1073,54 @@ fn no_primary_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> S
     )
 }
 
-/// The `dedup_sort` column and direction of a merge, and the problems with `on_duplicate_keys` and `dedup_sort` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `dedup_sort` names one column that is neither in the key nor masked, and has nothing to pick under `on_duplicate_keys = "fail"`.
+/// The `newest_by` columns of a merge, and the problems with `on_duplicate_keys` and `newest_by` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `newest_by` names columns that are neither in the key, masked nor repeated, and has nothing to pick under `on_duplicate_keys = "fail"`.
 fn dedupe_settings(
     strategy: WriteStrategy,
     unique_key: &[String],
-    (on_duplicate_keys, dedup_sort): (
-        Option<OnDuplicateKeys>,
-        Option<&BTreeMap<String, SortDirection>>,
-    ),
+    (on_duplicate_keys, newest_by): (Option<OnDuplicateKeys>, Option<&[String]>),
     overrides: &TableOverride,
-) -> (Option<(String, SortDirection)>, Vec<String>) {
+) -> (Vec<String>, Vec<String>) {
     let mut problems: Vec<String> = Vec::new();
     if strategy != WriteStrategy::Merge {
         problems.extend(
             [
                 on_duplicate_keys.map(|_| "on_duplicate_keys"),
-                dedup_sort.map(|_| "dedup_sort"),
+                newest_by.map(|_| "newest_by"),
             ]
             .into_iter()
             .flatten()
             .map(|name| format!("{name} is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row")),
         );
-        return (None, problems);
+        return (Vec::new(), problems);
     }
-    let Some(sort) = dedup_sort else {
-        return (None, problems);
+    let Some(columns) = newest_by else {
+        return (Vec::new(), problems);
     };
-    let mut entries = sort.iter();
-    let (column, direction) = match (entries.next(), entries.next()) {
-        (Some((column, direction)), None) => (column.clone(), *direction),
-        _ => {
-            problems.push(
-                "dedup_sort names one column and its direction, such as { updated_at = \"desc\" }"
-                    .to_owned(),
-            );
-            return (None, problems);
+    if columns.is_empty() {
+        problems.push("newest_by names a column, or a list compared in order, such as newest_by = \"updated_at\"".to_owned());
+    }
+    for (index, column) in columns.iter().enumerate() {
+        if columns[..index].contains(column) {
+            problems.push(format!(
+                "newest_by names {column} twice; name each column once"
+            ));
         }
-    };
-    if unique_key
-        .iter()
-        .any(|key| key.eq_ignore_ascii_case(&column))
-    {
-        problems.push(format!("dedup_sort column {column} is in the unique_key, so it is the same in every row it would rank; name another column"));
-    }
-    if overrides.mask.contains_key(&column) {
-        problems.push(format!(
-            "dedup_sort column {column} is masked, so its values cannot rank rows"
-        ));
+        if unique_key
+            .iter()
+            .any(|key| key.eq_ignore_ascii_case(column))
+        {
+            problems.push(format!("newest_by column {column} is in the unique_key, so it is the same in every row it would compare; name another column"));
+        }
+        if overrides.mask.contains_key(column) {
+            problems.push(format!(
+                "newest_by column {column} is masked, so its values cannot say which row is newer"
+            ));
+        }
     }
     if on_duplicate_keys == Some(OnDuplicateKeys::Fail) {
-        problems.push("dedup_sort picks which repeated row a merge keeps, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
+        problems.push("newest_by picks the newest of the rows repeating a key, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
     }
-    (Some((column, direction)), problems)
+    (columns.to_vec(), problems)
 }
 
 /// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when `keyed`) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that matches no key.

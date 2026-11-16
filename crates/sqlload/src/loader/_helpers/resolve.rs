@@ -753,7 +753,7 @@ pub(crate) fn loaded_overrides(
     }
 }
 
-/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, dedup sort, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
+/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, newest_by columns, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
 pub(crate) fn loaded_settings(
     settings: &TableSettings,
     name: &dyn Fn(&str) -> String,
@@ -790,10 +790,7 @@ pub(crate) fn loaded_settings(
             .constant_columns
             .as_ref()
             .map(|constants| ConstantColumns(renamed_keys(&constants.0, &name))),
-        dedup_sort: settings
-            .dedup_sort
-            .as_ref()
-            .map(|sort| renamed_keys(sort, &name)),
+        newest_by: settings.newest_by.as_ref().map(names),
         checks,
         order_by: settings.order_by.as_ref().map(keys),
         primary_key: settings.primary_key.as_ref().map(keys),

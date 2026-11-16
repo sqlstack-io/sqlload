@@ -116,13 +116,13 @@ impl WriteMode {
     }
 }
 
-/// Which of a commit's staged rows sharing a merge key is kept: the first by `sort` (a column, and whether its highest value wins; a NULL never wins), then the one with the largest `ordinal`, the last in source order. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
+/// Which of a commit's staged rows sharing a merge key is kept: the newest by `newest_by` (the first column decides, the next breaks ties; a NULL loses to any value, two NULLs tie), then the one with the largest `ordinal`, the last in source order; and, with `newest_by`, none older than the table's row of its key, which it would overwrite. A NULL in the key is a value like any other, so rows sharing one are kept to one too, as the merge matches them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeDedupe {
     /// The staged column numbering rows in source order.
     pub ordinal: String,
-    /// The `dedup_sort` column, and `true` when its highest value wins.
-    pub sort: Option<(String, bool)>,
+    /// The columns whose higher values are newer, compared in order; empty, the last row read wins and every row overwrites.
+    pub newest_by: Vec<String>,
 }
 
 /// How a batch of captured changes is applied.

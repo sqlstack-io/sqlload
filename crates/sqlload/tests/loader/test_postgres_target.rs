@@ -9,7 +9,7 @@ use crate::helpers::{described_project, run_async, run_sqlload, words};
 use crate::merge_helpers::run_merge_case;
 use crate::postgres_helpers::{load_once, project_text, text};
 use crate::test_files_to_duckdb::{
-    MERGE_CHECK, MERGE_FAIL_SETTINGS, MERGE_SETTINGS, MERGE_SORT_SETTINGS,
+    MERGE_CHECK, MERGE_FAIL_SETTINGS, MERGE_SETTINGS, MERGE_SORT_SETTINGS, MONDAY,
 };
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 use crate::test_types::{PostgresTargetTestCase, TargetTlsTestCase};
@@ -392,30 +392,51 @@ fn given_csv_files_when_merging_into_postgres_then_the_newest_modified_file_wins
                 expected_result: "5:a,6:c|1",
             },
             FilesMergeTestCase {
-                description: "with dedup_sort a file repeating a key merges the row that sorts first, and plan warns that a later file still overwrites it",
+                description: "with newest_by a file repeating a key merges its newest row, and Monday's file coming back after Tuesday's, rewritten, leaves Tuesday's row, the load saying so",
                 settings: MERGE_SORT_SETTINGS,
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[
-                        MergeFile {
-                            key: "a.csv",
-                            contents: "id,v\n5,b\n5,a\n5,c\n",
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "mon.csv",
+                            contents: MONDAY,
                             modified_secs: 1_000,
-                        },
-                        MergeFile {
-                            key: "b.csv",
-                            contents: "id,v\n6,z\n",
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "merge (unique_key: id; newest by day",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "tue.csv",
+                            contents: "id,v,day\n42,tue,2026-11-03\n",
                             modified_secs: 2_000,
-                        },
-                    ],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "",
-                    expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
-                }],
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "mon.csv",
+                            contents: MONDAY,
+                            modified_secs: 3_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "(1 older row skipped: newest_by day)",
+                    },
+                ],
                 check_query: MERGE_CHECK,
-                expected_result: "5:a,6:z|2",
+                expected_result: "42:tue,43:a|3",
             },
             FilesMergeTestCase {
                 description: "with on_duplicate_keys = \"fail\" a file repeating a key no row has yet fails before it merges, naming the key",

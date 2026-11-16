@@ -43,7 +43,7 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
         not_null_keys: vec!["id".to_owned()],
         dedupe: Some(MergeDedupe {
             ordinal: "_sqlload_row".to_owned(),
-            sort: Some(("note".to_owned(), false)),
+            newest_by: vec!["note".to_owned()],
         }),
     };
     let nullable = WriteMode::Merge {
@@ -78,10 +78,10 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
             ],
         },
         RenderedTestCase {
-            description: "merge with dedupe upserts one staged row per key, the lowest dedup_sort value first, NULLs last, then the later row, so ON CONFLICT never meets a key twice",
+            description: "merge with dedupe upserts one staged row per key, the newest by newest_by first, NULLs last, then the later row, none older than the table's, so ON CONFLICT never meets a key twice",
             rendered: adapter.render_write(&request(&deduped), &staging),
             expected_statements: &[
-                "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\" AS \"id\", CAST(\"doc\" AS jsonb) AS \"doc\", \"note\" AS \"note\", ROW_NUMBER() OVER (PARTITION BY \"id\" ORDER BY \"note\" ASC NULLS LAST, \"_sqlload_row\" DESC) AS __sqlload_rank FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\") AS __sqlload_ranked WHERE __sqlload_rank = 1) AS __sqlload_kept ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
+                "INSERT INTO \"app\".\"orders\" (\"id\", \"doc\", \"note\") SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\", \"doc\", \"note\" FROM (SELECT \"id\" AS \"id\", CAST(\"doc\" AS jsonb) AS \"doc\", \"note\" AS \"note\", ROW_NUMBER() OVER (PARTITION BY \"id\" ORDER BY \"note\" DESC NULLS LAST, \"_sqlload_row\" DESC) AS __sqlload_rank FROM \"pg_temp\".\"orders__sqlload_staging_20261108000000_ab12\") AS __sqlload_ranked WHERE __sqlload_rank = 1 AND NOT EXISTS (SELECT 1 FROM \"app\".\"orders\" AS __sqlload_newer WHERE __sqlload_newer.\"id\" = __sqlload_ranked.\"id\" AND ((__sqlload_newer.\"note\" IS NOT NULL AND (__sqlload_ranked.\"note\" IS NULL OR __sqlload_newer.\"note\" > __sqlload_ranked.\"note\"))))) AS __sqlload_kept ON CONFLICT (\"id\") DO UPDATE SET \"doc\" = EXCLUDED.\"doc\", \"note\" = EXCLUDED.\"note\"",
             ],
         },
         RenderedTestCase {

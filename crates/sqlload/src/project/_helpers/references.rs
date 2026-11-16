@@ -848,10 +848,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             || settings.on_duplicate_keys.is_some()
             || settings.null_keys.is_some()
             || settings.replace_key.is_some()
-            || settings.dedup_sort.is_some()
+            || settings.newest_by.is_some()
         {
             problems.push(format!(
-                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state, checks, on_duplicate_keys, null_keys, replace_key or dedup_sort; choose cdc_mode = \"merge\" or \"changelog\""
+                "{place} kind = \"postgres_cdc\" writes every captured change, so it takes no write_strategy, cursor_column, batch_size, state, checks, on_duplicate_keys, null_keys, replace_key or newest_by; choose cdc_mode = \"merge\" or \"changelog\""
             ));
             break;
         }
