@@ -1,9 +1,9 @@
 ---
 title: "ClickHouse"
-description: "Load into ClickHouse (preview): rows sent as Arrow over HTTP into a staging table, then published by swapping in whole tables or partitions."
+description: "Load into a self-hosted ClickHouse server: rows sent as Arrow over HTTP into a staging table, then published by swapping in whole tables or partitions."
 ---
 
-A ClickHouse target loads into one ClickHouse server over its HTTP interface. It's in preview from
+A ClickHouse target loads into one self-hosted ClickHouse server over its HTTP interface, from
 sqlload 0.26.0. SQLLoad sends each batch as Arrow into a staging table. The rows reach the table
 only when the load publishes them, by swapping in a whole table or whole partitions. Parquet files
 in S3 skip SQLLoad: ClickHouse reads them itself.
@@ -205,8 +205,8 @@ incompatible rather than load into them.
 
 ## Limitations
 
-- ClickHouse is in preview.
 - One server only: clusters, replicated tables and distributed tables aren't supported.
+- ClickHouse Cloud is untested.
 - Load each table from one `sqlload` process at a time.
 - `copy_to_internal_stage` is for Snowflake and is refused here.
 - A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into ClickHouse; `plan` refuses
