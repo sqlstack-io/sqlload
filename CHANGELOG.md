@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.55.0](https://github.com/sqlstack-io/sqlload/compare/v0.54.0...v0.55.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** deletes and deletes_from fail plan on MotherDuck, Snowflake, Databricks, BigQuery, ClickHouse and files targets. The tombstone table loads by delete_insert instead of append. A tombstone cursor of a different kind from the table's cursor fails plan.
+* **files:** on S3 and SFTP, on_empty = "skip" fails a table that has never loaded when its folder holds no files.
+* **http:** key_path on a request that fills more than one placeholder fails plan. Rebuilt rows create their columns in the API's key order rather than alphabetically.
+* **python:** a dict-row column of bytes values is created as binary instead of text, holding the bytes rather than their Python repr; in a text column they are base64. A table loaded before needs --reload, or columns = { name = "text" }.
+
+### Features
+
+* **loader:** refuse deletes on targets whose mark statements haven't run, read late tombstones with deletes_from lookback, and compare tombstone cursor types ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+* **postgres:** name the unique indexes of a table without a primary key when unique_key = "{primary_key}" fails ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+
+
+### Bug Fixes
+
+* **files:** refuse an empty S3 or SFTP folder under on_empty = "skip" until its table exists ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+* **http:** count list indexes from the end in select and pointers, keep rebuilt rows in the API's key order, and refuse key_path over several placeholders ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+* **python:** load bytes values in dict rows as binary ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+
+
+### Documentation
+
+* show measured paging speed with and without read_ahead ([1aa31ca](https://github.com/sqlstack-io/sqlload/commit/1aa31cae7e61ddb120fee7dd3b56b8239e660a13))
+
 ## [0.54.0](https://github.com/sqlstack-io/sqlload/compare/v0.53.0...v0.54.0) (2026-11-16)
 
 
