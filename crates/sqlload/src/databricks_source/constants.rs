@@ -12,3 +12,9 @@ pub const DOWNLOAD_ATTEMPTS: usize = 3;
 
 /// The schema every catalog has, which discovery skips.
 pub const INFORMATION_SCHEMA: &str = "information_schema";
+
+/// The precision and scale of a `DECIMAL` declared without them.
+pub const DECIMAL_DEFAULT: (u32, u32) = (10, 0);
+
+/// What `information_schema.columns.is_nullable` says of a column that can't hold NULL.
+pub const NOT_NULLABLE: &str = "NO";

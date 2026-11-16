@@ -2,6 +2,7 @@
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
 use crate::column_types::models::ColumnType;
+use crate::databricks_source::constants::DECIMAL_DEFAULT;
 use crate::postgres_source::models::{PgType, SourceColumn};
 
 /// A column from its name, its full SQL type as Databricks writes it (`information_schema.columns.full_data_type`, or a result's `type_text`, in either case) and whether it may be NULL: `ARRAY`, `MAP`, `STRUCT` and `VARIANT` as `json`; a type with no portable one (`INTERVAL`, `GEOMETRY`, `VOID`) must be pinned or excluded.
@@ -31,18 +32,26 @@ fn scalar_type(shown: &str) -> Option<ColumnType> {
         Some(rest) => rest.trim_end_matches(')'),
         None => "",
     };
-    let number = |text: Option<&str>| text.and_then(|text| text.trim().parse::<u32>().ok());
-    let mut parts = sizes.split(',');
-    let (first, second) = (number(parts.next()), number(parts.next()));
+    let mut parts = sizes.split(',').map(|part| part.trim().parse::<u32>());
+    let (first, second) = match (parts.next(), parts.next()) {
+        (Some(Err(_)), _) | (_, Some(Err(_))) if !sizes.is_empty() => return None,
+        (first, second) => (first.and_then(Result::ok), second.and_then(Result::ok)),
+    };
     Some(match base {
         "BOOLEAN" => ColumnType::Bool,
         "TINYINT" | "BYTE" | "SMALLINT" | "SHORT" => ColumnType::SmallInt,
         "INT" | "INTEGER" | "BIGINT" | "LONG" => ColumnType::Int,
         "FLOAT" | "REAL" | "DOUBLE" => ColumnType::Float,
         "DECIMAL" | "DEC" | "NUMERIC" => {
-            let precision = u8::try_from(first.unwrap_or(10)).ok()?;
-            let scale = u8::try_from(second.unwrap_or(0)).ok()?;
-            (precision <= MAX_DECIMAL_PRECISION).then_some(ColumnType::Decimal { precision, scale })?
+            let (precision, scale) = match (
+                u8::try_from(first.unwrap_or(DECIMAL_DEFAULT.0)),
+                u8::try_from(second.unwrap_or(DECIMAL_DEFAULT.1)),
+            ) {
+                (Ok(precision), Ok(scale)) => (precision, scale),
+                _ => return None,
+            };
+            (precision <= MAX_DECIMAL_PRECISION)
+                .then_some(ColumnType::Decimal { precision, scale })?
         }
         "STRING" => ColumnType::Text,
         "VARCHAR" | "CHAR" => match first {

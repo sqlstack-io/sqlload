@@ -1,0 +1,141 @@
+---
+title: "Databricks"
+description: "Load Databricks tables, views and query results as Arrow through the Statement Execution API: connections, choosing tables, query tables, cursors, types, cost and permissions."
+---
+
+From sqlload 0.61.0, a `databricks` source loads tables, views and query results from a Databricks
+SQL warehouse with Unity Catalog. SQLLoad runs one `SELECT` per read on the warehouse and downloads
+its result as Arrow files, several at once, through the short-lived links the
+[Statement Execution API](https://docs.databricks.com/api/workspace/statementexecution) gives.
+Nothing is written to a volume or a bucket, and the source only needs read access.
+
+```toml
+[connections.dbx]
+kind = "databricks"
+host = "https://dbc-1234.cloud.databricks.com"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+
+[sources.marts]
+kind = "databricks"
+connection = "dbx"
+description = "Tables of the marts schema."
+include = ["marts.*"]
+exclude = ["marts.tmp_*"]
+write_strategy = "replace"
+
+[sources.marts.tables."marts.events"]
+description = "Events, one row per event."
+cursor_column = "event_at"
+write_strategy = "append"
+
+[sources.marts.tables.recent]
+description = "Orders of the last week, with their customer."
+sql = "SELECT o.*, c.name FROM main.marts.orders o JOIN main.marts.customers c USING (customer_id)"
+cursor_column = "ordered_at"
+write_strategy = "append"
+```
+
+:::note
+The Databricks source is tested against a local fake of the Statement Execution API, not yet on a
+real workspace. See [Tested](#tested).
+:::
+
+## Connection
+
+A source uses a [`databricks` connection](/docs/targets/databricks/#connection), the same kind a
+Databricks target uses. Its statements run on the connection's `warehouse_id`, and its tables are
+read from the connection's `catalog`. A connection that only a source uses needs no `volume`; a
+connection a target loads into still does.
+
+## Choosing tables
+
+`include` and `exclude` are `schema.table` patterns in the connection's catalog, such as `marts.*`.
+Unity Catalog stores names in lower case, so write the patterns in lower case. SQLLoad lists the
+tables, views and their columns from the catalog's `information_schema`, in three queries however
+many tables match. A `[sources.marts.tables."schema.table"]` entry sets options for one table; on
+its own, it doesn't add the table.
+
+A source needs at least one `include` pattern or one query table. A `merge` table merges on the
+primary key the table declares with `unique_key = "{primary_key}"`, or on the columns you name.
+Unity Catalog doesn't enforce primary keys. A table's comment becomes the table's description.
+
+## How tables are read
+
+Each read is one `SELECT` of the read columns, with the cursor window and any `where` in its
+`WHERE`, so the warehouse sends only the rows in it. One statement sees one version of each table,
+so a read is consistent on its own; different reads of one run, such as `batch_size` windows or
+different tables, can see the data moments apart.
+
+The result comes back as Arrow files behind links that expire within 15 minutes. SQLLoad downloads
+up to eight at a time, without the Databricks token, and holds at most a few batches ahead of the
+target. A download that fails is tried again through a fresh link, up to three times. A result the
+warehouse cuts short at its byte limit fails the read rather than loading fewer rows.
+
+## Query tables
+
+A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is
+its name. At `plan`, SQLLoad runs the query with `LIMIT 0` to learn its columns, which reads no rows.
+
+`cursor_column` names a column of the query's result. SQLLoad wraps the query and filters on the
+cursor outside it, so the query needs no placeholder. Write the query in Databricks SQL, naming
+tables as `catalog.schema.table`.
+
+## Filtering rows
+
+`where` narrows a table to the rows that match a condition, written in Databricks SQL:
+
+```toml
+[sources.marts.tables."marts.orders"]
+where = "region = 'EU' AND status != 'void'"
+```
+
+It works as for the other database sources: SQLLoad ANDs it into every `SELECT` it reads the table
+with, `plan` checks it by counting the rows it selects, and a query table refuses it (put the
+condition in its `sql`). See [BigQuery: Filtering rows](/docs/sources/bigquery/#filtering-rows) for
+the details they share.
+
+## Types
+
+| Databricks type | Loads as |
+|-----------------|----------|
+| `TINYINT`, `SMALLINT` | `smallint` |
+| `INT`, `BIGINT` | `int` |
+| `DECIMAL(p,s)`, p up to 38 | `decimal(p,s)`; a `DECIMAL` with no precision is `decimal(10,0)` |
+| `FLOAT`, `DOUBLE` | `float` |
+| `BOOLEAN` | `bool` |
+| `STRING` | `text` |
+| `VARCHAR(n)`, `CHAR(n)` | `varchar(n)` |
+| `BINARY` | `binary` |
+| `DATE` | `date` |
+| `TIMESTAMP` | `timestamp_tz`, in UTC |
+| `TIMESTAMP_NTZ` | `timestamp_ntz` |
+| `ARRAY`, `MAP`, `STRUCT`, `VARIANT` | `json` |
+| `INTERVAL` and others | none: pin `text`, or exclude the column |
+
+Pin a type to load a column another way, such as `columns = { total = "decimal(18,2)" }`. A value
+that doesn't convert to the pinned type fails the read, naming the column, rather than loading as
+NULL. An `array(T)` pin isn't available: arrays load as `json`. See [Types](/docs/concepts/types/).
+
+## Cost
+
+Reads run on the connection's SQL warehouse and bill its compute while they run; a stopped
+warehouse starts for the first read. Listing tables and describing query tables run small queries
+on it too. A table read from a nullable cursor column with `null_cursor = "fail"` (the default)
+first counts its rows with a NULL cursor. See
+[NULL cursor values](/docs/concepts/cursors/#null-cursor-values).
+
+## Permissions
+
+The service principal needs `CAN USE` on the SQL warehouse, `USE CATALOG` on the catalog,
+`USE SCHEMA` on the schemas it reads, and `SELECT` on the tables and views. It needs no volume or
+storage access: the result links carry their own short-lived credential. A workspace that has
+external links turned off can't be read this way.
+
+## Tested
+
+A local fake of the Statement Execution API covers discovery from `information_schema`, result
+files in several chunks, an expired link fetched again, cursor reads of only new rows, and that no
+download carries the Databricks token. The source has not yet run against a real workspace.

@@ -28,7 +28,11 @@ pub async fn execute_arrow(
         ));
     }
     let mut columns: Vec<(String, String)> = Vec::new();
-    for column in manifest["schema"]["columns"].as_array().into_iter().flatten() {
+    for column in manifest["schema"]["columns"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
         columns.push((
             column["name"].as_str().unwrap_or_default().to_owned(),
             column["type_text"].as_str().unwrap_or_default().to_owned(),

@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::fake_databricks::_helpers::volume::Outcome;
+use crate::fake_databricks::constants::{ARROW_FORMAT, LINKS_DISPOSITION};
 use crate::fake_databricks::models::{FakeState, FakeTable, SharedState};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
@@ -123,7 +124,7 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
         }
     };
     let statement = request["statement"].as_str().unwrap_or_default().to_owned();
-    let links = request["disposition"] == "EXTERNAL_LINKS" && request["format"] == "ARROW_STREAM";
+    let links = request["disposition"] == LINKS_DISPOSITION && request["format"] == ARROW_FORMAT;
     let mut state = state.lock();
     state.statements.push(statement.clone());
     if let Some(answer) = state.source_answer(&statement, links) {

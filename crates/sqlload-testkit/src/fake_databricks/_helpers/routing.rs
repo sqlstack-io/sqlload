@@ -37,8 +37,12 @@ pub(crate) async fn handle(
             .into_response();
     }
     if let Some(file) = path.strip_prefix(RESULTS) {
-        let authorized = parts.headers.contains_key(axum::http::header::AUTHORIZATION);
-        let downloaded = state.lock().download(&format!("{RESULTS}{file}"), authorized);
+        let authorized = parts
+            .headers
+            .contains_key(axum::http::header::AUTHORIZATION);
+        let downloaded = state
+            .lock()
+            .download(&format!("{RESULTS}{file}"), authorized);
         return match downloaded {
             Ok(body) => (StatusCode::OK, body).into_response(),
             Err(status) => (

@@ -7,7 +7,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use crate::databricks_api::main::execute_statement::execute_statement;
 use crate::databricks_source::_helpers::query::{quote_identifier, quote_text};
 use crate::databricks_source::_helpers::type_map::source_column;
-use crate::databricks_source::constants::INFORMATION_SCHEMA;
+use crate::databricks_source::constants::{INFORMATION_SCHEMA, NOT_NULLABLE};
 use crate::databricks_source::errors::DatabricksSourceError;
 use crate::databricks_source::models::DatabricksReader;
 use crate::postgres_source::models::SourceTable;
@@ -76,11 +76,15 @@ pub(crate) async fn catalog_tables(
     )
     .await?;
     for row in &columns.rows {
-        if let (Some(table), Some(name), Some(sql_type)) =
-            (found(&mut tables, row), text(row, 2), text(row, 3))
-        {
-            let nullable = text(row, 4).is_none_or(|nullable| nullable != "NO");
-            table.columns.push(source_column(&name, &sql_type, nullable));
+        if let (Some(table), Some(name), Some(sql_type)) = (
+            table_key(row).and_then(|key| tables.get_mut(&key)),
+            text(row, 2),
+            text(row, 3),
+        ) {
+            let nullable = text(row, 4).is_none_or(|nullable| nullable != NOT_NULLABLE);
+            table
+                .columns
+                .push(source_column(&name, &sql_type, nullable));
         }
     }
     let keys = execute_statement(
@@ -93,19 +97,19 @@ pub(crate) async fn catalog_tables(
     )
     .await?;
     for row in &keys.rows {
-        if let (Some(table), Some(column)) = (found(&mut tables, row), text(row, 2)) {
+        if let (Some(table), Some(column)) = (
+            table_key(row).and_then(|key| tables.get_mut(&key)),
+            text(row, 2),
+        ) {
             table.primary_key.push(column);
         }
     }
     Ok(tables.into_values().collect())
 }
 
-/// The listed table the row's first two values name, if it is one.
-fn found<'a>(
-    tables: &'a mut BTreeMap<(String, String), SourceTable>,
-    row: &[Option<String>],
-) -> Option<&'a mut SourceTable> {
-    tables.get_mut(&(text(row, 0)?, text(row, 1)?))
+/// The `(schema, table)` the row's first two values name.
+fn table_key(row: &[Option<String>]) -> Option<(String, String)> {
+    Some((text(row, 0)?, text(row, 1)?))
 }
 
 /// The row's value at `index`, when it has one.

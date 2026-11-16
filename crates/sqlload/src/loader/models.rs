@@ -251,6 +251,13 @@ impl TableSpec {
             .is_some_and(|deletes| deletes.apply == Deletes::Soft)
     }
 
+    /// The query whose rows are the table, for a warehouse source's query table.
+    pub fn query_sql(&self) -> Option<&str> {
+        self.warehouse_source
+            .as_ref()
+            .and_then(|source| source.sql.as_deref())
+    }
+
     /// `filter` narrowed by the table's `where`: `(<where>) AND (<filter>)`, or either alone; the `where` closes on a line of its own, so a trailing `--` comment in it ends first.
     pub fn read_filter(&self, filter: Option<String>) -> Option<String> {
         match (&self.row_filter, filter) {
