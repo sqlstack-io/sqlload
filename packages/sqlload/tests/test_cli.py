@@ -77,7 +77,9 @@ def test_given_a_command_waiting_on_the_network_when_interrupted_then_it_ends_at
 	home = tmp_path / "home"
 	home.mkdir()
 	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home), "XDG_CACHE_HOME": str(home), "XDG_DATA_HOME": str(home)}
-	process = subprocess.Popen([sqlload.executable(), "debug", "-c", str(project)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+	# Start it as a terminal would, with SIGINT at its default: a runner that ignores SIGINT passes that on, and the native executable keeps it.
+	default_sigint = (lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)) if os.name == "posix" else None
+	process = subprocess.Popen([sqlload.executable(), "debug", "-c", str(project)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, preexec_fn=default_sigint)
 	time.sleep(2)
 	if process.poll() is not None:
 		pytest.skip("the unroutable address failed at once here, so there is nothing to interrupt")
