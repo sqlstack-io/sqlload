@@ -1,7 +1,9 @@
 use crate::adapters::contract::_helpers::promote::key_join;
-use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{MarkWrite, TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
+use crate::load_naming::constants::SQLLOAD_LOADED_AT;
+use crate::schema_plan::constants::CDC_DELETED_AT_COLUMN;
 
 /// Atomic statements applying `request.mode` from `staging`, which holds every column, the `_sqlload_*` metadata included; the caller drops `staging` and its swap table.
 pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
@@ -45,6 +47,9 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         }
         WriteMode::Replace => return adapter.render_replace(request, staging, &insert_from),
         WriteMode::Changes(change) => return adapter.render_changes(request, change, staging),
+        WriteMode::MarkMissing(mark) => {
+            return vec![adapter.render_mark(request, mark, staging)];
+        }
         WriteMode::Append => Vec::new(),
         WriteMode::DeleteInsert {
             cursor_column,
@@ -72,6 +77,95 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     statements.push(insert);
     statements.push("COMMIT".to_owned());
     statements
+}
+
+/// The one statement of a key scan (`mark`): the table's rows [it marks](marked_rows) get `_sqlload_deleted_at` when it soft-deletes, else are removed.
+pub(crate) fn mark_statement<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    mark: &MarkWrite,
+    staging: &TableName,
+) -> String {
+    let (table, condition) = marked_rows(adapter, request, mark, staging);
+    match mark.soft {
+        true => format!(
+            "UPDATE {table} SET {} = {} WHERE {condition}",
+            adapter.render_identifier(CDC_DELETED_AT_COLUMN),
+            timestamp(adapter, &mark.before)
+        ),
+        false => format!("DELETE FROM {table} WHERE {condition}"),
+    }
+}
+
+/// Two queries, each returning one count as text: the table's rows a key scan (`mark`) [would mark](marked_rows), then those it may mark from (the rows not marked yet when it soft-deletes, else every row).
+pub(crate) fn marked_counts<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    mark: &MarkWrite,
+    staging: &TableName,
+) -> [String; 2] {
+    let (table, condition) = marked_rows(adapter, request, mark, staging);
+    let count = adapter.render_text_cast("COUNT(*)");
+    let unmarked = match mark.soft {
+        true => format!(
+            " WHERE {} IS NULL",
+            adapter.render_identifier(CDC_DELETED_AT_COLUMN)
+        ),
+        false => String::new(),
+    };
+    [
+        format!("SELECT {count} FROM {table} WHERE {condition}"),
+        format!(
+            "SELECT {count} FROM {}{unmarked}",
+            adapter.render_qualified_name(request.table)
+        ),
+    ]
+}
+
+/// The table aliased `__target`, and the condition choosing the rows of it a key scan (`mark`) marks deleted: loaded before the scan's read started, not marked yet when soft-deleting, and holding a key none of `staging`'s rows holds.
+fn marked_rows<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    mark: &MarkWrite,
+    staging: &TableName,
+) -> (String, String) {
+    let source = adapter.render_qualified_name(staging);
+    let values: Vec<String> = request
+        .columns
+        .iter()
+        .map(|column| adapter.render_source_expression_cast(&column.name, &column.column_type))
+        .collect();
+    let (keys, join) = replaced_keys(adapter, request, &values, &mark.unique_key);
+    let column = |name: &str| format!("__target.{}", adapter.render_identifier(name));
+    let mut conditions = vec![format!(
+        "{} < {}",
+        column(SQLLOAD_LOADED_AT),
+        timestamp(adapter, &mark.before)
+    )];
+    if mark.soft {
+        conditions.push(format!("{} IS NULL", column(CDC_DELETED_AT_COLUMN)));
+    }
+    conditions.push(format!(
+        "NOT EXISTS (SELECT 1 FROM (SELECT DISTINCT {keys} FROM {source}) AS __source WHERE {join})"
+    ));
+    (
+        format!(
+            "{} AS __target",
+            adapter.render_qualified_name(request.table)
+        ),
+        conditions.join(" AND "),
+    )
+}
+
+/// RFC 3339 `text` as a timestamp with time zone.
+fn timestamp<A: SqlAdapter + ?Sized>(adapter: &A, text: &str) -> String {
+    format!(
+        "CAST({} AS {})",
+        adapter.render_loader_value_literal(text),
+        adapter
+            .render_loader_logical_type(&ColumnType::TimestampTz)
+            .sql
+    )
 }
 
 /// The staged values of the `replace_key` columns as a `SELECT` lists them (`value AS name`, from `values`, the insert's expressions in `request.columns`' order, so they convert and hash as it does; the bare column when the request doesn't list one), and the join matching them on `__source` to the table's rows on `__target`, NULL-safely where a column's staged values may be NULL.

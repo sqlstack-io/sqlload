@@ -103,6 +103,8 @@ mod test_sftp_files;
 mod test_sheets_to_duckdb;
 #[path = "loader/test_snowflake_routes.rs"]
 mod test_snowflake_routes;
+#[path = "loader/test_sync_deletes.rs"]
+mod test_sync_deletes;
 #[path = "loader/test_text_files_to_duckdb.rs"]
 mod test_text_files_to_duckdb;
 #[path = "loader/test_typed_cursors.rs"]

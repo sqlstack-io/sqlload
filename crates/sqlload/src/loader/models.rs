@@ -19,17 +19,17 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
-    AfterLoad, AfterLoadReport, FilesEncoding, PathValues, FilesOrder, FilesRead, FilesTable, Footer,
-    LoadedFile, TextChecks,
+    AfterLoad, AfterLoadReport, FilesEncoding, FilesOrder, FilesRead, FilesTable, Footer,
+    LoadedFile, PathValues, TextChecks,
 };
 use crate::loader::_helpers::render::problem_item;
 use crate::loader::_helpers::sources::PLANNED_SOURCES;
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
-    BatchStep, Contract, NewTables, NullCursor, NullKeys, OnCursorOutOfRange, OnDuplicateKeys,
-    OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, SortDirection, TableChecks,
-    WriteStrategy,
+    BatchStep, Contract, Deletes, NewTables, NullCursor, NullKeys, OnCursorOutOfRange,
+    OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode,
+    SortDirection, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -201,6 +201,8 @@ pub struct TableSpec {
     pub sheet: Option<crate::sheets_source::models::SheetRead>,
     /// How a `postgres_cdc` table's captured changes are written; `None` for other sources.
     pub cdc: Option<CdcSpec>,
+    /// What a merge does with rows whose key the source no longer holds; `None` without `deletes`.
+    pub deletes: Option<DeletesSpec>,
     /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
     pub tunnel: Option<String>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).
@@ -232,6 +234,13 @@ pub struct TableSpec {
 }
 
 impl TableSpec {
+    /// Whether the table keeps the rows it marks deleted, with `_sqlload_deleted_at` set (`deletes = "soft"` on a merge).
+    pub fn soft_deletes(&self) -> bool {
+        self.deletes
+            .as_ref()
+            .is_some_and(|deletes| deletes.apply == Deletes::Soft)
+    }
+
     /// The zone the table's times without an offset are in: its `timezone`, else UTC.
     pub fn zone(&self) -> chrono_tz::Tz {
         self.timezone.map_or(chrono_tz::Tz::UTC, |(zone, _)| zone)
@@ -290,6 +299,16 @@ impl TableLayout {
     pub fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+}
+
+/// A merge table's `deletes`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletesSpec {
+    pub apply: Deletes,
+    /// The largest percentage of the table's rows one key scan marks: `checks.max_row_drop`, else 5.
+    pub max_drop: u8,
+    /// `--sync-deletes`: after its merge, the load reads every key from the source and marks the table's rows of the others.
+    pub scan: bool,
 }
 
 /// A `postgres_cdc` table's stream: where it comes from and how its changes are applied.
@@ -706,6 +725,8 @@ pub struct PlanOptions {
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
     pub resnapshot: bool,
+    /// `--sync-deletes`: after each selected `deletes` table's merge, read every key from its source and mark its rows of the others.
+    pub sync_deletes: bool,
     /// `--fail-fast`: once a table fails, start no other; tables already loading finish.
     pub fail_fast: bool,
     /// `--memory-per-table` (Linux): one table at a time, each table's peak memory measured.
@@ -972,6 +993,8 @@ pub enum WholeReason {
     AppendWithoutCursor,
     /// `batch_size = "none"`.
     Chosen,
+    /// A key scan (`--sync-deletes`): its one commit marks the rows of every key it didn't read.
+    KeyScan,
     /// `single_file`: each file is written once, whole.
     SingleFile,
     /// The table cannot load, so it has no commits.
@@ -1053,6 +1076,8 @@ pub struct Publisher {
     pub merged_file: Option<String>,
     /// The `replace_key` values committed so far; `None` without a `replace_key`.
     pub replaced: Option<ReplacedKeys>,
+    /// The rows a key scan's commit marked deleted; `None` for other loads.
+    pub marked: Option<u64>,
     /// Every `replace_key` value a files source's commits inserted in this run, with the file it came from, which a later file of the run may not hold too.
     pub run_keys: std::collections::BTreeMap<String, String>,
     /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).

@@ -63,6 +63,11 @@ impl SqlAdapter for ClickHouseSql {
         )
     }
 
+    /// Not yet: ClickHouse changes rows by mutations, which run after the statement returns.
+    fn marks_deleted_rows(&self) -> bool {
+        false
+    }
+
     /// Not yet: changes would need merging into partitions batch by batch.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false

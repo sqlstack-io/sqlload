@@ -14,7 +14,7 @@ use crate::project::constants::{
     TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcDeletes, CdcMode, ConnectionConfig, ConstantColumns, ProjectConfig, RenameSetting,
+    CdcMode, ConnectionConfig, ConstantColumns, Deletes, ProjectConfig, RenameSetting,
     SourceConfig, SourceKind, TableSettings, WriteStrategy,
 };
 use crate::sheets_source::main::a1_range::a1_range;
@@ -207,11 +207,10 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let cdc_only = source.publication.is_some()
         || source.slot.is_some()
         || source.cdc_mode != CdcMode::Merge
-        || source.deletes != CdcDeletes::Soft
         || source.batch_interval.is_some();
     if cdc_only && source.kind != SourceKind::PostgresCdc {
         problems.push(format!(
-            "{place} publication, slot, cdc_mode, deletes and batch_interval are for kind = \"postgres_cdc\""
+            "{place} publication, slot, cdc_mode and batch_interval are for kind = \"postgres_cdc\""
         ));
     }
     if source.kind == SourceKind::PostgresCdc {
@@ -863,7 +862,10 @@ fn cdc_problems(place: &str, source: &SourceConfig) -> Vec<String> {
             "{place} batch_interval must be at least 1s, or `load --follow` would write a batch for almost every change"
         ));
     }
-    if source.deletes == CdcDeletes::Hard && source.cdc_mode == CdcMode::Changelog {
+    let hard = std::iter::once(&source.defaults)
+        .chain(source.tables.values().map(|table| &table.settings))
+        .any(|settings| settings.deletes == Some(Deletes::Hard));
+    if hard && source.cdc_mode == CdcMode::Changelog {
         problems.push(format!(
             "{place} deletes = \"hard\" applies to cdc_mode = \"merge\"; a changelog keeps every delete as a row"
         ));

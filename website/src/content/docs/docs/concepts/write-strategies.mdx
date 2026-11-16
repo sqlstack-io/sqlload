@@ -231,6 +231,55 @@ WHERE rowid IN (
 
 `PARTITION BY` puts NULLs together, so each key, NULLs included, keeps one row.
 
+### Rows deleted at the source
+
+From 0.54.0, `deletes` makes a `merge` table drop or mark the rows whose key the source no
+longer holds. A merge alone never sees a deleted row: its key just stops arriving. Postgres,
+ODBC, Snowflake and BigQuery sources take it; files, Python and Google Sheets sources, which can't
+list every key, don't.
+
+```toml
+[sources.erp.tables."pub.stock_item"]
+write_strategy = "merge"
+cursor_column = "updated_at"
+unique_key = ["company_no", "item_no"]
+deletes = "soft"            # or "hard"; unset, rows are never marked
+checks = { max_row_drop = "10%" }
+```
+
+A plain `load` only merges. `sqlload load --sync-deletes` merges, then reads every key of the
+source table (from its `sql` query, when it has one) and marks the table's rows of the keys it
+didn't read. Your orchestrator decides how often to scan, such as a load every 15 minutes and a
+nightly `--sync-deletes`, so SQLLoad keeps no schedule.
+
+- `soft` sets `_sqlload_deleted_at` to the time the scan started, the column
+  [`postgres_cdc`](/docs/sources/postgres-cdc/) sets. When a key comes back, the merge clears it.
+  The table gets the column when it first loads with `deletes = "soft"`.
+- `hard` removes the row.
+- Only rows loaded before the key read started are marked (`_sqlload_loaded_at` earlier than the
+  scan's start), so a row a concurrent load writes while the scan reads is never marked.
+- The scan marks at most `checks.max_row_drop` of the table's rows (those not already marked), or
+  5% without it. A scan that would mark more, as an empty view or a changed permission would,
+  fails the table and marks nothing.
+- `--sync-deletes` fails `plan` when none of the selected tables sets `deletes`.
+- A table with `unnest`, or one sharing its destination with other tables through
+  `constant_columns`, can't take `deletes`. Neither can a ClickHouse or files target.
+
+`plan` shows the cost on the table's line, and the result shows how many rows were marked:
+
+```console
+$ sqlload plan --sync-deletes
+…
+└── raw.erp__stock_item   merge (unique_key: company_no, item_no), then a full key scan of pub.stock_item soft-deletes the rows of keys it no longer holds (at most 10% of the table)
+…
+$ sqlload load --sync-deletes
+…
+loaded  raw.erp__stock_item  1,204 rows (key scan of 48,112 keys: 37 rows soft-deleted)  6.3s
+```
+
+On a [`postgres_cdc`](/docs/sources/postgres-cdc/) source, `deletes` is how captured deletes are
+applied instead, `soft` by default.
+
 ## delete_insert
 
 `delete_insert` replaces a cursor range: it deletes rows in the range it read, `[start, end)`, then

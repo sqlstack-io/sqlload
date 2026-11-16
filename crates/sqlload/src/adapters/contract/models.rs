@@ -44,6 +44,22 @@ pub enum WriteMode {
     Recreate,
     /// Captured changes (`kind = "postgres_cdc"`), applied only where their `_sqlload_lsn` is newer than what the table holds, so a replayed batch changes nothing.
     Changes(ChangeWrite),
+    /// The staged rows are every key the source holds (`load --sync-deletes`): the table's rows loaded before `before` whose key none of them holds are marked deleted, matched as a merge matches keys.
+    MarkMissing(MarkWrite),
+}
+
+/// How a key scan marks the table's rows whose key the source no longer holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkWrite {
+    pub unique_key: Vec<String>,
+    /// The key columns whose staged values are never NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
+    /// `_sqlload_deleted_at` is set to `before` on a row it is NULL on; otherwise the row is removed.
+    pub soft: bool,
+    /// When the key read started, RFC 3339 UTC: a row loaded since (its `_sqlload_loaded_at` not before it) may hold a key the read missed, so it stays.
+    pub before: String,
+    /// The most percent of the table's rows (those not marked yet) one scan may mark; more fails the table, marking none.
+    pub max_drop: u8,
 }
 
 impl WriteMode {
@@ -58,7 +74,7 @@ impl WriteMode {
         }
     }
 
-    /// The key columns a merge, a change apply or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
+    /// The key columns a merge, a change apply, a key scan or a `delete_insert` by `replace_key` matches rows on, each with whether its staged values may be NULL, so it matches NULL-safely; none for the other modes.
     pub fn matched_keys(&self) -> Vec<(&str, bool)> {
         let (unique_key, not_null_keys) = match self {
             WriteMode::Merge {
@@ -67,6 +83,7 @@ impl WriteMode {
                 ..
             } => (unique_key, not_null_keys),
             WriteMode::Changes(change) => (&change.unique_key, &change.not_null_keys),
+            WriteMode::MarkMissing(mark) => (&mark.unique_key, &mark.not_null_keys),
             WriteMode::DeleteInsert {
                 replace_key,
                 not_null_keys,

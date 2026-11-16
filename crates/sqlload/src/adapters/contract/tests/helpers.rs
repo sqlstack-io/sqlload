@@ -26,7 +26,7 @@ pub(crate) fn columns() -> Vec<DesiredColumn> {
     ];
     columns.extend(metadata_columns(
         crate::load_naming::models::Compat::Sqlload,
-        false,
+        (false, false),
     ));
     columns
 }

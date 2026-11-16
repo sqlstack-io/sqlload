@@ -172,7 +172,10 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
     {
         column.origin = ColumnOrigin::Metadata;
     }
-    desired.extend(metadata_columns(spec.compat, spec.row_id));
+    desired.extend(metadata_columns(
+        spec.compat,
+        (spec.row_id, spec.soft_deletes()),
+    ));
     desired
 }
 

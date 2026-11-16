@@ -316,6 +316,16 @@ fn shared_problems(table: &TablePlan, others: &[&TableSpec]) -> Vec<String> {
             removing.strategy
         ));
     }
+    if let Some(deleting) = std::iter::once(spec)
+        .chain(others.iter().copied())
+        .find(|each| each.deletes.is_some())
+    {
+        problems.push(format!(
+            "{place}; {}.{} sets deletes, which would mark the other tables' rows deleted, as its source holds none of their keys: remove deletes",
+            deleting.source_name,
+            deleting.source_table.qualified_name()
+        ));
+    }
     if table.mode == WriteMode::Recreate || table.schema.action == TableAction::Recreate {
         problems.push(format!(
             "{place}; --reload would drop the other tables' rows"
