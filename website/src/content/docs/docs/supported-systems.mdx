@@ -41,10 +41,10 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Postgres | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| ODBC (from 0.27.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
-| BigQuery (from 0.30.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
+| ODBC (from 0.27.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
+| BigQuery (from 0.30.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
-| Files on an SFTP server (from 0.32.0) | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
+| Files on an SFTP server (from 0.32.0) | Yes, read by SQLLoad, tested live | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
@@ -64,11 +64,11 @@ them into DuckDB.
 | ClickHouse | Real ClickHouse 25.3, 25.8 and 26.10 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
 | DuckDB | Real, in process. |
 | MotherDuck | Live against a MotherDuck account on DuckDB 1.5.6: every write strategy, an incremental load and rerun, a new column and every portable type. Offline, every change loads through the separate process into a stand-in for MotherDuck and compares with DuckDB. See [MotherDuck](/docs/targets/motherduck/#tested). |
-| ODBC | psqlODBC against real Postgres in containers, into DuckDB. |
-| BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors. |
+| ODBC | psqlODBC against real Postgres in containers, into DuckDB, plus a live round from SQL Server and MySQL into Databricks. |
+| BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors, plus a live round into Databricks. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
-| SFTP | OpenSSH's SFTP server in a container, into DuckDB: new and rewritten files, gzip CSV and Parquet, key and password sign-in, and unknown or changed host keys refused. |
+| SFTP | OpenSSH's SFTP server in a container, into DuckDB: new and rewritten files, gzip CSV and Parquet, key and password sign-in, and unknown or changed host keys refused, plus a live round into Databricks. |
 | Kafka | Redpanda in containers. |
 | Google Sheets | A local fake Sheets API (OAuth, tabs and A1 ranges, refused tokens), plus a live smoke test on a real spreadsheet with generic contents. |
 | Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |

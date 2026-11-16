@@ -107,8 +107,15 @@ values checked against each source after every round.
 | Python rows | live | live | live | live |
 | Python Arrow data | live | live | live | live |
 | `sl.http` (paginated JSON) | live | live | live | live |
+| ODBC (SQL Server, MySQL) | not run | live | not run | live |
+| BigQuery | not run | live | not run | live |
+| Files on an SFTP server (gzip CSV, Parquet) | live | not run | not run | refused at `plan` |
 
 `merge` is refused for files sources on every target. The live rounds also covered incremental
 loads on a cursor, rows with a NULL cursor under `delete_insert`, an added column, widening a
 decimal in place, `contract diff`, `contract diff --source` and `contract generate --write`, and a
 load that failed mid-way, which committed no rows and left the volume's `sqlload/` folder empty.
+
+A later round, with the code released as 0.59.0, loaded SQL Server and MySQL through ODBC and a BigQuery project
+under `merge` and `replace`, and gzip CSV and Parquet files from an SFTP server under `append`, into
+one schema. It ran twice, a first load and then source changes (updated and new rows, new files), with row counts, keys and sums checked against each source after both.
