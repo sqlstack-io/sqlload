@@ -478,6 +478,7 @@ pub(crate) fn flat_ndjson(rows: u64) -> Vec<u8> {
                     Cell::Date(value) => value.to_string(),
                     Cell::TimestampNtz(value) => value.to_string(),
                     Cell::Text(text) => format!("\"{text}\""),
+                    Cell::Binary(bytes) => format!("{bytes:?}"),
                 };
                 format!("\"{name}\":{value}")
             })
