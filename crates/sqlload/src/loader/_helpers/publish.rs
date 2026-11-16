@@ -1919,8 +1919,15 @@ fn room_to_hold(table: &TablePlan, commit_bytes: usize) -> Result<Spool, LoaderE
     Spool::new(&parent).map_err(LoaderError::Invalid)
 }
 
+/// The plan's `send` line for the table (see [`send_line`]) and its `memory` line, where the target's peak memory doesn't follow the source's fetch budget, as labelled lines.
+pub(crate) fn send_lines(table: &TablePlan) -> impl Iterator<Item = (&'static str, String)> {
+    let memory = sql_adapter(table.spec.warehouse).memory_note();
+    (send_line(table).map(|text| ("send", text)).into_iter())
+        .chain(memory.map(|text| ("memory", text.to_owned())))
+}
+
 /// The plan's `send` line for a table under `send = "at_commit"`: about how much each commit holds locally before its burst, or why the setting doesn't apply; `None` when each batch is sent as it is read.
-pub(crate) fn send_line(table: &TablePlan) -> Option<String> {
+fn send_line(table: &TablePlan) -> Option<String> {
     let spec = &table.spec;
     if spec.send == SendMode::PerBatch || !sql_adapter(spec.warehouse).runs_sql() {
         return None;

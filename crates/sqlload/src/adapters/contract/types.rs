@@ -48,6 +48,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         true
     }
 
+    /// What a load's peak memory on this target scales with, for `plan`, where it doesn't follow the source's fetch budget; `None` elsewhere.
+    fn memory_note(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Whether a merge table's `deletes` may mark its rows in place (`load --sync-deletes`): every SQL warehouse that updates and deletes rows by a correlated subquery.
     fn marks_deleted_rows(&self) -> bool {
         self.runs_sql()
