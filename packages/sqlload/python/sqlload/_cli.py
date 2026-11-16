@@ -71,7 +71,17 @@ def main() -> None:
 	args = ["sqlload", *sys.argv[1:]]
 	if "--json" not in args:
 		sys.exit(_native.run_cli(args))
-	# The native command writes its one JSON document to the process's stdout; a source's print() goes to stderr, so stdout still parses.
-	with contextlib.redirect_stdout(sys.stderr):
-		code = _native.run_cli(args)
+	# Under --json, stdout holds the one JSON document and nothing else: for the run, file descriptor 1 is stderr, so what a
+	# source's print(), a child process it starts or os.write(1, ...) writes goes there, and the document is written after.
+	saved = os.dup(1)
+	os.dup2(2, 1)
+	try:
+		with contextlib.redirect_stdout(sys.stderr):
+			code, document = _native.run_cli_captured(args)
+		sys.stderr.flush()
+	finally:
+		os.dup2(saved, 1)
+		os.close(saved)
+	with open(1, "wb", closefd=False) as stdout:
+		stdout.write(document.encode())
 	sys.exit(code)

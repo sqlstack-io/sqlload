@@ -46,3 +46,17 @@ pub(crate) fn runtime(
         .build()
         .map_err(|error| format!("cannot start the async runtime: {error}"))
 }
+
+/// `body`'s result, run on a thread of its own with `COMMAND_STACK_BYTES` of stack rather than on the caller's: a Windows main thread, the executable's or python.exe's, has 1 MB, which a debug build's copy into a files target outgrows. A panic in `body` carries on in the caller.
+pub(crate) fn on_command_stack<T: Send>(body: impl FnOnce() -> T + Send) -> std::io::Result<T> {
+    std::thread::scope(|scope| {
+        let thread = std::thread::Builder::new()
+            .name("sqlload-command".to_owned())
+            .stack_size(COMMAND_STACK_BYTES)
+            .spawn_scoped(scope, body)?;
+        Ok(match thread.join() {
+            Ok(value) => value,
+            Err(panic) => std::panic::resume_unwind(panic),
+        })
+    })
+}
