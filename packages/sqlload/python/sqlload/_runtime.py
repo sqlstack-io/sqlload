@@ -91,8 +91,8 @@ def discover(root: str, python_paths: list[str]) -> str:
 
 
 def crossing_default(value: Any) -> Any:
-	"""orjson's `default` for yielded rows: `str()`, a `time` as ISO text; a `Decimal`, `date` or `datetime` refuses, so the batch is walked and keeps its type."""
-	if isinstance(value, Decimal) or type(value) in (date, datetime):
+	"""orjson's `default` for yielded rows: `str()`, a `time` as ISO text; a `Decimal`, `date`, `datetime` or bytes refuses, so the batch is walked and keeps its type."""
+	if isinstance(value, (Decimal, bytes, bytearray, memoryview)) or type(value) in (date, datetime):
 		raise TypeError("typed value")
 	if type(value) is time:
 		return value.isoformat()

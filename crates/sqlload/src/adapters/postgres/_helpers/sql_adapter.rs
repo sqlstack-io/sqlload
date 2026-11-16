@@ -35,6 +35,11 @@ impl SqlAdapter for PostgresSql {
         Some(63)
     }
 
+    /// The mark statements of `deletes` and `deletes_from` run in the container tests.
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
     /// Not yet: Postgres targets take `postgres` and other sources, and a later release applies captured changes.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false

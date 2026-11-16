@@ -380,7 +380,7 @@ pub(crate) fn build_spec(
     problems.extend(deletes_problems(
         deletes,
         kind,
-        context.target.warehouse,
+        (context.target.warehouse, context.target.motherduck),
         unnests,
     ));
     let from = overrides.deletes_from.as_ref();
@@ -1056,9 +1056,12 @@ fn no_primary_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> S
         .iter()
         .map(|key| format!("{} ({})", key.constraint_type, key.columns.join(", ")))
         .collect();
-    let listed = match table.listed_keys.first() {
-        None => String::new(),
-        Some(first) => format!(
+    let listed = match (table.listed_keys.first(), context.source.kind.name()) {
+        (None, _) => String::new(),
+        (Some(_), "postgres" | "postgres_cdc") => {
+            format!(". The table has {}", shown.join(" and "))
+        }
+        (Some(first), _) => format!(
             ". The ODBC driver reported no primary key, but the database's INFORMATION_SCHEMA lists {}{}",
             shown.join(" and "),
             match first.constraint_type == PRIMARY_KEY {

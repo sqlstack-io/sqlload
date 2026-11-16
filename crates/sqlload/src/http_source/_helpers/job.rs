@@ -115,6 +115,14 @@ fn context_problems(job: &HttpJob) -> Vec<String> {
     }
     if let Some(key_path) = &request.key_path {
         problems.extend(key_path_problem(&key_path.path));
+        let names = fan_out_placeholders(request);
+        if names.len() > 1 {
+            problems.push(format!(
+                "key_path checks each record against the one key its request sent, but the request fills {} placeholders ({}), so a record could match the wrong one; fan out over one placeholder",
+                names.len(),
+                names.join(", ")
+            ));
+        }
     }
     if request.cells.is_some() && reshapes(request, &rows) {
         problems.push(format!(

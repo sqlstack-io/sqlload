@@ -605,6 +605,8 @@ pub(crate) struct ResolvedTarget {
     pub(crate) staging_dir: Option<std::path::PathBuf>,
     /// `json_type = "variant"`: `json` columns are DuckDB `VARIANT` columns.
     pub(crate) variant_json: bool,
+    /// A MotherDuck database, which DuckDB reaches but runs statements itself.
+    pub(crate) motherduck: bool,
 }
 
 /// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
@@ -682,6 +684,7 @@ pub(crate) fn source_target(
             send: target.send.unwrap_or(SendMode::PerBatch),
             staging_dir: target.staging_dir.clone(),
             variant_json: false,
+            motherduck: false,
         });
     }
     let schema = source
@@ -715,6 +718,7 @@ pub(crate) fn source_target(
         ),
         staging_dir: target.staging_dir.clone(),
         variant_json: target.json_type == Some(JsonType::Variant),
+        motherduck: matches!(connection, ConnectionConfig::MotherDuck { .. }),
     })
 }
 
@@ -1474,8 +1478,16 @@ pub(crate) async fn found_sources<'a>(
             None => false,
         };
         let path = source.source.path.as_deref().unwrap_or_default();
+        let proves_folders = matches!(
+            project.connections.get(&source.source.connection),
+            Some(ConnectionConfig::Filesystem { .. })
+        );
         let problem = match (exists, shared, options.reload) {
             (false, _, _) if source.source.on_empty == OnEmpty::Fail => Some(drained.problem),
+            (false, _, _) if !proves_folders => Some(format!(
+                "[sources.{}]: no files to load in {path}, and {} was never loaded: an object store or SFTP server lists a folder that doesn't exist as empty, so on_empty = \"skip\" skips one only once its table exists. Fix: check the source's path and connection, or load once files arrive",
+                source.name, drained.table.table
+            )),
             (_, true, _) => Some(format!(
                 "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
                 source.name, drained.table.table, source.name
