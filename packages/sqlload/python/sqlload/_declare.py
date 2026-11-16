@@ -37,6 +37,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"on_cursor_out_of_range",
 		"on_duplicate_keys",
 		"on_duplicate_names",
+		"on_nonfinite",
 		"on_schema_change",
 		"rename",
 		"replace_key",

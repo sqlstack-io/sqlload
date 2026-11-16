@@ -101,11 +101,13 @@ loading as NULL. Elements convert as a pinned column of `T` would, so from 0.45.
 0.45.0, float elements of Arrow and Parquet lists pinned `array(int)` were cut to whole numbers
 (which `plan` noted), and extra decimal places were rounded to the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
 0.29.0, a list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
-converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values. In
-Python dicts, in Arrow lists that load as `json`, and in a table whose batches mix dicts and Arrow
-data, they load as NULL elements. Into Snowflake, NaN and infinities in a pinned Parquet list fail
-the load, and from 0.29.0 so do those in a pinned Arrow list; from dicts they
-load as NULL. Partition columns, path and constant columns, and Postgres change capture don't take
+converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values, and
+from 0.54.0 so do those in the lists of Python dicts. In Arrow lists that load as `json`, and in the
+Arrow batches of a table that mixes dicts and Arrow data, they load as NULL elements; a dict's list
+that loads as `json` fails the load instead, as JSON can't hold them (see
+[NaN and infinities](/docs/sources/python/#nan-and-infinities)). Into Snowflake, NaN and infinities
+in a pinned Parquet list fail the load, and from 0.29.0 so do those in a pinned Arrow list, and from
+0.54.0 those from dicts. Partition columns, path and constant columns, and Postgres change capture don't take
 arrays.
 
 ## Names SQLLoad accepts
@@ -162,7 +164,9 @@ Columns pinned in `columns` are read as the pinned type, when the source type ca
 
 ## Python and files
 
-Python values are typed as described in the [Python API](/docs/sources/python/#types). Parquet columns
+Python values are typed as described in the [Python API](/docs/sources/python/#types); from 0.54.0,
+NaN and infinite floats in dicts keep their values, as Postgres and Parquet floats do (see
+[NaN and infinities](/docs/sources/python/#nan-and-infinities)). Parquet columns
 keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
 want typed differently.
 

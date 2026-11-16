@@ -46,8 +46,8 @@ use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, Naming};
 use crate::loader::_helpers::destination::files_read_as;
 use crate::loader::_helpers::destination::nanosecond_columns;
+use crate::loader::_helpers::python::read_schema;
 use crate::loader::_helpers::python::{fitting_type, python_tables};
-use crate::loader::_helpers::python::{read_schema, read_types};
 use crate::loader::_helpers::resolve::{
     display_name, resolve_tables, source_target, spec_names, target_display_name,
 };
@@ -94,6 +94,7 @@ use crate::python_sources::main::transform_range::transform_range;
 use crate::python_sources::models::{TransformCall, TransformContext, TransformFiles};
 use crate::python_sources::types::PythonHost;
 use crate::row_batches::main::loaded_batch::loaded_batch;
+use crate::row_batches::main::read_types::read_types;
 use crate::schema_plan::models::LiveColumn;
 use crate::sheets_source::constants::{EMPTY_SHEET_COLUMN_KIND, SCOPE, SHEET_COLUMN_KIND};
 use crate::sheets_source::main::a1_width::a1_width;
@@ -878,11 +879,15 @@ async fn sheet_rows(
             .await
             .map_err(LoaderError::Invalid)?;
         let mut typed: Vec<RecordBatch> = Vec::with_capacity(batches.len());
+        let mut rows: u64 = 0;
         for batch in &batches {
             unplanned_column(batch, &table.spec, &time.file).map_err(LoaderError::Invalid)?;
             let loaded =
                 loaded_batch(batch, &table.spec.source_table).map_err(LoaderError::Invalid)?;
-            typed.push(read_types(&loaded, &read_schema(table))?);
+            typed.push(
+                read_types(&loaded, &read_schema(table), rows).map_err(LoaderError::Invalid)?,
+            );
+            rows += batch.num_rows() as u64;
         }
         run.times
             .lock()

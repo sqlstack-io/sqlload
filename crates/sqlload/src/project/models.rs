@@ -807,6 +807,9 @@ pub struct TableSettings {
     /// `infer_types = false`: every column whose type SQLLoad would infer from sampled values loads as `text` (objects and lists stay `json`); pinned columns keep their types.
     #[serde(default)]
     pub infer_types: Option<bool>,
+    /// What the dict rows of a Python table or transform do with a NaN or infinite float: keep it where the column holds it and fail where it can't (default), or load it as NULL.
+    #[serde(default)]
+    pub on_nonfinite: Option<OnNonFinite>,
     #[serde(default)]
     pub type_change_rebuild: Option<Policy>,
     /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.
@@ -1016,6 +1019,17 @@ pub enum OnCursorOutOfRange {
     Skip,
     /// Load them, with a warning in the load report.
     Warn,
+}
+
+/// What the dict rows of a Python table or transform do with NaN, `inf` and `-inf` floats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnNonFinite {
+    /// Load them as floats, and fail naming the column where its type can't hold them (a decimal or integer, a `json` value).
+    #[default]
+    Keep,
+    /// Load them as NULL.
+    Null,
 }
 
 /// How far a cursor's `lookback` reads back: a duration on a date or timestamp cursor (`"1d"`), or a number of cursor units on an integer cursor (`1`).
