@@ -80,7 +80,8 @@ A column whose type SQLLoad infers (Python tables, CSV and JSON files) doesn't c
 own. When values outgrow the column, the table fails with the column, both types, and the fix. With
 `auto_widen = true` on the table or source, it widens instead along `bool` → `int` → `decimal`
 and `timestamp_ntz` → `timestamp_tz`, as `plan` shows. It never widens to `float`, `text` or
-`json` by itself: pin those.
+`json` by itself: pin those, or set `infer_types = false` to load every inferred column as `text`
+([Loading every column as text](/docs/concepts/types/#loading-every-column-as-text)).
 
 ### Changes that rebuild a table
 

@@ -97,6 +97,22 @@ pub(crate) struct SettingsChangeTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A CSV files table loaded once, planned under changed settings, then loaded again with one more file.
+pub(crate) struct FilesSettingsChangeTestCase {
+    pub(crate) description: &'static str,
+    /// The file (name, contents) the first load reads, and the one added before the second.
+    pub(crate) first: (&'static str, &'static str),
+    pub(crate) second: (&'static str, &'static str),
+    /// Source settings for the first load, then for the plan and second load.
+    pub(crate) before: &'static str,
+    pub(crate) after: &'static str,
+    /// Lines the plan under `after` shows.
+    pub(crate) expected_plan: &'static [&'static str],
+    /// A query on the DuckDB destination after the second load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One project with constant columns planned and loaded once on a fresh Postgres.
 pub(crate) struct ConstantLoadTestCase {
     pub(crate) description: &'static str,

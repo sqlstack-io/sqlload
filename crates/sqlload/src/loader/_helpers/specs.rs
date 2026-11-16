@@ -477,6 +477,8 @@ pub(crate) fn build_spec(
             .unwrap_or_default(),
         auto_widen: layered(&settings.auto_widen, &defaults.auto_widen)
             .is_some_and(|(value, _)| value),
+        infer_types: layered(&settings.infer_types, &defaults.infer_types)
+            .is_none_or(|(value, _)| value),
         type_change_rebuild: layered(&settings.type_change_rebuild, &defaults.type_change_rebuild)
             .map(|(value, _)| value)
             .unwrap_or_default(),
@@ -1846,35 +1848,6 @@ pub(crate) fn pinned_unsampled(
     Ok(unsampled)
 }
 
-/// What a files read reads, as the files spell it (the batches it reads are renamed to the loaded names after): each of `read_columns` in its read type, and those whose types were inferred from sampled values, not pinned and not filled from the path (`partition_types`) or the file.
-pub(crate) fn files_read_as(
-    spec: &TableSpec,
-    read_columns: &[ReadColumn],
-    partition_types: &[(String, ColumnType)],
-) -> (Vec<DesiredColumn>, Vec<String>) {
-    let spelled = |name: &str| spec.source_table.spelling(name).to_owned();
-    let columns: Vec<DesiredColumn> = read_columns
-        .iter()
-        .map(|column| DesiredColumn {
-            name: spelled(&column.name),
-            column_type: column.output.clone(),
-            origin: ColumnOrigin::Source,
-        })
-        .collect();
-    let filled: Vec<&str> = partition_types
-        .iter()
-        .map(|(name, _)| name.as_str())
-        .chain([SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN])
-        .collect();
-    let inferred: Vec<String> = read_columns
-        .iter()
-        .filter(|column| !spec.pinned.contains_key(&column.name))
-        .map(|column| spelled(&column.name))
-        .filter(|name| !filled.contains(&name.as_str()))
-        .collect();
-    (columns, inferred)
-}
-
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading); a parsed column reads as text, for `parse` to convert.
 pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
     let mut problems: Vec<String> = Vec::new();
@@ -1888,6 +1861,9 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
             _ if excluded => continue,
             _ if spec.parses.contains_key(&column.name) => ColumnType::Text,
             (Some(pinned), _) => pinned.clone(),
+            (None, Ok(column_type)) if read_as_text(spec, &column.name, column_type) => {
+                ColumnType::Text
+            }
             (None, Ok(column_type)) => column_type.clone(),
             (None, Err(reason)) => {
                 problems.push(format!("column {}: {reason}", column.name));
@@ -1905,6 +1881,27 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
         true => Ok(columns),
         false => Err(problems),
     }
+}
+
+/// Whether unpinned column `name` of `column_type` reads as `text` under `infer_types = false`: a scalar SQLLoad's files or Sheets reader would type by inference (Parquet, a `transform`'s output and columns filled from the path or file keep their types).
+fn read_as_text(spec: &TableSpec, name: &str, column_type: &ColumnType) -> bool {
+    let reader_inferred = match (&spec.files, &spec.sheet) {
+        (Some(files), _) => {
+            files.encoding.format != SourceFormat::Parquet
+                && files.transform.is_none()
+                && !files
+                    .partition_types
+                    .iter()
+                    .any(|(partition, _)| partition == spec.source_table.spelling(name))
+        }
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    !spec.infer_types
+        && reader_inferred
+        && !matches!(column_type, ColumnType::Json | ColumnType::Array(_))
+        && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
+            .contains(&spec.source_table.spelling(name))
 }
 
 /// The function and the host that run table `name`'s `transform` (its own, else its source's), when it has one the host imported.

@@ -14,6 +14,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "contract",
     "on_schema_change",
     "auto_widen",
+    "infer_types",
     "type_change_rebuild",
     "batch_size",
     "checks",

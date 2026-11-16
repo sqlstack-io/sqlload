@@ -2,10 +2,13 @@ use sqlload_testkit::seaweedfs::main::create_bucket::create_bucket;
 use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
-    after_sample, gzip, local_store, plain, run_async, run_text_files_scenario, seaweedfs_store,
-    zstd,
+    after_sample, codes_after_sample, duckdb_text, gzip, local_store, plain, run_async,
+    run_sqlload, run_text_files_scenario, seaweedfs_store, words, zstd,
 };
-use crate::test_types::{PipedOutputTestCase, TextFile, TextFilesRun, TextFilesScenarioTestCase};
+use crate::test_types::{
+    FilesSettingsChangeTestCase, PipedOutputTestCase, TextFile, TextFilesRun,
+    TextFilesScenarioTestCase,
+};
 
 const EVENTS_NOV_3: TextFile = TextFile {
     key: "day=2026-11-03/part-0.ndjson.gz",
@@ -76,6 +79,13 @@ const CSV_RUNS: &[TextFilesRun] = &[
 
 /// Rows, names in id order (the quoted delimiter kept), the newest timestamp as epoch seconds, the added column's sum, newest partition, and the pinned column's type.
 const CSV_CHECK: &str = "SELECT count(*) || ',' || string_agg(name, '|' ORDER BY id) || ',' || CAST(epoch(max(seen_at)) AS BIGINT) || ',' || sum(score) || ',' || max(day) || ',' || (SELECT typeof(id) FROM raw.scores LIMIT 1) FROM raw.scores";
+
+/// `code,amount` rows: 10,000 sampled ones with numeric codes, then an alphanumeric code and one with leading zeros.
+const CODES_AFTER_SAMPLE: TextFile = TextFile {
+    key: "part-0.csv",
+    contents: "16ZN102RSC,2.25\n00123,1.25\n",
+    encode: codes_after_sample,
+};
 
 /// The table's columns, each record in load order, and the record column's type.
 const RECORD_CHECK: &str = "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_name = 'scores') || '|' || string_agg(day || ' ' || CAST(record AS VARCHAR), '|' ORDER BY day, _sqlload_source_row) || '|' || (SELECT typeof(record) FROM raw.scores LIMIT 1) FROM raw.scores";
@@ -403,6 +413,30 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             check_query: "SELECT sum(v) || ',' || (SELECT typeof(v) FROM raw.scores LIMIT 1) FROM raw.scores",
             expected_result: "2.5,DOUBLE",
         },
+        TextFilesScenarioTestCase {
+            description: "codes numeric in the sampled rows and alphanumeric after load as text written as they are under infer_types = false, a pinned decimal stays decimal, and plan says so",
+            store: local_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\ninfer_types = false\n[sources.scores.tables.scores]\ncolumns = { amount = \"decimal(18,2)\" }\n",
+            runs: &[TextFilesRun {
+                files: &[CODES_AFTER_SAMPLE],
+                expected_error: "",
+                expected_plan: "schema  every column text except columns pinned, objects and lists (infer_types = false)",
+            }],
+            check_query: "SELECT (SELECT typeof(code) || ',' || typeof(amount) FROM raw.scores LIMIT 1) || ',' || count(*) FILTER (WHERE code IN ('00123', '16ZN102RSC')) || ',' || sum(amount) FROM raw.scores",
+            expected_result: "VARCHAR,DECIMAL(18,2),2,10003.50",
+        },
+        TextFilesScenarioTestCase {
+            description: "the same codes without infer_types = false fail on the first alphanumeric one",
+            store: local_store,
+            settings: "format = \"csv\"\nwrite_strategy = \"append\"\n",
+            runs: &[TextFilesRun {
+                files: &[CODES_AFTER_SAMPLE],
+                expected_error: "code: \"16ZN102RSC\" does not fit int, the type inferred from sampled values",
+                expected_plan: "",
+            }],
+            check_query: NO_ROWS,
+            expected_result: "0",
+        },
     ];
     run_async(async {
         let server = start_seaweedfs().await?;
@@ -468,6 +502,64 @@ fn given_plan_and_load_piped_when_colour_is_left_on_then_no_output_has_an_escape
         assert!(
             !text.contains('\u{1b}') && text.contains(test_case.expected_table),
             "{}: {text:?}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_loaded_csv_table_when_infer_types_turns_off_then_plan_shows_each_type_change_and_new_rows_load_as_written()
+-> Result<(), String> {
+    let test_cases = [FilesSettingsChangeTestCase {
+        description: "int columns widen to text in place, the loaded 123 becomes text, and a new file's 00456 keeps its zeros",
+        first: ("a.csv", "code,qty\n123,1\n"),
+        second: ("b.csv", "code,qty\n00456,2\n"),
+        before: "",
+        after: "infer_types = false\n",
+        expected_plan: &[
+            "widen  code int -> text (VARCHAR)",
+            "widen  qty int -> text (VARCHAR)",
+        ],
+        check_query: "SELECT string_agg(code || ':' || qty, '|' ORDER BY code) || ',' || typeof(any_value(code)) || ',' || typeof(any_value(qty)) FROM raw.products",
+        expected_result: "00456:2|123:1,VARCHAR,VARCHAR",
+    }];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path();
+        let folder = root.join("drop/products");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        let config = root.join("sqlload.toml");
+        let project = |extra: &str| {
+            format!(
+                "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{root}/out.duckdb\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.products]\nkind = \"files\"\ndescription = \"Products.\"\nconnection = \"files\"\npath = \"drop/products/\"\nformat = \"csv\"\nwrite_strategy = \"append\"\n{extra}",
+                root = root.display()
+            )
+        };
+        std::fs::write(folder.join(test_case.first.0), test_case.first.1)
+            .map_err(|error| error.to_string())?;
+        std::fs::write(&config, project(test_case.before)).map_err(|error| error.to_string())?;
+        let (loaded, first) = run_sqlload(&config, &["load"], ("", ""))?;
+        std::fs::write(&config, project(test_case.after)).map_err(|error| error.to_string())?;
+        let (planned, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+        std::fs::write(folder.join(test_case.second.0), test_case.second.1)
+            .map_err(|error| error.to_string())?;
+        let (reloaded, second) = run_sqlload(&config, &["load"], ("", ""))?;
+        assert!(
+            loaded
+                && planned
+                && reloaded
+                && test_case
+                    .expected_plan
+                    .iter()
+                    .all(|line| words(&plan).contains(&words(line))),
+            "{}:\n{first}\n{plan}\n{second}",
+            test_case.description
+        );
+        assert_eq!(
+            duckdb_text(&root.join("out.duckdb"), test_case.check_query)?,
+            test_case.expected_result,
+            "{}",
             test_case.description
         );
     }

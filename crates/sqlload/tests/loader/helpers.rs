@@ -481,6 +481,14 @@ pub(crate) fn after_sample(text: &str) -> Result<bytes::Bytes, String> {
     gzip(&format!("{padding}{text}"))
 }
 
+/// A CSV of `code,amount` whose sampled rows hold numeric codes, then `text`.
+pub(crate) fn codes_after_sample(text: &str) -> Result<bytes::Bytes, String> {
+    let sampled: String = (0..10_000)
+        .map(|row| format!("{},1.00\n", 1_099_999_500_115_812_i64 + row))
+        .collect();
+    plain(&format!("code,amount\n{sampled}{text}"))
+}
+
 /// A file zstd-compressed.
 pub(crate) fn zstd(text: &str) -> Result<bytes::Bytes, String> {
     zstd::encode_all(text.as_bytes(), 3)

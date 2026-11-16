@@ -127,6 +127,9 @@ same name, ignoring case, fails `plan`.
   as text, such as `'00123`, stays text with its zeros.
 - A column mixing kinds loads as `text` as the sheet shows each value, with a `plan` warning. Pin a
   type in `columns` to load it as another; a cell that does not convert fails the load, naming it.
+- From 0.54.0, `infer_types = false` loads every column not pinned as `text` as the sheet shows
+  each value (`TRUE`, `2026-01-15`). See
+  [Loading every column as text](/docs/concepts/types/#loading-every-column-as-text).
 - A column keeps the type its table already has when its values fit it: whole numbers in a `float`
   column, anything in a `text` column, and a column emptied in the sheet. A column first loaded
   with no values, such as every column of a header-only tab, is `text`; to type it once rows arrive,

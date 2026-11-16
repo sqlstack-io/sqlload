@@ -83,9 +83,24 @@ pub(crate) fn existing_column(
         ..ColumnDecision::default()
     };
     let adapter = sql_adapter(rules.warehouse);
-    let fit = adapter.type_fit(&column.column_type, &live.column_type);
+    let as_text = !rules.infer_types
+        && column.column_type == ColumnType::Text
+        && !matches!(
+            live.column_type,
+            ColumnType::Json | ColumnType::Array(_) | ColumnType::Native(_) | ColumnType::Binary
+        );
+    let fit = match adapter.type_fit(&column.column_type, &live.column_type) {
+        TypeFit::Incompatible if as_text => {
+            let sql = adapter.render_loader_logical_type(&ColumnType::Text).sql;
+            match adapter.widens_in_place(&live.column_type, &ColumnType::Text) {
+                true => TypeFit::WidenInPlace(sql),
+                false => TypeFit::NeedsRebuild(sql),
+            }
+        }
+        fit => fit,
+    };
     let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
-    if widens && column.origin == ColumnOrigin::Inferred && adapter.runs_sql() {
+    if widens && column.origin == ColumnOrigin::Inferred && !as_text && adapter.runs_sql() {
         let wider = format!(
             "{} is {} in the table but {} in the source; pin the wider type to widen it, for example columns = {{ {} = \"{}\" }}",
             live.name, live.column_type, column.column_type, column.name, column.column_type

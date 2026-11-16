@@ -144,7 +144,7 @@ fn expand(
         return Ok(false);
     }
     let parent = path.join(FLATTEN_SEPARATOR);
-    for (key, values) in key_columns(field, array)? {
+    for (key, values) in key_columns(field, array, flatten.as_text)? {
         let name = names.claim(&parent, key.name())?;
         let below: Vec<&str> = path.iter().copied().chain([key.name().as_str()]).collect();
         let named = Arc::new(key.as_ref().clone().with_name(name));
@@ -183,14 +183,15 @@ fn is_json(field: &Field) -> bool {
 pub(crate) fn key_columns(
     field: &Field,
     array: &ArrayRef,
+    as_text: bool,
 ) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
     match (array.data_type(), is_json(field)) {
         _ if array.logical_null_count() == array.len() => Ok(Vec::new()),
         (DataType::Struct(_), _) => struct_children(array),
-        (DataType::Utf8, true) => json_keys(field, array),
+        (DataType::Utf8, true) => json_keys(field, array, as_text),
         (DataType::Map(..), _) => {
             let (json_field, json_array) = normalise_column(field.name(), array)?;
-            json_keys(&json_field, &json_array)
+            json_keys(&json_field, &json_array, as_text)
         }
         (DataType::Utf8, false) => {
             let (row, shape) = text_shape(array);
@@ -225,7 +226,11 @@ fn struct_children(array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRef)>, Stri
 }
 
 /// A JSON column's objects read back as typed columns, one per key.
-fn json_keys(field: &Field, array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
+fn json_keys(
+    field: &Field,
+    array: &ArrayRef,
+    as_text: bool,
+) -> Result<Vec<(Arc<Field>, ArrayRef)>, String> {
     let document = object_lines(field, array)?;
     let read = JsonRead {
         layout: JsonLayout::Document,
@@ -235,7 +240,7 @@ fn json_keys(field: &Field, array: &ArrayRef) -> Result<Vec<(Arc<Field>, ArrayRe
     };
     let mut keys: Vec<(Arc<Field>, ArrayRef)> = Vec::new();
     json_rows(document.as_bytes(), &read, |columns| {
-        let batch = columns_batch(columns)?;
+        let batch = columns_batch(columns, as_text)?;
         keys.extend(
             batch
                 .schema()

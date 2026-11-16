@@ -42,6 +42,8 @@ pub struct SchemaRules {
     pub on_schema_change: OnSchemaChange,
     /// Inferred columns widen along the ladder (bool -> int -> decimal, timestamp_ntz -> timestamp_tz) instead of failing.
     pub auto_widen: bool,
+    /// `infer_types = false`: a scalar column turning `text` changes type as `type_change_rebuild` allows, as a column pinned `text` would.
+    pub infer_types: bool,
     pub type_change_rebuild: Policy,
     /// `--allow-type-change-rebuild` was given.
     pub rebuild_allowed: bool,

@@ -121,6 +121,46 @@ fn given_a_sheet_s_date_time_column_when_loading_with_parse_and_tz_then_its_wall
 }
 
 #[test]
+fn given_a_sheet_range_under_infer_types_false_when_loading_then_every_column_but_the_pinned_one_is_text()
+-> Result<(), String> {
+    run_async(async {
+        let fake = start_fake_sheets().await?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let database = folder.path().join("out.duckdb");
+        let config = folder.path().join("sqlload.toml");
+        let project = project_text(&fake.key_json, &fake.base_url, &database);
+        let settings = "[sources.reference.tables.locations]\ninfer_types = false\ncolumns = { Capacity = \"int\" }\n";
+        std::fs::write(&config, format!("{project}\n{settings}"))
+            .map_err(|error| error.to_string())?;
+        let test_cases = [SheetsLoadTestCase {
+            description: "dates, booleans and codes load as the text the sheet shows, the pinned Capacity as int, and plan says so",
+            tabs: first_tabs,
+            refused_reads: 0,
+            expected_output: "schema  every column text except columns pinned, objects and lists (infer_types = false)",
+            query: "SELECT string_agg(Code || ':' || coalesce(Opened, '') || ':' || coalesce(Active, '') || ':' || coalesce(CAST(Capacity AS VARCHAR), '') || ':' || coalesce(Ref, ''), ',' ORDER BY Code) || '|' || (SELECT string_agg(column_name || ' ' || data_type, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'reference__locations' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\') FROM raw.reference__locations",
+            expected_result: "L1:2026-01-15:TRUE:120:00123,L2:2025-12-31:FALSE::|code VARCHAR,name VARCHAR,opened VARCHAR,active VARCHAR,capacity BIGINT,updated_at VARCHAR,ref VARCHAR",
+        }];
+        for test_case in test_cases {
+            fake.place("fake-sheet", (test_case.tabs)());
+            let (_, plan) = run_sqlload(&config, &["plan"], ("", ""))?;
+            let (succeeded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+            assert!(
+                succeeded && words(&plan).contains(&words(test_case.expected_output)),
+                "{}:\n{plan}\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                duckdb_text(&database, test_case.query)?,
+                test_case.expected_result,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn given_a_google_sheets_source_when_planning_then_a_shared_table_name_and_a_repeated_merge_key_are_refused()
 -> Result<(), String> {
     run_async(async {

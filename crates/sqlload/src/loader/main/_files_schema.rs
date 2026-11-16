@@ -20,6 +20,7 @@ pub(in crate::loader) fn files_schema(
         contract: spec.contract,
         on_schema_change: spec.on_schema_change,
         auto_widen: spec.auto_widen,
+        infer_types: spec.infer_types,
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
         compat: spec.compat,

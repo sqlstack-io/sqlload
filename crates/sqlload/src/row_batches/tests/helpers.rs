@@ -64,7 +64,7 @@ pub(crate) fn read_json(test_case: &JsonRowsTestCase) -> Result<Vec<String>, Str
     };
     let mut batches: Vec<String> = Vec::new();
     json_rows(test_case.text.as_bytes(), &read, &mut |columns| {
-        batches.push(render(&columns_batch(columns)?));
+        batches.push(render(&columns_batch(columns, false)?));
         Ok(())
     })?;
     Ok(batches)
@@ -84,7 +84,7 @@ pub(crate) fn read_projected(test_case: &ProjectionTestCase) -> Result<Vec<Strin
     };
     let mut batches: Vec<String> = Vec::new();
     json_rows(test_case.text.as_bytes(), &read, &mut |columns| {
-        batches.push(render(&columns_batch(columns)?));
+        batches.push(render(&columns_batch(columns, false)?));
         Ok(())
     })?;
     Ok(batches)
@@ -101,7 +101,7 @@ pub(crate) fn merged_table(texts: &[&str]) -> Result<String, String> {
     let mut batches: Vec<RecordBatch> = Vec::new();
     for text in texts {
         json_rows(text.as_bytes(), &read, &mut |columns| {
-            batches.push(columns_batch(columns)?);
+            batches.push(columns_batch(columns, false)?);
             Ok(())
         })?;
     }
@@ -174,7 +174,7 @@ pub(crate) fn flattened(test_case: &FlattenBatchTestCase) -> Result<String, Stri
     };
     let mut batches: Vec<RecordBatch> = Vec::new();
     json_rows(test_case.rows.as_bytes(), &read, |columns| {
-        batches.push(columns_batch(columns)?);
+        batches.push(columns_batch(columns, false)?);
         Ok(())
     })?;
     let batch = batches.first().ok_or("no rows")?;
@@ -215,6 +215,7 @@ pub(crate) fn flatten_rule(
         max_depth,
         naming,
         excluded: crate::row_batches::models::ExcludePatterns::default(),
+        as_text: false,
     }
 }
 
@@ -263,7 +264,7 @@ pub(crate) fn unnested(
     };
     let mut batches: Vec<RecordBatch> = Vec::new();
     json_rows(test_case.rows.as_bytes(), &read, |columns| {
-        batches.push(columns_batch(columns)?);
+        batches.push(columns_batch(columns, false)?);
         Ok(())
     })?;
     let batch = batches.first().ok_or("no rows")?;

@@ -75,6 +75,7 @@ pub(crate) async fn listed_table(
             key: &data.file.relative_key,
             replaced: &replaced,
             widen_numbers: text_format,
+            as_text: text_format && encoding.flatten.as_text,
         };
         let (merged, conflicts) = merge_columns(columns, found, merge);
         columns = merged;

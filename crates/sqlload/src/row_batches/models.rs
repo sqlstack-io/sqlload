@@ -336,6 +336,8 @@ pub struct Flatten {
     pub naming: Naming,
     /// The table's `exclude_columns` patterns: one matching an object flattening would replace, but not its `<object>__<key>` columns, fails rather than let those columns load.
     pub excluded: ExcludePatterns,
+    /// `infer_types = false`: the keys of JSON objects flattening reads, and dict rows, load as `text` rather than typed by inference.
+    pub as_text: bool,
 }
 
 /// A table's `exclude_columns` patterns, matched as one set.
