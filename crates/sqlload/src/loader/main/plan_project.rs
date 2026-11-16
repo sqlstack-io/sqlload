@@ -11,14 +11,12 @@ use crate::loader::_helpers::destination::{
 };
 use crate::loader::_helpers::python::python_table;
 use crate::loader::_helpers::resolve::{
-    admit_tables, destination_names, found_sources, spec_names, unmatched_selectors,
-    with_kept_names,
+    admit_tables, block_failing_reads, destination_names, found_sources, spec_names,
+    unmatched_selectors, with_kept_names,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::sources::with_fetch_memory;
 use crate::loader::_helpers::sources::{PLANNED_SOURCES, selected, source_ends};
-#[cfg(feature = "odbc")]
-use crate::loader::_helpers::table_plan::block_refused_bounds;
 use crate::loader::_helpers::table_plan::{blocked_plan, plan_table, skip_up_to_date};
 use crate::loader::constants::NO_DELETES_TABLES;
 use crate::loader::errors::LoaderError;
@@ -26,7 +24,9 @@ use crate::loader::main::_mixed_cursors::block_mixed_cursors;
 use crate::loader::models::{
     FilesSource, FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec,
 };
-use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+#[cfg(feature = "odbc")]
+use crate::project::models::SourceKind;
+use crate::project::models::{ProjectConfig, SourceConfig};
 use crate::row_deletes::main::link_tombstones::link_tombstones;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
@@ -89,7 +89,7 @@ pub async fn plan_project(
     ))
 }
 
-/// One source's `specs`: the selected ones (with the tombstone table of each selected `deletes_from`) planned against their destinations and tied to their tombstone tables, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.
+/// One source's `specs`: the selected ones (with the tombstone table of each selected `deletes_from`) planned against their destinations and tied to their tombstone tables, with each table blocked whose `where` fails on the source, or whose cursor bounds its ODBC driver refuses, and the others.
 async fn planned_tables(
     project: &ProjectConfig,
     (source_name, source, files): (&str, &SourceConfig, Option<FilesSource>),
@@ -125,10 +125,7 @@ async fn planned_tables(
         planned.push(Box::pin(with_kept_names(project, spec, plan, (destination, options))).await?);
     }
     link_tombstones(&mut planned);
-    if source.kind == SourceKind::Odbc {
-        #[cfg(feature = "odbc")]
-        block_refused_bounds(project, (source_name, source), &mut planned).await?;
-    }
+    planned = block_failing_reads(project, (source_name, source), planned).await?;
     #[cfg(feature = "odbc")]
     if source.kind == SourceKind::Odbc {
         planned = with_fetch_memory(project, source, planned, options).await?;

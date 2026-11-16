@@ -425,6 +425,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] sql is for kind = \"snowflake\", \"odbc\" and \"bigquery\"",
         },
         ParseProjectErrorTestCase {
+            description: "where narrows a database table's SELECT, so a files source refuses it",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.raw] where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a postgres_cdc source captures every change, so it refuses where on a table",
+            text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"public.a\"]\n[sources.app.tables.\"public.a\"]\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.app] where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "a query table takes its condition in its sql",
+            text: "[sources.erp]\nkind = \"odbc\"\nconnection = \"erp\"\n[sources.erp.tables.recent]\nsql = \"SELECT 1 AS a\"\nwhere = \"a = 1\"\n",
+            expected_message: "[sources.erp] [tables.recent] where narrows a table SQLLoad selects from, and recent is a query; put the condition in its sql",
+        },
+        ParseProjectErrorTestCase {
             description: "a source's project is for bigquery sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nproject = \"other\"\n",
             expected_message: "[sources.app] project is for kind = \"bigquery\"",

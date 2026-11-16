@@ -747,7 +747,14 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         ));
     }
     details.extend(
-        (table.cursor_note.iter()).map(|note| detail("cursor", cursor_rules(table, note, true))),
+        (spec
+            .row_filter
+            .iter()
+            .map(|row_filter| detail("filter", row_filter)))
+        .chain(
+            (table.cursor_note.iter())
+                .map(|note| detail("cursor", cursor_rules(table, note, true))),
+        ),
     );
     details.extend(table.logged.as_ref().map(|logged| {
         detail(

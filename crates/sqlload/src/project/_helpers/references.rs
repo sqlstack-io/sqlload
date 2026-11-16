@@ -266,6 +266,22 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     if source.kind == SourceKind::Snowflake {
         problems.extend(unload_stage_problems(place, source));
     }
+    let selects = matches!(
+        source.kind,
+        SourceKind::Postgres | SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery
+    );
+    if !selects && sheet_settings(source).any(|settings| settings.row_filter.is_some()) {
+        problems.push(format!(
+            "{place} where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\", whose tables SQLLoad reads with a SELECT"
+        ));
+    }
+    problems.extend(
+        (source.tables.iter())
+            .filter(|(_, table)| table.sql.is_some() && table.settings.row_filter.is_some())
+            .map(|(name, _)| {
+                format!("{place} [tables.{name}] where narrows a table SQLLoad selects from, and {name} is a query; put the condition in its sql")
+            }),
+    );
     let sheets_only = source.spreadsheet_id.is_some()
         || !source.ranges.is_empty()
         || sheet_settings(source)

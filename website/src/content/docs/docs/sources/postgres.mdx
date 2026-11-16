@@ -61,6 +61,30 @@ The first load is the one before any of the source's tables exists in the destin
 tables are selected. Tables present then count as approved. A table that didn't load then, such as
 one a problem blocked, counts as new afterwards, so name it exactly in `include`.
 
+## Filtering rows
+
+From 0.54.0, `where` narrows a table to the rows that match a condition, written in Postgres SQL:
+
+```toml
+[sources.app]
+where = "tenant_id = 42"
+
+[sources.app.tables."public.orders"]
+where = "tenant_id = 42 AND status <> 'void'"
+```
+
+SQLLoad ANDs it into every `SELECT` it reads the table with, next to the cursor filter: cursor
+reads, `batch_size` windows, `--reload`, `replace`, and the key scan of `load --sync-deletes`. The
+table keeps its primary key, so `unique_key = "{primary_key}"` still works, and the database can
+use its indexes. On a source it applies to every table `include` matches; a table's own `where`
+replaces it. `plan` checks the condition on the source, counting no rows (`AND 1 = 0`) and shows it on a `filter` line, so a typo
+fails `plan`, naming the table.
+
+A row that later stops matching isn't removed from a `merge`, `append` or `delete_insert` table; it
+stops being updated. `replace` drops it, and so does `deletes` with `load --sync-deletes` (see
+[Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source)).
+
+
 ## Choosing columns
 
 | Setting | Effect |

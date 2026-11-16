@@ -892,6 +892,9 @@ pub struct TableSettings {
     /// The IANA time zone, such as `Europe/Paris`, of the times without an offset that `parse` reads in a column without its own `tz` (UTC when unset).
     #[serde(default)]
     pub timezone: Option<String>,
+    /// A condition in the source database's SQL (`where`), ANDed into every read of a table SQLLoad selects from, next to its cursor filter; a table's own replaces its source's.
+    #[serde(default, rename = "where")]
+    pub row_filter: Option<String>,
     /// Give every row a unique id column (`_sqlload_row_id`); always on under `compat = "dlt"`, as `_dlt_id`.
     #[serde(default)]
     pub row_id: Option<bool>,

@@ -217,6 +217,8 @@ pub struct TableSpec {
     pub checks: Option<TableChecks>,
     /// How a warehouse source's table is read; `None` for other sources.
     pub warehouse_source: Option<WarehouseSource>,
+    /// The condition every read of the table is narrowed by (`where`, its own else its source's), in the source database's SQL; `None` without one, and for query tables and tombstone tables.
+    pub row_filter: Option<String>,
     /// How the table is laid out when it is created, where the warehouse takes a layout (ClickHouse).
     pub layout: TableLayout,
     /// How the table's and its columns' names load.
@@ -247,6 +249,15 @@ impl TableSpec {
         self.deletes
             .as_ref()
             .is_some_and(|deletes| deletes.apply == Deletes::Soft)
+    }
+
+    /// `filter` narrowed by the table's `where`: `(<where>) AND (<filter>)`, or either alone; the `where` closes on a line of its own, so a trailing `--` comment in it ends first.
+    pub fn read_filter(&self, filter: Option<String>) -> Option<String> {
+        match (&self.row_filter, filter) {
+            (Some(row_filter), Some(filter)) => Some(format!("({row_filter}\n) AND ({filter})")),
+            (Some(row_filter), None) => Some(format!("({row_filter}\n)")),
+            (None, filter) => filter,
+        }
     }
 
     /// The zone the table's times without an offset are in: its `timezone`, else UTC.

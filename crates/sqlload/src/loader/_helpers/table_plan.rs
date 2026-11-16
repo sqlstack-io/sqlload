@@ -1876,6 +1876,7 @@ pub(crate) async fn block_refused_bounds(
     {
         let (spec, read_columns) = (&table.spec, &table.read_columns);
         let run = async |filter: String, parameters: Vec<BoundParameter>| {
+            let filter = spec.read_filter(Some(filter));
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &spec.source_table,
                 sql: spec
@@ -1883,7 +1884,7 @@ pub(crate) async fn block_refused_bounds(
                     .as_ref()
                     .and_then(|source| source.sql.as_deref()),
                 columns: read_columns,
-                filter: Some(&filter),
+                filter: filter.as_deref(),
                 parameters: &parameters,
                 batch_rows: 1,
                 memory_budget: crate::odbc_source::constants::DEFAULT_BATCH_MEMORY,
