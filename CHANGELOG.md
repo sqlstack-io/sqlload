@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.53.0](https://github.com/sqlstack-io/sqlload/compare/v0.52.0...v0.53.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **names:** tables and columns load under snake_case names by default; set naming = "source" to keep the source's names, and rebuild existing tables with --reload. naming = "dlt" is removed: use compat = "dlt", which naming's default already matches. Repeated headers, which failed plan, are now numbered.
+* **flatten:** under compat = "dlt", JSON and NDJSON files default to flatten = "all" and, on a warehouse, unnest = "all", so their lists load as child tables. A transform on such files gets objects as read and its output is flattened. A json pin, a mask, or an exclude_columns or allow_columns name on an object keeps it whole instead of failing plan, and a listed flatten path may now be dotted.
+* **http:** sl.cells no longer takes key, names_from, name_key, id_key or header_row, and name is required: name=sl.listed("$.columns") names columns the response lists, sl.listed("$.columns", by_position=True) names them by position, and sl.header_row() takes the first row's cells.
+* **parse:** sl.field(parse={"timestamp": format}) with a format without an offset loads timestamp_tz, the time read in the table's timezone or UTC, instead of timestamp_ntz. A %s format is refused; use epoch_s.
+* **cursor:** rows a Python table's function returns outside the cursor window it was asked for fail the table by default; set on_cursor_out_of_range = "skip" to drop them. With timezone set, cursor_start and cursor flags without an offset are read in that zone rather than UTC, and ctx.cursor_value and ctx.cursor_end arrive in it.
+* **odbc:** where an ODBC driver compares names case-sensitively, an include pattern whose own lookup finds a table no longer also finds a table whose name differs from it only in case (erp.Items beside erp.items); name each such table in include.
+* **send:** MotherDuck, Snowflake and Databricks targets default to send = "at_commit", so their tables' rows reach the warehouse at each commit rather than batch by batch as they are read; set send = "per_batch" on the target, source or table to send each batch as it is read.
+
+### Features
+
+* **cursor:** check loaded rows against the cursor window asked for, and read times without a zone in the source's timezone ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **flatten:** flatten nested objects on every source by dotted path or "all", list them in plan, and keep an object whole with a json pin ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **http:** name cells from the data with sl.cells(name=...), name the repeated page a paginator returns, and fail on errors in 200 bodies with error_path ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **names:** snake_case names by default, rename by map or [@sl](https://github.com/sl).rename function, number duplicate names, and compat = "dlt" for dlt's columns ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **parse:** parse text columns on every source with a list of formats tried in turn, and tz for times without a zone ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **plan:** show each connection and table discovery with its time as plan runs, with RUNNING rows for long steps and connected and discovered events ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **send:** hold a commit's rows locally and send them in one burst, by default on targets billed while they run queries ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+
+
+### Bug Fixes
+
+* **names:** drop a Python table's excluded fields by the names they arrive under, so a camelCase or flattened field matching exclude_columns never loads ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **odbc:** ask the driver only for the included tables, and read primary keys only when a table needs them ([144b4da](https://github.com/sqlstack-io/sqlload/commit/144b4da1395c0e340f97e4d83d4ce54abf19ad12))
+* **website:** draw the SQLLoad mark at full size in the header and favicon ([#265](https://github.com/sqlstack-io/sqlload/issues/265)) ([0279211](https://github.com/sqlstack-io/sqlload/commit/02792112fb7c6535b8ea5188fc3cc1d0694c71db))
+
+
+### Maintenance
+
+* **website:** use the updated SQLStack mark in the footer credit ([#264](https://github.com/sqlstack-io/sqlload/issues/264)) ([81b8e26](https://github.com/sqlstack-io/sqlload/commit/81b8e26ac99836e4191170c7fa23041102af1cd7))
+
 ## [0.52.0](https://github.com/sqlstack-io/sqlload/compare/v0.51.0...v0.52.0) (2026-11-15)
 
 
