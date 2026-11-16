@@ -287,8 +287,12 @@ pub struct CsvOptions {
     pub delimiter: char,
     /// Whether the first record holds the column names; without one, columns are `column_1`, `column_2`, ...
     pub header: bool,
-    /// The quote character, one ASCII character; a quote inside a quoted field is written twice.
-    pub quote: char,
+    /// The quote character, one ASCII character, whose quoted fields may hold the delimiter and line breaks (a quote inside one written twice, or after `escape`); `false` reads every quote as a plain character.
+    pub quote: CsvQuote,
+    /// Inside a quoted field, the character that makes the next one plain text, such as `\\` for `\"`; none by default.
+    pub escape: Option<char>,
+    /// Whether a file read as `latin-1`, `cp1252` or `iso-8859-15` fails when its bytes say it is in another encoding: control characters that mean cp1252, or mostly UTF-8 sequences.
+    pub encoding_check: bool,
     /// Field values read as NULL.
     pub null_values: Vec<String>,
     /// The files' character encoding, such as `utf-8` (the default), `cp1252` or `latin-1`; see [`text_charset`](crate::files_source::main::text_charset::text_charset).
@@ -305,11 +309,32 @@ impl Default for CsvOptions {
         Self {
             delimiter: ',',
             header: true,
-            quote: '"',
+            quote: CsvQuote::Char('"'),
+            escape: None,
+            encoding_check: true,
             null_values: vec![String::new()],
             encoding: DEFAULT_CSV_ENCODING.to_owned(),
             skip_rows: 0,
             column_names: None,
+        }
+    }
+}
+
+/// A CSV source's `quote` setting: the quote character, or `false`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum CsvQuote {
+    Char(char),
+    /// `false` turns quoting off; `true` is refused at plan, as it names no character.
+    Off(bool),
+}
+
+impl CsvQuote {
+    /// The quote character; `None` when quoting is off.
+    pub fn character(self) -> Option<char> {
+        match self {
+            Self::Char(character) => Some(character),
+            Self::Off(_) => None,
         }
     }
 }
@@ -325,6 +350,18 @@ pub enum Charset {
     Ascii,
     /// Any other encoding the WHATWG Encoding Standard names, such as windows-1252 or UTF-16LE.
     Other(&'static encoding_rs::Encoding),
+}
+
+impl Charset {
+    /// Whether `csv.encoding_check` checks files read in this charset (`latin-1`, `cp1252` and `iso-8859-15`), and if so whether C1 control characters count against it (`latin-1` and `iso-8859-15`, where no text holds them); `None` for any other.
+    pub fn checked(self) -> Option<bool> {
+        match self {
+            Self::Latin1 => Some(true),
+            Self::Other(encoding) if encoding == encoding_rs::ISO_8859_15 => Some(true),
+            Self::Other(encoding) if encoding == encoding_rs::WINDOWS_1252 => Some(false),
+            Self::Utf8 | Self::Ascii | Self::Other(_) => None,
+        }
+    }
 }
 
 /// Which rows of an Excel workbook load.

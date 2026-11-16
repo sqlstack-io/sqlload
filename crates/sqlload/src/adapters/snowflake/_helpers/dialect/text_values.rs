@@ -88,7 +88,7 @@ pub(crate) fn keys_query(from: &str, format: &str, pattern: &str) -> String {
     )
 }
 
-/// The `FILE_FORMAT` a direct `COPY` reads CSV with, as SQLLoad's reader does: `options`' delimiter and quote (a quote inside a quoted field written twice, backslashes plain text), the header skipped, every field as text (`csv_field` applies the NULL values, since Snowflake would not turn a quoted empty field into NULL; live, 2026-11-05).
+/// The `FILE_FORMAT` a direct `COPY` reads CSV with, as SQLLoad's reader does: `options`' delimiter, quote (none with `quote = false`; a quote inside a quoted field written twice) and escape inside quoted fields (backslashes plain text without one), the header skipped, every field as text (`csv_field` applies the NULL values, since Snowflake would not turn a quoted empty field into NULL; live, 2026-11-05).
 pub(crate) fn csv_file_format(options: &CsvOptions, compression: Compression) -> String {
     let literal = |text: &str| SnowflakeSql.render_loader_value_literal(text);
     let encoding = match text_charset(&options.encoding).map(snowflake_encoding) {
@@ -97,10 +97,15 @@ pub(crate) fn csv_file_format(options: &CsvOptions, compression: Compression) ->
         }
         Ok(_) | Err(_) => String::new(),
     };
+    let character = |setting: Option<char>| match setting {
+        Some(character) => literal(&character.to_string()),
+        None => "NONE".to_owned(),
+    };
     format!(
-        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = NONE ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = {}{encoding}",
+        "TYPE = CSV FIELD_DELIMITER = {} FIELD_OPTIONALLY_ENCLOSED_BY = {} ESCAPE = {} ESCAPE_UNENCLOSED_FIELD = NONE SKIP_HEADER = {} NULL_IF = () EMPTY_FIELD_AS_NULL = FALSE COMPRESSION = {}{encoding}",
         literal(&options.delimiter.to_string()),
-        literal(&options.quote.to_string()),
+        character(options.quote.character()),
+        character(options.escape),
         options.skip_rows + u64::from(options.header),
         compression_name(compression)
     )

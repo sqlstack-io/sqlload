@@ -70,7 +70,7 @@ fn given_zip_archives_with_after_load_when_their_members_load_then_each_archive_
                 args: &[],
                 files: &[("drop/batch.zip", "a.csv=id,v\n1,a\n;b.csv=id,v\n2,\"b\n")],
                 expected_exit: 1,
-                expected_report: r#"{"after_load":null,"problems":["batch.zip/b.csv: line 2: unterminated quoted field"],"rows":null,"skipped":[],"status":null}"#,
+                expected_report: r#"{"after_load":null,"problems":["batch.zip/b.csv: line 2: unterminated quoted field; if this file escapes quotes with a backslash, set csv = { escape = \"\\\\\" }; if it never quotes values, set csv = { quote = false }"],"rows":null,"skipped":[],"status":null}"#,
             }],
             expected_files: &["drop/batch.zip=zip"],
         },

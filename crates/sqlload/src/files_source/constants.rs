@@ -152,6 +152,22 @@ pub const CP1252_UNDEFINED: [u8; 5] = [0x81, 0x8D, 0x8F, 0x90, 0x9D];
 pub const ENCODING_HINT: &str =
     "set csv.encoding to the files' encoding, such as \"cp1252\", \"latin-1\" or \"utf-16le\"";
 
+/// The quote byte the CSV decoder gets when `quote = false`: one valid UTF-8 never holds, so no field opens a quote.
+pub const QUOTE_OFF_BYTE: u8 = 0xFF;
+
+/// The fix for a backslash-escaped quote, which a CSV error about quoting suggests unless `escape` is set.
+pub const ESCAPE_HINT: &str =
+    "if this file escapes quotes with a backslash, set csv = { escape = \"\\\\\" }";
+
+/// The fix for a file that never quotes values, which a CSV error about quoting suggests.
+pub const QUOTE_OFF_HINT: &str = "if it never quotes values, set csv = { quote = false }";
+
+/// The last C1 control character: bytes 0x80 to this one are controls in `latin-1` and `iso-8859-15`, which no text holds.
+pub const LAST_C1_CONTROL: u8 = 0x9F;
+
+/// Of a file's bytes above 0x7F read in a single-byte encoding, the share in valid UTF-8 sequences that says the file is UTF-8.
+pub const UTF8_SHARE: f64 = 0.9;
+
 /// Floats below this hold every whole number exactly: 2^53.
 pub const MAX_EXACT_FLOAT_INT: f64 = 9_007_199_254_740_992.0;
 

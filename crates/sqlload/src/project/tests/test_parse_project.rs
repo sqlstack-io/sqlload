@@ -165,7 +165,7 @@ fn given_a_files_target_when_parsing_then_paths_and_defaults_are_read() -> Resul
         ParseProjectTestCase {
             description: "a files source reads its format, compression and CSV options; unset options keep their defaults",
             read: |project| format!("{:?}", project.sources["events"].files_encoding()),
-            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: '\"', null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } }, as_text: false, nonfinite_null: false } }",
+            expected_value: "FilesEncoding { format: Csv, compression: Zstd, csv: CsvOptions { delimiter: ';', header: true, quote: Char('\"'), escape: None, encoding_check: true, null_values: [\"NA\", \"\"], encoding: \"utf-8\", skip_rows: 0, column_names: None }, xlsx: XlsxOptions { sheet: None, header: true, skip_rows: 0, range: None, header_row: None, column_names: None }, xml: XmlOptions { record_path: \"\", lists: [] }, members: None, record: None, flatten: Flatten { objects: None, keep: [], pinned: [], max_depth: 0, naming: SnakeCase, excluded: ExcludePatterns { patterns: [], set: GlobSet { len: 0, strats: [] } }, as_text: false, nonfinite_null: false } }",
         },
         ParseProjectTestCase {
             description: "a files source without settings reads Parquet",
@@ -383,6 +383,21 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a csv delimiter is one ASCII character",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { delimiter = \"\u{e9}\" }\n",
             expected_message: "[sources.raw] csv delimiter must be one ASCII character other than a line break",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv quote = true names no character",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { quote = true }\n",
+            expected_message: "[sources.raw] csv quote = true names no character",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv escape needs quoted fields",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { quote = false, escape = \"\\\\\" }\n",
+            expected_message: "[sources.raw] csv escape works inside quoted fields, and quote = false has none; remove escape",
+        },
+        ParseProjectErrorTestCase {
+            description: "csv escape is one ASCII character, not the delimiter",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncsv = { escape = \",\" }\n",
+            expected_message: "[sources.raw] csv delimiter must differ from quote and escape",
         },
         ParseProjectErrorTestCase {
             description: "an unknown csv option is rejected",
