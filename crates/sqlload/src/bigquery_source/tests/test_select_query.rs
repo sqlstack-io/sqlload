@@ -25,6 +25,7 @@ fn given_a_query_table_when_wrapping_it_with_a_cursor_filter_then_the_filter_sta
             sql: Some(test_case.sql),
             columns: &[],
             filter: Some("`id` > 3"),
+            filtered: false,
         };
         assert_eq!(
             select_query("p", &request),

@@ -1583,6 +1583,7 @@ async fn read_each(
                     .and_then(|source| source.sql.as_deref()),
                 columns: &table.read_columns,
                 filter: filter.as_deref(),
+                filtered: table.spec.row_filter.is_some(),
             };
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
         }

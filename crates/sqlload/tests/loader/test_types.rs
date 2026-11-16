@@ -1574,3 +1574,14 @@ pub(crate) struct SyncDeletesRefusalTestCase {
     /// Text the failed plan must show, compared as words.
     pub(crate) expected_error: &'static str,
 }
+
+/// A plan of `public.items` with `deletes_from` tombstones whose `deleted_at` has some type.
+pub(crate) struct TombstonePlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) deletes: &'static str,
+    /// The Postgres type of the tombstones' `deleted_at`.
+    pub(crate) deleted_at_type: &'static str,
+    pub(crate) expected_failed: bool,
+    /// Text the plan must show, compared as words; empty when it succeeds.
+    pub(crate) expected_error: &'static str,
+}

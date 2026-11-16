@@ -300,14 +300,20 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
   the last load stopped, as for any `cursor_column`. `plan` lists it like any other table. It keeps
   every tombstone; trim it yourself if it grows too big.
 - The tombstone table loads first. Then, once the merge commits, the rows whose key a tombstone
-  holds, deleted at or after the row's own `cursor_column`, are marked as `deletes` says. A
-  tombstone read in a run marks rows in that run.
+  holds, deleted at or after the row's own `cursor_column` (a coalesced one's first non-NULL
+  column), are marked as `deletes` says. A tombstone read in a run marks rows in that run.
+  `deletes = "soft"` sets `_sqlload_deleted_at` to the latest such tombstone's time.
 - A key deleted and then created again stays: its row's cursor is after the tombstone. A row
   arriving late, after its tombstone loaded, is marked by the next load, as every tombstone is
   checked each time. Marking again changes nothing.
+- A marked row the merge reads again, such as one at the cursor's maximum, is written by the merge
+  and marked again in the same load, with the same time. Between the two it shows as live.
+- Tombstones are read after the latest `deleted_at` already loaded. A tombstone that becomes
+  visible later with an earlier time, such as one written by a long transaction, is not read.
 - The tombstone table must hold every `unique_key` column, under the same names; `plan` fails
   otherwise. `deletes_from` needs `deletes` and a `cursor_column`, and the tombstone table can't
-  also be listed under `tables`.
+  also be listed under `tables`. Under `deletes = "soft"` its `cursor_column` must be a timestamp;
+  `hard` takes any column that compares with the table's cursor, such as a sequence number.
 
 ```console
 $ sqlload plan

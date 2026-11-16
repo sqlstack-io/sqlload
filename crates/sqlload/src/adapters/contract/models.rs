@@ -55,15 +55,13 @@ pub struct TombstoneWrite {
     pub tombstones: TableName,
     /// The tombstone table's column holding when each key was deleted.
     pub deleted_at: String,
-    /// The table's `cursor_column`, which a tombstone's time must not be before.
-    pub cursor: String,
+    /// The table's `cursor_column`, every column of a coalesced one in order, whose first non-NULL value a tombstone's time must not be before.
+    pub cursor: Vec<String>,
     pub unique_key: Vec<String>,
     /// The key columns whose values are never NULL, which compare with `=`; the rest match NULL-safely.
     pub not_null_keys: Vec<String>,
-    /// `_sqlload_deleted_at` is set to `at` on a row it is NULL on; otherwise the row is removed.
+    /// `_sqlload_deleted_at` is set, on a row it is NULL on, to the latest time of the tombstones marking it, the same each time the row is marked again; otherwise the row is removed.
     pub soft: bool,
-    /// When the marks are made, RFC 3339 UTC.
-    pub at: String,
 }
 
 /// How a key scan marks the table's rows whose key the source no longer holds.

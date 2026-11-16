@@ -23,7 +23,8 @@ pub fn deletes_note(spec: &TableSpec) -> String {
     if let (Some(from), Some(cursor)) = (&deletes.from, &spec.cursor) {
         note.push_str(&format!(
             ", then {action} the rows whose key {} lists deleted at or after the row's {} (its tombstones load first)",
-            from.source_table, cursor.column
+            from.source_table,
+            cursor.label()
         ));
     }
     note

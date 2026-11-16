@@ -164,6 +164,34 @@ description = "Orders, captured."
 columns = { tags = "text" }
 "#;
 
+const MIXED: &[&str] = &["load", "mixed"];
+
+const MIXED_SOURCE: &str = r#"
+[sources.mixed]
+kind = "postgres_cdc"
+connection = "pg"
+include = ["public.*"]
+
+[sources.mixed.tables."public.items"]
+description = "Items, captured with hard deletes."
+deletes = "hard"
+
+[sources.mixed.tables."public.orders"]
+description = "Orders, captured with the source's soft deletes."
+columns = { tags = "text" }
+"#;
+
+const MIXED_DELETES: [CdcStep; 3] = [
+    step("", MIXED, "", (true, "loaded")),
+    step(
+        "DELETE FROM public.orders WHERE id = 2; DELETE FROM public.items WHERE id = 1;",
+        MIXED,
+        "",
+        (true, "Completed"),
+    ),
+    step("", MIXED, "", (true, "0 rows")),
+];
+
 const TRUNCATE_ONLY: [CdcStep; 3] = [
     step("", APP, "", (true, "loaded")),
     step("TRUNCATE public.orders", APP, "", (true, "Completed")),
@@ -1038,6 +1066,15 @@ fn given_a_postgres_cdc_source_when_loads_stop_at_each_restart_point_then_the_ta
             expected_result: "3:1:snapshot,5:9600:update:0",
         },
         CdcScenarioTestCase {
+            description: "each table applies its own deletes: hard on the table that sets it, the source's soft on the other, whichever comes first",
+            tag: "17-alpine",
+            spill_bytes: "",
+            extra_config: MIXED_SOURCE,
+            steps: &MIXED_DELETES,
+            check_query: "SELECT (SELECT string_agg(id || ':' || (_sqlload_deleted_at IS NOT NULL), ',' ORDER BY id) FROM raw.mixed__orders) || '|' || (SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY id) FROM raw.mixed__items)",
+            expected_result: "1:false,2:true,3:false|2",
+        },
+        CdcScenarioTestCase {
             description: "a key change that leaves a TOASTed value out stops the load instead of writing NULL",
             tag: "17-alpine",
             spill_bytes: "",
@@ -1514,7 +1551,7 @@ fn given_a_databricks_target_when_planning_a_postgres_cdc_source_then_each_table
             expected_output: "snapshot copy, then append changes (changelog)",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let postgres = start_postgres_version("17-alpine").await?;
         connect(&postgres)
             .await?
@@ -1604,7 +1641,7 @@ fn given_a_live_databricks_schema_when_capturing_postgres_changes_then_the_table
             expected_result: "1:7:insert",
         },
     ];
-    run_async(async {
+    run_async(|| async move {
         let api = live_databricks_client(&live)?;
         let schema = format!("`{}`.`{}`", live.catalog, live.schema);
         let volume = format!("{}.{}.sqlload_stage", live.catalog, live.schema);
@@ -1679,7 +1716,7 @@ fn given_a_quiet_postgres_cdc_source_when_other_tables_write_then_a_load_advance
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let postgres = start_postgres_version(test_case.tag).await?;
             let client = connect(&postgres).await?;
             client
@@ -1859,7 +1896,7 @@ fn given_a_following_load_when_the_source_changes_then_each_change_lands_once_an
         },
     ];
     for test_case in test_cases {
-        run_async(async {
+        run_async(|| async move {
             let postgres = start_postgres_version(test_case.tag).await?;
             let client = connect(&postgres).await?;
             client

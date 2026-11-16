@@ -19,4 +19,6 @@ pub struct BigQueryReadRequest<'a> {
     pub columns: &'a [ReadColumn],
     /// A GoogleSQL condition on the read columns, already rendered.
     pub filter: Option<&'a str>,
+    /// The filter holds the table's own `where`, which may use any GoogleSQL, more than a read session's row restriction takes, so the table is read through a query job.
+    pub filtered: bool,
 }

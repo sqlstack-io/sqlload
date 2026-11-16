@@ -5,14 +5,14 @@ use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use crate::helpers::{run_async, words};
 use crate::merge_helpers::{
     hard_steps, hard_tombstone_steps, run_sync_deletes, run_tombstones, soft_steps,
-    soft_tombstone_steps, sync_deletes_plan,
+    soft_tombstone_steps, sync_deletes_plan, tombstones_plan,
 };
-use crate::test_types::{SyncDeletesRefusalTestCase, SyncDeletesTestCase};
+use crate::test_types::{SyncDeletesRefusalTestCase, SyncDeletesTestCase, TombstonePlanTestCase};
 
 #[test]
 fn given_a_merge_with_deletes_when_scanning_its_source_keys_then_only_rows_loaded_before_the_read_whose_key_is_gone_are_marked_within_the_limit()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let postgres = format!(
@@ -72,7 +72,7 @@ fn given_a_merge_with_deletes_when_scanning_its_source_keys_then_only_rows_loade
 #[test]
 fn given_deletes_where_nothing_can_scan_when_planning_then_plan_fails_naming_the_fix()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let test_cases = [
@@ -108,7 +108,7 @@ fn given_deletes_where_nothing_can_scan_when_planning_then_plan_fails_naming_the
 #[test]
 fn given_a_merge_with_deletes_from_when_loading_then_its_tombstones_mark_rows_in_the_same_run_once_and_late_rows_too()
 -> Result<(), String> {
-    run_async(async {
+    run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
         let postgres = format!(
@@ -123,7 +123,7 @@ fn given_a_merge_with_deletes_from_when_loading_then_its_tombstones_mark_rows_in
                 reset: &[],
                 deletes: "soft",
                 marks: "soft-deletes",
-                check_query: "SELECT string_agg(CAST(id AS VARCHAR) || ':' || CASE WHEN _sqlload_deleted_at IS NULL THEN 'live' ELSE 'deleted' END, ',' ORDER BY id) FROM raw.app__items",
+                check_query: "SELECT string_agg(CAST(id AS VARCHAR) || ':' || CASE WHEN _sqlload_deleted_at IS NULL THEN 'live' ELSE CAST(CAST(_sqlload_deleted_at AT TIME ZONE 'UTC' AS DATE) AS VARCHAR) END, ',' ORDER BY id) FROM raw.app__items",
                 expected_steps: soft_tombstone_steps(),
             },
             SyncDeletesTestCase {
@@ -143,7 +143,7 @@ fn given_a_merge_with_deletes_from_when_loading_then_its_tombstones_mark_rows_in
                 reset: &["DROP SCHEMA IF EXISTS tombstones_soft CASCADE"],
                 deletes: "soft",
                 marks: "soft-deletes",
-                check_query: "SELECT string_agg(id || ':' || CASE WHEN _sqlload_deleted_at IS NULL THEN 'live' ELSE 'deleted' END, ',' ORDER BY id) FROM tombstones_soft.app__items",
+                check_query: "SELECT string_agg(id || ':' || CASE WHEN _sqlload_deleted_at IS NULL THEN 'live' ELSE CAST(CAST(_sqlload_deleted_at AT TIME ZONE 'UTC' AS DATE) AS VARCHAR) END, ',' ORDER BY id) FROM tombstones_soft.app__items",
                 expected_steps: soft_tombstone_steps(),
             },
             SyncDeletesTestCase {
@@ -160,6 +160,55 @@ fn given_a_merge_with_deletes_from_when_loading_then_its_tombstones_mark_rows_in
         for test_case in &test_cases {
             let steps = run_tombstones(test_case, (&client, source.port)).await?;
             assert_eq!(steps, test_case.expected_steps, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_tombstones_whose_time_is_not_a_time_when_planning_then_soft_deletes_fail_naming_the_fix_and_hard_deletes_plan()
+-> Result<(), String> {
+    run_async(|| async move {
+        let source = start_postgres().await?;
+        let client = connect(&source).await?;
+        let test_cases = [
+            TombstonePlanTestCase {
+                description: "a soft mark takes the tombstone's time, which a sequence number isn't",
+                deletes: "soft",
+                deleted_at_type: "int8",
+                expected_failed: true,
+                expected_error: "deletes_from table audit.deleted_items has cursor_column deleted_at of type int, but deletes = \"soft\" sets _sqlload_deleted_at to a tombstone's time └── fix name a timestamp column, or set deletes = \"hard\"",
+            },
+            TombstonePlanTestCase {
+                description: "a hard delete only compares the tombstone with the row's cursor",
+                deletes: "hard",
+                deleted_at_type: "int8",
+                expected_failed: false,
+                expected_error: "",
+            },
+            TombstonePlanTestCase {
+                description: "a timestamp without a time zone is a time",
+                deletes: "soft",
+                deleted_at_type: "timestamp",
+                expected_failed: false,
+                expected_error: "",
+            },
+        ];
+        for test_case in &test_cases {
+            let plan = tombstones_plan(
+                (&client, source.port),
+                (test_case.deletes, test_case.deleted_at_type),
+            )
+            .await?;
+            assert_eq!(
+                (
+                    plan.contains("Plan failed"),
+                    words(&plan).contains(test_case.expected_error)
+                ),
+                (test_case.expected_failed, true),
+                "{}: {plan}",
+                test_case.description
+            );
         }
         Ok(())
     })

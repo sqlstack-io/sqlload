@@ -119,6 +119,10 @@ stops being updated. `replace` drops it, and so does `deletes` with `load --sync
 
 A query table refuses `where`: put the condition in its `sql`.
 
+A table with `where` is read through a query job, like a view, rather than directly by the Storage Read
+API, so the filter can use any GoogleSQL. The job is billed for the bytes it scans, and reads the
+table as it is when the job runs.
+
 
 ## Types
 

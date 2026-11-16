@@ -10,9 +10,8 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::TablePlan;
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::Deletes;
-use crate::time_text::main::now_utc_text::now_utc_text;
 
-/// After `planned`'s merge, mark its rows whose key a loaded tombstone (`deletes_from`) holds, deleted at or after the row's cursor: every tombstone kept so far, so a row loaded after its tombstone is still marked, and marking again changes nothing. Returns what it did for the table's line, `(tombstones: 3 rows soft-deleted)`; `None` without a tombstone table loaded yet.
+/// After `planned`'s merge, mark its rows whose key a loaded tombstone (`deletes_from`) holds, deleted at or after the row's cursor (a coalesced cursor's first non-NULL column): every tombstone kept so far, so a row loaded after its tombstone is still marked, and marking again changes nothing, a soft mark being the tombstones' own time. Returns what it did for the table's line, `(tombstones: 3 rows soft-deleted)`; `None` without a tombstone table loaded yet.
 pub async fn apply_tombstones(
     planned: &TablePlan,
     destination: &Destination,
@@ -39,11 +38,10 @@ pub async fn apply_tombstones(
     let write = TombstoneWrite {
         tombstones: tombstones.clone(),
         deleted_at: deleted_at.clone(),
-        cursor: cursor.column.clone(),
+        cursor: cursor.columns().map(str::to_owned).collect(),
         unique_key: unique_key.clone(),
         not_null_keys: not_null_keys.clone(),
         soft: deletes.apply == Deletes::Soft,
-        at: now_utc_text(),
     };
     let [count, mark] =
         sql_adapter(planned.spec.warehouse).render_tombstones(&planned.spec.destination, &write);

@@ -175,9 +175,20 @@ pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
             adapter.render_key_equality((&row, &tombstone), nullable)
         })
         .collect();
-    let (cursor, deleted_at) = (
-        name("__target", &tombstones.cursor),
-        name("__tombstone", &tombstones.deleted_at),
+    let cursors: Vec<String> = tombstones
+        .cursor
+        .iter()
+        .map(|column| name("__target", column))
+        .collect();
+    let cursor = match cursors.as_slice() {
+        [one] => one.clone(),
+        _ => format!("COALESCE({})", cursors.join(", ")),
+    };
+    let deleted_at = name("__tombstone", &tombstones.deleted_at);
+    let matching = format!(
+        "FROM {} AS __tombstone WHERE {} AND ({cursor} IS NULL OR {deleted_at} >= {cursor})",
+        adapter.render_qualified_name(&tombstones.tombstones),
+        keys.join(" AND ")
     );
     let mut conditions: Vec<String> = Vec::new();
     if tombstones.soft {
@@ -186,18 +197,16 @@ pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
             name("__target", CDC_DELETED_AT_COLUMN)
         ));
     }
-    conditions.push(format!(
-        "EXISTS (SELECT 1 FROM {} AS __tombstone WHERE {} AND ({cursor} IS NULL OR {deleted_at} >= {cursor}))",
-        adapter.render_qualified_name(&tombstones.tombstones),
-        keys.join(" AND ")
-    ));
+    conditions.push(format!("EXISTS (SELECT 1 {matching})"));
     let target = format!("{} AS __target", adapter.render_qualified_name(table));
     let condition = conditions.join(" AND ");
     let mark = match tombstones.soft {
         true => format!(
-            "UPDATE {target} SET {} = {} WHERE {condition}",
+            "UPDATE {target} SET {} = (SELECT CAST(MAX({deleted_at}) AS {}) {matching}) WHERE {condition}",
             adapter.render_identifier(CDC_DELETED_AT_COLUMN),
-            timestamp(adapter, &tombstones.at)
+            adapter
+                .render_loader_logical_type(&ColumnType::TimestampTz)
+                .sql
         ),
         false => format!("DELETE FROM {target} WHERE {condition}"),
     };

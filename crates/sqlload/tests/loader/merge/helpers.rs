@@ -444,7 +444,7 @@ const SYNC_STEPS: [(&str, &str, bool); 6] = [
     ),
 ];
 
-/// Run [`SYNC_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `updated_at` with `target.deletes`, the scan marking at most half the table: after each step, `target.check_query`'s rows, then ` | ` and the scan's note, or the load's error.
+/// Run [`SYNC_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `coalesce(updated_at, created_at)` with `target.deletes`, the scan marking at most half the table: after each step, `target.check_query`'s rows, then ` | ` and the scan's note, or the load's error.
 pub(crate) async fn run_sync_deletes(
     target: &SyncDeletesTestCase,
     (source, postgres_port): (&tokio_postgres::Client, u16),
@@ -595,34 +595,78 @@ pub(crate) fn hard_steps() -> Vec<String> {
     .to_vec()
 }
 
-/// `public.items`, five items each updated at its own time, and `audit.deleted_items`, where the source records the items it deleted, empty.
+/// `public.items`, five items each created and updated at its own time, and `audit.deleted_items`, where the source records the items it deleted, empty.
 const TOMBSTONES_SETUP: &str = "
 DROP TABLE IF EXISTS public.items;
 DROP SCHEMA IF EXISTS audit CASCADE;
 CREATE SCHEMA audit;
-CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz NOT NULL);
+CREATE TABLE public.items (id int8 PRIMARY KEY, qty int8, updated_at timestamptz, created_at timestamptz NOT NULL);
 CREATE TABLE audit.deleted_items (id int8, reason text, deleted_at timestamptz NOT NULL);
-INSERT INTO public.items SELECT id, id * 10, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' FROM generate_series(1, 5) AS id;
+INSERT INTO public.items SELECT id, id * 10, at, at FROM (SELECT id, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' AS at FROM generate_series(1, 5) AS id) AS times;
 ";
 
-/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, which stays; a tombstone for item 6, which the table doesn't hold yet; and item 6 arriving late, updated before its tombstone, so the next load marks it.
-const TOMBSTONE_STEPS: [&str; 6] = [
+/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, never updated, so only its `created_at` (the coalesced cursor's second column) is after the tombstone, and it stays; a tombstone for item 6, which the table doesn't hold yet; item 6 arriving late, updated before its tombstone, so the next load marks it; and nothing new, so the merge reads item 6 again at the cursor's maximum and it is marked again the same.
+const TOMBSTONE_STEPS: [&str; 7] = [
     "",
     "DELETE FROM public.items WHERE id = 2; INSERT INTO audit.deleted_items VALUES (2, 'gone', '2026-11-02 00:00:00+00')",
     "",
-    "INSERT INTO public.items VALUES (2, 21, '2026-11-03 00:00:00+00')",
+    "INSERT INTO public.items VALUES (2, 21, NULL, '2026-11-03 00:00:00+00')",
     "INSERT INTO audit.deleted_items VALUES (6, 'gone', '2026-11-05 00:00:00+00')",
-    "INSERT INTO public.items VALUES (6, 60, '2026-11-04 00:00:00+00')",
+    "INSERT INTO public.items VALUES (6, 60, '2026-11-04 00:00:00+00', '2026-11-04 00:00:00+00')",
+    "",
 ];
 
-/// Run [`TOMBSTONE_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `updated_at` with `target.deletes` and `deletes_from` its tombstones in `audit.deleted_items`: after each step, `target.check_query`'s rows, then ` | ` and the items load's note, or its error.
+/// A project merging `public.items` from Postgres on `postgres_port` into `connection`'s `schema` by `coalesce(updated_at, created_at)` with `deletes` and `deletes_from` its tombstones in `audit.deleted_items`, by `deleted_at`.
+pub(crate) fn tombstones_project(
+    (connection, schema): (&str, &str),
+    postgres_port: u16,
+    deletes: &str,
+) -> String {
+    format!(
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = [\"updated_at\", \"created_at\"]\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }}\n",
+        connection, schema, deletes
+    )
+}
+
+/// The plan of [`tombstones_project`] into DuckDB with `deletes`, its tombstones' `deleted_at` of `deleted_at_type`.
+pub(crate) async fn tombstones_plan(
+    (source, postgres_port): (&tokio_postgres::Client, u16),
+    (deletes, deleted_at_type): (&str, &str),
+) -> Result<String, String> {
+    source
+        .batch_execute(&format!(
+            "{TOMBSTONES_SETUP} ALTER TABLE audit.deleted_items ALTER COLUMN deleted_at TYPE {deleted_at_type} USING NULL;"
+        ))
+        .await
+        .map_err(|error| error.to_string())?;
+    let text = tombstones_project(
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        postgres_port,
+        deletes,
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let plan = plan_project(&project, &destinations, &PlanOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    source
+        .batch_execute("DROP TABLE public.items; DROP SCHEMA audit CASCADE")
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(render_plan(&plan).0.join("\n"))
+}
+
+/// Run [`TOMBSTONE_STEPS`] on `target`, merging `public.items` from Postgres on `postgres_port` (reached by `source`) by `coalesce(updated_at, created_at)` with `target.deletes` and `deletes_from` its tombstones in `audit.deleted_items`: after each step, `target.check_query`'s rows, then ` | ` and the items load's note, or its error.
 pub(crate) async fn run_tombstones(
     target: &SyncDeletesTestCase,
     (source, postgres_port): (&tokio_postgres::Client, u16),
 ) -> Result<Vec<String>, String> {
-    let text = format!(
-        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"updated_at\"\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }}\n",
-        target.connection, target.schema, target.deletes
+    let text = tombstones_project(
+        (&target.connection, target.schema),
+        postgres_port,
+        target.deletes,
     );
     let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
@@ -642,7 +686,7 @@ pub(crate) async fn run_tombstones(
         .await
         .map_err(|error| error.to_string())?;
     let note = format!(
-        "then {} the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)",
+        "then {} the rows whose key audit.deleted_items lists deleted at or after the row's coalesce(updated_at, created_at) (its tombstones load first)",
         target.marks
     );
     let mut steps = Vec::new();
@@ -701,15 +745,16 @@ pub(crate) async fn run_tombstones(
     Ok(steps)
 }
 
-/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, then the tombstone table's own columns: item 2 marked in the run that read its tombstone, nothing more on the next, item 2 back, and the late item 6 marked once it arrives.
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, each mark shown as its UTC date, then the tombstone table's own columns: item 2 marked with its tombstone's time in the run that read it, nothing more on the next, item 2 back, the late item 6 marked once it arrives, and marked again with the same time when read again.
 pub(crate) fn soft_tombstone_steps() -> Vec<String> {
     [
         "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
-        "1:live,2:deleted,3:live,4:live,5:live | (tombstones: 1 row soft-deleted)",
-        "1:live,2:deleted,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
+        "1:live,2:2026-11-02,3:live,4:live,5:live | (tombstones: 1 row soft-deleted)",
+        "1:live,2:2026-11-02,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
         "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
         "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
-        "1:live,2:live,3:live,4:live,5:live,6:deleted | (tombstones: 1 row soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
+        "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
         "tombstone columns: deleted_at,id",
     ]
     .map(str::to_owned)
@@ -724,6 +769,7 @@ pub(crate) fn hard_tombstone_steps() -> Vec<String> {
         "1,3,4,5 | (tombstones: 0 rows deleted)",
         "1,2,3,4,5 | (tombstones: 0 rows deleted)",
         "1,2,3,4,5 | (tombstones: 0 rows deleted)",
+        "1,2,3,4,5 | (tombstones: 1 row deleted)",
         "1,2,3,4,5 | (tombstones: 1 row deleted)",
         "tombstone columns: deleted_at,id",
     ]
