@@ -147,10 +147,11 @@ publish, as it lives in a patch part that moving partitions does not carry.
 
 From 0.60.0, `delete_insert`, `append` and `merge` publish once per run. Read in windows
 (`batch_size`) or [in cursor order](/docs/concepts/cursors/#batches), they stage everything they
-read and publish it in one commit at the end. Readers see the table as it was before the run or
-after it, never part way, and a partition several batches share is rewritten once. `batch_size`
-then splits only the reads. A run stopped part way publishes nothing, and the next run reads the
-same rows again, so split a long backfill into several runs with `--end-cursor`. A files source
+read and publish it in one commit at the end; a `merge` also commits every 10 million waiting rows
+(below). Readers see the table as it was at the last commit or after the next one, never part way,
+and a partition several batches share is rewritten once per commit. `batch_size` then splits only
+the reads. A run stopped part way publishes nothing after its last commit, and the next run reads
+those rows again, so split a long backfill into several runs with `--end-cursor`. A files source
 still commits each batch of partitions as it goes.
 
 A `merge` keeps the last row read of each key in the run, or the newest by `newest_by`, so a key
