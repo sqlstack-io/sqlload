@@ -70,7 +70,7 @@ pub(crate) async fn plan_apply_load_with(
     let plan = plan_project(project, destinations, options)
         .await
         .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     let text = lines.join("\n");
     ok.then_some(()).ok_or_else(|| text.clone())?;
     apply_project(&plan, destinations)

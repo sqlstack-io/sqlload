@@ -11,6 +11,7 @@ use crate::command::_helpers::logging::LIVE_BLOCK;
 use crate::command::_helpers::output::{paint, print_lines};
 use crate::command::constants::PLAN_TREE_HINT;
 use crate::load_events::main::event_line::event_line;
+use crate::load_events::main::phase_summary::phase_summary;
 use crate::load_events::main::progress_view::progress_view;
 use crate::load_events::models::{EventKind, LoadEvent, ProgressView, StepView};
 use crate::loader::constants::{
@@ -570,16 +571,19 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
     lines
 }
 
-/// `work`, a plan of a project with `sources` sources, with its progress on stderr, watched by a thread of its own (planning may hold up the async runtime): when `prints`, each connection's and discovery's phase line as it ends, and a `RUNNING` row for a step every [`running_every`] it runs, which logs that are no terminal show too; when `draws`, a spinner for the step running once it has run [`SPINNER_DELAY`] (or `Planning` and how many sources are done between steps), cleared before anything else prints.
+/// `work`, a plan of a project with `sources` sources, with its progress on stderr, watched by a thread of its own (planning may hold up the async runtime): when `prints`, the phase line of each connection and discovery that failed or was slow as it ends (with `verbose`, every one), then the `Connected` and `Discovered` summary lines (not with `verbose`), and a `RUNNING` row for a step every [`running_every`] it runs, which logs that are no terminal show too; when `draws`, a spinner for the step running once it has run [`SPINNER_DELAY`] (or `Planning` and how many sources are done between steps), cleared before anything else prints.
 pub(crate) async fn planning<T>(
     work: impl std::future::Future<Output = T>,
     sources: usize,
     (draws, prints, no_color): (bool, bool, bool),
+    verbose: bool,
 ) -> T {
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let watcher = {
         let done = done.clone();
-        std::thread::spawn(move || watch_steps(&done, sources, (draws, prints, no_color)))
+        std::thread::spawn(move || {
+            watch_steps(&done, sources, (draws, prints, no_color), verbose);
+        })
     };
     let output = work.await;
     done.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -587,11 +591,12 @@ pub(crate) async fn planning<T>(
     output
 }
 
-/// What [`planning`] shows, until `done`: its phase lines and `RUNNING` rows (when `prints`), and its spinner (when `draws`), which it clears at the end.
+/// What [`planning`] shows, until `done`: its phase lines (every one with `verbose`, else those of failed and slow steps, then the summary lines) and `RUNNING` rows (when `prints`), and its spinner (when `draws`), which it clears at the end.
 fn watch_steps(
     done: &std::sync::atomic::AtomicBool,
     sources: usize,
     (draws, prints, no_color): (bool, bool, bool),
+    verbose: bool,
 ) {
     let started = std::time::Instant::now();
     let every = running_every();
@@ -601,10 +606,24 @@ fn watch_steps(
     let mut reported: (u64, u128) = (0, 0);
     loop {
         let finished = done.load(std::sync::atomic::Ordering::Relaxed);
-        let ProgressView { mut lines, step } = progress_view();
+        let ProgressView {
+            mut lines,
+            quiet,
+            step,
+        } = progress_view();
+        if verbose {
+            lines.extend(quiet);
+        }
         let row;
         (reported, row) = running_row(step.as_ref(), every, reported);
         lines.extend(row);
+        if finished && !verbose {
+            let summary = phase_summary();
+            if !summary.is_empty() {
+                lines.extend(summary);
+                lines.push(String::new());
+            }
+        }
         if prints && !lines.is_empty() {
             let write = || {
                 let mut stderr = std::io::stderr().lock();

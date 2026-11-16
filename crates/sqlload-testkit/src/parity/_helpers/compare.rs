@@ -84,7 +84,7 @@ async fn load_side(text: &str, select: &str) -> Result<(String, Option<String>),
         Ok(plan) => plan,
         Err(error) => return Ok((String::new(), Some(error.to_string()))),
     };
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     let plan_text = lines.join("\n");
     if !ok {
         return Ok((plan_text.clone(), Some(plan_text)));

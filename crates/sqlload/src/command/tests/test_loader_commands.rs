@@ -48,7 +48,7 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             description: "text: an Errors section with the reason and the fix, and no error: prefix",
             project: NO_LOAD_METHOD,
             argv: &["plan"],
-            expected_output: "Errors (1)\n└── connection wh\n    ├── reason  load_method is required: how should data get into Snowflake?\n    └── fix     add one of these to [connections.wh]:\n                load_method = { type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }   (fastest)\n                load_method = { type = \"internal_user_stage\" }   (no setup)\n\n✗ Plan failed with errors",
+            expected_output: "Errors (1)\n└── connection wh\n    ├── reason  load_method is required: how should data get into Snowflake?\n    └── fix     add one of these to [connections.wh]:\n                load_method = { type = \"external_stage\", url = \"s3://...\", storage_integration = \"...\" }   (fastest)\n                load_method = { type = \"internal_user_stage\" }   (no setup)\n\n✗ Plan failed  1 error",
             expected_exit: "exit 1",
         },
         PlanFailureTestCase {
@@ -76,7 +76,7 @@ fn given_a_plan_that_fails_when_planning_then_it_prints_the_errors_or_one_json_e
             description: "a plan with nothing selected is complete and exits 0",
             project: TARGET,
             argv: &["plan"],
-            expected_output: "Plan ready  0 selected",
+            expected_output: "✓ Plan complete",
             expected_exit: "exit 0",
         },
         #[cfg(not(target_os = "linux"))]

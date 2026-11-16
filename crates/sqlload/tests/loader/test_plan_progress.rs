@@ -22,26 +22,44 @@ fn given_plan_piped_when_connecting_and_discovering_then_timed_phase_lines_and_r
     );
     let test_cases = [
         PlanProgressTestCase {
-            description: "a fast plan: a line per connection and discovery, no RUNNING row, no spinner",
+            description: "a fast plan: its connections and discoveries collapse into two summary lines, no RUNNING row, no spinner",
             config: format!("{target}{files}"),
             args: &["plan", "--progress", "always"],
+            expected_stderr: &[
+                "✓ Connected   dev DuckDB   0.",
+                "✓ Discovered  1 table in 1 source   0.",
+            ],
+            unexpected_stderr: &[
+                "Target connected",
+                "orders  1 table",
+                "RUNNING",
+                "Planning",
+                "⠋",
+                "\u{1b}",
+            ],
+            least_running_rows: 0,
+        },
+        PlanProgressTestCase {
+            description: "-v: a line per connection and discovery, and no summary",
+            config: format!("{target}{files}"),
+            args: &["plan", "-v"],
             expected_stderr: &[
                 "✓ Target connected  dev  DUCKDB  (",
                 "✓ Discovered  orders  1 table  (",
             ],
-            unexpected_stderr: &["RUNNING", "Planning", "⠋", "\u{1b}"],
+            unexpected_stderr: &["✓ Connected", "in 1 source"],
             least_running_rows: 0,
         },
         PlanProgressTestCase {
-            description: "a source slow to connect: RUNNING rows as it waits, then the failure with its time",
+            description: "a source slow to connect: RUNNING rows as it waits, then the failure with its time, and the target in the summary",
             config: format!("{target}{slow}"),
             args: &["plan"],
             expected_stderr: &[
-                "✓ Target connected  dev  DUCKDB  (",
+                "✓ Connected   dev DuckDB   0.",
                 "  erp  connecting  RUNNING 0.",
                 "✗ Source connection failed  erp  POSTGRES  (after ",
             ],
-            unexpected_stderr: &["Discovered", "Discovery failed"],
+            unexpected_stderr: &["Discovered", "Discovery failed", "Target connected"],
             least_running_rows: 2,
         },
     ];

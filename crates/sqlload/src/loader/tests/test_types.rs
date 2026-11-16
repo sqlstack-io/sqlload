@@ -234,3 +234,17 @@ pub(crate) struct NullCursorFilterTestCase {
     /// How many values are bound to the filter's placeholders.
     pub(crate) expected_parameters: usize,
 }
+
+/// A table of Python source `s` named `name` (landing as `s__<name>`), written with `mode`.
+pub(crate) struct ModedTable {
+    pub(crate) name: &'static str,
+    pub(crate) mode: fn() -> crate::adapters::contract::models::WriteMode,
+}
+
+/// A plan of `tables` and its skipped tables (destination and reason), and the lines `plan` prints for it without `-v`.
+pub(crate) struct PlanLinesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) tables: &'static [ModedTable],
+    pub(crate) skipped: &'static [(&'static str, &'static str)],
+    pub(crate) expected_output: &'static str,
+}

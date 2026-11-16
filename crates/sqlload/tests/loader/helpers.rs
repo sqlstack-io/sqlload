@@ -130,7 +130,7 @@ pub(crate) async fn run_once(
     let plan = plan_project(&project, destinations, options)
         .await
         .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
     apply_project(&plan, destinations)
         .await
@@ -152,7 +152,7 @@ pub(crate) async fn load_selected(
     let plan = plan_project(project, destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    let (lines, ok) = render_plan(&plan);
+    let (lines, ok) = render_plan(&plan, true);
     ok.then_some(()).ok_or_else(|| lines.join("\n"))?;
     apply_project(&plan, destinations)
         .await
@@ -208,7 +208,7 @@ async fn plan_text(
     let plan = plan_project(&project, destinations, &PlanOptions::default())
         .await
         .map_err(|error| error.to_string())?;
-    Ok(render_plan(&plan).0.join("\n"))
+    Ok(render_plan(&plan, true).0.join("\n"))
 }
 
 /// Run a scenario's loads on fresh source tables and a fresh DuckDB; the check query's result.
@@ -1073,7 +1073,7 @@ pub(crate) async fn plan_apply_load(
         let plan = plan_project(project, destinations, options)
             .await
             .map_err(|error| error.to_string())?;
-        let (lines, ok) = render_plan(&plan);
+        let (lines, ok) = render_plan(&plan, true);
         plan_text = lines.join("\n");
         ok.then_some(()).ok_or_else(|| plan_text.clone())?;
         let applied = apply_project(&plan, destinations)
@@ -1423,7 +1423,7 @@ pub(crate) async fn mixed_cursor_plan(selectors: &[&str], start: &str) -> Result
     let plan = plan_project(&project, &destinations, &options)
         .await
         .map_err(|error| error.to_string())?;
-    Ok(render_plan(&plan).0.join("\n"))
+    Ok(render_plan(&plan, true).0.join("\n"))
 }
 
 /// A project with two `postgres_cdc` sources on every `public` table of `port`'s database, into the DuckDB file `database`: `app` merges with soft deletes, `log` keeps a changelog; `orders.tags`, an array, is pinned to text, as captured arrays must be.

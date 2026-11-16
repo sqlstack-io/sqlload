@@ -8,6 +8,8 @@ mod key_nulls;
 mod lookback_start;
 #[path = "tests/test_merged_files.rs"]
 mod merged_files;
+#[path = "tests/test_plan_lines.rs"]
+mod plan_lines;
 #[path = "tests/test_python_columns.rs"]
 mod python_columns;
 #[cfg(feature = "odbc")]

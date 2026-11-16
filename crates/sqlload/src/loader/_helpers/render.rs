@@ -1740,7 +1740,7 @@ pub(crate) fn reads_line(table: &TablePlan, precise: bool) -> Option<String> {
 }
 
 /// [`reads_line`] without the NULL cursor rule.
-fn reads_text(table: &TablePlan, precise: bool) -> Option<String> {
+pub(crate) fn reads_text(table: &TablePlan, precise: bool) -> Option<String> {
     if let Some(logged) = &table.logged {
         return Some(match &logged.current {
             Some(record) => {

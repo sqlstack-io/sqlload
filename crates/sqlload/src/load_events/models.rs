@@ -138,9 +138,10 @@ pub struct StepView {
     pub elapsed: std::time::Duration,
 }
 
-/// What the plan's progress has to show: the phase lines finished since last asked, and the step running now.
+/// What the plan's progress has to show: the phase lines finished since last asked, those of steps that failed or were slow (`lines`) apart from the others (`quiet`, which only `-v` prints), and the step running now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProgressView {
     pub lines: Vec<String>,
+    pub quiet: Vec<String>,
     pub step: Option<StepView>,
 }
