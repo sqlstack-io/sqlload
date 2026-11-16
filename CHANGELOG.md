@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.59.0](https://github.com/sqlstack-io/sqlload/compare/v0.58.0...v0.59.0) (2026-11-16)
+
+
+### Features
+
+* **bigquery:** BigQuery target out of preview, with deletes and deletes_from ([45cc570](https://github.com/sqlstack-io/sqlload/commit/45cc570c4821935e26bdde387fecbc57a95c1d9d))
+* **databricks:** deletes and deletes_from load into Databricks ([45cc570](https://github.com/sqlstack-io/sqlload/commit/45cc570c4821935e26bdde387fecbc57a95c1d9d))
+
+
+### Bug Fixes
+
+* **bigquery:** replace and rebuilds keep NUMERIC(p,s) and STRING(n) column parameters ([45cc570](https://github.com/sqlstack-io/sqlload/commit/45cc570c4821935e26bdde387fecbc57a95c1d9d))
+
 ## [0.58.0](https://github.com/sqlstack-io/sqlload/compare/v0.57.0...v0.58.0) (2026-11-16)
 
 
