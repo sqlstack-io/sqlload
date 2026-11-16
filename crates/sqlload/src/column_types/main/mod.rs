@@ -1,6 +1,7 @@
 pub mod array_element;
 pub mod array_loss;
 pub mod arrow_field;
+pub mod binary_text;
 pub mod combined_type;
 pub mod exact_cast;
 pub mod holds_values;

@@ -92,7 +92,7 @@ lists become JSON columns. From 0.27.0, a list column pinned as
 | `date` | `date` |
 | naive `datetime` | `timestamp_ntz` |
 | `datetime` with a UTC offset | `timestamp_tz` (a column mixing both becomes text) |
-| `bytes`, `bytearray`, `memoryview` | From 0.55.0, `binary`. A column mixing them with text, and one under `infer_types = false`, is text holding them as base64, as is a value nested in a dict or list. |
+| `bytes`, `bytearray`, `memoryview` | From 0.55.0, `binary`. A column mixing them with text, pinned as `text`, or under `infer_types = false` holds them as base64 text, as does a value nested in a dict or list. Before 0.55.0 they loaded as their `b'...'` text, so a table loaded then needs `--reload` to become `binary`, or `columns = { name = "text" }` to keep its column. |
 | `Enum` | Its value. |
 | dataclass | A JSON object. |
 | numpy numbers | Numbers. |

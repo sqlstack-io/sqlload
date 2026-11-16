@@ -594,6 +594,30 @@ def test_given_bytes_in_dict_rows_when_loading_then_they_load_as_a_blob_column(t
 	assert query(project, 'SELECT id, typeof(data), data FROM "RAW".shop__blobs ORDER BY id') == [(1, "BLOB", b"\x00\xffhi"), (2, "BLOB", None)]
 
 
+def test_given_python_bytes_in_a_text_column_when_loading_then_they_load_as_base64_and_arrow_binary_as_its_text(tmp_path: Path) -> None:
+	tables = """
+	@shop.table(description='Text, then bytes in a later batch.')
+	def later(ctx):
+	    for i in range(1200):
+	        yield {'id': i, 'v': f't{i}' if i < 1100 else b'\\x00\\xff'}
+
+	@shop.table(description='Bytes pinned as text.', columns={'v': 'text'})
+	def pinned(ctx):
+	    yield {'id': 1, 'v': b'\\x00\\xff'}
+
+	@shop.table(description='Arrow binary pinned as text.', columns={'v': 'text'})
+	def arrow(ctx):
+	    import pyarrow as pa
+	    yield pa.table({'id': [1], 'v': pa.array([b'plain'], pa.binary())})
+	"""
+	project = make_project(tmp_path, DUCKDB_PROJECT, tables)
+	load(project)
+	assert query(project, 'SELECT typeof(v), count(v) FROM "RAW".shop__later WHERE id >= 1100 GROUP BY 1') == [("VARCHAR", 100)]
+	assert query(project, 'SELECT DISTINCT v FROM "RAW".shop__later WHERE id >= 1100') == [("AP8=",)]
+	assert query(project, 'SELECT typeof(v), v FROM "RAW".shop__pinned') == [("VARCHAR", "AP8=")]
+	assert query(project, 'SELECT typeof(v), v FROM "RAW".shop__arrow') == [("VARCHAR", "plain")]
+
+
 def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column_but_the_pinned_one_loads_as_text(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', infer_types=False, columns={'amount': 'decimal(18,2)'})(rows)\n")
 	give(
