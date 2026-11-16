@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>SQLLoad · Load data into your warehouse, and see how first</title>
-		<meta name="description" content="SQLLoad loads Postgres and Snowflake tables, files, Google Sheets and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
+		<meta name="description" content="SQLLoad loads Postgres, Snowflake and ODBC database tables (SQL Server, MySQL and others), files, Google Sheets, Kafka topics and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
 		<meta property="og:title" content="SQLLoad · Load data into your warehouse, and see how first" />
 		<meta property="og:description" content="A free, open-source data loader in Rust that shows you its plan before it changes anything." />
 		<meta property="og:type" content="website" />
@@ -291,16 +291,17 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 								<tr><th scope="row">Snowflake</th><td>✓</td><td>✓</td></tr>
 								<tr><th scope="row">BigQuery</th><td>✓</td><td>preview</td></tr>
 								<tr><th scope="row">Databricks</th><td></td><td>✓</td></tr>
-								<tr><th scope="row">ClickHouse</th><td></td><td>preview</td></tr>
+								<tr><th scope="row">ClickHouse</th><td></td><td>✓ one self-hosted server¹</td></tr>
 								<tr><th scope="row">DuckDB</th><td></td><td>✓</td></tr>
 								<tr><th scope="row">MotherDuck</th><td></td><td>beta²</td></tr>
-								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON (S3, local folder, SFTP)</td><td>✓ Parquet, CSV (S3, local folder)</td></tr>
+								<tr><th scope="row">SQL Server, MySQL, MariaDB, OpenEdge and other databases through <a href="/docs/sources/odbc/">ODBC</a>³</th><td>✓</td><td></td></tr>
+								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through <code>pattern</code> (S3, local folder, SFTP)</td><td>✓ Parquet, CSV (S3, local folder)</td></tr>
 								<tr><th scope="row">Google Sheets</th><td>✓</td><td></td></tr>
 								<tr><th scope="row">HTTP APIs and Python</th><td>✓</td><td></td></tr>
-								<tr><th scope="row">ODBC databases¹</th><td>✓</td><td></td></tr>
+								<tr><th scope="row">Kafka</th><td>✓ into Snowflake, through the <a href="/docs/kafka/">Kafka exporter</a></td><td></td></tr>
 							</tbody>
 						</table>
-						<p class="systems-notes">¹ In builds with the <code>odbc</code> feature.<br />² From 0.34.0, through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
+						<p class="systems-notes">¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² From 0.34.0, through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
 						<ul>
 							<li>Linux and macOS; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>
