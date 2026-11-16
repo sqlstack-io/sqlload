@@ -138,7 +138,7 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
-    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement. It takes the build table's options with `LIKE`, so a build table must never carry an expiration, or the table it replaces would expire with it, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
+    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's options, so a build table must never carry an expiration, or the table it replaces would expire with it. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
     fn render_swap(
         &self,
         target: &TableName,

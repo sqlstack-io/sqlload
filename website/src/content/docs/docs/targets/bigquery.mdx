@@ -140,9 +140,9 @@ lost, as are labels, column descriptions and policy tags. BigQuery won't replace
 clustered table with one that isn't, so `replace` fails on such a table and leaves it as it was.
 So does a type change that rewrites the table, such as `int` to `float`. That rewrite keeps each
 column's type, except that a `BIGNUMERIC` whose digits fit a `NUMERIC`, such as `BIGNUMERIC(20,2)`,
-becomes `NUMERIC(20,2)`. In a table with a `STRUCT` or `RANGE` column, whose type can't be named
-again, the rewrite takes its types from the query, so its columns lose their precision, scale and
-length.
+becomes `NUMERIC(20,2)`. In a table with a column whose type SQLLoad can't name again, a `STRUCT`,
+`RANGE`, `GEOGRAPHY`, `INTERVAL` or a `BIGNUMERIC` of more than 38 digits, the rewrite takes its
+types from the query, so its columns lose their precision, scale and length.
 The build table holds only the table's own columns, so a column a
 [contract](/docs/concepts/contracts/) or `on_schema_change = "ignore"` leaves out isn't loaded.
 
@@ -208,5 +208,5 @@ For 0.59.0, a live round ran against a real BigQuery project, in one dataset dro
 - **Deletes:** the key scan and tombstone rounds of `deletes` and `deletes_from`, soft and hard,
   matched on every step, with a key that can't be NULL and with a text key holding a NULL row.
 - **Rebuilds:** the statement a type change that rewrites a table renders, such as `int` to
-  `float`, kept `NUMERIC(20,2)` and `BIGNUMERIC(40,2)` columns as they were and rewrote a table
-  with a `STRUCT` column.
+  `float`, kept a `NUMERIC(20,2)` column as it was, turned a `BIGNUMERIC(20,2)` made outside
+  SQLLoad into `NUMERIC(20,2)` with its values, and rewrote a table with a `STRUCT` column.

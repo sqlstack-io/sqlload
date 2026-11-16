@@ -81,8 +81,8 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                     LiveColumn {
                         name: "total".to_owned(),
                         column_type: ColumnType::Decimal {
-                            precision: 40,
-                            scale: 2,
+                            precision: 38,
+                            scale: 10,
                         },
                         fraction_digits: None,
                     },
@@ -94,7 +94,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                 ],
             ),
             expected_statements: &[
-                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `total` BIGNUMERIC(40,2), `qty` FLOAT64) AS SELECT CAST(`amount` AS NUMERIC) AS `amount`, CAST(`total` AS BIGNUMERIC) AS `total`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `total` BIGNUMERIC(38,10), `qty` FLOAT64) AS SELECT CAST(`amount` AS NUMERIC) AS `amount`, CAST(`total` AS BIGNUMERIC) AS `total`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
             ],
         },
         RenderedTestCase {
