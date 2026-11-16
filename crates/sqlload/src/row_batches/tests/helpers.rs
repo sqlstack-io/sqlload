@@ -216,6 +216,7 @@ pub(crate) fn flatten_rule(
         naming,
         excluded: crate::row_batches::models::ExcludePatterns::default(),
         as_text: false,
+        nonfinite_null: false,
     }
 }
 

@@ -21,6 +21,12 @@ struct Walker<'py> {
     decimal: Bound<'py, PyType>,
     utc: Bound<'py, PyAny>,
     enumeration: Bound<'py, PyType>,
+    /// `on_nonfinite = "null"`: NaN and infinite floats read as NULL.
+    nonfinite_null: bool,
+    /// Whether the column being read is pinned as an array, whose NaN and infinite elements cross as their text.
+    elements: bool,
+    /// The first NaN or infinite float written inside the nested value being read, which JSON can't hold.
+    refused: Option<f64>,
 }
 
 /// One Python value as orjson sees it.
@@ -89,9 +95,20 @@ fn collision(object: &str, key: &str, name: &str, clash: &str) -> PyErr {
     ))
 }
 
+/// Whether any value of `rows`, a list of dicts, is or holds a NaN or infinite float, which orjson writes as `null`.
+pub(crate) fn holds_nonfinite(rows: &Bound<'_, PyList>) -> PyResult<bool> {
+    let walker = Walker::new(rows.py(), false)?;
+    for row in rows.iter() {
+        if walker.nonfinite(&row)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Read `rows`, a list of dicts, column by column, holding the GIL; each dict `flatten` flattens becomes one typed column per key, `<object>__<key>`, and its dicts in turn.
 pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &Flatten) -> PyResult<RowColumns> {
-    let mut walker = Walker::new(rows.py())?;
+    let mut walker = Walker::new(rows.py(), flatten.nonfinite_null)?;
     let mut columns = RowColumns::new();
     let mut names = FlatNames::default();
     for (index, row) in rows.iter().enumerate() {
@@ -105,7 +122,10 @@ pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &Flatten) -> PyResult
             let key = key.cast::<PyString>().map_err(|_| key_error(&key))?;
             let key = key.to_str()?;
             match flatten.is_none() {
-                true => columns.push(key, walker.cell(&value)?),
+                true => columns.push(
+                    key,
+                    walker.column_cell(&value, (key, &[key], index), flatten)?,
+                ),
                 false => walker.flattened_cell(
                     (key, &value),
                     (index, &[], flatten),
@@ -122,7 +142,7 @@ pub(crate) fn walk_rows(rows: &Bound<'_, PyList>, flatten: &Flatten) -> PyResult
 }
 
 impl<'py> Walker<'py> {
-    fn new(py: Python<'py>) -> PyResult<Self> {
+    fn new(py: Python<'py>, nonfinite_null: bool) -> PyResult<Self> {
         let datetime = py.import("datetime")?;
         Ok(Self {
             writer: JsonWriter::new(),
@@ -132,10 +152,57 @@ impl<'py> Walker<'py> {
             decimal: py.import("decimal")?.getattr("Decimal")?.cast_into()?,
             utc: datetime.getattr("timezone")?.getattr("utc")?,
             enumeration: py.import("enum")?.getattr("Enum")?.cast_into()?,
+            nonfinite_null,
+            elements: false,
+            refused: None,
         })
     }
 
-    /// The cell for one Python value: a `Decimal` as a decimal, a `date` as a date, a naive `datetime` as `timestamp_ntz` and an aware one as UTC RFC 3339 text (`timestamp_tz`); anything else as orjson would write it, then read back (NaN is NULL; times are ISO text; unknown types are `str()`).
+    /// The cell for `value` in column `name`, at `path` (keys from the row down) in row `row` of the batch: a NaN or infinite float inside a nested value fails it, as `json` can't hold one, unless the column is pinned as an array, whose elements keep it, or `on_nonfinite = "null"` reads it as NULL.
+    fn column_cell(
+        &mut self,
+        value: &Bound<'py, PyAny>,
+        (name, path, row): (&str, &[&str], usize),
+        flatten: &Flatten,
+    ) -> PyResult<Cell> {
+        self.elements = flatten.pins_array(path);
+        let cell = self.cell(value)?;
+        match self.refused.take() {
+            None => Ok(cell),
+            Some(number) => Err(PyValueError::new_err(format!(
+                "column {name}: row {} of a batch holds {} inside a nested value, which json can't hold; pin {name} as array(float) when it is a list of numbers, or set on_nonfinite = \"null\" to load NaN and infinities as NULL",
+                row + 1,
+                nonfinite_text(number)
+            ))),
+        }
+    }
+
+    /// Whether `value` is or holds a NaN or infinite float, read as [`Walker::plain`] reads it.
+    fn nonfinite(&self, value: &Bound<'py, PyAny>) -> PyResult<bool> {
+        if value.is_none() || value.is_instance_of::<PyString>() || value.is_instance_of::<PyInt>()
+        {
+            return Ok(false);
+        }
+        if let Ok(number) = value.cast::<PyFloat>() {
+            return Ok(!number.value().is_finite());
+        }
+        let items: Vec<Bound<'py, PyAny>> = match self.plain(value)? {
+            Plain::Float(number) => return Ok(!number.is_finite()),
+            Plain::Object(items) => items.into_iter().map(|(_, item)| item).collect(),
+            Plain::Array(items) => items.try_iter()?.collect::<PyResult<_>>()?,
+            Plain::Null | Plain::Bool(_) | Plain::Int(_) | Plain::Text(_) | Plain::Typed { .. } => {
+                return Ok(false);
+            }
+        };
+        for item in items {
+            if self.nonfinite(&item)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The cell for one Python value: a `Decimal` as a decimal, a `date` as a date, a naive `datetime` as `timestamp_ntz` and an aware one as UTC RFC 3339 text (`timestamp_tz`), a float as a float, NaN and infinities included (NULL under `on_nonfinite = "null"`); anything else as orjson would write it, then read back (times are ISO text; unknown types are `str()`).
     fn cell(&mut self, value: &Bound<'py, PyAny>) -> PyResult<Cell> {
         Ok(match self.plain(value)? {
             Plain::Null => Cell::Null,
@@ -144,7 +211,7 @@ impl<'py> Walker<'py> {
                 Ok(number) => Cell::Int(number),
                 Err(_) => Cell::Number(number.str()?.to_str()?.to_owned()),
             },
-            Plain::Float(number) => match number.is_finite() {
+            Plain::Float(number) => match number.is_finite() || !self.nonfinite_null {
                 true => Cell::Float(number),
                 false => Cell::Null,
             },
@@ -171,7 +238,15 @@ impl<'py> Walker<'py> {
                 Ok(number) => self.writer.raw(&number.to_string()),
                 Err(_) => self.writer.raw(number.str()?.to_str()?),
             },
-            Plain::Float(number) => self.writer.float(number),
+            Plain::Float(number) if number.is_finite() => self.writer.float(number),
+            Plain::Float(number) => match (self.nonfinite_null, self.elements) {
+                (true, _) => self.writer.raw("null"),
+                (false, true) => self.writer.string(nonfinite_text(number)),
+                (false, false) => {
+                    self.refused.get_or_insert(number);
+                    self.writer.raw("null");
+                }
+            },
             Plain::Text(text) | Plain::Typed { text, .. } => self.writer.string(&text),
             Plain::Object(items) => {
                 self.writer.raw("{");
@@ -282,10 +357,11 @@ impl<'py> Walker<'py> {
         if !(object && flatten.flattens(&here).map_err(PyValueError::new_err)?) {
             if path.is_empty() {
                 names.plain(key)?;
-                columns.push(key, self.cell(value)?);
+                columns.push(key, self.column_cell(value, (key, &here, row), flatten)?);
             } else if !value.is_none() {
                 let name = names.claim(&path.join("__"), key)?;
-                columns.push(&name, self.cell(value)?);
+                let cell = self.column_cell(value, (&name, &here, row), flatten)?;
+                columns.push(&name, cell);
             }
             return Ok(());
         }
@@ -417,6 +493,15 @@ fn numpy_plain<'py>(value: &Bound<'py, PyAny>) -> PyResult<Plain<'py>> {
         }
         _ => Plain::Text(value.str()?.to_str()?.to_owned()),
     })
+}
+
+/// A NaN or infinite float as text a float column reads back: `NaN`, `inf` or `-inf`.
+fn nonfinite_text(number: f64) -> &'static str {
+    match (number.is_nan(), number.is_sign_negative()) {
+        (true, _) => "NaN",
+        (false, false) => "inf",
+        (false, true) => "-inf",
+    }
 }
 
 /// A value's shape in words, for a listed object that holds something else.

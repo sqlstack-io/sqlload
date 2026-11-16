@@ -15,7 +15,7 @@ use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
 use crate::bindings::models::JsonData;
 use crate::crossing::_helpers::parser::{panic_if, panicked};
-use crate::crossing::_helpers::walk::walk_rows;
+use crate::crossing::_helpers::walk::{holds_nonfinite, walk_rows};
 use crate::crossing::constants::{CHECKPOINT_METHOD, CROSSING_DEFAULT, HTTP_JOB_METHOD};
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
@@ -185,6 +185,16 @@ impl<'py> Producer<'py> {
             Some((dumps, options)) => serialise(dumps, options, rows)?,
             None => None,
         };
+        let serialised = match serialised {
+            Some(bytes)
+                if !self.dispatch.flatten.nonfinite_null
+                    && writes_null(&bytes)
+                    && holds_nonfinite(rows)? =>
+            {
+                None
+            }
+            other => other,
+        };
         let crossed = match serialised {
             Some(bytes) => Crossed::Json {
                 bytes,
@@ -252,6 +262,11 @@ fn orjson_dumps(
     let passthrough = orjson.getattr("OPT_PASSTHROUGH_DATETIME")?;
     options.set_item("option", numpy.bitor(passthrough)?)?;
     Ok(Some((orjson.getattr("dumps")?, options)))
+}
+
+/// Whether orjson's JSON holds a `null`, as it writes for NaN and infinities as well as `None` (or `null` in a string), so the rows may need walking to keep them.
+fn writes_null(bytes: &[u8]) -> bool {
+    bytes.windows(4).any(|window| window == b"null")
 }
 
 /// `rows` as JSON bytes from orjson; `None` when orjson refuses them (an integer beyond 64 bits, say), so they are walked instead.

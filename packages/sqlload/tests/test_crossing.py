@@ -92,17 +92,28 @@ def test_given_the_same_rows_when_yielded_as_each_kind_then_the_tables_are_ident
 
 def test_given_python_values_when_crossed_then_types_follow_the_files_rules() -> None:
 	rows = [
-		{"i": 1, "f": 1.5, "b": True, "t": "2026-01-02T03:04:05Z", "s": "x", "n": {"z": [1, "a"]}, "big": 2**70, "nan": float("nan")},
-		{"i": 2, "f": 2, "b": None, "t": None, "s": None, "n": None, "big": 1, "nan": None},
+		{"i": 1, "f": 1.5, "b": True, "t": "2026-01-02T03:04:05Z", "s": "x", "n": {"z": [1, "a"]}, "big": 2**70, "nan": float("nan"), "inf": float("inf")},
+		{"i": 2, "f": 2, "b": None, "t": None, "s": None, "n": None, "big": 1, "nan": None, "inf": float("-inf")},
 	]
 	for crossing in CROSSINGS:
 		table = read(iter(rows), crossing=crossing)
 		assert [str(field.type) for field in table.schema] == [
-			"int64", "double", "bool", "timestamp[us, tz=UTC]", "string", "string", "string", "string",
-		]
+			"int64", "double", "bool", "timestamp[us, tz=UTC]", "string", "string", "string", "double", "double",
+		], crossing
+		nan, missing = table.column("nan").to_pylist()
+		assert nan != nan and missing is None, crossing
+		assert table.column("inf").to_pylist() == [float("inf"), float("-inf")], crossing
 		assert table.schema.field("n").metadata == {b"sqlload.type": b"json"}
 		assert table.column("n").to_pylist() == ['{"z":[1,"a"]}', None]
 		assert table.column("big").to_pylist() == [str(2**70), "1"]
+
+
+def test_given_nan_inside_a_nested_value_when_crossed_then_the_read_fails_naming_the_column_and_row() -> None:
+	rows = [{"id": 1, "n": {"z": [1.5]}}, {"id": 2, "n": {"z": [float("nan")]}}]
+	for crossing in CROSSINGS:
+		with pytest.raises(Exception, match=r"column n: row 2 of a batch holds NaN inside a nested value, which json can't hold") as raised:
+			read(iter(rows), crossing=crossing)
+		assert 'on_nonfinite = "null"' in str(raised.value), crossing
 
 
 def test_given_many_single_dicts_when_crossed_then_they_arrive_in_batches_of_batch_rows() -> None:
@@ -231,7 +242,7 @@ def numpy_rows() -> list[dict[str, Any]]:
 			"day": date(2026, 1, 2),
 			"price": Decimal("1.10"),
 			"nested": {"n": np.int64(i), "c": Colour.RED, "d": date(2026, 1, 2), "p": Decimal("2.50"), "a": np.array([1.5, 2.0], dtype=np.float32)},
-			"nan": np.float64("nan"),
+			"inf": np.float64("-inf"),
 			"when": np.datetime64("2021-01-01T00:00:00.123456789"),
 		}
 		for i in range(5)
@@ -246,6 +257,7 @@ def test_given_orjson_typed_values_when_walked_or_serialised_then_the_tables_are
 	assert types["i"] == "int64" and types["f"] == "double" and types["b"] == "bool"
 	assert types["at"] == "timestamp[us, tz=UTC]"
 	assert walked.column("f32").to_pylist()[0] == 0.1
+	assert types["inf"] == "double" and walked.column("inf").to_pylist()[0] == float("-inf")
 	assert walked.column("colour").to_pylist()[0] == "red"
 	assert walked.column("point").to_pylist()[0] == '{"x":0,"label":{"code":7}}'
 	assert walked.column("price").to_pylist()[0] == Decimal("1.10")

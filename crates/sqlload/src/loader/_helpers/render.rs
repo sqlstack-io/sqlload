@@ -517,7 +517,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             .as_ref()
             .map(|python| detail("schema", python_columns_line(table, python)))
             .into_iter()
-            .chain(text_columns_line(spec).map(|line| detail("schema", line))),
+            .chain(text_columns_line(spec).map(|line| detail("schema", line)))
+            .chain(spec.flatten.nonfinite_null.then(|| {
+                detail(
+                    "schema",
+                    "NaN and infinite floats of dict rows load as NULL (on_nonfinite = \"null\")",
+                )
+            })),
     );
     let unnested: Option<Vec<String>> = match &spec.unnest {
         Unnest::Paths(paths) => Some(paths.clone()),

@@ -604,6 +604,40 @@ def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column
 	]
 
 
+NONFINITE_ROWS = [
+	{"id": 1, "f": float("nan"), "scores": [1.5, float("nan")]},
+	{"id": 2, "f": float("inf"), "scores": None},
+	{"id": 3, "f": float("-inf"), "scores": [float("-inf")]},
+]
+
+
+@pytest.mark.parametrize(
+	("settings", "expected", "plan_line"),
+	[
+		pytest.param("columns={'scores': 'array(float)'}", [(1, "nan", "[1.5, nan]"), (2, "inf", None), (3, "-inf", "[-inf]")], False, id="kept"),
+		pytest.param(
+			"columns={'scores': 'array(float)'}, on_nonfinite='null'", [(1, None, "[1.5, NULL]"), (2, None, None), (3, None, "[NULL]")], True, id="null"
+		),
+		pytest.param("columns={'f': 'decimal(10,2)', 'scores': 'array(float)'}", "column f: row 1 holds NaN, which decimal(10,2) can't hold", False, id="decimal"),
+		pytest.param("", "column scores: row 1 of a batch holds NaN inside a nested value, which json can't hold", False, id="json"),
+	],
+)
+def test_given_nan_and_infinities_in_dict_rows_when_loading_then_they_keep_their_values_or_fail_naming_the_column(
+	tmp_path: Path, settings: str, expected: Any, plan_line: bool
+) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings})(rows)\n")
+	give(project, "rows", NONFINITE_ROWS)
+	planned = sqlload(project, "plan")
+	assert ('NaN and infinite floats of dict rows load as NULL (on_nonfinite = "null")' in planned.stdout) == plan_line, planned.stdout + planned.stderr
+	if isinstance(expected, str):
+		failed = sqlload(project, "load")
+		assert failed.returncode != 0 and expected in failed.stdout + failed.stderr, failed.stdout + failed.stderr
+		assert 'on_nonfinite = "null"' in failed.stdout + failed.stderr
+		return
+	load(project)
+	assert query(project, 'SELECT id, CAST(f AS VARCHAR), CAST(scores AS VARCHAR) FROM "RAW".shop__rows ORDER BY id') == expected
+
+
 @pytest.mark.parametrize(
 	("toml", "settings"),
 	[
@@ -1324,14 +1358,21 @@ def test_given_flatten_all_when_a_later_load_adds_an_object_field_then_it_become
 	assert query(project, 'SELECT id, customer__name, customer__address__city, tags::VARCHAR FROM "RAW".shop__rows ORDER BY id') == [(1, "Ann", None, None), (2, "Bo", "Leeds", '["x"]')]
 
 
-def test_given_flatten_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path) -> None:
-	toml = DUCKDB_PROJECT + '\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\nflatten = ["customer"]\n'
+@pytest.mark.parametrize(
+	("setting", "problem"),
+	[
+		('flatten = ["customer"]', "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON"),
+		('on_nonfinite = "null"', "on_nonfinite applies to the dict rows of Python tables and transforms; this source's floats load as they are read, so remove it"),
+	],
+)
+def test_given_a_dict_rows_setting_on_a_csv_files_source_when_planning_then_it_is_refused(tmp_path: Path, setting: str, problem: str) -> None:
+	toml = DUCKDB_PROJECT + f'\n[connections.lake]\nkind = "filesystem"\nroot = "lake"\n\n[sources.events]\nwrite_strategy = "replace"\nkind = "files"\nconnection = "lake"\npath = "events/"\nformat = "csv"\ndescription = "Events."\n[sources.events.tables.events]\n{setting}\n'
 	project = make_project(tmp_path, toml, "")
 	(project / "lake" / "events").mkdir()
 	(project / "lake" / "events" / "a.csv").write_text("id\n1\n")
 	done = sqlload(project, "plan")
 	assert done.returncode == 1
-	assert "flatten applies to Python tables, JSON and NDJSON files, and tables with a transform; nested values from this source stay JSON" in done.stdout, done.stdout + done.stderr
+	assert problem in done.stdout, done.stdout + done.stderr
 
 
 DATE_CURSOR_MODULE = '''

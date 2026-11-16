@@ -15,6 +15,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_schema_change",
     "auto_widen",
     "infer_types",
+    "on_nonfinite",
     "type_change_rebuild",
     "batch_size",
     "checks",
