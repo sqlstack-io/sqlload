@@ -16,6 +16,10 @@ use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
+use crate::databricks_source::main::databricks_reader::databricks_reader;
+use crate::databricks_source::main::read_catalog::read_catalog as read_databricks_catalog;
+use crate::databricks_source::main::read_rows::read_rows as read_databricks_rows;
+use crate::databricks_source::models::{DatabricksReadRequest, DatabricksReader};
 use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
@@ -228,6 +232,9 @@ pub(crate) async fn open_source(
         SourceKind::BigQuery => Ok(SourceReader::BigQuery(Box::new(bigquery_source_reader(
             project, source,
         )?))),
+        SourceKind::Databricks => Ok(SourceReader::Databricks(Box::new(
+            databricks_source_reader(project, source)?,
+        ))),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -356,6 +363,25 @@ pub(crate) async fn source_tables(
                 .collect();
             Ok(
                 match read_bigquery_catalog(&reader, (&source.include, &source.exclude), &queries)
+                    .await
+                {
+                    Ok(discovered) => Ok((discovered, None, Vec::new())),
+                    Err(error) => Err(LoaderError::from(error).into()),
+                },
+            )
+        }
+        SourceKind::Databricks => {
+            let reader = match databricks_source_reader(project, source) {
+                Ok(reader) => reader,
+                Err(error) => return Ok(Err(error.into())),
+            };
+            let queries: Vec<(String, String)> = source
+                .tables
+                .iter()
+                .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+                .collect();
+            Ok(
+                match read_databricks_catalog(&reader, (&source.include, &source.exclude), &queries)
                     .await
                 {
                     Ok(discovered) => Ok((discovered, None, Vec::new())),
@@ -515,6 +541,20 @@ pub(crate) fn bigquery_source_reader(
         ))
     })?;
     Ok(bigquery_reader(connection, source.project.as_deref())?)
+}
+
+/// A `databricks` source's reader, for its connection.
+pub(crate) fn databricks_source_reader(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+) -> Result<DatabricksReader, LoaderError> {
+    let connection = project.connections.get(&source.connection).ok_or_else(|| {
+        LoaderError::Invalid(format!(
+            "connection {:?} is not a [connections] entry",
+            source.connection
+        ))
+    })?;
+    Ok(databricks_reader(connection)?)
 }
 
 /// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s) or as the Google user who consents to its OAuth client, and the spreadsheet it reads.
@@ -1586,6 +1626,22 @@ async fn read_each(
                 filtered: table.spec.row_filter.is_some(),
             };
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
+        }
+        (SourceReader::Databricks(reader), _) => {
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
+            let request = DatabricksReadRequest {
+                table: &table.spec.source_table,
+                sql: table
+                    .spec
+                    .warehouse_source
+                    .as_ref()
+                    .and_then(|source| source.sql.as_deref()),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+            };
+            Ok(read_databricks_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batches =

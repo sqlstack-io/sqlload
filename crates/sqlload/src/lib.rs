@@ -8,6 +8,7 @@ pub mod batch_plan;
 pub mod batching;
 pub mod bigquery_api;
 pub mod bigquery_source;
+pub mod databricks_source;
 pub mod cdc;
 pub mod column_parse;
 pub mod column_types;

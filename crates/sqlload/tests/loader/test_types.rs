@@ -1602,3 +1602,16 @@ pub(crate) struct TombstonePlanTestCase {
     /// Text the plan must show, compared as words; empty when it succeeds.
     pub(crate) expected_error: &'static str,
 }
+
+/// One load from a databricks source into DuckDB, read through the fake's result links.
+pub(crate) struct DatabricksSourceTestCase {
+    pub(crate) description: &'static str,
+    /// Rows added to the fake's `marts.orders` before the load.
+    pub(crate) rows: fn() -> Vec<serde_json::Value>,
+    /// How many of the load's link downloads fail as expired links do.
+    pub(crate) expired_links: usize,
+    /// The table's rows after the load, as `id:label:amount:at`.
+    pub(crate) expected_rows: &'static str,
+    /// The end of the statement that read the table.
+    pub(crate) expected_read: &'static str,
+}

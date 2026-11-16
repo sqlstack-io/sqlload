@@ -14,6 +14,7 @@ pub async fn start_fake_databricks() -> Result<FakeDatabricks, String> {
     let address = listener.local_addr().map_err(|error| error.to_string())?;
     let state = SharedState::default();
     state.lock().directories.insert(FAKE_VOLUME_PATH.to_owned());
+    state.lock().base_url = format!("http://{address}");
     let router = Router::new()
         .fallback(handle)
         .layer(axum::extract::DefaultBodyLimit::disable())

@@ -123,8 +123,15 @@ pub(crate) fn run_statement(state: &SharedState, body: &[u8]) -> Outcome {
         }
     };
     let statement = request["statement"].as_str().unwrap_or_default().to_owned();
+    let links = request["disposition"] == "EXTERNAL_LINKS" && request["format"] == "ARROW_STREAM";
     let mut state = state.lock();
     state.statements.push(statement.clone());
+    if let Some(answer) = state.source_answer(&statement, links) {
+        return Ok(match links {
+            true => answer,
+            false => state.deliver(answer),
+        });
+    }
     let answer = state.answer(&statement);
     Ok(state.deliver(answer))
 }

@@ -41,6 +41,8 @@ mod test_bigquery_source;
 mod test_column_names;
 #[path = "loader/test_databricks_loads.rs"]
 mod test_databricks_loads;
+#[path = "loader/test_databricks_source.rs"]
+mod test_databricks_source;
 #[path = "loader/test_debug_project.rs"]
 mod test_debug_project;
 #[path = "loader/test_file_store.rs"]

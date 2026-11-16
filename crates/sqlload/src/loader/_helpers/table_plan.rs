@@ -33,6 +33,7 @@ use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
+use crate::databricks_source::constants::DATABRICKS_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::main::is_variant::is_variant;
@@ -447,6 +448,17 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
                 .is_some_and(|source| source.system == BIGQUERY_SOURCE) =>
         {
             crate::bigquery_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
+        (None, None)
+            if spec
+                .warehouse_source
+                .as_ref()
+                .is_some_and(|source| source.system == DATABRICKS_SOURCE) =>
+        {
+            crate::databricks_source::main::read_columns::read_columns(
                 &selected_columns(spec),
                 &spec.pinned,
             )

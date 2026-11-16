@@ -143,8 +143,9 @@ pub enum ConnectionConfig {
         warehouse_id: String,
         /// The Unity Catalog catalog tables load into.
         catalog: String,
-        /// The managed volume load files are staged in, `catalog.schema.volume`; it must exist.
-        volume: String,
+        /// The managed volume load files are staged in, `catalog.schema.volume`; it must exist, and is needed only when a target loads into the connection.
+        #[serde(default)]
+        volume: Option<String>,
     },
     /// A BigQuery project, reached with a service-account key.
     #[serde(rename = "bigquery")]
@@ -608,6 +609,7 @@ impl SourceConfig {
                 | SourceKind::Snowflake
                 | SourceKind::Odbc
                 | SourceKind::BigQuery
+                | SourceKind::Databricks
         )
     }
 
@@ -665,6 +667,7 @@ impl SourceConfig {
                 | SourceKind::Snowflake
                 | SourceKind::Odbc
                 | SourceKind::BigQuery
+                | SourceKind::Databricks
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
@@ -689,6 +692,8 @@ pub enum SourceKind {
     /// BigQuery tables, views and queries, read as Arrow through the Storage Read API.
     #[serde(rename = "bigquery")]
     BigQuery,
+    /// Databricks tables, views and queries, read as Arrow through the Statement Execution API's result links.
+    Databricks,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
     /// Tabs or ranges of a Google Sheets spreadsheet, one table each.
@@ -705,6 +710,7 @@ impl SourceKind {
             Self::Snowflake => "snowflake",
             Self::Odbc => "odbc",
             Self::BigQuery => "bigquery",
+            Self::Databricks => "databricks",
             Self::Python => "python",
             Self::GoogleSheets => "google_sheets",
         }
