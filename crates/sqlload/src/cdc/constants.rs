@@ -50,6 +50,12 @@ pub const BACKFILL_SLOT_SUFFIX: &str = "_backfill";
 /// The longest replication slot name Postgres takes (`NAMEDATALEN - 1`).
 pub const SLOT_NAME_BYTES: usize = 63;
 
+/// How long a load waits for another session to release the slot before failing: Postgres ends the walsender of a load that stopped (crashed, or was killed) a moment after its client is gone, so a load started right after it would otherwise find the slot "active for PID …".
+pub const SLOT_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How often a load waiting on [`SLOT_RELEASE_WAIT`] checks the slot again.
+pub const SLOT_RELEASE_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// What Postgres says when a slot cannot be made because every one under `max_replication_slots` is taken.
 pub const SLOTS_FULL_ERROR: &str = "all replication slots are in use";
 

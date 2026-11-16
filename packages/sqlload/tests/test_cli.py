@@ -25,6 +25,11 @@ def test_given_help_when_run_then_the_native_commands_are_listed() -> None:
 	assert "debug" in done.stdout and "load" in done.stdout
 
 
+def test_given_help_with_json_when_run_then_the_help_is_on_stdout() -> None:
+	done = run("load", "--json", "--help")
+	assert (done.returncode, "--json" in done.stdout) == (0, True), done.stdout + done.stderr
+
+
 def test_given_a_project_when_debugging_without_connections_then_it_validates(project: Path) -> None:
 	done = run("debug", "--no-connection", "-c", str(project))
 	assert done.returncode == 0, done.stderr

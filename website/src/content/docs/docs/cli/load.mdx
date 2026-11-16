@@ -250,10 +250,9 @@ fix, such as a target that refused the connection or timed out.
 
 `--reload` and `--resnapshot` need `--yes` with `--json`, as there is no prompt to answer.
 
-Under `--json`, what a Python source prints goes to standard error, so standard output holds only
-the document. Output written to the process's standard output directly, such as by a child process
-that inherits it or `os.write(1, …)`, still reaches standard output: capture or redirect it in the
-source.
+Under `--json`, standard output holds only the document. From 0.56.0, everything a project with
+Python sources writes to standard output while it runs goes to standard error instead: a source's
+`print()`, a child process that inherits standard output, and `os.write(1, …)`.
 
 ## Events
 

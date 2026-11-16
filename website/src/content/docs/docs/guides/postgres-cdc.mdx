@@ -246,6 +246,10 @@ and how to stop; piped or redirected output has no escape codes, and `--json` is
 - **Stopping.** `--max-duration`, or a first Ctrl-C or SIGTERM, writes and confirms what it has
   read, then exits 0. A snapshot or copy under way finishes first. A second signal stops at once
   (exit code 130), which is safe: the next load skips what was already written.
+- **A load started right after one that stopped** finds the slot still held until Postgres
+  notices the stopped load is gone. From 0.56.0 it waits up to 30 seconds for the slot, then fails
+  naming the server process that holds it: another load reading the slot, or one whose network
+  connection was lost and that the server hasn't noticed yet (until `wal_sender_timeout`).
 - **While idle** it writes nothing and confirms the server's position, so the slot keeps no WAL for
   writes to tables it doesn't publish. It sends Snowflake or Databricks no queries, so the warehouse can suspend;
   each batch written resumes it, and a longer `batch_interval` writes fewer, larger batches.

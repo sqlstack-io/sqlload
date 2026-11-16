@@ -34,6 +34,11 @@ impl SqlAdapter for SnowflakeSql {
         true
     }
 
+    /// The mark statements of `deletes` and `deletes_from` ran on a Snowflake warehouse through every step of the container tests' key scans and tombstones, soft and hard.
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }

@@ -6,5 +6,14 @@ use crate::host::main::extension_host::extension_host;
 /// Run the `sqlload` command line `argv` (the program name first) with the GIL released, Python sources included, and return its exit code.
 #[pyfunction]
 pub(crate) fn run_cli(py: Python<'_>, argv: Vec<String>) -> u8 {
-    py.detach(|| run_args_with_host(argv, Some(extension_host())))
+    py.detach(|| run_args_with_host(argv, Some(extension_host()), false).0)
+}
+
+/// [`run_cli`], returning what the command would write to stdout along with its exit code, for a caller that writes it itself.
+#[pyfunction]
+pub(crate) fn run_cli_captured(py: Python<'_>, argv: Vec<String>) -> (u8, String) {
+    py.detach(|| {
+        let (code, stdout) = run_args_with_host(argv, Some(extension_host()), true);
+        (code, stdout.unwrap_or_default())
+    })
 }
