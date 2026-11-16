@@ -363,6 +363,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         alter_statements(self, table, changes, live)
     }
 
+    /// The select-list entry keeping column `name` of `column_type` in a rebuild that declares each column's type, where its value must coerce to that type.
+    fn render_typed_rebuild_column(&self, name: &str, _column_type: &ColumnType) -> String {
+        name.to_owned()
+    }
+
     /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters.
     fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")

@@ -60,7 +60,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
             expected_statements: &["`a\\`b\\\\c`"],
         },
         RenderedTestCase {
-            description: "a rebuild lists every column with its type, so the table's NUMERIC(20,2) keeps its precision and scale through the query",
+            description: "a rebuild lists every column with its type, so a decimal keeps its precision and scale through the query, and casts each decimal to the unparameterized type it is declared as, which a BIGNUMERIC(20,2) made outside SQLLoad also coerces to",
             rendered: adapter.render_change_columns(
                 &orders(),
                 &[ColumnChange::Rebuild {
@@ -79,6 +79,14 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                         fraction_digits: None,
                     },
                     LiveColumn {
+                        name: "total".to_owned(),
+                        column_type: ColumnType::Decimal {
+                            precision: 40,
+                            scale: 2,
+                        },
+                        fraction_digits: None,
+                    },
+                    LiveColumn {
                         name: "qty".to_owned(),
                         column_type: ColumnType::Int,
                         fraction_digits: None,
@@ -86,7 +94,34 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                 ],
             ),
             expected_statements: &[
-                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `qty` FLOAT64) AS SELECT `amount`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `total` BIGNUMERIC(40,2), `qty` FLOAT64) AS SELECT CAST(`amount` AS NUMERIC) AS `amount`, CAST(`total` AS BIGNUMERIC) AS `total`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
+            ],
+        },
+        RenderedTestCase {
+            description: "a table with a STRUCT column, whose type can't be named again, is rebuilt with the types its query gives",
+            rendered: adapter.render_change_columns(
+                &orders(),
+                &[ColumnChange::Rebuild {
+                    column: "qty".to_owned(),
+                    from: ColumnType::Int,
+                    to: ColumnType::Float,
+                    sql_type: "FLOAT64".to_owned(),
+                }],
+                &[
+                    LiveColumn {
+                        name: "meta".to_owned(),
+                        column_type: ColumnType::Native("STRUCT".to_owned()),
+                        fraction_digits: None,
+                    },
+                    LiveColumn {
+                        name: "qty".to_owned(),
+                        column_type: ColumnType::Int,
+                        fraction_digits: None,
+                    },
+                ],
+            ),
+            expected_statements: &[
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` AS SELECT `meta`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
             ],
         },
         RenderedTestCase {
