@@ -124,6 +124,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             connection: DuckDbConnection::Local(Arc::new(Mutex::new(connection))),
             ddl: Arc::new(tokio::sync::Mutex::new(())),
             motherduck: false,
+            bridge_duckdb: String::new(),
         },
         open_transaction: false,
     };

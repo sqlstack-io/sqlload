@@ -32,3 +32,26 @@ from the environment or, from 0.27.0, the shared credentials file. Without
 either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.
+
+## VARIANT columns
+
+From 0.54.0, `json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
+DuckDB's `VARIANT` instead of `JSON`, which holds each value as its text:
+
+```toml
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+json_type = "variant"
+```
+
+Each value loads parsed, so objects, arrays, numbers and booleans keep their types:
+`variant_typeof(payload)` is `OBJECT(user)` and `payload.user.id` is `42`. It applies to every
+`json` column: Python dicts and lists, JSON and NDJSON objects, `shape = "record"` records, nested
+values not unnested, and lists loaded as `json`. A column pinned `native("VARIANT")` loads the same
+way on any DuckDB or MotherDuck target. The default, `json_type = "json"`, keeps `JSON`.
+
+Changing `json_type` for a table that exists changes its `json` columns' type. `plan` shows each one,
+such as `payload json -> native("VARIANT") needs a table rebuild`, and it runs as
+[`type_change_rebuild`](/docs/concepts/contracts/#changes-that-rebuild-a-table) allows: by default
+with `--allow-type-change-rebuild`. The column keeps its values.

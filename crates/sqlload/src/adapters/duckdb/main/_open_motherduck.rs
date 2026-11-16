@@ -32,11 +32,13 @@ pub(in crate::adapters) fn open_motherduck(
         "custom_user_agent": format!("sqlload/{}", env!("CARGO_PKG_VERSION")),
     });
     let hidden = vec![query_value(&token), token.clone()];
-    let (bridge, _) = open_bridge(&connection_string(&shown, &token), config, (python, hidden))
-        .map_err(|error| refused(&error.to_string(), &token, &shown))?;
+    let (bridge, bridge_duckdb) =
+        open_bridge(&connection_string(&shown, &token), config, (python, hidden))
+            .map_err(|error| refused(&error.to_string(), &token, &shown))?;
     Ok(DuckDbDestination {
         connection: DuckDbConnection::Bridge(bridge),
         ddl: Arc::default(),
         motherduck: true,
+        bridge_duckdb,
     })
 }

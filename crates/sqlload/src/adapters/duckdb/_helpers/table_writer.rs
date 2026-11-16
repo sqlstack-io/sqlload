@@ -8,6 +8,7 @@ use crate::adapters::contract::types::TableWriter;
 use crate::adapters::duckdb::main::_append_batch::append_batch;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::models::DuckDbWriter;
+use crate::column_types::main::is_variant::is_variant;
 use crate::loader::errors::LoaderError;
 
 impl TableWriter for DuckDbWriter {
@@ -25,7 +26,13 @@ impl TableWriter for DuckDbWriter {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
-        Ok(append_batch(&self.destination, into, batch).await?)
+        let variants: Vec<&str> = target
+            .write_columns
+            .iter()
+            .filter(|column| is_variant(&column.column_type))
+            .map(|column| column.name.as_str())
+            .collect();
+        Ok(append_batch(&self.destination, (into, &variants), batch).await?)
     }
 
     fn staged_bytes(&self) -> Option<usize> {

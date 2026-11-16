@@ -604,6 +604,44 @@ def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column
 	]
 
 
+@pytest.mark.parametrize(
+	("toml", "settings"),
+	[
+		(DUCKDB_PROJECT + 'json_type = "variant"\n', ""),
+		(DUCKDB_PROJECT, ", columns={'payload': 'native(\"VARIANT\")'}"),
+	],
+	ids=["json-type-variant", "native-variant-pin"],
+)
+def test_given_variant_json_on_duckdb_when_loading_dicts_then_values_keep_their_types(tmp_path: Path, toml: str, settings: str) -> None:
+	project = make_project(tmp_path, toml, f"shop.table(description='Test table.', write_strategy='merge', unique_key='id'{settings})(rows)\n")
+	give(project, "rows", [{"id": 1, "payload": {"user": {"id": 42}}}, {"id": 2, "payload": [1, "a"]}, {"id": 3, "payload": None}])
+	load(project)
+	give(project, "rows", [{"id": 2, "payload": {"user": {"id": 7}}}, {"id": 4, "payload": [True]}])
+	load(project)
+	assert query(project, 'SELECT id, variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM "RAW".shop__rows ORDER BY id') == [
+		(1, "OBJECT(user)", 42),
+		(2, "OBJECT(user)", 7),
+		(3, "VARIANT_NULL", None),
+		(4, "ARRAY(1)", None),
+	]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'payload'") == [("VARIANT",)]
+
+
+def test_given_a_json_column_when_json_type_turns_variant_then_plan_shows_the_rebuild_and_it_keeps_the_values(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append')(rows)\n")
+	give(project, "rows", [{"id": 1, "payload": {"user": {"id": 42}}}])
+	load(project)
+	(project / "sqlload.toml").write_text(DUCKDB_PROJECT + 'json_type = "variant"\n')
+	give(project, "rows", [{"id": 2, "payload": {"user": {"id": 7}}}])
+	refused = sqlload(project, "load")
+	assert refused.returncode != 0 and "payload json -> native(\"VARIANT\") needs a table rebuild" in refused.stdout, refused.stdout + refused.stderr
+	load(project, "--allow-type-change-rebuild")
+	assert query(project, 'SELECT id, variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM "RAW".shop__rows ORDER BY id') == [
+		(1, "OBJECT(user)", 42),
+		(2, "OBJECT(user)", 7),
+	]
+
+
 PRICED_TABLE = """
 import decimal
 

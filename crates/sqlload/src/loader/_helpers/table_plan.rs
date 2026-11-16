@@ -35,6 +35,7 @@ use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
+use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
@@ -137,10 +138,13 @@ pub(crate) fn desired_columns(spec: &TableSpec, read: &[ReadColumn]) -> Vec<Desi
         .iter()
         .map(|column| DesiredColumn {
             name: column.name.clone(),
-            column_type: match spec.parses.get(&column.name) {
-                Some(parse) => parse.kind.column_type(),
-                None => column.output.clone(),
-            },
+            column_type: spec.loaded_type(
+                &column.name,
+                match spec.parses.get(&column.name) {
+                    Some(parse) => parse.kind.column_type(),
+                    None => column.output.clone(),
+                },
+            ),
             origin: match (
                 column.name == SOURCE_ROW_COLUMN,
                 spec.pinned.contains_key(&column.name) || spec.parses.contains_key(&column.name),
@@ -689,8 +693,14 @@ async fn checked_writes(
     (mode, exists): (&WriteMode, bool),
     mut schema: SchemaPlan,
 ) -> Result<SchemaPlan, LoaderError> {
+    let variants = !spec.variants.is_empty()
+        || (spec.variant_json && spec.python.is_some())
+        || schema
+            .write_columns
+            .iter()
+            .any(|column| is_variant(&column.column_type));
     let (problems, warnings) =
-        write_problems(destination, &spec.destination, (mode, exists)).await?;
+        write_problems(destination, &spec.destination, (mode, exists, variants)).await?;
     schema.warnings.extend(warnings);
     Ok(match problems.is_empty() {
         true => schema,

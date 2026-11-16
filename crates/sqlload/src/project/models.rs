@@ -370,6 +370,20 @@ pub struct TargetConfig {
     /// The folder `send = "at_commit"` holds a commit's rows in until it is sent; the system's temporary folder when unset.
     #[serde(default)]
     pub staging_dir: Option<std::path::PathBuf>,
+    /// The type `json` columns get on a DuckDB or MotherDuck target: `JSON` text (default) or `VARIANT`.
+    #[serde(default)]
+    pub json_type: Option<JsonType>,
+}
+
+/// The type `json` columns get on a DuckDB or MotherDuck target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonType {
+    /// DuckDB's `JSON`, which holds each value as its JSON text.
+    #[default]
+    Json,
+    /// DuckDB's `VARIANT`, which keeps each value's objects, arrays, numbers and booleans typed.
+    Variant,
 }
 
 /// When a table's rows reach its target.

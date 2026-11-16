@@ -44,7 +44,8 @@ TOKEN = "tok&en=#1"
 #: Stands in for MotherDuck in the bridge's Python: `md:<name>?motherduck_token=...` opens `<name>.duckdb` in MD_FOLDER
 #: after checking the token, with another database attached as MotherDuck attaches the account's others. MD_REFUSE makes
 #: it refuse as MotherDuck's extension does on a DuckDB version it doesn't support; MD_DIE_ON ends the bridge when a
-#: statement holds that text; MD_LOG records every statement.
+#: statement holds that text; MD_LOG records every statement. MD_CLIENT_VERSION is the duckdb version the bridge reports,
+#: and MD_SERVER_VERSION what `md_version()` answers (without it, the function doesn't exist).
 STAND_IN = r'''
 import os
 import sys
@@ -54,6 +55,7 @@ import duckdb
 
 _connect = duckdb.connect
 FOLDER = os.environ["MD_FOLDER"]
+duckdb.__version__ = os.environ.get("MD_CLIENT_VERSION", duckdb.__version__)
 
 
 def log(sql):
@@ -103,6 +105,8 @@ def connect(database=":memory:", *args, config=None, **kwargs):
     inner = _connect(os.path.join(FOLDER, f"{name}.duckdb"), config=config or {})
     inner.execute(f"ATTACH '{os.path.join(FOLDER, 'other.duckdb')}' AS other")
     inner.execute("CREATE SCHEMA IF NOT EXISTS other.raw; CREATE TABLE IF NOT EXISTS other.raw.cloud__cloud_rows (stray INTEGER)")
+    if os.environ.get("MD_SERVER_VERSION"):
+        inner.execute(f"CREATE OR REPLACE MACRO md_version() AS '{os.environ['MD_SERVER_VERSION']}'")
     return Database(inner)
 
 
@@ -451,3 +455,35 @@ def test_given_send_when_planning_then_each_table_says_how_its_rows_are_sent(tmp
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert "send    at commit: staged locally, then one burst" in done.stdout, done.stdout
 	assert "send    n/a: DuckDB reads the files itself" in done.stdout, done.stdout
+
+
+SLOW_VARIANT = "MotherDuck runs DuckDB 1.5, which stores VARIANT unshredded: queries on its fields can be much slower than on JSON until MotherDuck moves to DuckDB 2.0; json_type = \"json\" keeps JSON"
+
+
+@pytest.mark.parametrize(
+	("env", "expected_code", "expected"),
+	[
+		({"MD_CLIENT_VERSION": "1.5.6", "MD_SERVER_VERSION": "v1.5.6-2026-11-382"}, 0, SLOW_VARIANT),
+		({"MD_CLIENT_VERSION": "1.5.6"}, 0, SLOW_VARIANT + " (judged from the bridge's duckdb 1.5.6: MotherDuck reported no server version)"),
+		(
+			{"MD_CLIENT_VERSION": "1.4.4", "MD_SERVER_VERSION": "v1.5.6-2026-11-382"},
+			1,
+			"VARIANT columns need Python's duckdb 1.5 or later on the MotherDuck bridge, which runs 1.4.4: install duckdb 1.5 there (pip install 'sqlload[motherduck]'), or set json_type = \"json\" on the target",
+		),
+		({"MD_CLIENT_VERSION": "1.5.6", "MD_SERVER_VERSION": "v2.0.0-2027-01-1"}, 0, ""),
+	],
+	ids=["server-1.5", "no-server-version", "client-1.4", "server-2.0"],
+)
+def test_given_json_type_variant_on_motherduck_when_planning_and_loading_then_the_versions_decide_warnings_and_refusals(
+	tmp_path: Path, env: dict[str, str], expected_code: int, expected: str
+) -> None:
+	project = make_project(tmp_path, "cloud.table(description='Dict rows.', name='cloud_rows')(rows)\n")
+	(project / "sqlload.toml").write_text(PROJECT.replace('[targets.cloud]\nconnection = "md"\n', '[targets.cloud]\nconnection = "md"\njson_type = "variant"\n'))
+	give(project, "rows", [{"id": 1, "payload": {"user": {"id": 42}}}])
+	planned = sqlload(project, "plan", "cloud_rows", **env)
+	assert planned.returncode == expected_code and expected in " ".join(planned.stdout.split()), planned.stdout + planned.stderr
+	assert ("unshredded" in planned.stdout) == ("unshredded" in expected), planned.stdout
+	if expected_code == 0:
+		loaded = load(project, "cloud_rows", **env)
+		assert ("unshredded" in loaded.stdout + loaded.stderr) == ("unshredded" in expected), loaded.stdout + loaded.stderr
+		assert cloud(project, 'SELECT variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM raw.cloud__cloud_rows') == [("OBJECT(user)", 42)]

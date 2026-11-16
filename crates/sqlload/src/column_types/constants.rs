@@ -59,3 +59,6 @@ pub const ARRAY_ELEMENTS: &[crate::column_types::models::ColumnType] = &[
 
 /// The name of an array's element field in Arrow and Parquet lists.
 pub const ARRAY_ITEM: &str = "item";
+
+/// DuckDB's `VARIANT` type, which a `json_type = "variant"` target's `json` columns and `native("VARIANT")` pins create; values reach it as JSON.
+pub const VARIANT_TYPE: &str = "VARIANT";

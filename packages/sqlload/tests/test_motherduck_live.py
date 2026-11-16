@@ -175,3 +175,22 @@ def test_given_a_live_account_when_loading_twice_and_rerunning_then_every_strate
 		python,
 		f"SELECT count(*) FROM duckdb_tables() WHERE database_name = '{database}' AND table_name LIKE '%sqlload_staging%'",
 	) == [[0]]
+
+
+def test_given_json_type_variant_when_loading_into_live_motherduck_then_dicts_land_as_variant_objects_with_the_slow_variant_warning(
+	tmp_path: Path, python: str, database: str
+) -> None:
+	for folder in ("sources", "data"):
+		(tmp_path / folder).mkdir()
+	project = PROJECT.format(database=database, variable=TOKEN_VARIABLE).replace('loader_schema = "raw"\n', 'loader_schema = "raw"\njson_type = "variant"\n')
+	(tmp_path / "sqlload.toml").write_text(project)
+	(tmp_path / "sources" / "shop.py").write_text(textwrap.dedent(MODULE))
+	give(tmp_path, {"customers": [{"id": 1, "payload": {"user": {"id": 42}}}]})
+	planned = sqlload(tmp_path, python, "plan", "customers")
+	assert planned.returncode == 0, planned.stdout + planned.stderr
+	assert "MotherDuck runs DuckDB 1.5, which stores VARIANT unshredded" in planned.stdout, planned.stdout
+	loaded = sqlload(tmp_path, python, "load", "customers")
+	assert loaded.returncode == 0 and "unshredded" in loaded.stdout + loaded.stderr, loaded.stdout + loaded.stderr
+	assert admin(
+		python, f"SELECT variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM {database}.raw.cloud__customers"
+	) == [["OBJECT(user)", 42]]
