@@ -1,8 +1,8 @@
+use crate::column_types::models::ColumnType;
 use crate::databricks_source::_helpers::query::select_query;
 use crate::databricks_source::models::DatabricksReadRequest;
 use crate::databricks_source::tests::test_types::SelectQueryTestCase;
 use crate::postgres_source::models::{ReadColumn, SourceTable, WireType};
-use crate::column_types::models::ColumnType;
 
 #[test]
 fn given_a_table_or_query_when_selecting_it_then_names_are_backquoted_in_the_catalog_and_a_query_keeps_the_filter_outside()

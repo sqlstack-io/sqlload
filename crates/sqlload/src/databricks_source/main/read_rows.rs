@@ -2,8 +2,8 @@
 
 use arrow_array::RecordBatch;
 
-use crate::bigquery_source::_helpers::convert::{convert_batch, output_schema};
 use crate::databricks_api::main::execute_arrow::execute_arrow;
+use crate::databricks_source::_helpers::convert::{convert_batch, output_schema};
 use crate::databricks_source::_helpers::downloads::download_chunks;
 use crate::databricks_source::_helpers::query::select_query;
 use crate::databricks_source::errors::DatabricksSourceError;
@@ -16,8 +16,7 @@ pub async fn read_rows(
     request: &DatabricksReadRequest<'_>,
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, DatabricksSourceError> {
-    let (schema, json) =
-        output_schema(request.columns).map_err(DatabricksSourceError::Invalid)?;
+    let schema = output_schema(request.columns).map_err(DatabricksSourceError::Invalid)?;
     let result = execute_arrow(&reader.client, &select_query(&reader.catalog, request)).await?;
     let (mut chunks, mut receiver) = download_chunks(&reader.client, result);
     let mut rows: u64 = 0;
@@ -29,7 +28,7 @@ pub async fn read_rows(
             batch = receiver.recv() => {
                 let Some(batch) = batch else { break };
                 let batch = loaded_batch(&batch, request.table)
-                    .and_then(|batch| convert_batch(&batch, (&schema, &json)))
+                    .and_then(|batch| convert_batch(&batch, &schema))
                     .map_err(DatabricksSourceError::Invalid)?;
                 rows += batch.num_rows() as u64;
                 on_batch(batch)

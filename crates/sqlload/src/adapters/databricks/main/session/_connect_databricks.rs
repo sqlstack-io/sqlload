@@ -31,7 +31,8 @@ pub(in crate::adapters) fn connect_databricks(
     };
     let volume = volume.as_deref().ok_or_else(|| {
         ApiError::Protocol(
-            "a databricks connection a target loads into needs volume = \"CATALOG.SCHEMA.VOLUME\"".to_owned(),
+            "a databricks connection a target loads into needs volume = \"CATALOG.SCHEMA.VOLUME\""
+                .to_owned(),
         )
     })?;
     let http = build_http_client(&ConnectionCounter::default())?;

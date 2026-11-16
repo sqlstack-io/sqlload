@@ -10,6 +10,9 @@ use crate::fake_databricks::models::{FakeState, FakeTable};
 
 const STATEMENTS: &str = "/api/2.0/sql/statements";
 
+/// A select list that reads every column.
+const ALL_COLUMNS: &str = "*";
+
 /// Where the fake serves result files, under its own address.
 pub(crate) const RESULTS: &str = "/results/";
 
@@ -37,7 +40,12 @@ fn arrow_type(sql_type: &str) -> DataType {
         .strip_prefix("decimal(")
         .and_then(|rest| rest.strip_suffix(')'))
         .and_then(|rest| rest.split_once(','))
-        .and_then(|(precision, scale)| Some((precision.trim().parse().ok()?, scale.trim().parse().ok()?)));
+        .and_then(
+            |(precision, scale)| match (precision.trim().parse(), scale.trim().parse()) {
+                (Ok(precision), Ok(scale)) => Some((precision, scale)),
+                _ => None,
+            },
+        );
     match (lower.as_str(), digits) {
         (_, Some((precision, scale))) => DataType::Decimal128(precision, scale),
         ("bigint" | "long", _) => DataType::Int64,
@@ -62,26 +70,34 @@ fn text(value: &Value) -> Option<String> {
 
 /// `` `a`, `b` `` → `a`, `b`; `*` → every column of the table.
 fn selected(list: &str, table: &FakeTable) -> Vec<(String, String)> {
-    if list.trim() == "*" {
+    if list.trim() == ALL_COLUMNS {
         return table.columns.clone();
     }
     list.split(", ")
         .map(|name| name.trim().trim_matches('`').replace("``", "`"))
         .map(|name| {
-            let sql_type = table
-                .columns
-                .iter()
-                .find(|(column, _)| column.eq_ignore_ascii_case(&name))
-                .map_or_else(|| "string".to_owned(), |(_, sql_type)| sql_type.clone());
+            let sql_type = declared_type(table, &name);
             (name, sql_type)
         })
         .collect()
 }
 
+/// The type `table` declares `name` with; `string` for a column it doesn't declare.
+fn declared_type(table: &FakeTable, name: &str) -> String {
+    table
+        .columns
+        .iter()
+        .find(|(column, _)| column.eq_ignore_ascii_case(name))
+        .map_or_else(|| "string".to_owned(), |(_, sql_type)| sql_type.clone())
+}
+
 /// Whether `row` passes `filter`: conditions `` `column` <op> literal `` or `` `column` IS NULL `` joined by ` AND `, a literal a bare number or a quoted string; a condition the fake cannot read is an error.
 fn passes(row: &Value, filter: &str) -> Result<bool, String> {
     for condition in filter.split(" AND ") {
-        let condition = condition.trim().trim_start_matches('(').trim_end_matches(')');
+        let condition = condition
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')');
         if let Some(column) = condition.strip_suffix(" IS NULL") {
             if !row[column.trim_matches('`')].is_null() {
                 return Ok(false);
@@ -89,7 +105,8 @@ fn passes(row: &Value, filter: &str) -> Result<bool, String> {
             continue;
         }
         let mut parts = condition.splitn(3, ' ');
-        let (Some(column), Some(operator), Some(literal)) = (parts.next(), parts.next(), parts.next())
+        let (Some(column), Some(operator), Some(literal)) =
+            (parts.next(), parts.next(), parts.next())
         else {
             return Err(format!("the fake cannot read the condition {condition:?}"));
         };
@@ -97,11 +114,14 @@ fn passes(row: &Value, filter: &str) -> Result<bool, String> {
         if value.is_null() {
             return Ok(false);
         }
-        let order = match literal.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\'')) {
+        let order = match literal
+            .strip_prefix('\'')
+            .and_then(|rest| rest.strip_suffix('\''))
+        {
             Some(quoted) => text(value).unwrap_or_default().as_str().cmp(quoted),
             None => {
-                let (Some(left), Ok(right)) = (
-                    text(value).and_then(|value| value.parse::<f64>().ok()),
+                let (Some(Ok(left)), Ok(right)) = (
+                    text(value).map(|value| value.parse::<f64>()),
                     literal.parse::<f64>(),
                 ) else {
                     return Err(format!("the fake cannot compare {condition:?}"));
@@ -115,7 +135,11 @@ fn passes(row: &Value, filter: &str) -> Result<bool, String> {
             "<" => order.is_lt(),
             "<=" => order.is_le(),
             "=" => order.is_eq(),
-            _ => return Err(format!("the fake cannot read the operator in {condition:?}")),
+            _ => {
+                return Err(format!(
+                    "the fake cannot read the operator in {condition:?}"
+                ));
+            }
         };
         if !kept {
             return Ok(false);
@@ -132,10 +156,9 @@ impl FakeState {
                 let (inner, rest) = query
                     .split_once("\n)")
                     .ok_or_else(|| format!("the fake cannot read the subquery {after_from:?}"))?;
-                let name = inner
-                    .trim()
-                    .strip_prefix("SELECT * FROM ")
-                    .ok_or_else(|| format!("the fake reads only SELECT * FROM a table, not {inner:?}"))?;
+                let name = inner.trim().strip_prefix("SELECT * FROM ").ok_or_else(|| {
+                    format!("the fake reads only SELECT * FROM a table, not {inner:?}")
+                })?;
                 (name.trim().to_owned(), rest)
             }
             None => {
@@ -159,10 +182,14 @@ impl FakeState {
         if rest.trim_end().ends_with("LIMIT 0") {
             return Ok(Vec::new());
         }
-        let filter = rest.trim().strip_prefix("WHERE ").unwrap_or_default();
+        let filter = match (rest.trim(), rest.trim().strip_prefix("WHERE ")) {
+            ("", _) => None,
+            (_, Some(filter)) => Some(filter),
+            (other, None) => return Err(format!("the fake cannot read {other:?} after FROM")),
+        };
         let mut rows: Vec<Value> = Vec::new();
         for row in &table.rows {
-            if filter.is_empty() || passes(row, filter)? {
+            if filter.map_or(Ok(true), |filter| passes(row, filter))? {
                 rows.push(row.clone());
             }
         }
@@ -186,22 +213,44 @@ impl FakeState {
         if statement.contains("full_data_type, is_nullable FROM ") {
             let mut rows: Vec<Vec<Value>> = Vec::new();
             for (key, table) in &self.tables {
-                let Some((schema, name)) = key.split_once('.') else { continue };
+                let Some((schema, name)) = key.split_once('.') else {
+                    continue;
+                };
                 for (column, sql_type) in &table.columns {
-                    rows.push(vec![json!(schema), json!(name), json!(column), json!(sql_type), json!("YES")]);
+                    rows.push(vec![
+                        json!(schema),
+                        json!(name),
+                        json!(column),
+                        json!(sql_type),
+                        json!("YES"),
+                    ]);
                 }
             }
-            return Some(succeeded(&["table_schema", "table_name", "column_name", "full_data_type", "is_nullable"], rows));
+            return Some(succeeded(
+                &[
+                    "table_schema",
+                    "table_name",
+                    "column_name",
+                    "full_data_type",
+                    "is_nullable",
+                ],
+                rows,
+            ));
         }
         if statement.contains("information_schema.table_constraints") {
             let mut rows: Vec<Vec<Value>> = Vec::new();
             for (key, columns) in &self.primary_keys {
-                let Some((schema, name)) = key.split_once('.') else { continue };
+                let Some((schema, name)) = key.split_once('.') else {
+                    continue;
+                };
                 for column in columns {
                     rows.push(vec![json!(schema), json!(name), json!(column)]);
                 }
             }
-            return Some(succeeded(&["table_schema", "table_name", "column_name"], rows));
+            return Some(succeeded(
+                &["table_schema", "table_name", "column_name"],
+                rows,
+            ));
         }
         let after = statement.strip_prefix("SELECT COUNT(*) FROM ")?;
         Some(
@@ -221,17 +270,23 @@ impl FakeState {
             .strip_prefix("SELECT ")
             .and_then(|rest| rest.split_once(" FROM "))
         else {
-            return failed(&format!("the fake reads only SELECTs as Arrow, not {statement:?}"));
+            return failed(&format!(
+                "the fake reads only SELECTs as Arrow, not {statement:?}"
+            ));
         };
-        let (columns, rows) = match self.from_item(after).and_then(|(table, rest)| {
-            Ok((selected(list, table), Self::kept_rows(table, rest)?))
-        }) {
+        let (columns, rows) = match self
+            .from_item(after)
+            .and_then(|(table, rest)| Ok((selected(list, table), Self::kept_rows(table, rest)?)))
+        {
             Ok(found) => found,
             Err(message) => return failed(&message),
         };
         self.statement_ids += 1;
         let id = format!("stmt-{}", self.statement_ids);
-        let size = self.chunk_rows.filter(|size| *size > 0).unwrap_or(usize::MAX);
+        let size = self
+            .chunk_rows
+            .filter(|size| *size > 0)
+            .unwrap_or(usize::MAX);
         let pieces: Vec<&[Value]> = match rows.is_empty() {
             true => vec![&[]],
             false => rows.chunks(size).collect(),

@@ -7,17 +7,21 @@ use crate::databricks_source::_helpers::type_map::source_column;
 use crate::databricks_source::errors::DatabricksSourceError;
 use crate::databricks_source::models::DatabricksReader;
 use crate::postgres_source::models::SourceTable;
+use crate::project::models::SourceConfig;
 
-/// Every table and view of the reader's catalog whose `schema.table` matches `include` and not `exclude`, from `information_schema`; then one table per query in `queries` (name and SQL), its columns those of the query as a load wraps it, run with `LIMIT 0` so it reads no rows.
+/// Every table and view of the reader's catalog whose `schema.table` matches `source`'s `include` and not its `exclude`, from `information_schema`; then one table per query table of `source`, its columns those of the query as a load wraps it, run with `LIMIT 0` so it reads no rows.
 pub async fn read_catalog(
     reader: &DatabricksReader,
-    (include, exclude): (&[String], &[String]),
-    queries: &[(String, String)],
+    source: &SourceConfig,
 ) -> Result<Vec<SourceTable>, DatabricksSourceError> {
-    let mut tables: Vec<SourceTable> = match include.is_empty() {
+    let mut tables: Vec<SourceTable> = match source.include.is_empty() {
         true => Vec::new(),
-        false => catalog_tables(reader, (include, exclude)).await?,
+        false => catalog_tables(reader, (&source.include, &source.exclude)).await?,
     };
+    let queries = source
+        .tables
+        .iter()
+        .filter_map(|(name, table)| Some((name, table.sql.as_deref()?)));
     for (name, sql) in queries {
         let described = execute_arrow(
             &reader.client,

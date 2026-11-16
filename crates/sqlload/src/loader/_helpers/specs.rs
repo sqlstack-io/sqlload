@@ -8,8 +8,6 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
-use crate::databricks_source::constants::DATABRICKS_SOURCE;
-use crate::databricks_source::main::count_rows::count_rows as count_databricks_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -20,6 +18,8 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::databricks_source::constants::DATABRICKS_SOURCE;
+use crate::databricks_source::main::count_rows::count_rows as count_databricks_rows;
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;

@@ -8,7 +8,10 @@ use crate::databricks_api::models::{DatabricksClient, ResultLink};
 use crate::http::errors::ApiError;
 
 /// Send the statement request `body`, then poll while it runs (each poll retried; a statement no longer polled is cancelled); returns the finished response.
-pub(crate) async fn run_statement(client: &DatabricksClient, body: &Value) -> Result<Value, ApiError> {
+pub(crate) async fn run_statement(
+    client: &DatabricksClient,
+    body: &Value,
+) -> Result<Value, ApiError> {
     let url = format!("{}{STATEMENTS_PATH}", client.host);
     let mut response: Value = send(client, |http| http.post(&url).json(body))
         .await?
