@@ -342,6 +342,8 @@ pub(crate) struct FilesToFilesTestCase {
     pub(crate) runs: &'static [SourceFiles],
     /// After each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
     pub(crate) expected_held: &'static [&'static str],
+    /// Text a run's plan holds, such as its `reads` line; empty for none.
+    pub(crate) expected_reads: &'static str,
 }
 
 /// Postgres into a files target, then those files through a files source into DuckDB, loaded twice.

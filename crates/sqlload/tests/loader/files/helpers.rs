@@ -44,12 +44,12 @@ pub(crate) fn late_and_new() -> Result<Vec<(String, bytes::Bytes)>, String> {
     Ok(files)
 }
 
-/// Load the case's files source into a files target once per run, adding that run's source files first; after each run, the rows the target holds and how many loads wrote them, as `rows|loads`.
+/// Load the case's files source into a files target once per run, adding that run's source files first; after each run, the rows the target holds and how many loads wrote them, as `rows|loads`, then every run's rendered plan.
 pub(crate) async fn run_files_to_files(
     endpoint: &str,
     directory: &std::path::Path,
     test_case: &FilesToFilesTestCase,
-) -> Result<Vec<String>, String> {
+) -> Result<(Vec<String>, String), String> {
     let (store, connection) = (test_case.store)(endpoint, directory);
     let prefix = format!("f2f-{}/", uuid::Uuid::new_v4());
     let source = open_folder(&Location {
@@ -72,14 +72,14 @@ pub(crate) async fn run_files_to_files(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let mut held: Vec<String> = Vec::new();
+    let (mut held, mut plan) = (Vec::new(), String::new());
     for files in test_case.runs {
         for (key, body) in files()? {
             write_file(&source, &key, body)
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        run_once(&text, &destinations, &PlanOptions::default())
+        plan += &run_once(&text, &destinations, &PlanOptions::default())
             .await
             .map_err(|error| format!("{}: {error}", test_case.description))?;
         let mut batches: Vec<RecordBatch> = Vec::new();
@@ -107,7 +107,7 @@ pub(crate) async fn run_files_to_files(
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
         held.push(format!("{rows}|{}", loads.len()));
     }
-    Ok(held)
+    Ok((held, plan))
 }
 
 /// Load a files table into DuckDB; take `_sqlload_source_row` away, as in a table from before it; add a file and load again. Each row's id and row number.
