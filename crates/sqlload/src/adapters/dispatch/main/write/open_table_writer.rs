@@ -59,6 +59,7 @@ pub fn open_table_writer(
             destination: (**clickhouse).clone(),
             pending: Default::default(),
             sending: None,
+            staged_build: None,
         }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
     }

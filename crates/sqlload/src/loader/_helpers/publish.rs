@@ -90,7 +90,10 @@ use crate::loader::_helpers::table_plan::{
 use crate::loader::_helpers::table_plan::{replan_columns, schema_statements};
 use crate::loader::constants::EXCLUSIVE_BOUND;
 use crate::loader::constants::INCLUSIVE_BOUND;
+use crate::loader::constants::MERGE_PUBLISHED_ONCE;
+use crate::loader::constants::MERGE_RUN_ROWS;
 use crate::loader::constants::PROGRESS_EVERY;
+use crate::loader::constants::PUBLISHED_ONCE;
 use crate::loader::constants::REPLACED_KEYS_SHOWN;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
@@ -820,7 +823,7 @@ impl Publisher {
         bytes >= self.batch_bytes
     }
 
-    /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end (a `replace`, or a `delete_insert` the warehouse publishes once, see [`publishes_once`]), or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
+    /// A point where the rows so far may commit, replacing `range` under `delete_insert`: the batch is loaded (one `COPY` for all its files), then committed unless the table commits only at the end (a `replace`, or a read the warehouse publishes once, see [`publishes_once`], short of a merge's [`MERGE_RUN_ROWS`]), or is logged and its `ctx.state` has not changed since the last commit (its rows then wait in the staging table).
     pub(crate) async fn cut(&mut self, range: CommitRange) -> Result<(), LoaderError> {
         self.flush_batch().await?;
         let unfinished = self.partition_unfinished(&range)?;
@@ -835,7 +838,10 @@ impl Publisher {
             (_, range) => range,
         });
         let unchanged = self.run.is_some() && self.state == self.committed_state;
-        if self.direct || self.at_end || unchanged || unfinished || publishes_once(&self.table) {
+        let held = publishes_once(&self.table)
+            && !(matches!(self.table.mode, WriteMode::Merge { .. })
+                && self.waiting_rows >= MERGE_RUN_ROWS);
+        if self.direct || self.at_end || unchanged || unfinished || held {
             return Ok(());
         }
         self.commit(false).await
@@ -1891,6 +1897,14 @@ pub(crate) fn holds_commits(table: &TablePlan) -> bool {
     table.spec.send == SendMode::AtCommit
         && sql_adapter(table.spec.warehouse).runs_sql()
         && !reads_files_itself(table)
+}
+
+/// How `plan` words a run [published once](crate::loader::_helpers::table_plan::publishes_once): a merge also commits once [`MERGE_RUN_ROWS`] rows wait, so the keys it matches stay a bounded set.
+pub(crate) fn published_once(table: &TablePlan) -> &'static str {
+    match table.mode {
+        WriteMode::Merge { .. } => MERGE_PUBLISHED_ONCE,
+        _ => PUBLISHED_ONCE,
+    }
 }
 
 /// Whether the target loads the table's files itself: a files source's, or a warehouse source's unload.

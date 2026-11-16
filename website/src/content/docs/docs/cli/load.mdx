@@ -63,7 +63,7 @@ loaded  raw.shop__orders     3,000,000 rows 2.4s
 `--fail-fast` and `--memory-per-table` don't combine with `--follow`.
 
 Large loads commit along the way, so a failure keeps what committed and the next run carries on from
-there; a `delete_insert` into ClickHouse read by cursor publishes once per run instead. See
+there; a `delete_insert`, `append` or `merge` into ClickHouse publishes once per run instead. See
 [Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing from the
 destination's maximum, give `--start-cursor` and `--end-cursor`, or from 0.52.0 their typed forms
 `--start-cursor-ts`/`--end-cursor-ts` and `--start-cursor-int`/`--end-cursor-int`; see [Backfilling a

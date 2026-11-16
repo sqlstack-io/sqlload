@@ -22,6 +22,8 @@ pub struct ClickHouseWriter {
     pub pending: PendingInsert,
     /// The insert being sent.
     pub sending: Option<tokio::task::JoinHandle<Result<(), crate::http::errors::ApiError>>>,
+    /// The build table whose first rows have been sent, after [`stage_build`](crate::adapters::clickhouse::_helpers::session::steps::stage_build) chose how it takes them.
+    pub staged_build: Option<String>,
 }
 
 /// Rows gathered for one insert request.
@@ -64,5 +66,11 @@ pub enum PublishStep {
         table: String,
         columns: Vec<String>,
         insert: String,
+    },
+    /// Before `build` is swapped in for `target` (each a database and a table): when the rows went into `build` as an unpartitioned table sorted by `target`'s partition key (see [`stage_build`](crate::adapters::clickhouse::_helpers::session::steps::stage_build)), move them into `swap`, laid out as `target` with `build`'s columns, by one insert ordered by that key, and exchange the two, so `build` holds them partitioned; nothing otherwise.
+    FillBuild {
+        target: (String, String),
+        build: (String, String),
+        swap: String,
     },
 }

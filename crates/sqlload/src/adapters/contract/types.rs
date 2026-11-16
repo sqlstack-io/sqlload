@@ -104,8 +104,8 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
-    /// Whether a `delete_insert` read in windows or cursor-ordered batches is staged whole and published in one commit at the end, not one commit per batch: each publish here rewrites the partitions it touches, so batches sharing a partition rewrite it again each time, and readers would see the run half published between commits.
-    fn publishes_ranges_once(&self) -> bool {
+    /// Whether a `delete_insert`, `append` or deduplicating `merge` read in windows or cursor-ordered batches is staged whole and published in one commit at the end, not one commit per batch: each publish here rewrites the partitions it touches, so batches sharing a partition rewrite it again each time, and readers would see the run half published between commits.
+    fn publishes_runs_once(&self) -> bool {
         false
     }
 

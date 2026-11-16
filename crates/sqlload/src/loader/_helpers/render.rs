@@ -23,8 +23,7 @@ use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{FilesOrder, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
-use crate::loader::_helpers::publish::records_files;
-use crate::loader::_helpers::publish::send_lines;
+use crate::loader::_helpers::publish::{published_once, records_files, send_lines};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::unnested_table;
 use crate::loader::_helpers::resolve::display_name;
@@ -821,7 +820,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             };
             let commits = match (at_end, publishes_once(table)) {
                 (true, _) => "read one after another into a new table, swapped in once at the end",
-                (false, true) => "staged one after another and published in one commit",
+                (false, true) => &format!("staged one after another and {}", published_once(table)),
                 (false, false) => "one commit each",
             };
             format!("{windows} of {step}, {commits}{end}")
@@ -861,7 +860,8 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
         }
         (_, true) => "about 1 GB at a time into a new table, swapped in once at the end".to_owned(),
         (CommitRule::Ordered { column, .. }, false) if publishes_once(table) => format!(
-            "in {column} order (an index leads with it, NULLs first), staged about 1 GB at a time and published in one commit replacing the whole range"
+            "in {column} order (an index leads with it, NULLs first), staged about 1 GB at a time and {}",
+            published_once(table)
         ),
         (CommitRule::Ordered { column, .. }, false) => format!(
             "about every 1 GB, in {column} order (an index leads with it, NULLs first), between distinct values{}",
@@ -895,7 +895,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 }
             };
             let once = matches!(table.mode, WriteMode::DeleteInsert { .. })
-                && sql_adapter(spec.warehouse).publishes_ranges_once();
+                && sql_adapter(spec.warehouse).publishes_runs_once();
             let hint = match (large, reason, once) {
                 (true, WholeReason::Unordered, false) => {
                     "; for a large first load, set batch_size (such as batch_size = \"1d\") to commit it window by window"

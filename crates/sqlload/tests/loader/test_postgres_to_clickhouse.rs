@@ -23,6 +23,7 @@ CREATE TABLE public.pings (id int8, day date NOT NULL);
 CREATE TABLE public.days (id int8, day date NOT NULL);
 CREATE TABLE public.ordered_days (id int8, day date NOT NULL);
 CREATE INDEX ordered_days_day ON public.ordered_days (day);
+CREATE TABLE public.versions (id int8, v text, at date NOT NULL);
 CREATE TABLE public.kinds (id int2, tz timestamptz, ntz timestamp, amount numeric(38,9), born date, ref uuid, doc jsonb, raw bytea, opens time, ok bool, ratio float8);
 INSERT INTO public.accounts VALUES
   (1, 'Acme Ltd', 10.50, '2026-10-01 10:00:00+00'),
@@ -44,10 +45,10 @@ const VIEWS_WITH_PROJECTION: &str = "CREATE TABLE raw.app__views (id Nullable(In
 const VIEWS_ROWS: &str = "INSERT INTO raw.app__views VALUES (1, '2026-10-20', NULL, NULL), (2, '2026-10-30', NULL, NULL)";
 
 /// `1` when the loads above took the publish path the server allows: only lightweight `DELETE`s on ClickHouse 25.5 and later, only kept rows copied by `INSERT ... SELECT` before.
-const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 5), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
+const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', version())[1]), toUInt32(splitByChar('.', version())[2])) >= (25, 5), deletes > 0 AND kept = 0, deletes = 0 AND kept > 0)) FROM (SELECT countIf(query LIKE 'DELETE FROM %') AS deletes, countIf(query LIKE 'INSERT INTO % SELECT * FROM `raw`.% WHERE _partition_id IN (%') AS kept FROM system.query_log WHERE type = 'QueryFinish')";
 
 /// Whether every finished delta insert into a monthly-partitioned table was ordered by its partition key, and none into an unpartitioned one.
-const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings|days|ordered_days)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
+const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings|days|ordered_days|versions)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
 
 /// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
 const TABLES: &str = r#"
@@ -77,6 +78,7 @@ partition_by = "toYYYYMM(day)"
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
 mask = { city = "hash" }
+partition_by = "substring(code, 1, 1)"
 
 [sources.app.tables."public.pings"]
 write_strategy = "delete_insert"
@@ -94,6 +96,14 @@ cursor_start = "2026-10-01"
 write_strategy = "delete_insert"
 cursor_column = "day"
 partition_by = "toYYYYMM(day)"
+
+[sources.app.tables."public.versions"]
+write_strategy = "merge"
+unique_key = "id"
+cursor_column = "at"
+partition_by = "toYYYYMM(at)"
+batch_size = "3d"
+cursor_start = "2026-10-01"
 
 [sources.app.tables."public.clicks"]
 write_strategy = "append"
@@ -215,10 +225,10 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 expected_result: "2/2",
             },
             LoadRunTestCase {
-                description: "replace mirrors deletes in the source by exchanging a whole table in, and keeps hashed values",
+                description: "replace mirrors deletes in the source by exchanging a whole table in, keeps hashed values, and the rows sent unpartitioned are partitioned before the swap",
                 source_change: "DELETE FROM public.stores WHERE code = 'Y1';",
-                check_query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT code || '@' || city AS r FROM raw.app__stores ORDER BY code)",
-                expected_result: "L1@8593b9db65212160979d946950601c26622a219c80f1f122679eb69ec5b96600",
+                check_query: "SELECT arrayStringConcat(groupArray(r), ',') || ' / ' || (SELECT partition_key FROM system.tables WHERE database = 'raw' AND name = 'app__stores') || ' / ' || (SELECT arrayStringConcat(groupArray(partition), ',') FROM (SELECT DISTINCT partition FROM system.parts WHERE database = 'raw' AND table = 'app__stores' AND active ORDER BY partition)) FROM (SELECT code || '@' || city AS r FROM raw.app__stores ORDER BY code)",
+                expected_result: "L1@8593b9db65212160979d946950601c26622a219c80f1f122679eb69ec5b96600 / substring(code, 1, 1) / L",
             },
             LoadRunTestCase {
                 description: "replace into a database that cannot exchange tables swaps by renames instead",
@@ -362,18 +372,39 @@ fn given_a_load_stopped_at_every_statement_when_it_runs_again_then_the_table_was
                 expected_minimum_stops: 8,
             },
             StoppedLoadTestCase {
-                description: "a replace exchanging a whole table in",
+                description: "a merge read in 3-day windows across October and November, a key read in two windows keeping the later row and moving partition, published once for the whole read",
+                table: "app__versions",
+                options: PlanOptions {
+                    start_cursor: Some("2026-10-25".to_owned()),
+                    end_cursor: Some("2026-11-10".to_owned()),
+                    ..select_only("app__versions")
+                },
+                query: "SELECT arrayStringConcat(groupArray(r), ',') FROM (SELECT toString(id) || ':' || v || '@' || toString(at) AS r FROM stops.app__versions ORDER BY id)",
+                states: [
+                    (
+                        "DELETE FROM public.versions; INSERT INTO public.versions VALUES (1, 'a', '2026-10-26'), (2, 'b', '2026-10-27'), (3, 'c', '2026-11-08');",
+                        "1:a@2026-10-26,2:b@2026-10-27,3:c@2026-11-08",
+                    ),
+                    (
+                        "DELETE FROM public.versions; INSERT INTO public.versions VALUES (1, 'x', '2026-10-26'), (1, 'a2', '2026-11-05'), (2, 'b', '2026-10-27'), (3, 'c2', '2026-11-09');",
+                        "1:a2@2026-11-05,2:b@2026-10-27,3:c2@2026-11-09",
+                    ),
+                ],
+                expected_minimum_stops: 8,
+            },
+            StoppedLoadTestCase {
+                description: "a replace exchanging a whole table in, its rows sent unpartitioned and partitioned before the swap",
                 table: "app__stores",
                 options: select_only("app__stores"),
-                query: "SELECT arrayStringConcat(groupArray(code), ',') FROM (SELECT code FROM stops.app__stores ORDER BY code)",
+                query: "SELECT arrayStringConcat(groupArray(code), ',') || ' / ' || (SELECT arrayStringConcat(groupArray(partition), ',') FROM (SELECT DISTINCT partition FROM system.parts WHERE database = 'stops' AND table = 'app__stores' AND active ORDER BY partition)) FROM (SELECT code FROM stops.app__stores ORDER BY code)",
                 states: [
                     (
                         "DELETE FROM public.stores; INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');",
-                        "L1,Y1",
+                        "L1,Y1 / L,Y",
                     ),
                     (
                         "DELETE FROM public.stores; INSERT INTO public.stores VALUES ('B1', 'Bath'), ('Y1', 'York');",
-                        "B1,Y1",
+                        "B1,Y1 / B,Y",
                     ),
                 ],
                 expected_minimum_stops: 3,

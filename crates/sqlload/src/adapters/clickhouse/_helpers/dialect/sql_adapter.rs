@@ -72,7 +72,7 @@ impl SqlAdapter for ClickHouseSql {
         false
     }
 
-    fn publishes_ranges_once(&self) -> bool {
+    fn publishes_runs_once(&self) -> bool {
         true
     }
 
