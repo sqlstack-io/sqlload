@@ -19,7 +19,7 @@ use crate::batch_plan::models::{FileGroup, WindowPlan};
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::models::{
-    AfterLoad, AfterLoadReport, FilesEncoding, FilesOrder, FilesRead, FilesTable, Footer,
+    AfterLoad, AfterLoadReport, FilesEncoding, PathValues, FilesOrder, FilesRead, FilesTable, Footer,
     LoadedFile, TextChecks,
 };
 use crate::loader::_helpers::render::problem_item;
@@ -335,6 +335,8 @@ pub struct FilesSource {
     pub partition_types: Vec<(String, ColumnType)>,
     /// The partition columns that are `constant_columns`, the same in every file.
     pub constants: Vec<String>,
+    /// How each file's key gives its partition, path and constant values.
+    pub paths: PathValues,
     pub encoding: FilesEncoding,
     /// Column names and patterns JSON and CSV reads check keys and headers against.
     pub checks: TextChecks,

@@ -20,7 +20,7 @@ pub struct DataFile {
 }
 
 /// The columns a files source fills from each file's path or its configuration rather than from the files.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PathValues {
     /// `partition_columns`: Hive `key=value` folders.
     pub partition_columns: Vec<String>,
@@ -58,6 +58,15 @@ pub struct PathTemplate {
     /// Each capture's column and type, in the order of the regex's groups.
     pub captures: Vec<(String, ColumnType)>,
 }
+
+/// Templates are equal when written alike, as their patterns are compiled from the text.
+impl PartialEq for PathTemplate {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.captures == other.captures
+    }
+}
+
+impl Eq for PathTemplate {}
 
 /// What a file whose key does not match `path_columns` does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -172,6 +181,8 @@ pub struct FileSelection<'a> {
     pub held: &'a [LoadedFile],
     /// The partition column the cursor is on, and its type.
     pub cursor: Option<(&'a str, &'a ColumnType)>,
+    /// How a file's key gives its partition values, which the `held` files' names give too.
+    pub paths: &'a PathValues,
     pub from: Option<&'a str>,
     pub to: Option<&'a str>,
 }

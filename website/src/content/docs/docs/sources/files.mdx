@@ -409,7 +409,13 @@ From 0.51.0, `delete_insert` on a partition cursor fails the table when a listed
 it loaded but its partition lies below the range the load reads, such as a monthly file sent again
 corrected after the next month's loaded. Skipping it would keep its old rows. A new file below the
 range fails it too when the table holds other files of its partition, such as a part file added to
-a loaded month, which would otherwise never load. The error names the file and the fixes:
+a loaded month, which would otherwise never load. The error names the file and the fixes.
+
+From 0.54.0, such a new file fails it even when every file the table holds of its partition has
+left the folder, as `plan` reads the partitions from the files the table holds. A file below the
+range that the table holds without a version (an empty `_sqlload_source_version`, as in rows loaded
+before SQLLoad recorded it) fails it too, as whether it changed can't be told; rebuild the table
+with `--reload` to record each file's version:
 
 ```console
 $ sqlload plan
