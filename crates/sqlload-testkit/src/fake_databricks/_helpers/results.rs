@@ -150,7 +150,7 @@ fn passes(row: &Value, filter: &str) -> Result<bool, String> {
 
 impl FakeState {
     /// The table a `FROM` item names: `` `c`.`s`.`t` ``, or a subquery `(SELECT * FROM s.t\n)`; then the rest of the statement after it.
-    fn from_item<'a>(&self, after_from: &'a str) -> Result<(&FakeTable, &'a str), String> {
+    fn named_table<'a>(&self, after_from: &'a str) -> Result<(&FakeTable, &'a str), String> {
         let (name, rest) = match after_from.strip_prefix('(') {
             Some(query) => {
                 let (inner, rest) = query
@@ -255,7 +255,7 @@ impl FakeState {
         let after = statement.strip_prefix("SELECT COUNT(*) FROM ")?;
         Some(
             match self
-                .from_item(after)
+                .named_table(after)
                 .and_then(|(table, rest)| Self::kept_rows(table, rest))
             {
                 Ok(rows) => succeeded(&["count(1)"], vec![vec![json!(rows.len().to_string())]]),
@@ -275,7 +275,7 @@ impl FakeState {
             ));
         };
         let (columns, rows) = match self
-            .from_item(after)
+            .named_table(after)
             .and_then(|(table, rest)| Ok((selected(list, table), Self::kept_rows(table, rest)?)))
         {
             Ok(found) => found,
