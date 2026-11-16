@@ -28,8 +28,8 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     BatchStep, Contract, Deletes, NewTables, NullCursor, NullKeys, OnCursorOutOfRange,
-    OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode,
-    SortDirection, TableChecks, WriteStrategy,
+    OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, TableChecks,
+    WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -145,8 +145,8 @@ pub struct TableSpec {
     pub not_null_keys: Vec<String>,
     /// Under `delete_insert`, the columns whose values each commit replaces whole: the rows holding a value of them that the commit's rows hold are deleted first. Empty otherwise.
     pub replace_key: Vec<String>,
-    /// The column and direction that pick which of the rows sharing a key a merge keeps; without it, the last in source order.
-    pub dedup_sort: Option<(String, SortDirection)>,
+    /// The columns, compared in order, whose higher values are a row's newer version (`newest_by`): a merge keeps the newest of the rows sharing a key and never overwrites a loaded row with an older one; empty, the last row read wins.
+    pub newest_by: Vec<String>,
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
@@ -1091,6 +1091,8 @@ pub struct Publisher {
     pub replaced: Option<ReplacedKeys>,
     /// The rows a key scan's commit marked deleted; `None` for other loads.
     pub marked: Option<u64>,
+    /// The keys whose newest staged row a merge skipped so far, the table holding a newer one by `newest_by`.
+    pub older: u64,
     /// Every `replace_key` value a files source's commits inserted in this run, with the file it came from, which a later file of the run may not hold too.
     pub run_keys: std::collections::BTreeMap<String, String>,
     /// The files fed since the last commit, as they were read, settled by the next one (`after_load`).

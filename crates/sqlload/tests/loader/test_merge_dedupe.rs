@@ -141,7 +141,7 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 expected_rows: [
                     "s1:20,s2:1,s3:4,NULL:8",
                     "s1:30,s2:5,s3:4,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },
@@ -157,7 +157,7 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 expected_rows: [
                     "s1:20,s2:1,s3:4,NULL:8",
                     "s1:30,s2:5,s3:4,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },
@@ -173,7 +173,7 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
                 expected_rows: [
                     "s1:20,s2:1,s3:4,NULL:8",
                     "s1:30,s2:5,s3:4,NULL:8",
-                    "s1:10,s2:5,s3:4,NULL:8",
+                    "s1:30,s2:5,s3:4,NULL:8",
                     "",
                 ],
             },
@@ -187,7 +187,7 @@ fn given_a_source_repeating_a_merge_key_when_loading_into_each_target_then_one_r
 }
 
 #[test]
-fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_the_table()
+fn given_a_newest_by_column_it_cannot_compare_when_planning_then_plan_refuses_the_table()
 -> Result<(), String> {
     run_async(async {
         let postgres = start_postgres().await?;
@@ -201,8 +201,8 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 description: "a masked column",
                 rule: DedupeRule {
                     description: "a masked column",
-                    settings: "dedup_sort = { seen_at = \"desc\" }\nmask = { seen_at = \"hash\" }",
-                    expected_error: "dedup_sort column seen_at is masked, so its values cannot rank rows",
+                    settings: "newest_by = \"seen_at\"\nmask = { seen_at = \"hash\" }",
+                    expected_error: "newest_by column seen_at is masked, so its values cannot say which row is newer",
                     expected_plan: "",
                 },
                 expected_tables: "0",
@@ -211,8 +211,8 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 description: "a JSON column, which has no order",
                 rule: DedupeRule {
                     description: "a JSON column, which has no order",
-                    settings: "dedup_sort = { meta = \"desc\" }",
-                    expected_error: "dedup_sort column meta is json, which has no order to rank rows by",
+                    settings: "newest_by = [\"seen_at\", \"meta\"]",
+                    expected_error: "newest_by column meta is json, which has no order to say which row is newer",
                     expected_plan: "",
                 },
                 expected_tables: "0",
@@ -221,8 +221,8 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 description: "a column the source does not have",
                 rule: DedupeRule {
                     description: "a column the source does not have",
-                    settings: "dedup_sort = { read_at = \"desc\" }",
-                    expected_error: "dedup_sort column read_at is not written to the table",
+                    settings: "newest_by = \"read_at\"",
+                    expected_error: "newest_by column read_at is not written to the table",
                     expected_plan: "",
                 },
                 expected_tables: "0",
@@ -231,8 +231,8 @@ fn given_a_dedup_sort_column_it_cannot_rank_by_when_planning_then_plan_refuses_t
                 description: "an excluded column",
                 rule: DedupeRule {
                     description: "an excluded column",
-                    settings: "dedup_sort = { seen_at = \"desc\" }\nexclude_columns = [\"seen_at\"]",
-                    expected_error: "dedup_sort column seen_at is not written to the table",
+                    settings: "newest_by = \"seen_at\"\nexclude_columns = [\"seen_at\"]",
+                    expected_error: "newest_by column seen_at is not written to the table",
                     expected_plan: "",
                 },
                 expected_tables: "0",

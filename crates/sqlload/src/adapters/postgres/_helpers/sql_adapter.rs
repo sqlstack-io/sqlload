@@ -192,7 +192,7 @@ impl SqlAdapter for PostgresSql {
         source: &str,
         values: &[String],
     ) -> String {
-        let ranked = ranked_source(self, request, (source, values));
+        let ranked = ranked_source(self, request, (source, values), false);
         let (source, values) = ranked.as_ref().map_or((source, values), |(source, names)| {
             (source.as_str(), names.as_slice())
         });

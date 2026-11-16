@@ -45,18 +45,22 @@ pub(in crate::loader) async fn load_one(
         (None, _) => {
             let reader = open_source(project, source, source_readers(planned)).await?;
             let loaded = publish_table(&reader, planned, (destination, run)).await?;
-            let note = marked_rows(&reader, planned, (destination, run)).await?;
-            TableLoaded { note, ..loaded }
+            let note = marked_rows(&reader, planned, (destination, run), loaded.note.clone());
+            TableLoaded {
+                note: note.await?,
+                ..loaded
+            }
         }
     };
     Ok((name, loaded))
 }
 
-/// After `planned`'s merge, under `--sync-deletes`, its key scan through `reader`, then its loaded tombstones (`deletes_from`): what each marked, for the table's line; `None` when neither ran.
+/// After `planned`'s merge, which said `merged`, under `--sync-deletes` its key scan through `reader`, then its loaded tombstones (`deletes_from`): what each did, for the table's line; `None` when none said anything.
 async fn marked_rows(
     reader: &SourceReader,
     planned: &TablePlan,
     (destination, run): (&Destination, &LoadRun<'_>),
+    merged: Option<String>,
 ) -> Result<Option<String>, LoaderError> {
     let scanned = match scan_plan(planned, &now_utc_text()) {
         Some(scan) => {
@@ -67,6 +71,10 @@ async fn marked_rows(
         None => None,
     };
     let tombstones = apply_tombstones(planned, destination).await?;
-    let notes: Vec<String> = scanned.into_iter().chain(tombstones).collect();
+    let notes: Vec<String> = merged
+        .into_iter()
+        .chain(scanned)
+        .chain(tombstones)
+        .collect();
     Ok((!notes.is_empty()).then(|| notes.join(" ")))
 }

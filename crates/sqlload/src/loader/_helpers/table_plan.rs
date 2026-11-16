@@ -81,7 +81,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
-use crate::project::models::{NullCursor, OnDuplicateKeys, SortDirection};
+use crate::project::models::{NullCursor, OnDuplicateKeys};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -254,12 +254,11 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
-    plan.schema.warnings.extend(split_ranking(&plan));
     let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
     with_transform_version(plan, destination).await
 }
 
-/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or its `dedup_sort` column is not among the columns written. A Python table's columns are known only once it yields, so its `dedup_sort` is not checked here.
+/// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or a `newest_by` column is not among the columns written, or has no order. A Python table's columns are known only once it yields, so its `newest_by` is not checked here.
 fn unwritten_column(
     spec: &TableSpec,
     schema: &SchemaPlan,
@@ -283,17 +282,24 @@ fn unwritten_column(
             "replace_key column {key} is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change). Fix: name a column the table loads in replace_key, such as the version column every row holds"
         ));
     }
-    let (name, _) = spec.dedup_sort.as_ref().filter(|_| spec.python.is_none())?;
+    let columns = spec.newest_by.iter().filter(|_| spec.python.is_none());
+    columns
+        .filter_map(|name| unordered_column(schema, name))
+        .next()
+}
+
+/// Why `newest_by` column `name` cannot say which row is newer: it isn't written, or it is JSON or an array, which have no order.
+fn unordered_column(schema: &SchemaPlan, name: &str) -> Option<String> {
     let column = schema
         .write_columns
         .iter()
         .find(|column| column.name.eq_ignore_ascii_case(name));
     match column.map(|column| &column.column_type) {
         None => Some(format!(
-            "dedup_sort column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
+            "newest_by column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
         )),
         Some(column_type @ (ColumnType::Json | ColumnType::Array(_))) => Some(format!(
-            "dedup_sort column {name} is {column_type}, which has no order to rank rows by; name a column of another type"
+            "newest_by column {name} is {column_type}, which has no order to say which row is newer; name a column of another type"
         )),
         Some(_) => None,
     }
@@ -310,7 +316,7 @@ fn ordered_mode(mode: WriteMode, mut schema: SchemaPlan) -> (WriteMode, SchemaPl
     }
 }
 
-/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `dedup_sort`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
+/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `newest_by`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
 fn unordered_merge(
     mode: WriteMode,
     schema: &SchemaPlan,
@@ -331,12 +337,12 @@ fn unordered_merge(
             .write_columns
             .iter()
             .any(|column| column.name == SOURCE_ROW_COLUMN);
-    match (ordered, &dedupe.sort) {
+    match (ordered, dedupe.newest_by.is_empty()) {
         (true, _) => Ok((mode, None)),
-        (false, Some(_)) => Err(format!(
-            "dedup_sort breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
+        (false, false) => Err(format!(
+            "newest_by breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
         )),
-        (false, None) => Ok((
+        (false, true) => Ok((
             WriteMode::Merge {
                 unique_key: unique_key.clone(),
                 dedupe: None,
@@ -347,37 +353,6 @@ fn unordered_merge(
             )),
         )),
     }
-}
-
-/// What `dedup_sort` cannot rank when a merge may commit more than once: each commit ranks only its own rows, so a later commit overwrites a key an earlier one wrote whatever its sort value.
-fn split_ranking(plan: &TablePlan) -> Option<String> {
-    let WriteMode::Merge {
-        dedupe: Some(MergeDedupe {
-            sort: Some((column, _)),
-            ..
-        }),
-        ..
-    } = &plan.mode
-    else {
-        return None;
-    };
-    let (commits, remedy) = match &plan.commits {
-        CommitRule::Windows(windows) if windows.count > 1 => (
-            format!("once per window ({} windows)", windows.count),
-            "; set batch_size = \"none\" to load it in one commit",
-        ),
-        CommitRule::FileGroups(groups) if groups.len() > 1 => {
-            (format!("once per file ({} files)", groups.len()), "")
-        }
-        CommitRule::Ordered { .. } | CommitRule::Size => (
-            "about every 1 GB".to_owned(),
-            "; set batch_size = \"none\" to load it in one commit",
-        ),
-        _ => return None,
-    };
-    Some(format!(
-        "dedup_sort ranks repeated keys within one commit, and this table commits {commits}: a later commit still overwrites a key an earlier one wrote, whatever its {column} value{remedy}"
-    ))
 }
 
 /// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` swaps the whole table in once, as does `--reload` (whose cursor windows still cut the reads), and windows need a cursor.
@@ -1274,10 +1249,7 @@ fn write_mode(
                     true => SOURCE_ROW_COLUMN.to_owned(),
                     false => MERGE_ROW_COLUMN.to_owned(),
                 },
-                sort: spec
-                    .dedup_sort
-                    .as_ref()
-                    .map(|(column, direction)| (column.clone(), *direction == SortDirection::Desc)),
+                newest_by: spec.newest_by.clone(),
             }),
         },
         (false, WriteStrategy::DeleteInsert) => WriteMode::DeleteInsert {

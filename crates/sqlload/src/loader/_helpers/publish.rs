@@ -110,10 +110,12 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::TransformRun;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
+use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
 use crate::publish_checks::main::key_sources::key_sources;
 use crate::publish_checks::main::marked_rows::marked_rows;
+use crate::publish_checks::main::older_rows::older_rows;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
 use crate::publish_checks::main::refuse_repeated_keys::refuse_repeated_keys;
 use crate::publish_checks::main::run_checks::run_checks;
@@ -658,6 +660,7 @@ impl Publisher {
             merged_file: None,
             replaced: None,
             marked: None,
+            older: 0,
             run_keys: Default::default(),
             fed_files: Vec::new(),
             settled_files: Vec::new(),
@@ -1262,6 +1265,7 @@ impl Publisher {
         if let WriteMode::MarkMissing(mark) = &mode {
             self.marked = Some(marked_rows(&checked, mark).await?);
         }
+        self.older += older_rows(&checked, &mode).await?;
         let replaced = match &mode {
             WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
                 let limit = file
@@ -1620,7 +1624,8 @@ pub(crate) async fn publish_table(
     Ok(TableLoaded {
         rows,
         changes: publisher.child_changes(),
-        note: marked(table, (rows, publisher.marked)),
+        note: marked(table, (rows, publisher.marked))
+            .or_else(|| older_note(table, publisher.older)),
         after_load: report,
         replaced_keys: publisher.replaced.clone(),
         transforms,
@@ -1635,6 +1640,19 @@ fn marked(table: &TablePlan, (keys, marked): (u64, Option<u64>)) -> Option<Strin
         return None;
     };
     Some(marked_note(mark.soft, (keys, marked.unwrap_or_default())))
+}
+
+/// How many keys `table`'s merge left alone, the table holding a newer row of each by `newest_by`: `(12 older rows skipped: newest_by updated_at)`; `None` when it skipped none.
+fn older_note(table: &TablePlan, older: u64) -> Option<String> {
+    let rows = match older {
+        0 => return None,
+        1 => "1 older row".to_owned(),
+        _ => format!("{} older rows", thousands(older)),
+    };
+    Some(format!(
+        "({rows} skipped: newest_by {})",
+        table.spec.newest_by.join(", ")
+    ))
 }
 
 /// Pass the rows to `publisher`, cutting commits where the plan says; returns the publisher for its clean-up, and the rows committed.

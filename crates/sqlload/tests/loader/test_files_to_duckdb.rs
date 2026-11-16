@@ -35,10 +35,13 @@ pub(crate) const MERGE_FAIL_SETTINGS: &str =
 
 const UNORDERED_MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\n";
 
-const UNORDERED_SORT_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\ndedup_sort = { v = \"asc\" }\n";
+const UNORDERED_SORT_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\nnewest_by = \"v\"\n";
+
+/// Monday's customers file: 42 once, and 43 twice, its newest row read first.
+pub(crate) const MONDAY: &str = "id,v,day\n42,mon,2026-11-02\n43,a,2026-11-02\n43,b,2026-11-01\n";
 
 pub(crate) const MERGE_SORT_SETTINGS: &str =
-    "write_strategy = \"merge\"\nunique_key = [\"id\"]\ndedup_sort = { v = \"asc\" }\n";
+    "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnewest_by = \"day\"\n";
 
 const NOV_3: ParquetFile = ParquetFile {
     key: "day=2026-11-03/part-0.parquet",
@@ -682,30 +685,51 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "5:a,6:c|1",
             },
             FilesMergeTestCase {
-                description: "with dedup_sort a file repeating a key merges the row that sorts first, and plan warns that a later file still overwrites it",
+                description: "with newest_by a file repeating a key merges its newest row, and Monday's file coming back after Tuesday's, rewritten, leaves Tuesday's row, the load saying so",
                 settings: MERGE_SORT_SETTINGS,
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[
-                        MergeFile {
-                            key: "a.csv",
-                            contents: "id,v\n5,b\n5,a\n5,c\n",
+                steps: &[
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "mon.csv",
+                            contents: MONDAY,
                             modified_secs: 1_000,
-                        },
-                        MergeFile {
-                            key: "b.csv",
-                            contents: "id,v\n6,z\n",
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "merge (unique_key: id; newest by day",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "tue.csv",
+                            contents: "id,v,day\n42,tue,2026-11-03\n",
                             modified_secs: 2_000,
-                        },
-                    ],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "",
-                    expected_plan: "dedup_sort ranks repeated keys within one commit, and this table commits once per file (2 files)",
-                }],
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "",
+                    },
+                    MergeStep {
+                        before: &[],
+                        files: &[MergeFile {
+                            key: "mon.csv",
+                            contents: MONDAY,
+                            modified_secs: 3_000,
+                        }],
+                        removed: &[],
+                        loads: true,
+                        reload: false,
+                        expected_error: "",
+                        expected_plan: "(1 older row skipped: newest_by day)",
+                    },
+                ],
                 check_query: MERGE_CHECK,
-                expected_result: "5:a,6:z|2",
+                expected_result: "42:tue,43:a|3",
             },
             FilesMergeTestCase {
                 description: "without _sqlload_source_row a file's rows have no order, so files merge as in 0.38.0: one without repeats merges, one repeating a key fails, and plan says why",
@@ -742,7 +766,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:a,2:a|1",
             },
             FilesMergeTestCase {
-                description: "dedup_sort without _sqlload_source_row is refused at plan, as ties need the file's row order",
+                description: "newest_by without _sqlload_source_row is refused at plan, as ties need the file's row order",
                 settings: UNORDERED_SORT_SETTINGS,
                 steps: &[MergeStep {
                     before: &[],
@@ -754,7 +778,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     removed: &[],
                     loads: true,
                     reload: false,
-                    expected_error: "dedup_sort breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
+                    expected_error: "newest_by breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
                     expected_plan: "",
                 }],
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",

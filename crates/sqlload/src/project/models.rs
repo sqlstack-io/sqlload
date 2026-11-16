@@ -844,9 +844,9 @@ pub struct TableSettings {
     /// The columns whose values `delete_insert` replaces whole: each commit first deletes the rows holding a value of them that its rows hold.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub replace_key: Option<Vec<String>>,
-    /// Which of the rows sharing a `unique_key` a merge keeps: the one with the highest (`desc`) or lowest (`asc`) value of the one column named.
-    #[serde(default)]
-    pub dedup_sort: Option<BTreeMap<String, SortDirection>>,
+    /// The column, or columns compared in order, whose higher value is the newer version of a row: of the rows sharing a `unique_key` a merge keeps the newest, and never overwrites a loaded row with an older one.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub newest_by: Option<Vec<String>>,
     /// How the table and its columns are named: snake_case (default) or as the source spells them; overrides the target's.
     #[serde(default)]
     pub naming: Option<Naming>,
@@ -888,7 +888,7 @@ pub enum RenameSetting {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnDuplicateKeys {
-    /// Keep one row per key: the last in source order, or the one `dedup_sort` ranks first.
+    /// Keep one row per key: the last in source order, or the newest by `newest_by`.
     #[default]
     Dedupe,
     /// Fail the commit, naming some of the repeated keys.
@@ -914,23 +914,6 @@ pub enum NullKeys {
     Match,
     /// Fail the commit holding it, naming the key's columns and some of the keys.
     Fail,
-}
-
-/// Which way `dedup_sort` ranks its column: `desc` keeps the highest value, `asc` the lowest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SortDirection {
-    Asc,
-    Desc,
-}
-
-impl std::fmt::Display for SortDirection {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Asc => "asc",
-            Self::Desc => "desc",
-        })
-    }
 }
 
 /// `constant_columns`: each column's value as written, by name.

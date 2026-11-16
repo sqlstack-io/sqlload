@@ -319,3 +319,17 @@ pub(crate) fn replaced_rows<A: SqlAdapter + ?Sized>(
         _ => None,
     }
 }
+
+/// `staging` as a merge reads it: its name, and `request.columns`' expressions over it, each converted to its column's type.
+pub(crate) fn staged_values<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+    staging: &TableName,
+) -> (String, Vec<String>) {
+    let values: Vec<String> = request
+        .columns
+        .iter()
+        .map(|column| adapter.render_source_expression_cast(&column.name, &column.column_type))
+        .collect();
+    (adapter.render_qualified_name(staging), values)
+}
