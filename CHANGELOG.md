@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.54.0](https://github.com/sqlstack-io/sqlload/compare/v0.53.0...v0.54.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** Google Sheets tables gain a _sqlload_source_row column, and a header column of that name fails plan. A Sheets cell holding an empty text loads as NULL and no longer makes its column text.
+* **files:** delete_insert tables on a partition cursor that hold rows loaded before _sqlload_source_version was recorded fail on a below-range file until rebuilt with --reload, and a new file below the range now fails when the table holds files of its partition that were removed from the folder.
+* **loader:** dedup_sort is removed; use newest_by = "column" (a higher value is newer). A merge with newest_by no longer overwrites a loaded row with an older staged one.
+* **python:** NaN and infinite floats in dict rows no longer load as NULL. They load as floats, or fail the table where the column can't hold them; set on_nonfinite = "null" to load them as NULL.
+* **files:** text after a closing quote now fails the file instead of loading a misread value, and CSV files read as latin-1, cp1252 or iso-8859-15 whose bytes say they are UTF-8 or cp1252 fail unless encoding_check = false. Such files no longer load directly into Snowflake from an external stage while the check is on.
+
+### Features
+
+* **duckdb:** load json columns as VARIANT with json_type = "variant" ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **files:** choose a files source's files by glob with pattern ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **files:** CSV escape, quote = false, strict closing quotes and encoding checks ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **files:** move or delete ZIP archives with after_load once every member read from them commits ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **files:** order files by path with order = "path", skip existing empty folders with on_empty = "skip", number Google Sheets rows in _sqlload_source_row, and load an empty Sheets cell as NULL ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **loader:** keep the newest row of a key across loads with newest_by, which replaces dedup_sort ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **loader:** load every inferred column as text with infer_types = false ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **loader:** mark the rows whose key the source no longer holds with deletes and load --sync-deletes, or that a tombstone table names with deletes_from ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **plan:** state what a DuckDB table's peak memory scales with, in plan and the DuckDB docs ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **python:** keep NaN and infinite floats from dict rows, or load them as NULL with on_nonfinite = "null" ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+* **sources:** narrow a database table's reads with where, keeping its primary key and include patterns ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+
+
+### Bug Fixes
+
+* **files:** fail delete_insert on a below-range file held without a version or in a partition whose files left the folder ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+
+
+### Performance Improvements
+
+* **python:** run an sl.http job's page transform in one crossing instead of three threads per page ([c7ab321](https://github.com/sqlstack-io/sqlload/commit/c7ab3213f129fb092b071e29fbde61e371b98001))
+
 ## [0.53.0](https://github.com/sqlstack-io/sqlload/compare/v0.52.0...v0.53.0) (2026-11-16)
 
 
