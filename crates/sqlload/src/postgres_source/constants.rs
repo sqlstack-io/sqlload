@@ -75,7 +75,8 @@ JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
 CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS key(attnum, position)
 JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum
 WHERE i.indisunique AND i.indisvalid AND NOT i.indisprimary AND i.indpred IS NULL
-  AND i.indexprs IS NULL AND key.position <= i.indnkeyatts
+  AND i.indexprs IS NULL
+  AND key.position <= coalesce((to_jsonb(i) ->> 'indnkeyatts')::int, i.indnatts)
 GROUP BY 1, 2, 3
 ORDER BY 1, 2, 3";
 
