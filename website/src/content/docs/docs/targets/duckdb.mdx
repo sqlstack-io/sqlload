@@ -65,8 +65,9 @@ groups quickly. A table of few rows with large values does. Loading 300 rows of 
 (286 MB) in one commit peaks at about 1.2 GB, whatever the source's fetch budget, as measured with
 DuckDB 2.0. The same 286 MB as three million short rows peaks at about 300 MB.
 
-So for such a table, peak memory scales with the bytes of the largest commit, about four times
-over, and not with the source's `max_batch_memory`. `batch_size` cuts a cursor table's load into
-smaller commits. DuckDB also keeps the blocks it wrote cached, up to its memory limit (80% of the
-machine's memory by default), so a long load's memory can grow past its largest commit until DuckDB
-needs the room.
+So for such a table, peak memory is about four times the bytes of the largest commit, plus the
+blocks DuckDB keeps cached, up to its memory limit (80% of the machine's memory by default). It
+doesn't follow the source's `max_batch_memory`, and smaller commits alone don't lower it: DuckDB's
+cache fills to its limit either way. `plan` notes this on each DuckDB table. A Postgres target stays
+bounded: the same 286 MB loads in about 225 MB with `send = "at_commit"` and 410 MB with
+`send = "per_batch"`.
