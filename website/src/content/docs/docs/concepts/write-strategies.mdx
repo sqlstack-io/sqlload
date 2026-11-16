@@ -268,9 +268,9 @@ nightly `--sync-deletes`, so SQLLoad keeps no schedule.
 - `--sync-deletes` fails `plan` when none of the selected tables sets `deletes`.
 - A table with `unnest`, or one sharing its destination with other tables through
   `constant_columns`, can't take `deletes`.
-- `deletes` and `deletes_from` load only into DuckDB, Postgres and, from 0.56.0, Snowflake, the
-  targets their mark statements have run on. `plan` refuses them on MotherDuck, Databricks,
-  BigQuery, ClickHouse and files targets rather than run untested statements.
+- `deletes` and `deletes_from` load only into DuckDB, Postgres and, from 0.56.0, Snowflake, and
+  from 0.57.0 MotherDuck, the targets their mark statements have run on. `plan` refuses them on
+  Databricks, BigQuery, ClickHouse and files targets rather than run untested statements.
 
 `plan` shows the cost on the table's line, and the result shows how many rows were marked:
 
