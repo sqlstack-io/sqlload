@@ -6,7 +6,6 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 
 use crate::http_source::models::Selector;
-use crate::row_batches::_helpers::projected::list_index;
 use crate::row_batches::main::item_position::item_position;
 
 /// `text` as a selector; `None` and `$` select the whole response.
@@ -108,30 +107,26 @@ pub(crate) fn raw_rows<'a>(
         path.push("[*]");
         path.extend(selector.within.iter().map(String::as_str));
     }
-    let mut found: Vec<&'a RawValue> = Vec::new();
-    raw_walk(document, &path, &mut found).map_err(|error| error.to_string())?;
-    Ok(found)
+    raw_walk(document, &path).map_err(|error| error.to_string())
 }
 
-/// `walk` over source text: the rows at `path` under `node`, pushed to `found`.
-fn raw_walk<'a>(
-    node: &'a RawValue,
-    path: &[&str],
-    found: &mut Vec<&'a RawValue>,
-) -> Result<(), serde_json::Error> {
+/// `walk` over source text: the rows at `path` under `node`.
+fn raw_walk<'a>(node: &'a RawValue, path: &[&str]) -> Result<Vec<&'a RawValue>, serde_json::Error> {
     let kind = node.get().trim_start().as_bytes().first().copied();
     match path.split_first() {
         None => match kind {
-            Some(b'[') => found.extend(serde_json::from_str::<Vec<&RawValue>>(node.get())?),
-            Some(b'n') => {}
-            _ => found.push(node),
+            Some(b'[') => serde_json::from_str(node.get()),
+            Some(b'n') => Ok(Vec::new()),
+            _ => Ok(vec![node]),
         },
         Some((&"[*]", rest)) if kind == Some(b'[') => {
+            let mut found: Vec<&'a RawValue> = Vec::new();
             for item in serde_json::from_str::<Vec<&RawValue>>(node.get())? {
-                raw_walk(item, rest, found)?;
+                found.extend(raw_walk(item, rest)?);
             }
+            Ok(found)
         }
-        Some((&"[*]", _)) => {}
+        Some((&"[*]", _)) => Ok(Vec::new()),
         Some((segment, rest)) => {
             let next = match (segment.starts_with('['), kind) {
                 (true, Some(b'[')) => {
@@ -144,12 +139,12 @@ fn raw_walk<'a>(
                 }
                 _ => None,
             };
-            if let Some(next) = next {
-                raw_walk(next, rest, found)?;
+            match next {
+                Some(next) => raw_walk(next, rest),
+                None => Ok(Vec::new()),
             }
         }
     }
-    Ok(())
 }
 
 /// How many objects are around each row `selector` reaches, for `sl.parent`: one per field name its path steps by.
@@ -183,7 +178,11 @@ fn indexed(part: &str) -> Option<Vec<String>> {
     let mut found = vec![is_name(name).then(|| name.to_owned())?];
     if !indexes.is_empty() {
         for index in format!("[{indexes}").split_inclusive(']') {
-            list_index(index.strip_prefix('[')?.strip_suffix(']')?)?;
+            let inside = index.strip_prefix('[')?.strip_suffix(']')?;
+            let digits = inside.strip_prefix('-').unwrap_or(inside);
+            if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
             found.push(index.to_owned());
         }
     }
