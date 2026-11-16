@@ -29,6 +29,11 @@ impl SqlAdapter for DuckDbSql {
         Some(65536)
     }
 
+    /// The mark statements of `deletes` and `deletes_from` run in the container tests.
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
     fn keeps_nanoseconds(&self) -> bool {
         false
     }

@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::types::{
-    PyAnyMethods, PyBool, PyBoolMethods, PyDict, PyDictMethods, PyFloat, PyFloatMethods, PyInt,
-    PyList, PyListMethods, PyString, PyStringMethods, PyTuple, PyType, PyTypeMethods,
+    PyAnyMethods, PyBool, PyBoolMethods, PyByteArray, PyBytes, PyDict, PyDictMethods, PyFloat,
+    PyFloatMethods, PyInt, PyList, PyListMethods, PyMemoryView, PyString, PyStringMethods, PyTuple,
+    PyType, PyTypeMethods,
 };
 use pyo3::{Bound, PyAny, PyErr, PyResult, Python};
 use sqlload::row_batches::models::{Cell, Flatten, FlattenObjects, JsonWriter, RowColumns};
@@ -295,6 +298,19 @@ impl<'py> Walker<'py> {
         if let Ok(object) = value.cast::<PyDict>() {
             return Ok(Plain::Object(object.iter().collect()));
         }
+        let bytes = if value.is_instance_of::<PyBytes>() || value.is_instance_of::<PyByteArray>() {
+            Some(value.extract::<Vec<u8>>()?)
+        } else if value.is_instance_of::<PyMemoryView>() {
+            Some(value.call_method0("tobytes")?.extract::<Vec<u8>>()?)
+        } else {
+            None
+        };
+        if let Some(bytes) = bytes {
+            return Ok(Plain::Typed {
+                text: STANDARD.encode(&bytes),
+                cell: Cell::Binary(bytes),
+            });
+        }
         if value.is_instance_of::<PyList>() || value.is_exact_instance_of::<PyTuple>() {
             return Ok(Plain::Array(value.clone()));
         }
@@ -520,6 +536,10 @@ fn shape(plain: &Plain<'_>) -> &'static str {
             cell: Cell::Decimal(_) | Cell::Null,
             ..
         } => "a decimal",
+        Plain::Typed {
+            cell: Cell::Binary(_),
+            ..
+        } => "bytes",
         Plain::Typed { .. } => "a timestamp",
     }
 }

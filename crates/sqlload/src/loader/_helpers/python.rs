@@ -22,6 +22,7 @@ use crate::cdc::constants::DELETE_OP;
 use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::main::binary_text::binary_columns_as_text;
 use crate::column_types::main::combined_type::combined_type;
 use crate::column_types::models::ColumnType;
 use crate::http_source::main::literal_path_problems::literal_path_problems;
@@ -658,9 +659,11 @@ pub(crate) fn typed_batch(
     (merged, window): (&SchemaRef, Option<&ReadWindow>),
     (rows_before, seen): (u64, OutsideRows),
 ) -> Result<WindowRows, LoaderError> {
-    let conformed = conform_batch(batch, merged).map_err(LoaderError::Invalid)?;
-    let typed =
-        read_types(&conformed, &read_schema(table), rows_before).map_err(LoaderError::Invalid)?;
+    let read = read_schema(table);
+    let conformed = conform_batch(batch, merged)
+        .and_then(|conformed| binary_columns_as_text(&conformed, &read))
+        .map_err(LoaderError::Invalid)?;
+    let typed = read_types(&conformed, &read, rows_before).map_err(LoaderError::Invalid)?;
     let cursor = table.spec.cursor.as_ref();
     let include = cursor.is_some_and(|cursor| cursor.null_cursor == NullCursor::Include);
     let warns = cursor.is_some_and(|cursor| cursor.out_of_range == OnCursorOutOfRange::Warn);

@@ -1098,7 +1098,7 @@ pub struct TableOverride {
     /// Text columns read as times, by column name: `"epoch_ms"`, or `{ timestamp = ["iso", "%m/%d/%Y %H:%M"], tz = "Europe/Paris", on_error = "null" }` (see [`column_parse`](crate::column_parse::main::column_parse::column_parse)).
     #[serde(default)]
     pub parse: BTreeMap<String, serde_json::Value>,
-    /// Where a source records the keys it deleted (`deletes_from = { table, cursor_column }`), which mark the table's rows under `deletes`.
+    /// Where a source records the keys it deleted (`deletes_from = { table, cursor_column, lookback }`), which mark the table's rows under `deletes`.
     #[serde(default)]
     pub deletes_from: Option<DeletesFrom>,
     /// The key under `tables` of the table this one holds the tombstones of: set on the table SQLLoad adds for a `deletes_from`, never read from the project.
@@ -1114,6 +1114,9 @@ pub struct DeletesFrom {
     pub table: String,
     /// Its column holding when each key was deleted, read incrementally as a cursor.
     pub cursor_column: String,
+    /// How far before the latest tombstone loaded each load reads again, for tombstones that become visible after a later one loaded (written by a long transaction); the window read again replaces its rows, so none repeat.
+    #[serde(default, deserialize_with = "deserialize_optional_lookback")]
+    pub lookback: Option<Lookback>,
 }
 
 /// A table's `unnest` or `flatten` as written: a word (`"all"`) or a list of dotted paths.

@@ -386,6 +386,21 @@ def test_given_decimals_when_crossed_then_the_column_holds_every_value_exactly(c
 	assert table.column("v").to_pylist() == expected_values
 
 
+@pytest.mark.parametrize("crossing", CROSSINGS)
+def test_given_bytes_when_crossed_then_they_load_as_binary_or_base64_text(crossing: str) -> None:
+	rows = [
+		{"blob": b"\x00\xffhi", "mixed": b"\x01", "nested": {"b": b"\x02"}},
+		{"blob": bytearray(b"\x7f"), "mixed": "text", "nested": None},
+		{"blob": memoryview(b"ab"), "mixed": None, "nested": None},
+		{"blob": None, "mixed": None, "nested": None},
+	]
+	table = read(iter(rows), crossing=crossing)
+	assert str(table.schema.field("blob").type) == "binary"
+	assert table.column("blob").to_pylist() == [b"\x00\xffhi", b"\x7f", b"ab", None]
+	assert table.column("mixed").to_pylist() == ["AQ==", "text", None, None]
+	assert table.column("nested").to_pylist() == ['{"b":"Ag=="}', None, None, None]
+
+
 def test_given_fields_when_json_and_ndjson_cross_then_only_those_values_load_renamed() -> None:
 	rows = [{"id": 1, "code": "A1", "address": {"city": "Leeds"}, "updated-at": "2026-01-02T03:04:05Z", "noise": True}, {"id": 2, "code": "B2"}]
 	fields = {"id": "$.id", "account_code": "$.code", "city": "$.address.city", "updated_at": sl.field("$.updated-at")}

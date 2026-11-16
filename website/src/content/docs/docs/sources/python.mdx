@@ -92,6 +92,7 @@ lists become JSON columns. From 0.27.0, a list column pinned as
 | `date` | `date` |
 | naive `datetime` | `timestamp_ntz` |
 | `datetime` with a UTC offset | `timestamp_tz` (a column mixing both becomes text) |
+| `bytes`, `bytearray`, `memoryview` | From 0.55.0, `binary`. A column mixing them with text, pinned as `text`, or under `infer_types = false` holds them as base64 text, as does a value nested in a dict or list. Before 0.55.0 they loaded as their `b'...'` text, so a table loaded then needs `--reload` to become `binary`, or `columns = { name = "text" }` to keep its column. |
 | `Enum` | Its value. |
 | dataclass | A JSON object. |
 | numpy numbers | Numbers. |
@@ -296,7 +297,8 @@ api.fan_out(
 - `key_path` on `fan_out` (a path from each record, or `sl.parent(...)`, in the
   [path syntax](#path-syntax)) fails the table when a
   record's key isn't among the keys its request sent (with `batch=`, the batch's), naming the key,
-  for an API that answers for other keys.
+  for an API that answers for other keys. From 0.55.0, a request filling more than one placeholder
+  refuses `key_path`, as a record's key could match another placeholder's value.
 - `sl.parent` and `sl.key` read an `sl.http` job's rows; `sl.json` and `sl.ndjson` refuse them, and
   `cells` can't combine with them.
 
@@ -397,6 +399,17 @@ strictly in page order. The run ends at the first short (or, for `sl.page_number
 already sent past it are dropped, so an API may see up to `N` requests more than the pages loaded.
 `sl.cursor`, `sl.next_link` and `sl.link_header` refuse `read_ahead`, as each page's address comes from the page
 before it.
+
+Without `read_ahead`, paging waits on the API one page at a time, so its speed is the API's latency. Against a
+mock API answering each page of 100 rows in 80 ms, 1,000 pages took:
+
+| Paginator | Wall time | Pages per second |
+|---|---|---|
+| no `read_ahead` | 83 s | 12 |
+| `read_ahead=8` | 12 s | 85 |
+| `read_ahead=20` | 6 s | 171 |
+
+Raise `read_ahead` until the API's own limits, or a `rate_limit` you set for them, become the bound.
 
 ### A missing select path
 

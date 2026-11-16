@@ -402,6 +402,20 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
+            description: "merge on {primary_key} of a table with unique indexes but no primary key names its plain-column indexes and suggests the first never NULL",
+            setup: "CREATE TABLE public.coded (code text, ref int8 NOT NULL, note text);
+                    CREATE UNIQUE INDEX coded_code ON public.coded (code);
+                    CREATE UNIQUE INDEX coded_ref ON public.coded (ref) INCLUDE (note);
+                    CREATE UNIQUE INDEX coded_lower ON public.coded (lower(note));",
+            settings: "write_strategy = \"merge\"\nunique_key = \"{primary_key}\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "public.coded (kind = \"postgres\"): unique_key = \"{primary_key}\", but the source reports no primary key for the table. The table has unique index coded_code (code) and unique index coded_ref (ref) └── fix name the key columns, such as unique_key = [\"ref\"]",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
             description: "a source's merge on {primary_key} covers a keyed table include matches, and a table entry that replaces overrides it, though that table has no primary key",
             setup: "CREATE TABLE public.plain (id int8, note text);
                     CREATE TABLE public.keyed (id int8 PRIMARY KEY, note text, at timestamptz NOT NULL);

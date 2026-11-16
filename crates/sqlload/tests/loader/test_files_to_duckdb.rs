@@ -227,6 +227,17 @@ fn given_parquet_files_when_loading_into_duckdb_then_new_files_and_partitions_lo
             expected_result: "1:1.0,2:1.0,3:2.0,4:2.0",
         },
         FilesScenarioTestCase {
+            description: "on S3, on_empty = \"skip\" refuses an empty prefix before its table exists, as a mistyped path lists the same",
+            store: seaweedfs_store,
+            settings: "write_strategy = \"append\"\non_empty = \"skip\"\n",
+            runs: &[FilesRun {
+                files: &[],
+                expected_error: "and scores was never loaded: an object store or SFTP server lists a folder that doesn't exist as empty, so on_empty = \"skip\" skips one only once its table exists",
+            }],
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        FilesScenarioTestCase {
             description: "append stops when a loaded file was rewritten in place",
             store: seaweedfs_store,
             settings: "write_strategy = \"append\"\npartition_columns = { day = \"date\" }\n",

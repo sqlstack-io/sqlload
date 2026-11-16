@@ -32,6 +32,9 @@ pub const AMBIGUOUS_TIMESTAMP_NAME: &str = "timestamp";
 /// Field metadata key marking a text column's portable type when Arrow has no matching type (`json`, `uuid`).
 pub const ARROW_TYPE_METADATA_KEY: &str = "sqlload.type";
 
+/// The Arrow field metadata key marking a binary column built from Python bytes, which a text column holds as base64.
+pub const PYTHON_BYTES_METADATA_KEY: &str = "sqlload.python_bytes";
+
 /// Digits an `int` needs: 64-bit integers have up to 19.
 pub const INT_DIGITS: u8 = 19;
 

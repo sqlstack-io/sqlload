@@ -166,7 +166,7 @@ fn given_a_merge_with_deletes_from_when_loading_then_its_tombstones_mark_rows_in
 }
 
 #[test]
-fn given_tombstones_whose_time_is_not_a_time_when_planning_then_soft_deletes_fail_naming_the_fix_and_hard_deletes_plan()
+fn given_tombstones_whose_time_is_not_a_time_or_unlike_the_cursor_when_planning_then_plan_fails_naming_the_fix()
 -> Result<(), String> {
     run_async(|| async move {
         let source = start_postgres().await?;
@@ -177,19 +177,26 @@ fn given_tombstones_whose_time_is_not_a_time_when_planning_then_soft_deletes_fai
                 deletes: "soft",
                 deleted_at_type: "int8",
                 expected_failed: true,
-                expected_error: "deletes_from table audit.deleted_items has cursor_column deleted_at of type int, but deletes = \"soft\" sets _sqlload_deleted_at to a tombstone's time └── fix name a timestamp column, or set deletes = \"hard\"",
+                expected_error: "deletes_from table audit.deleted_items has cursor_column deleted_at of type int, but deletes = \"soft\" sets _sqlload_deleted_at to a tombstone's time",
             },
             TombstonePlanTestCase {
-                description: "a hard delete only compares the tombstone with the row's cursor",
+                description: "a sequence number doesn't compare with a row's timestamp, hard or soft",
                 deletes: "hard",
                 deleted_at_type: "int8",
-                expected_failed: false,
-                expected_error: "",
+                expected_failed: true,
+                expected_error: "deletes_from table audit.deleted_items has cursor_column deleted_at of type int, which doesn't compare exactly with the table's cursor column updated_at of type timestamp_tz └── fix give both the same kind of type in the source: timestamps with a time zone, timestamps or dates without one, numbers, or text",
             },
             TombstonePlanTestCase {
-                description: "a timestamp without a time zone is a time",
+                description: "a timestamp without a time zone would compare with an instant in the session's time zone",
                 deletes: "soft",
                 deleted_at_type: "timestamp",
+                expected_failed: true,
+                expected_error: "has cursor_column deleted_at of type timestamp_ntz, which doesn't compare exactly with the table's cursor column updated_at of type timestamp_tz",
+            },
+            TombstonePlanTestCase {
+                description: "instants on both sides plan",
+                deletes: "hard",
+                deleted_at_type: "timestamptz",
                 expected_failed: false,
                 expected_error: "",
             },

@@ -38,7 +38,7 @@ pub(crate) fn tombstone_problems(place: &str, source: &SourceConfig) -> Vec<Stri
     problems
 }
 
-/// `project` with a table added for each `deletes_from`: its tombstone table, described, appended by its `cursor_column`, named and sent as the table it marks (its `rename` function, not a map naming its own columns), and matched by the source's `include` (so a database source finds it).
+/// `project` with a table added for each `deletes_from`: its tombstone table, described, loaded by `delete_insert` on its `cursor_column` with its `lookback` (the range read again replaces its rows, so a tombstone that becomes visible late is read and none repeats), named and sent as the table it marks (its `rename` function, not a map naming its own columns), and matched by the source's `include` (so a database source finds it).
 pub(crate) fn with_tombstone_tables(mut project: ProjectConfig) -> ProjectConfig {
     for source in project.sources.values_mut() {
         let added: Vec<(String, TableOverride)> = source
@@ -48,8 +48,9 @@ pub(crate) fn with_tombstone_tables(mut project: ProjectConfig) -> ProjectConfig
                 let from = table.deletes_from.as_ref()?;
                 let (own, defaults) = (&table.settings, &source.defaults);
                 let settings = TableSettings {
-                    write_strategy: Some(WriteStrategy::Append),
+                    write_strategy: Some(WriteStrategy::DeleteInsert),
                     cursor_column: Some(vec![from.cursor_column.clone()]),
+                    lookback: from.lookback,
                     naming: own.naming.or(defaults.naming),
                     compat: own.compat.or(defaults.compat),
                     send: own.send.or(defaults.send),

@@ -1,6 +1,9 @@
 //! Reading `select` and paginator pointers: `$`, `$.a.b`, `$.a[*].b` for keys, and `$.a[*].b[*]` for rows inside lists.
 
+use std::collections::HashMap;
+
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use crate::http_source::models::Selector;
 use crate::row_batches::main::item_position::item_position;
@@ -93,6 +96,57 @@ fn walk<'a>(
     }
 }
 
+/// The source text of each row `selector` reaches in the JSON `bytes`, in the order `rows_with_parents` finds them, so a rebuilt row keeps its keys in the order the API sent them.
+pub(crate) fn raw_rows<'a>(
+    bytes: &'a [u8],
+    selector: &Selector,
+) -> Result<Vec<&'a RawValue>, String> {
+    let document: &RawValue = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+    let mut path: Vec<&str> = selector.rows.iter().map(String::as_str).collect();
+    if !selector.within.is_empty() {
+        path.push("[*]");
+        path.extend(selector.within.iter().map(String::as_str));
+    }
+    raw_walk(document, &path).map_err(|error| error.to_string())
+}
+
+/// `walk` over source text: the rows at `path` under `node`.
+fn raw_walk<'a>(node: &'a RawValue, path: &[&str]) -> Result<Vec<&'a RawValue>, serde_json::Error> {
+    let kind = node.get().trim_start().as_bytes().first().copied();
+    match path.split_first() {
+        None => match kind {
+            Some(b'[') => serde_json::from_str(node.get()),
+            Some(b'n') => Ok(Vec::new()),
+            _ => Ok(vec![node]),
+        },
+        Some((&"[*]", rest)) if kind == Some(b'[') => {
+            let mut found: Vec<&'a RawValue> = Vec::new();
+            for item in serde_json::from_str::<Vec<&RawValue>>(node.get())? {
+                found.extend(raw_walk(item, rest)?);
+            }
+            Ok(found)
+        }
+        Some((&"[*]", _)) => Ok(Vec::new()),
+        Some((segment, rest)) => {
+            let next = match (segment.starts_with('['), kind) {
+                (true, Some(b'[')) => {
+                    let items: Vec<&RawValue> = serde_json::from_str(node.get())?;
+                    item_position(segment, items.len()).map(|at| items[at])
+                }
+                (false, Some(b'{')) => {
+                    let mut object: HashMap<String, &RawValue> = serde_json::from_str(node.get())?;
+                    object.remove(*segment)
+                }
+                _ => None,
+            };
+            match next {
+                Some(next) => raw_walk(next, rest),
+                None => Ok(Vec::new()),
+            }
+        }
+    }
+}
+
 /// How many objects are around each row `selector` reaches, for `sl.parent`: one per field name its path steps by.
 pub(crate) fn enclosing_levels(selector: &Selector) -> usize {
     selector
@@ -116,7 +170,7 @@ fn segments(text: &str) -> Option<Vec<String>> {
     }
 }
 
-/// A dotted path's part such as `sheets` or `sheets[0]` as its segments, an index kept as `[0]`; `None` when it is neither.
+/// A dotted path's part such as `sheets`, `sheets[0]` or `sheets[-1]` as its segments, an index kept as `[0]`; `None` when it is neither.
 fn indexed(part: &str) -> Option<Vec<String>> {
     let (name, indexes) = part
         .split_once('[')
@@ -124,7 +178,8 @@ fn indexed(part: &str) -> Option<Vec<String>> {
     let mut found = vec![is_name(name).then(|| name.to_owned())?];
     if !indexes.is_empty() {
         for index in format!("[{indexes}").split_inclusive(']') {
-            let digits = index.strip_prefix('[')?.strip_suffix(']')?;
+            let inside = index.strip_prefix('[')?.strip_suffix(']')?;
+            let digits = inside.strip_prefix('-').unwrap_or(inside);
             if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
                 return None;
             }

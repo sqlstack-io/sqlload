@@ -4,10 +4,12 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, new_null_array};
 use arrow_cast::cast::cast;
 use arrow_schema::{DataType, SchemaRef};
 
+use crate::column_types::main::binary_text::binary_columns_as_text;
 use crate::row_batches::_helpers::arrow_json::normalise_column;
 
-/// `batch` with `schema`'s columns in its order: missing columns are NULL, a list becomes its JSON text where the schema has none, and other differing types are cast; a column `schema` lacks is an error.
+/// `batch` with `schema`'s columns in its order: missing columns are NULL, a list becomes its JSON text where the schema has none, binary becomes base64 text where the schema has text, and other differing types are cast; a column `schema` lacks is an error.
 pub fn conform_batch(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch, String> {
+    let batch = &binary_columns_as_text(batch, schema)?;
     for field in batch.schema().fields() {
         if schema.column_with_name(field.name()).is_none() {
             return Err(format!(
