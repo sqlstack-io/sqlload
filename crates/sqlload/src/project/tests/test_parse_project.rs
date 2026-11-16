@@ -345,9 +345,9 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.raw] xlsx is for format = \"xlsx\"",
         },
         ParseProjectErrorTestCase {
-            description: "after_load is not for a ZIP archive's members",
-            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n",
-            expected_message: "[sources.raw] after_load is not for compression = \"zip\"",
+            description: "after_load on ZIP archives another source on the connection also reads in an overlapping folder",
+            text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\ncompression = \"zip\"\nafter_load = \"delete\"\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/orders/\"\nformat = \"csv\"\ncompression = \"zip\"\n",
+            expected_message: "[sources.raw] after_load moves or deletes each ZIP archive once its members load, and [sources.orders] reads ZIP archives in \"raw/orders/\" on the same connection, which may still need them",
         },
         ParseProjectErrorTestCase {
             description: "after_load is for files sources",
