@@ -1204,6 +1204,8 @@ pub enum SourceReader {
     Snowflake(Box<SnowflakeReader>),
     /// BigQuery tables and queries, read through the Storage Read API.
     BigQuery(Box<crate::bigquery_source::models::BigQueryReader>),
+    /// Databricks tables and queries, read as Arrow through the Statement Execution API.
+    Databricks(Box<crate::databricks_source::models::DatabricksReader>),
     /// A database read through its ODBC driver.
     #[cfg(feature = "odbc")]
     Odbc(Box<crate::odbc_source::models::OdbcReader>),

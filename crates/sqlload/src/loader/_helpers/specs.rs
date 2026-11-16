@@ -8,6 +8,8 @@ use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
 use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
+use crate::databricks_source::constants::DATABRICKS_SOURCE;
+use crate::databricks_source::main::count_rows::count_rows as count_databricks_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -538,6 +540,11 @@ pub(crate) fn build_spec(
                 sql: overrides.sql.clone(),
                 route: WarehouseRoute::Query,
             }),
+            SourceKind::Databricks => Some(WarehouseSource {
+                system: DATABRICKS_SOURCE,
+                sql: overrides.sql.clone(),
+                route: WarehouseRoute::Query,
+            }),
             _ => warehouse_source(context.source, overrides),
         },
         row_filter: layered(&settings.row_filter, &defaults.row_filter)
@@ -777,7 +784,8 @@ pub(crate) fn missing_description(
         | SourceKind::PostgresCdc
         | SourceKind::Snowflake
         | SourceKind::Odbc
-        | SourceKind::BigQuery => format!(
+        | SourceKind::BigQuery
+        | SourceKind::Databricks => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };
@@ -1387,6 +1395,9 @@ pub(crate) async fn null_cursor_rows(
         }
         SourceReader::BigQuery(bigquery) => {
             count_bigquery_rows(bigquery, (&spec.source_table, sql), &filter).await?
+        }
+        SourceReader::Databricks(databricks) => {
+            count_databricks_rows(databricks, (&spec.source_table, sql), &filter).await?
         }
         #[cfg(feature = "odbc")]
         SourceReader::Odbc(odbc) => {

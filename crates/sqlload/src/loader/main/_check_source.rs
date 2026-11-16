@@ -56,6 +56,24 @@ pub(in crate::loader) async fn check_source(
                 reader.client.location()
             ))
         }
+        SourceKind::Databricks => {
+            let reader = crate::loader::_helpers::sources::databricks_source_reader(project, source)?;
+            let answer = crate::databricks_api::main::execute_statement::execute_statement(
+                &reader.client,
+                "SELECT current_user() || ', catalog ' || current_catalog() || ', Databricks ' || current_version().dbsql_version",
+            )
+            .await
+            .map_err(crate::databricks_source::errors::DatabricksSourceError::from)?;
+            Ok(format!(
+                "{}; reads catalog {}",
+                answer
+                    .rows
+                    .first()
+                    .and_then(|row| row.first().cloned().flatten())
+                    .unwrap_or_default(),
+                reader.catalog
+            ))
+        }
         #[cfg(feature = "odbc")]
         SourceKind::Odbc => {
             let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;

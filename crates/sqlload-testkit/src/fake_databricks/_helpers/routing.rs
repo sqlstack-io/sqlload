@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::fake_databricks::_helpers::delivery::statement_path;
+use crate::fake_databricks::_helpers::results::RESULTS;
 use crate::fake_databricks::_helpers::statements::run_statement;
 use crate::fake_databricks::_helpers::volume::{
     delete_directory, delete_file, list_directory, put_file,
@@ -34,6 +35,18 @@ pub(crate) async fn handle(
                 .to_string(),
         )
             .into_response();
+    }
+    if let Some(file) = path.strip_prefix(RESULTS) {
+        let authorized = parts.headers.contains_key(axum::http::header::AUTHORIZATION);
+        let downloaded = state.lock().download(&format!("{RESULTS}{file}"), authorized);
+        return match downloaded {
+            Ok(body) => (StatusCode::OK, body).into_response(),
+            Err(status) => (
+                StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN),
+                "the link expired".to_owned(),
+            )
+                .into_response(),
+        };
     }
     let sent = match parts.headers.get(axum::http::header::AUTHORIZATION) {
         Some(value) => String::from_utf8_lossy(value.as_bytes()).into_owned(),
