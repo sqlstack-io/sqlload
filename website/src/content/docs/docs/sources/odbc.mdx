@@ -37,7 +37,7 @@ sql = "SELECT id, name FROM sales.items WHERE id > 2400"
 ```
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 Plan ready  2 selected, 2 objects to create, 2 to load
 to  DuckDB local
 
@@ -174,7 +174,7 @@ Errors (1)
     │           wrong (MariaDB Connector/ODBC 3.1 finds none in MySQL 8.4)
     └── fix     name the key columns, such as unique_key = ["id"]
 
-✗ Plan failed with errors
+✗ Plan failed  1 error
 ```
 
 Name the key columns on each such table, or use MySQL Connector/ODBC, which reports MySQL's keys.
@@ -394,7 +394,7 @@ with [`--memory-per-table`](/docs/cli/load/#peak-memory) on Linux; see
 `plan` shows how each ODBC table fetches (`fetch`) and its fetch buffer, and why (`buffer`):
 
 ```console
-$ sqlload plan
+$ sqlload plan -v
 …
 Loads (2)                                           sqlload load
 ├── raw.shop__contacts                              replace

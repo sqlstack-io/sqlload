@@ -38,7 +38,7 @@ pub const RECREATE_TABLE: &str = "recreate table";
 /// The starts of an `Objects` detail that names a column left out or masked, which the default plan keeps.
 pub const NAMED_COLUMNS: [&str; 2] = ["excluded  ", "masked  "];
 
-/// The start of the line naming a new table's `_sqlload_*` columns.
+/// The start of the line naming a new table's `_sqlload_*` columns, separated by `, `.
 pub const LOAD_COLUMNS: &str = "+ ";
 
 /// What a skipped files table's reason starts with when no file is new, and the group it joins.

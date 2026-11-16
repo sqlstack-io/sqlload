@@ -77,13 +77,17 @@ pub(crate) fn table_names(
     }
 }
 
-/// A table's write strategy and key, short: `merge on company_no, item_no`, `delete_insert on dt`, `replace`; others as `-v` gives them.
+/// A table's write strategy and key, short: `merge on company_no, item_no`, `delete_insert on dt` (its `replace_key`, else the cursor whose range it replaces), `replace`; others as `-v` gives them.
 pub(crate) fn action(loaded: &LoadedTable<'_>) -> String {
     match &loaded.table.mode {
         WriteMode::Merge { unique_key, .. } => format!("merge on {}", unique_key.join(", ")),
         WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
             format!("delete_insert on {}", replace_key.join(", "))
         }
+        WriteMode::DeleteInsert {
+            cursor_column: Some(column),
+            ..
+        } => format!("delete_insert on {column}"),
         WriteMode::DeleteInsert { .. } => "delete_insert".to_owned(),
         WriteMode::Append => "append".to_owned(),
         _ => loaded.item.action.clone(),

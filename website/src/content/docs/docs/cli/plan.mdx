@@ -46,85 +46,107 @@ selects a table by name, since that table could be one of its own.
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
 | `--memory-per-table` | From 0.52.0, Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |
+| `-v`, `--verbose` | From 0.58.0. Print every line of the plan: each table's source, route and memory lines and the defaults it follows, each column of a new table, and every connection's and discovery's own line. See [Reading a plan](#reading-a-plan). |
 | `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
 
 ## Reading a plan
 
-```console
-$ sqlload plan
-Plan ready  2 selected, 2 objects to create, 2 to load
-to  DuckDB local
-
-Objects (2)                                         sqlload apply
-├── raw.app__customers                              create table
-│   ├── customer_id int            -> BIGINT
-│   ├── email       text           -> VARCHAR
-│   ├── country     text           -> VARCHAR
-│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-│   └── + _sqlload_load_id, _loaded_at
-└── raw.app__orders                                 create table
-    ├── order_id    int             -> BIGINT
-    ├── customer_id int             -> BIGINT
-    ├── status      text            -> VARCHAR
-    ├── total       decimal(12,2)   -> DECIMAL(12,2)
-    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-    └── + _sqlload_load_id, _loaded_at
-
-Loads (2)                                           sqlload load
-├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
-│   ├── source  postgres  app  public.customers
-│   └── route   read as Arrow -> DuckDB takes Arrow
-└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
-    ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── reads   updated_at: first run, everything
-
-✓ Plan complete  2 selected, 2 objects to create, 2 to load
-```
-
-Tables are named as they land, `schema.table`, and sorted by that name. A table read by cursor
-says where its read starts and when it commits:
+From 0.58.0, `plan` shows only the lines that are a table's own or ask you to act. A table that
+keeps every default takes one line; `-v` shows everything else.
 
 ```console
 $ sqlload plan
-Plan ready  2 selected, 2 to load
-to  DuckDB local
+✓ Connected   local DuckDB · app PostgreSQL   0.03s
+✓ Discovered  3 tables in 2 sources   0.02s
 
-Loads (2)                                           sqlload load
-├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
-│   ├── source  postgres  app  public.customers
-│   └── route   read as Arrow -> DuckDB takes Arrow
-└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
-    ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── reads   updated_at >= 2026-11-01 16:40:00+00 (warehouse maximum)
+Objects (3)                                                                     sqlload apply
+├── raw.app__customers  create table, 6 columns
+├── raw.app__orders     create table, 7 columns
+└── raw.events          create table, 8 columns
 
-✓ Plan complete  2 selected, 2 to load
+Loads (3)  into DuckDB local                                                    sqlload load
+├── app postgres  into raw
+│   ├── customers   merge on customer_id
+│   └── orders      merge on order_id     updated_at: first run, everything
+└── events ./lake/events/  into raw
+    └── events      delete_insert on dt   3 new of 3 files
+        └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
+
+✓ Plan complete  3 objects to create, 3 to load
 ```
 
-`reads` gives the cursor's bound (`>=` when the bound row is read again, `>` when it isn't) and
-where it comes from: the warehouse maximum, minus any `lookback`, `--start-cursor`, or a logged
-state. `commits` shows when the read doesn't commit the usual way.
-
-A plan of several tables names each destination on a `to` line; when there are several, each
-`route` names its destination too. It leaves out `why`, and the `batch` and `schema` lines most of
-its tables share. Select one table to see every line, with times to the millisecond:
+`Loads` names the target, then each source with its kind (or its Python file or folder) and the
+schema its tables land in, when that isn't the source's name. Each table's line has its write
+strategy and key, then where its read starts. Once a table has rows, an incremental table's read
+starts at the warehouse's maximum:
 
 ```console
-$ sqlload plan app__orders
+$ sqlload plan
+✓ Connected   local DuckDB · app PostgreSQL   0.02s
+✓ Discovered  3 tables in 2 sources   0.02s
+
+Loads (3)  into DuckDB local                                                    sqlload load
+├── app postgres  into raw
+│   ├── customers   merge on customer_id
+│   └── orders      merge on order_id     updated_at ≥ 2026-11-02 08:04:00+00 (max)
+└── events ./lake/events/  into raw
+    └── events      delete_insert on dt   1 new of 3 files
+        └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
+
+✓ Plan complete  3 to load
+```
+
+The start is `≥` when the bound row is read again and `>` when it isn't, followed by where it
+comes from: `(max)`, the warehouse maximum, `(max − 5s)` with a `lookback`, `--start-cursor`, or
+`from state "…" (run 20d2b872)` for a logged state.
+
+A child line under a table means it does something unlike the defaults, or needs a look:
+
+| Line | Means |
+|------|-------|
+| `NULL cursors included`, `NULL cursors skipped` | `null_cursor` is set. |
+| `commits every 30 days` | The read commits after each window (`batch_size`). |
+| `repeated keys fail`, `newest by updated_at` | `on_duplicate_keys = "fail"`, or `newest_by`. |
+| `route  … (nothing through the loader)` | The warehouse reads the files itself. |
+| `memory  ~1.9 GiB per fetch, over the 512 MiB fetch buffer` | An ODBC table's row doesn't fit its fetch buffer; the next line is the `max_batch_memory` that does. |
+| `deletes`, `transform`, `filter`, `flatten`, `parse`, `note` | The table's own settings and notes. |
+
+Skipped tables get one line per reason:
+
+```console
+Skipped (7)
+├── no new files   customers, prices, receipts, stock_counts, targets
+└── up to date     estimates (3 files), kpis (1 file)
+```
+
+`sqlload plan -v` shows every line: each table's `source`, `route`, `memory`, `fetch` and `buffer`
+lines, the rules its cursor follows by default, and a new table's columns one by one, as each
+portable type `->` the warehouse type and what that type loses. Select one table with `-v` to also
+see its `key`, `columns` and `checks`, with times to the millisecond:
+
+```console
+$ sqlload plan -v app__orders
+✓ Target connected  local  DUCKDB  (0.02s)
+✓ Source connected  app  POSTGRES  (0.01s)
+✓ Discovered  app  2 tables  (0.02s)
+✓ Discovered  events  1 table  (0.00s)
 Plan ready  1 selected, 1 to load
 
 Loads (1)                                           sqlload load
 └── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
     ├── source  postgres  app  public.orders
     ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}", sqlload.toml:21)
-    ├── reads   updated_at >= 2026-11-01 16:40:00.000+00 (warehouse maximum)
+    ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}", sqlload.toml:22)
+    ├── reads   updated_at >= 2026-11-02 08:04:00.000+00 (warehouse maximum)
     ├── columns 5
-    └── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+    ├── commits once, at the end of the read (updated_at isn't read in order)
+    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
 
 ✓ Plan complete  1 selected, 1 to load
 ```
+
+The sections, as `-v` shows them; without it, `Objects` counts a new table's columns, and
+`Loads` and `Skipped` keep only the lines above:
 
 | Section | Lists |
 |---------|-------|
@@ -138,23 +160,29 @@ A table under `Errors` is left out; the others still run, and the command exits 
 
 ## Connecting and discovering
 
-From 0.53.0, `plan`, and the plan `apply` and `load` start with, writes a line to standard error as
-each target's and source's connection opens and as each source's tables are found, with how long it
-took:
+From 0.53.0, `plan`, and the plan `apply` and `load` start with, times each target's and source's
+connection and each source's discovery of its tables. From 0.58.0, once they are done they collapse
+into two lines on standard error:
 
 ```console
-✓ Target connected  dev  DUCKDB  (0.02s)
-✓ Source connected  erp  OPENEDGE through ODBC  (1.84s)
+✓ Connected   warehouse DuckDB · erp OpenEdge · app PostgreSQL   0.06s
+✓ Discovered  17 tables in 9 sources   0.05s
+```
+
+A step that took a second or more keeps its own line, so a slow catalog stands out:
+
+```console
 ✓ Discovered  erp  2 tables  (21.30s)
 ```
 
-A step that fails says how long it ran, as
-`✗ Source connection failed  erp  POSTGRES  (after 30.01s)`. A step still running after 30 seconds writes a row every 30 seconds, such as
-`  erp  listing tables  RUNNING 30.0s`, so logs that aren't a terminal show it too. Postgres and
-ODBC sources have a connection line; other sources connect as their tables are found, within the
-`Discovered` time. `--json` and `--log-format json` leave the lines out, and `plan --json` has the
-times under `phases`: one entry per connection (`"phase": "connect"`) and discovery
-(`"discover"`), with its `role` (`target` or `source`), `name`, `ok` and `elapsed_ms`.
+A step that fails keeps its line too and says how long it ran, as
+`✗ Source connection failed  erp  POSTGRES  (after 30.01s)`. `-v` prints every step's line
+instead of the two summary lines. A step still running after 30 seconds writes a row every 30
+seconds, such as `  erp  listing tables  RUNNING 30.0s`, so logs that aren't a terminal show it
+too. Postgres and ODBC sources have a connection step; other sources connect as their tables are
+found, within the discovery time. `--json` and `--log-format json` leave the lines out, and
+`plan --json` has the times under `phases`: one entry per connection (`"phase": "connect"`) and
+discovery (`"discover"`), with its `role` (`target` or `source`), `name`, `ok` and `elapsed_ms`.
 
 On a terminal, a spinner names the step running once it has run 300 ms, such as
 `erp  describing PUB.absence (2/5)… 18s`, or between steps `Planning  checking sources, 1 of 3 done`.

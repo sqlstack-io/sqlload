@@ -38,16 +38,22 @@ pub(crate) fn branch(line: &str, details: &[PlanDetail], last: bool, indent: &st
     lines
 }
 
-/// `items` as a section: `heading (count)` with `hint`, then each item's name and action two spaces apart and its details below it, then a blank line; nothing without items.
+/// `items` as a section: `heading (count)` with `hint`, then each item's name and its action, aligned two spaces after the longest name, and its details below it, then a blank line; nothing without items.
 pub(crate) fn section(heading: &str, hint: &str, items: &[PlanItem]) -> Vec<String> {
     if items.is_empty() {
         return Vec::new();
     }
+    let width = items
+        .iter()
+        .map(|item| item.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
     let mut lines: Vec<String> = vec![hinted(&format!("{heading} ({})", items.len()), hint)];
     for (index, item) in items.iter().enumerate() {
         let line = match item.action.is_empty() {
             true => item.name.clone(),
-            false => format!("{}  {}", item.name, item.action),
+            false => format!("{:<width$}{}", item.name, item.action),
         };
         lines.extend(branch(&line, &item.details, index + 1 == items.len(), ""));
     }

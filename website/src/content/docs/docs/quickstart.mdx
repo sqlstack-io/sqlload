@@ -14,7 +14,7 @@ files, `orders/`, is loaded into a DuckDB table:
 
 ```console
 $ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-✓ Plan complete  1 selected, 1 object to create, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 object to create, 1 to load   (sqlload plan shows the tree)
 
 created  raw.orders  9 columns
 loaded  raw.orders      3 rows 0.0s
@@ -138,38 +138,25 @@ ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
 
 ```console
 $ sqlload plan
-Plan ready  2 selected, 2 objects to create, 2 to load
-to  DuckDB local
+✓ Connected   local DuckDB · app PostgreSQL   0.03s
+✓ Discovered  2 tables in 1 source   0.01s
 
-Objects (2)                                         sqlload apply
-├── raw.app__customers                              create table
-│   ├── customer_id int            -> BIGINT
-│   ├── email       text           -> VARCHAR
-│   ├── country     text           -> VARCHAR
-│   ├── created_at  timestamp_tz   -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-│   └── + _sqlload_load_id, _loaded_at
-└── raw.app__orders                                 create table
-    ├── order_id    int             -> BIGINT
-    ├── customer_id int             -> BIGINT
-    ├── status      text            -> VARCHAR
-    ├── total       decimal(12,2)   -> DECIMAL(12,2)
-    ├── updated_at  timestamp_tz    -> TIMESTAMP WITH TIME ZONE  (stored as a UTC instant; the offset is not kept)
-    └── + _sqlload_load_id, _loaded_at
+Objects (2)                                                                     sqlload apply
+├── raw.app__customers  create table, 6 columns
+└── raw.app__orders     create table, 7 columns
 
-Loads (2)                                           sqlload load
-├── raw.app__customers                              merge (unique_key: customer_id ← {primary_key})
-│   ├── source  postgres  app  public.customers
-│   └── route   read as Arrow -> DuckDB takes Arrow
-└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
-    ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    └── reads   updated_at: first run, everything
+Loads (2)  into DuckDB local                                                    sqlload load
+└── app postgres  into raw
+    ├── customers   merge on customer_id
+    └── orders      merge on order_id   updated_at: first run, everything
 
-✓ Plan complete  2 selected, 2 objects to create, 2 to load
+✓ Plan complete  2 objects to create, 2 to load
 ```
 
-Tables are named `{source}__{table}` unless you set `table_name`. `← {primary_key}` shows that each
-`unique_key` is the table's primary key. `reads` shows where an incremental table's read starts.
+Tables are named `{source}__{table}` unless you set `table_name`. Each table gets one line under
+its source: the write strategy and key, then where an incremental table's read starts. A line
+shows only what is specific to the table or asks you to act; `sqlload plan -v` shows every
+column's type mapping and the route, commit and memory lines too.
 
 `sqlload apply` creates the tables, and `sqlload load` fills them. `apply` prints the plan first,
 here cut to the last lines; `load` prints the plan's closing line, then a line per table:
@@ -182,7 +169,7 @@ created  raw.app__orders     7 columns
 
 ✓ Completed  0.1s
 $ sqlload load
-✓ Plan complete  2 selected, 2 to load   (sqlload plan shows the tree)
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__customers     50 rows 0.0s
 loaded  raw.app__orders     1,000 rows 0.0s
@@ -200,27 +187,22 @@ Change one order and add another:
 docker exec -i shop-db psql -q -U postgres -c "UPDATE orders SET status = 'refunded', updated_at = now() WHERE order_id = 42; INSERT INTO orders VALUES (1001, 7, 'placed', 99.90, now());"
 ```
 
-Plan only `app__orders`. A plan of one table shows every line. `reads` shows where the read
-starts: the destination's maximum `updated_at`, read from the table itself. Because an index leads
-with `updated_at`, `orders` is read in cursor order and can commit along the way, as `commits`
-shows.
+Plan only `app__orders`. Its line shows where the read starts: the destination's maximum
+`updated_at`, read from the table itself. `-v` adds the key's source, the column count and how
+the read commits.
 
 ```console
 $ sqlload plan app__orders
-Plan ready  1 selected, 1 to load
+✓ Connected   local DuckDB · app PostgreSQL   0.03s
+✓ Discovered  2 tables in 1 source   0.02s
 
-Loads (1)                                           sqlload load
-└── raw.app__orders                                 merge (unique_key: order_id ← {primary_key})
-    ├── source  postgres  app  public.orders
-    ├── route   read as Arrow -> DuckDB takes Arrow
-    ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}", sqlload.toml:24)
-    ├── reads   updated_at >= 2026-10-12 16:00:00.000+00 (warehouse maximum)
-    ├── columns 5
-    └── commits about every 1 GB, in updated_at order (an index leads with it, NULLs first), between distinct values
+Loads (1)  into DuckDB local                                                    sqlload load
+└── app postgres  into raw
+    └── orders   merge on order_id   updated_at ≥ 2026-10-12 16:00:00+00 (max)
 
-✓ Plan complete  1 selected, 1 to load
+✓ Plan complete  1 to load
 $ sqlload load app__orders
-✓ Plan complete  1 selected, 1 to load   (sqlload plan shows the tree)
+✓ Plan complete  1 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__orders      3 rows 0.0s
 
