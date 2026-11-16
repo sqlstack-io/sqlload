@@ -32,6 +32,7 @@ use crate::files_source::constants::{
 };
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
+use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::files_source::models::{FileColumn, SourceFormat, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
@@ -874,4 +875,19 @@ impl Publisher {
             ))
         })
     }
+}
+
+/// Why a files table's CSV files go through SQLLoad: `csv.encoding_check` reads the bytes of files read as `latin-1`, `cp1252` or `iso-8859-15`, which no destination's own read checks.
+pub(crate) fn checked_encoding(spec: &TableSpec) -> Option<String> {
+    let files = spec.files.as_ref()?;
+    let csv = &files.encoding.csv;
+    let checked = files.encoding.format == SourceFormat::Csv
+        && csv.encoding_check
+        && text_charset(&csv.encoding).is_ok_and(|charset| charset.checked().is_some());
+    checked.then(|| {
+        format!(
+            "csv.encoding_check reads the bytes of each {} file, which no destination's own read checks; csv.encoding_check = false lets it read them",
+            csv.encoding
+        )
+    })
 }

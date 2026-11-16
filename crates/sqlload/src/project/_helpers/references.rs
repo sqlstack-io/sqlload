@@ -3,7 +3,7 @@ use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{
-    AfterLoad, Compression, FilesOrder, OnEmpty, RecordShape, SourceFormat,
+    AfterLoad, Compression, CsvQuote, FilesOrder, OnEmpty, RecordShape, SourceFormat,
 };
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
@@ -812,15 +812,34 @@ fn encoding_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     match (&source.csv, source.format) {
         (None, _) => {}
         (Some(csv), SourceFormat::Csv) => {
-            for (setting, character) in [("delimiter", csv.delimiter), ("quote", csv.quote)] {
-                if !character.is_ascii() || character == '\n' || character == '\r' {
+            let quote = csv.quote.character();
+            let characters = [
+                ("delimiter", Some(csv.delimiter)),
+                ("quote", quote),
+                ("escape", csv.escape),
+            ];
+            for (setting, character) in characters {
+                if let Some(character) = character
+                    && (!character.is_ascii() || character == '\n' || character == '\r')
+                {
                     problems.push(format!(
                         "{place} csv {setting} must be one ASCII character other than a line break, not {character:?}"
                     ));
                 }
             }
-            if csv.delimiter == csv.quote {
-                problems.push(format!("{place} csv delimiter and quote must differ"));
+            if quote == Some(csv.delimiter) || csv.escape == Some(csv.delimiter) {
+                problems.push(format!(
+                    "{place} csv delimiter must differ from quote and escape"
+                ));
+            }
+            match (csv.quote, csv.escape) {
+                (CsvQuote::Off(true), _) => problems.push(format!(
+                    "{place} csv quote = true names no character; write it, such as '\"', or false to read every quote as a plain character"
+                )),
+                (CsvQuote::Off(false), Some(_)) => problems.push(format!(
+                    "{place} csv escape works inside quoted fields, and quote = false has none; remove escape"
+                )),
+                _ => {}
             }
             if let Err(problem) = text_charset(&csv.encoding) {
                 problems.push(format!("{place} {problem}"));

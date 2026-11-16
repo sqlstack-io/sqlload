@@ -21,7 +21,7 @@ use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
-use crate::files_source::_helpers::text::csv_records::{FirstRecord, QuoteTracker};
+use crate::files_source::_helpers::text::csv_records::{CsvQuoting, FirstRecord, QuoteTracker};
 use crate::files_source::_helpers::text::json_records::{JsonSplitter, flattened_record};
 use crate::files_source::constants::RECORD_COLUMN;
 use crate::files_source::main::after_load::after_load;
@@ -407,8 +407,13 @@ pub(crate) fn flatten_json(test_case: &FlattenJsonTestCase) -> Result<String, St
 
 /// The first record's fields joined by `|`, once the whole file was followed for open quotes.
 pub(crate) fn read_csv(test_case: &TrackCsvTestCase) -> Result<String, String> {
-    let mut first_record = FirstRecord::new(b',', b'"', test_case.max_record_bytes);
-    let mut tracker = QuoteTracker::new(b',', b'"', test_case.max_record_bytes);
+    let quoting = CsvQuoting {
+        delimiter: b',',
+        quote: Some(b'"'),
+        escape: None,
+    };
+    let mut first_record = FirstRecord::new(quoting, test_case.max_record_bytes);
+    let mut tracker = QuoteTracker::new(quoting, test_case.max_record_bytes);
     let mut first: Option<Vec<String>> = None;
     for chunk in test_case
         .text

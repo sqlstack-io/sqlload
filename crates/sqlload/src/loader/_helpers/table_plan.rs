@@ -42,6 +42,7 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::files_source::models::FilesRead;
 use crate::files_source::models::{Compression, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
+use crate::loader::_helpers::destination::checked_encoding;
 use crate::loader::_helpers::destination::truncated_nanoseconds;
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -1073,7 +1074,8 @@ pub(crate) fn reader_offer(
         let parsed: Vec<&str> = spec.parses.keys().map(String::as_str).collect();
         (!parsed.is_empty()).then(|| format!("parse runs on {}", parsed.join(", ")))
     })
-    .or_else(|| archived_reason(spec, read));
+    .or_else(|| archived_reason(spec, read))
+    .or_else(|| checked_encoding(spec));
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },

@@ -943,6 +943,14 @@ pub(crate) fn every_csv_type() -> Result<Vec<(String, bytes::Bytes)>, String> {
     fixture_in_a_day(sqlload_testkit::parity::models::ParityFiles::CsvValues)
 }
 
+/// One CSV file that quotes no value, though one holds a quote.
+pub(crate) fn unquoted_csv() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    Ok(vec![(
+        "day=2026-11-01/part-0.csv".to_owned(),
+        bytes::Bytes::from_static(b"id,s\n1,12\" pipe\n2,y\n"),
+    )])
+}
+
 /// Load the case's files into a fresh fake Snowflake; what was planned and sent, and what stayed staged.
 pub(crate) async fn run_route(
     directory: &std::path::Path,
