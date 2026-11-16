@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.57.0](https://github.com/sqlstack-io/sqlload/compare/v0.56.0...v0.57.0) (2026-11-16)
+
+
+### Features
+
+* **motherduck:** mark deleted rows with deletes and deletes_from on MotherDuck ([32b17cc](https://github.com/sqlstack-io/sqlload/commit/32b17cc57d96a72ecc6ad422de4ca50fdfd69d94))
+
 ## [0.56.0](https://github.com/sqlstack-io/sqlload/compare/v0.55.0...v0.56.0) (2026-11-16)
 
 
