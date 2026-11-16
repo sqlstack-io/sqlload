@@ -1,7 +1,7 @@
 //! BigQuery GoogleSQL, where it differs from the contract's shared rendering.
 
 use crate::adapters::bigquery::_helpers::dialect::type_names::{
-    logical_type, portable_type, widens_in_place,
+    decimal_digits, logical_type, portable_type, widens_in_place,
 };
 use crate::adapters::bigquery::_helpers::dialect::write::write_statements;
 use crate::adapters::bigquery::models::BigQuerySql;
@@ -19,6 +19,11 @@ impl SqlAdapter for BigQuerySql {
 
     fn max_identifier_length(&self) -> Option<usize> {
         Some(300)
+    }
+
+    /// The mark statements of `deletes` and `deletes_from` ran on BigQuery through every step of the container tests' key scans and tombstones, soft and hard.
+    fn marks_deleted_rows(&self) -> bool {
+        true
     }
 
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
@@ -101,8 +106,28 @@ impl SqlAdapter for BigQuerySql {
         format!("ALTER TABLE {target} ALTER COLUMN {column} SET DATA TYPE {sql_type}")
     }
 
-    fn render_rebuild_table(&self, target: &str, select: &str) -> String {
-        format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}")
+    /// A decimal is cast to `NUMERIC` or `BIGNUMERIC` without parameters, which every parameterized column of the same digits takes: a column reads back as `decimal(p,s)` whether it was made `NUMERIC(p,s)` or `BIGNUMERIC(p,s)`, it is declared again as the one that fits those digits, and BigQuery won't put a `BIGNUMERIC` value into a `NUMERIC` column. A cast can't name the parameters.
+    fn render_typed_rebuild_column(&self, name: &str, column_type: &ColumnType) -> String {
+        match column_type {
+            ColumnType::Decimal { precision, scale } => {
+                let base = match decimal_digits(*precision, *scale).2 {
+                    true => "BIGNUMERIC",
+                    false => "NUMERIC",
+                };
+                format!("CAST({name} AS {base}) AS {name}")
+            }
+            _ => name.to_owned(),
+        }
+    }
+
+    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized. A table with a column whose type can't be named again, such as a `STRUCT`, gets no list.
+    fn render_rebuild_table(&self, target: &str, (select, columns): (&str, &str)) -> String {
+        match columns.is_empty() {
+            true => format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}"),
+            false => format!(
+                "CREATE OR REPLACE TABLE {target} ({columns}) AS SELECT {select} FROM {target}"
+            ),
+        }
     }
 
     /// BigQuery's `DELETE` needs a `WHERE`.
@@ -113,7 +138,7 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
-    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
+    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's options, so a build table must never carry an expiration, or the table it replaces would expire with it. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
     fn render_swap(
         &self,
         target: &TableName,
@@ -125,7 +150,7 @@ impl SqlAdapter for BigQuerySql {
             self.render_qualified_name(build),
         );
         vec![
-            format!("CREATE OR REPLACE TABLE {old} AS SELECT * FROM {new}"),
+            format!("CREATE OR REPLACE TABLE {old} LIKE {new} AS SELECT * FROM {new}"),
             format!("DROP TABLE IF EXISTS {new}"),
         ]
     }

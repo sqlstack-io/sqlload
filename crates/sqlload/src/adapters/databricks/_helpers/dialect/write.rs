@@ -175,7 +175,7 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
             .iter()
             .map(|column| rebuilt_column(adapter, column, &rebuilt))
             .collect();
-        statements.push(adapter.render_rebuild_table(&target, &select.join(", ")));
+        statements.push(adapter.render_rebuild_table(&target, (&select.join(", "), "")));
     }
     let mut features: Vec<&str> = Vec::new();
     if added.iter().any(|column| column.ends_with(TIMESTAMP_NTZ)) {

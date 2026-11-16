@@ -86,7 +86,7 @@ versions and how to run them yourself.
 |---|---|---|
 | Postgres | ✓ (incl. CDC) | ✓ |
 | Snowflake | ✓ | ✓ |
-| BigQuery | ✓ | preview |
+| BigQuery | ✓ | ✓ |
 | Databricks | | ✓ |
 | ClickHouse | | ✓ one self-hosted server¹ |
 | DuckDB | | ✓ |

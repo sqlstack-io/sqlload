@@ -363,8 +363,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         alter_statements(self, table, changes, live)
     }
 
-    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants.
-    fn render_rebuild_table(&self, target: &str, select: &str) -> String {
+    /// The select-list entry keeping column `name` of `column_type` in a rebuild that declares each column's type, where its value must coerce to that type.
+    fn render_typed_rebuild_column(&self, name: &str, _column_type: &ColumnType) -> String {
+        name.to_owned()
+    }
+
+    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters.
+    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
     }
 
@@ -500,6 +505,18 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging: &TableName,
     ) -> [String; 2] {
         marked_counts(self, request, mark, staging)
+    }
+
+    /// The statement a soft `deletes_from` marks rows with: `target` (the table aliased `__target`) gets `column` set from `marks`, a subquery aliased `__marks` holding each key's latest tombstone time as `column`, joined on `join`, for the rows `condition` chooses. `matched` chooses the same rows of those `marks` joins without a subquery: unmarked, with no cursor or one at or before the key's latest tombstone, which `latest_marks` (`marks` with that time also uncast, as `__sqlload_latest`) holds, so it compares as the tombstone's own time does.
+    fn render_soft_tombstones(
+        &self,
+        (target, column): (&str, &str),
+        ((marks, _latest_marks), join): ((&str, &str), &str),
+        (condition, _matched): (&str, &str),
+    ) -> String {
+        format!(
+            "UPDATE {target} SET {column} = __marks.{column} FROM {marks} WHERE {join} AND {condition}"
+        )
     }
 
     /// A table's tombstones (`deletes_from`): the query counting the rows they mark, as text, then the statement marking them.

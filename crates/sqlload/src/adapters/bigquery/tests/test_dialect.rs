@@ -6,7 +6,7 @@ use crate::adapters::contract::models::{
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
-use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, LiveColumn};
 
 #[test]
 fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_reads_them() {
@@ -60,6 +60,71 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
             expected_statements: &["`a\\`b\\\\c`"],
         },
         RenderedTestCase {
+            description: "a rebuild lists every column with its type, so a decimal keeps its precision and scale through the query, and casts each decimal to the unparameterized type it is declared as, which a BIGNUMERIC(20,2) made outside SQLLoad also coerces to",
+            rendered: adapter.render_change_columns(
+                &orders(),
+                &[ColumnChange::Rebuild {
+                    column: "qty".to_owned(),
+                    from: ColumnType::Int,
+                    to: ColumnType::Float,
+                    sql_type: "FLOAT64".to_owned(),
+                }],
+                &[
+                    LiveColumn {
+                        name: "amount".to_owned(),
+                        column_type: ColumnType::Decimal {
+                            precision: 20,
+                            scale: 2,
+                        },
+                        fraction_digits: None,
+                    },
+                    LiveColumn {
+                        name: "total".to_owned(),
+                        column_type: ColumnType::Decimal {
+                            precision: 38,
+                            scale: 10,
+                        },
+                        fraction_digits: None,
+                    },
+                    LiveColumn {
+                        name: "qty".to_owned(),
+                        column_type: ColumnType::Int,
+                        fraction_digits: None,
+                    },
+                ],
+            ),
+            expected_statements: &[
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `total` BIGNUMERIC(38,10), `qty` FLOAT64) AS SELECT CAST(`amount` AS NUMERIC) AS `amount`, CAST(`total` AS BIGNUMERIC) AS `total`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
+            ],
+        },
+        RenderedTestCase {
+            description: "a table with a STRUCT column, whose type can't be named again, is rebuilt with the types its query gives",
+            rendered: adapter.render_change_columns(
+                &orders(),
+                &[ColumnChange::Rebuild {
+                    column: "qty".to_owned(),
+                    from: ColumnType::Int,
+                    to: ColumnType::Float,
+                    sql_type: "FLOAT64".to_owned(),
+                }],
+                &[
+                    LiveColumn {
+                        name: "meta".to_owned(),
+                        column_type: ColumnType::Native("STRUCT".to_owned()),
+                        fraction_digits: None,
+                    },
+                    LiveColumn {
+                        name: "qty".to_owned(),
+                        column_type: ColumnType::Int,
+                        fraction_digits: None,
+                    },
+                ],
+            ),
+            expected_statements: &[
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` AS SELECT `meta`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
+            ],
+        },
+        RenderedTestCase {
             description: "a description is a table option, since BigQuery has no COMMENT ON",
             rendered: adapter
                 .render_table_comment(&orders(), "Orders, it's said")
@@ -70,10 +135,10 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
             ],
         },
         RenderedTestCase {
-            description: "the build table replaces the table in one statement, then is dropped",
+            description: "the build table's rows replace the table in one statement, its columns' precision, scale and length kept from the build table, then the build table is dropped",
             rendered: adapter.render_swap(&orders(), &build, &[]),
             expected_statements: &[
-                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
                 "DROP TABLE IF EXISTS `p`.`raw`.`orders__sqlload_staging_load1`",
             ],
         },

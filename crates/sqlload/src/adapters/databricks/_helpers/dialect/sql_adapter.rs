@@ -20,6 +20,22 @@ impl SqlAdapter for DatabricksSql {
         true
     }
 
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
+    /// Databricks has no `UPDATE ... FROM`, and a `MERGE` condition can't hold a subquery, so the rows are chosen by the condition without one, against each key's latest tombstone time uncast: cast from `TIMESTAMP_NTZ` in a session time zone with daylight saving, it could order differently from the cursor.
+    fn render_soft_tombstones(
+        &self,
+        (target, column): (&str, &str),
+        ((_marks, latest_marks), join): ((&str, &str), &str),
+        (_condition, matched): (&str, &str),
+    ) -> String {
+        format!(
+            "MERGE INTO {target} USING {latest_marks} ON {join} WHEN MATCHED AND {matched} THEN UPDATE SET {column} = __marks.{column}"
+        )
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }
@@ -69,7 +85,7 @@ impl SqlAdapter for DatabricksSql {
         }
     }
 
-    fn render_rebuild_table(&self, target: &str, select: &str) -> String {
+    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
         format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}")
     }
 

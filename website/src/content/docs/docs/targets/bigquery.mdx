@@ -1,9 +1,9 @@
 ---
 title: "BigQuery"
-description: "Load into BigQuery (preview): rows streamed as Arrow through the Storage Write API into a staging table, then one query job per write."
+description: "Load into BigQuery: rows streamed as Arrow through the Storage Write API into a staging table, then one query job per write."
 ---
 
-A BigQuery target loads into BigQuery datasets. It's in preview from sqlload 0.24.0. SQLLoad
+A BigQuery target loads into BigQuery datasets. It's supported from sqlload 0.59.0, after a preview from 0.24.0. SQLLoad
 streams each batch as Arrow through BigQuery's Storage Write API into a staging table, then moves
 the rows into the table with one query job.
 
@@ -124,7 +124,7 @@ Each statement is its own query job and commits on its own. The run record commi
 | `append` | One `INSERT ... SELECT` from the staging table. |
 | `merge` | One `MERGE` on the key. |
 | `delete_insert` | One `MERGE` that inserts the batch and deletes the rows it replaces. |
-| `replace` | `CREATE OR REPLACE TABLE ... AS SELECT` from the build table. |
+| `replace` | `CREATE OR REPLACE TABLE ... LIKE` the build table `AS SELECT` from it, so its columns keep their precision, scale and length, such as `NUMERIC(20,2)`. |
 
 `replace` loads the whole source into a build table, then swaps it in:
 
@@ -135,7 +135,14 @@ Each statement is its own query job and commits on its own. The run record commi
     └── batch   about 1 GB at a time into a new table, swapped in once at the end
 ```
 
-The new table keeps the old one's description, but not its partitioning, clustering or labels.
+The new table takes its description from the config, so a description set outside SQLLoad is
+lost, as are labels, column descriptions and policy tags. BigQuery won't replace a partitioned or
+clustered table with one that isn't, so `replace` fails on such a table and leaves it as it was.
+So does a type change that rewrites the table, such as `int` to `float`. That rewrite keeps each
+column's type, except that a `BIGNUMERIC` whose digits fit a `NUMERIC`, such as `BIGNUMERIC(20,2)`,
+becomes `NUMERIC(20,2)`. In a table with a column whose type SQLLoad can't name again, a `STRUCT`,
+`RANGE`, `GEOGRAPHY`, `INTERVAL` or a `BIGNUMERIC` of more than 38 digits, the rewrite takes its
+types from the query, so its columns lose their precision, scale and length.
 The build table holds only the table's own columns, so a column a
 [contract](/docs/concepts/contracts/) or `on_schema_change = "ignore"` leaves out isn't loaded.
 
@@ -168,7 +175,6 @@ as a UTC instant without its offset.
 
 ## Limitations
 
-- BigQuery is in preview.
 - Records load as `JSON`, not as typed `STRUCT` columns. From 0.27.0, columns pinned as
   [`array(T)`](/docs/concepts/types/#arrays) load as `ARRAY<T>`, except `array(timestamp_tz)`.
 - `copy_to_internal_stage` is for Snowflake and is refused here.
@@ -184,8 +190,23 @@ as a UTC instant without its offset.
 ## Tested
 
 A local fake BigQuery (OAuth, query jobs, table metadata and the Storage Write API) covers the
-protocol and failure cases: wrong offsets, refused appends and commits, and expired tokens. Before
-release, live tests ran against a real BigQuery project. They covered every Storage Write API call
-SQLLoad makes, and loads under `append` (once, again, and in two batches), `replace` (twice, and
-ignoring a new column) and `delete_insert` (twice), with no staging tables left afterwards. A
-Postgres source was also loaded with `merge` and `replace`.
+protocol and failure cases: wrong offsets, refused appends and commits, and expired tokens.
+
+For 0.59.0, a live round ran against a real BigQuery project, in one dataset dropped afterwards:
+
+- **Sources and strategies:** Postgres, local Parquet files, Python rows, Python Arrow and
+  `sl.http` JSON pages, each with `append`, `replace`, `delete_insert` and `merge` where `plan`
+  accepts it, 19 tables in all, checked against their sources after every round.
+- **Rounds:** a first load; a re-run; then new and updated rows, an added column, a decimal
+  widened in place from `numeric(20,2)` to `numeric(24,2)` holding a 19-digit value, and a new day
+  of files carrying a new column.
+- **Incremental reads:** cursors on `updated_at`, with NULL cursors included by `merge`.
+- **Contracts:** `contract diff`, `contract diff --source` (an unloaded column reported) and
+  `contract generate`.
+- **A failed load:** a Python table that raised after two batches committed no rows and left no
+  staging table.
+- **Deletes:** the key scan and tombstone rounds of `deletes` and `deletes_from`, soft and hard,
+  matched on every step, with a key that can't be NULL and with a text key holding a NULL row.
+- **Rebuilds:** the statement a type change that rewrites a table renders, such as `int` to
+  `float`, kept a `NUMERIC(20,2)` column as it was, turned a `BIGNUMERIC(20,2)` made outside
+  SQLLoad into `NUMERIC(20,2)` with its values, and rewrote a table with a `STRUCT` column.

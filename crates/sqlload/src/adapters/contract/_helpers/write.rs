@@ -177,16 +177,19 @@ pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
             .collect::<Vec<String>>()
             .join(" AND ")
     };
-    let applies = |row: &str| -> String {
+    let cursor_of = |row: &str| -> String {
         let cursors: Vec<String> = tombstones
             .cursor
             .iter()
             .map(|column| name(row, column))
             .collect();
-        let cursor = match cursors.as_slice() {
+        match cursors.as_slice() {
             [one] => one.clone(),
             _ => format!("COALESCE({})", cursors.join(", ")),
-        };
+        }
+    };
+    let applies = |row: &str| -> String {
+        let cursor = cursor_of(row);
         let deleted_at = name("__tombstone", &tombstones.deleted_at);
         format!(
             "{} AND ({cursor} IS NULL OR {deleted_at} >= {cursor})",
@@ -225,18 +228,34 @@ pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
                 })
                 .collect();
             let column = adapter.render_identifier(CDC_DELETED_AT_COLUMN);
-            format!(
-                "UPDATE {target} SET {column} = __marks.{column} FROM (SELECT {}, CAST(MAX({}) AS {}) AS {column} FROM {qualified} AS __row JOIN {tombstone_table} AS __tombstone ON {} WHERE {} GROUP BY {}) AS __marks WHERE {} AND {}",
-                selected.join(", "),
-                name("__tombstone", &tombstones.deleted_at),
-                adapter
-                    .render_loader_logical_type(&ColumnType::TimestampTz)
-                    .sql,
-                applies("__row"),
-                unmarked("__row"),
-                row_keys.join(", "),
-                keys("__target", "__marks"),
-                condition
+            let deleted_at = name("__tombstone", &tombstones.deleted_at);
+            let marks = |latest: &str| {
+                format!(
+                    "(SELECT {}, CAST(MAX({deleted_at}) AS {}) AS {column}{latest} FROM {qualified} AS __row JOIN {tombstone_table} AS __tombstone ON {} WHERE {} GROUP BY {}) AS __marks",
+                    selected.join(", "),
+                    adapter
+                        .render_loader_logical_type(&ColumnType::TimestampTz)
+                        .sql,
+                    applies("__row"),
+                    unmarked("__row"),
+                    row_keys.join(", "),
+                )
+            };
+            let cursor = cursor_of("__target");
+            let matched = format!(
+                "{} AND ({cursor} IS NULL OR __marks.__sqlload_latest >= {cursor})",
+                unmarked("__target")
+            );
+            adapter.render_soft_tombstones(
+                (&target, &column),
+                (
+                    (
+                        &marks(""),
+                        &marks(&format!(", MAX({deleted_at}) AS __sqlload_latest")),
+                    ),
+                    &keys("__target", "__marks"),
+                ),
+                (&condition, &matched),
             )
         }
         false => format!("DELETE FROM {target} WHERE {condition}"),

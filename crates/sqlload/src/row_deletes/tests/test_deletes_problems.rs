@@ -35,7 +35,7 @@ fn given_a_tables_deletes_when_validating_it_then_only_merges_of_listed_keys_int
             expected_problems: &[
                 "deletes marks the rows whose unique_key the source no longer holds, which needs write_strategy = \"merge\"; append keeps no key to match. Fix: remove deletes, or merge on a unique_key",
                 "deletes reads every key of the source table to find the ones it no longer holds, which only database and warehouse sources list; a files source can't. Fix: remove deletes",
-                "deletes marks rows of the table in place with statements SQLLoad has run only on DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on ClickHouse rather than run them untested. Fix: remove deletes, or load into DuckDB, MotherDuck, Postgres or Snowflake",
+                "deletes marks rows of the table in place with statements SQLLoad has run only on BigQuery, Databricks, DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on ClickHouse rather than run them untested. Fix: remove deletes, or load into BigQuery, Databricks, DuckDB, MotherDuck, Postgres or Snowflake",
                 "deletes would leave the child tables' rows of each row it removes or marks. Fix: drop unnest, or remove deletes",
             ],
         },
@@ -47,7 +47,7 @@ fn given_a_tables_deletes_when_validating_it_then_only_merges_of_listed_keys_int
             warehouse: Warehouse::Parquet,
             unnests: false,
             expected_problems: &[
-                "deletes marks rows of the table in place with statements SQLLoad has run only on DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on Parquet files rather than run them untested. Fix: remove deletes, or load into DuckDB, MotherDuck, Postgres or Snowflake",
+                "deletes marks rows of the table in place with statements SQLLoad has run only on BigQuery, Databricks, DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on Parquet files rather than run them untested. Fix: remove deletes, or load into BigQuery, Databricks, DuckDB, MotherDuck, Postgres or Snowflake",
             ],
         },
         DeletesProblemsTestCase {
@@ -60,26 +60,22 @@ fn given_a_tables_deletes_when_validating_it_then_only_merges_of_listed_keys_int
             expected_problems: &[],
         },
         DeletesProblemsTestCase {
-            description: "Databricks hasn't run the mark statements yet, so plan refuses them",
+            description: "Databricks has run the mark statements, so a merge into it takes deletes",
             deletes: Some(Deletes::Hard),
             strategy: WriteStrategy::Merge,
             kind: SourceKind::Snowflake,
             warehouse: Warehouse::Databricks,
             unnests: false,
-            expected_problems: &[
-                "deletes marks rows of the table in place with statements SQLLoad has run only on DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on Databricks rather than run them untested. Fix: remove deletes, or load into DuckDB, MotherDuck, Postgres or Snowflake",
-            ],
+            expected_problems: &[],
         },
         DeletesProblemsTestCase {
-            description: "BigQuery hasn't run the mark statements yet, so plan refuses them",
+            description: "BigQuery has run the mark statements, so a merge into it takes deletes",
             deletes: Some(Deletes::Hard),
             strategy: WriteStrategy::Merge,
             kind: SourceKind::Snowflake,
             warehouse: Warehouse::BigQuery,
             unnests: false,
-            expected_problems: &[
-                "deletes marks rows of the table in place with statements SQLLoad has run only on DuckDB, MotherDuck, Postgres and Snowflake so far, so it refuses them on BigQuery rather than run them untested. Fix: remove deletes, or load into DuckDB, MotherDuck, Postgres or Snowflake",
-            ],
+            expected_problems: &[],
         },
         DeletesProblemsTestCase {
             description: "Postgres has run them",

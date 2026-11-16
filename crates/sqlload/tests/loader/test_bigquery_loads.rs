@@ -51,10 +51,10 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BASE
         },
         BigQueryLoadTestCase {
-            description: "replace: rows stream into a build table, which replaces the table in one statement, its description set again",
+            description: "replace: rows stream into a build table, which replaces the table in one statement LIKE itself, so column parameters stay, its description set again",
             settings: "write_strategy = \"replace\"",
             expected_sent: &[
-                "CREATE OR REPLACE TABLE `raw`.`orders` AS SELECT * FROM `raw`.`orders__sqlload_staging_",
+                "CREATE OR REPLACE TABLE `raw`.`orders` LIKE `raw`.`orders__sqlload_staging_",
                 "ALTER TABLE `raw`.`orders` SET OPTIONS (description = 'Test table.')",
             ],
             ..BASE
