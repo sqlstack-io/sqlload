@@ -439,25 +439,19 @@ pub(crate) async fn replan_columns(
 
 /// How a table's columns are read: by name (files and Python tables, whose batches carry the names) or by Postgres expression.
 pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<String>> {
+    let system = |name: &str| {
+        let source = spec.warehouse_source.as_ref();
+        source.is_some_and(|source| source.system == name)
+    };
     match (&spec.files, &spec.python) {
         (Some(_), _) | (_, Some(_)) => files_read_columns(spec),
-        (None, None)
-            if spec
-                .warehouse_source
-                .as_ref()
-                .is_some_and(|source| source.system == BIGQUERY_SOURCE) =>
-        {
+        (None, None) if system(BIGQUERY_SOURCE) => {
             crate::bigquery_source::main::read_columns::read_columns(
                 &selected_columns(spec),
                 &spec.pinned,
             )
         }
-        (None, None)
-            if spec
-                .warehouse_source
-                .as_ref()
-                .is_some_and(|source| source.system == DATABRICKS_SOURCE) =>
-        {
+        (None, None) if system(DATABRICKS_SOURCE) => {
             crate::databricks_source::main::read_columns::read_columns(
                 &selected_columns(spec),
                 &spec.pinned,
