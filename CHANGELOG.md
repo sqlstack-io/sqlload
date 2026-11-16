@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.60.0](https://github.com/sqlstack-io/sqlload/compare/v0.59.0...v0.60.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **clickhouse:** on ClickHouse, a merge or append read in windows or cursor order commits at the end of its run instead of after each window or batch, and a merge also commits every 10 million waiting rows. A stopped run publishes nothing after its last commit point, and the next run reads those rows again; split long backfills with --end-cursor.
+
+### Features
+
+* **clickhouse:** publish a merge or append read in windows or cursor order once per run, a merge also every 10 million rows ([aa07ba3](https://github.com/sqlstack-io/sqlload/commit/aa07ba3302c0036b756f65ec9ab6c79c2c1e2d11))
+
+
+### Performance Improvements
+
+* **clickhouse:** fill a partitioned replace or --reload through one sorted insert, so a large first load makes about one part per partition ([aa07ba3](https://github.com/sqlstack-io/sqlload/commit/aa07ba3302c0036b756f65ec9ab6c79c2c1e2d11))
+
+
+### Documentation
+
+* **databricks:** ODBC, BigQuery and SFTP sources into Databricks tested live ([#281](https://github.com/sqlstack-io/sqlload/issues/281)) ([7f0d6d8](https://github.com/sqlstack-io/sqlload/commit/7f0d6d88e199ad68427c5854020043841a045171))
+
 ## [0.59.0](https://github.com/sqlstack-io/sqlload/compare/v0.58.0...v0.59.0) (2026-11-16)
 
 
