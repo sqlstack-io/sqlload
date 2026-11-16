@@ -267,7 +267,10 @@ nightly `--sync-deletes`, so SQLLoad keeps no schedule.
   fails the table and marks nothing.
 - `--sync-deletes` fails `plan` when none of the selected tables sets `deletes`.
 - A table with `unnest`, or one sharing its destination with other tables through
-  `constant_columns`, can't take `deletes`. Neither can a ClickHouse or files target.
+  `constant_columns`, can't take `deletes`.
+- From 0.55.0, `deletes` and `deletes_from` load only into DuckDB and Postgres, the targets their mark
+  statements have run on. `plan` refuses them on MotherDuck, Snowflake, Databricks, BigQuery,
+  ClickHouse and files targets rather than run untested statements.
 
 `plan` shows the cost on the table's line, and the result shows how many rows were marked:
 
@@ -295,10 +298,11 @@ deletes = "soft"
 deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
 ```
 
-- Every load, with no flag, appends the new tombstones to a table of their own beside the merged
+- Every load, with no flag, loads the new tombstones into a table of their own beside the merged
   one, `<table>__sqlload_deletes`: only the `unique_key` columns and `deleted_at`, read from where
-  the last load stopped, as for any `cursor_column`. `plan` lists it like any other table. It keeps
-  every tombstone; trim it yourself if it grows too big.
+  the last load stopped, as for any `cursor_column`. From 0.55.0 it loads by `delete_insert`, so the
+  range a load reads again replaces its rows rather than repeating them. `plan` lists it like any
+  other table. It keeps every tombstone; trim it yourself if it grows too big.
 - The tombstone table loads first. Then, once the merge commits, the rows whose key a tombstone
   holds, deleted at or after the row's own `cursor_column` (a coalesced one's first non-NULL
   column), are marked as `deletes` says. A tombstone read in a run marks rows in that run.
@@ -308,8 +312,14 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
   checked each time. Marking again changes nothing.
 - A marked row the merge reads again, such as one at the cursor's maximum, is written by the merge
   and marked again in the same load, with the same time. Between the two it shows as live.
-- Tombstones are read after the latest `deleted_at` already loaded. A tombstone that becomes
-  visible later with an earlier time, such as one written by a long transaction, is not read.
+- Tombstones are read from the latest `deleted_at` already loaded. A tombstone that becomes
+  visible later with an earlier time, such as one written by a long transaction, is read only
+  with a `lookback` that reaches it: from 0.55.0,
+  `deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at", lookback = "1h" }`
+  reads the last hour again on every load. Set it longer than the source's longest transaction.
+- From 0.55.0, `plan` fails when `deleted_at` and the table's `cursor_column` don't compare
+  exactly: both must be timestamps with a time zone, both dates or timestamps without one, both
+  numbers, or both text.
 - The tombstone table must hold every `unique_key` column, under the same names; `plan` fails
   otherwise. `deletes_from` needs `deletes` and a `cursor_column`, and the tombstone table can't
   also be listed under `tables`. Under `deletes = "soft"` its `cursor_column` must be a timestamp;
@@ -319,7 +329,7 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
 $ sqlload plan
 …
 ├── raw.erp__stock_item                  merge (unique_key: company_no, item_no), then soft-deletes the rows whose key audit.deleted_items lists deleted at or after the row's updated_at (its tombstones load first)
-└── raw.erp__stock_item__sqlload_deletes  append (cursor: deleted_at)
+└── raw.erp__stock_item__sqlload_deletes  delete_insert (cursor: deleted_at)
 …
 $ sqlload load
 …

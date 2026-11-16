@@ -605,8 +605,8 @@ CREATE TABLE audit.deleted_items (id int8, reason text, deleted_at timestamptz N
 INSERT INTO public.items SELECT id, id * 10, at, at FROM (SELECT id, TIMESTAMPTZ '2026-11-01 00:00:00+00' + id * INTERVAL '1 hour' AS at FROM generate_series(1, 5) AS id) AS times;
 ";
 
-/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, never updated, so only its `created_at` (the coalesced cursor's second column) is after the tombstone, and it stays; a tombstone for item 6, which the table doesn't hold yet; item 6 arriving late, updated before its tombstone, so the next load marks it; and nothing new, so the merge reads item 6 again at the cursor's maximum and it is marked again the same.
-const TOMBSTONE_STEPS: [&str; 7] = [
+/// The tombstone steps, each the source's change: a first load; item 2 deleted and its tombstone recorded, read and applied in the same run; nothing new, so applying every tombstone again changes nothing; item 2 created again after its tombstone, never updated, so only its `created_at` (the coalesced cursor's second column) is after the tombstone, and it stays; a tombstone for item 6, which the table doesn't hold yet; item 6 arriving late, updated before its tombstone, so the next load marks it; nothing new, so the merge reads item 6 again at the cursor's maximum and it is marked again the same; and a tombstone for item 3 that becomes visible after item 6's later one loaded, which the day of `lookback` reads.
+const TOMBSTONE_STEPS: [&str; 8] = [
     "",
     "DELETE FROM public.items WHERE id = 2; INSERT INTO audit.deleted_items VALUES (2, 'gone', '2026-11-02 00:00:00+00')",
     "",
@@ -614,17 +614,18 @@ const TOMBSTONE_STEPS: [&str; 7] = [
     "INSERT INTO audit.deleted_items VALUES (6, 'gone', '2026-11-05 00:00:00+00')",
     "INSERT INTO public.items VALUES (6, 60, '2026-11-04 00:00:00+00', '2026-11-04 00:00:00+00')",
     "",
+    "INSERT INTO audit.deleted_items VALUES (3, 'late', '2026-11-04 12:00:00+00')",
 ];
 
-/// A project merging `public.items` from Postgres on `postgres_port` into `connection`'s `schema` by `coalesce(updated_at, created_at)` with `deletes` and `deletes_from` its tombstones in `audit.deleted_items`, by `deleted_at`.
+/// A project merging `public.items` from Postgres on `postgres_port` into `connection`'s `schema` by `coalesce(updated_at, created_at)` with `deletes` and `deletes_from` its tombstones in `audit.deleted_items`, by `deleted_at` with `lookback` (a TOML fragment such as `, lookback = "1d"`, or empty).
 pub(crate) fn tombstones_project(
     (connection, schema): (&str, &str),
     postgres_port: u16,
-    deletes: &str,
+    (deletes, lookback): (&str, &str),
 ) -> String {
     format!(
-        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = [\"updated_at\", \"created_at\"]\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\" }}\n",
-        connection, schema, deletes
+        "[connections.app_pg]\nkind = \"postgres\"\nhost = \"127.0.0.1\"\nport = {postgres_port}\nuser = \"{USER}\"\npassword = \"{PASSWORD}\"\ndatabase = \"app\"\n\n[connections.target]\n{}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{}\"\n\n[sources.app]\nkind = \"postgres\"\nconnection = \"app_pg\"\ninclude = [\"public.items\"]\n\n[sources.app.tables.\"public.items\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = [\"updated_at\", \"created_at\"]\ndeletes = \"{}\"\ndeletes_from = {{ table = \"audit.deleted_items\", cursor_column = \"deleted_at\"{} }}\n",
+        connection, schema, deletes, lookback
     )
 }
 
@@ -642,7 +643,7 @@ pub(crate) async fn tombstones_plan(
     let text = tombstones_project(
         ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
         postgres_port,
-        deletes,
+        (deletes, ""),
     );
     let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
@@ -666,7 +667,7 @@ pub(crate) async fn run_tombstones(
     let text = tombstones_project(
         (&target.connection, target.schema),
         postgres_port,
-        target.deletes,
+        (target.deletes, ", lookback = \"1d\""),
     );
     let project = described_project(&text).await?;
     let destinations = connect_targets(&project)
@@ -745,7 +746,7 @@ pub(crate) async fn run_tombstones(
     Ok(steps)
 }
 
-/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, each mark shown as its UTC date, then the tombstone table's own columns: item 2 marked with its tombstone's time in the run that read it, nothing more on the next, item 2 back, the late item 6 marked once it arrives, and marked again with the same time when read again.
+/// What each of [`TOMBSTONE_STEPS`] leaves under `deletes = "soft"`, each mark shown as its UTC date, then the tombstone table's own columns: item 2 marked with its tombstone's time in the run that read it, nothing more on the next, item 2 back, the late item 6 marked once it arrives, and marked again with the same time when read again, then item 3 marked by a tombstone visible late.
 pub(crate) fn soft_tombstone_steps() -> Vec<String> {
     [
         "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
@@ -755,6 +756,7 @@ pub(crate) fn soft_tombstone_steps() -> Vec<String> {
         "1:live,2:live,3:live,4:live,5:live | (tombstones: 0 rows soft-deleted)",
         "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
         "1:live,2:live,3:live,4:live,5:live,6:2026-11-05 | (tombstones: 1 row soft-deleted)",
+        "1:live,2:live,3:2026-11-04,4:live,5:live,6:2026-11-05 | (tombstones: 2 rows soft-deleted)",
         "tombstone columns: deleted_at,id",
     ]
     .map(str::to_owned)
@@ -771,6 +773,7 @@ pub(crate) fn hard_tombstone_steps() -> Vec<String> {
         "1,2,3,4,5 | (tombstones: 0 rows deleted)",
         "1,2,3,4,5 | (tombstones: 1 row deleted)",
         "1,2,3,4,5 | (tombstones: 1 row deleted)",
+        "1,2,4,5 | (tombstones: 2 rows deleted)",
         "tombstone columns: deleted_at,id",
     ]
     .map(str::to_owned)

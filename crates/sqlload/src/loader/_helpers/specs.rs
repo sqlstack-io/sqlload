@@ -380,7 +380,7 @@ pub(crate) fn build_spec(
     problems.extend(deletes_problems(
         deletes,
         kind,
-        context.target.warehouse,
+        (context.target.warehouse, context.target.motherduck),
         unnests,
     ));
     let from = overrides.deletes_from.as_ref();

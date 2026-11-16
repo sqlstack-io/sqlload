@@ -7,6 +7,7 @@ pub(crate) struct DeletesProblemsTestCase {
     pub(crate) strategy: WriteStrategy,
     pub(crate) kind: SourceKind,
     pub(crate) warehouse: Warehouse,
+    pub(crate) motherduck: bool,
     pub(crate) unnests: bool,
     pub(crate) expected_problems: &'static [&'static str],
 }

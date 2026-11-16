@@ -53,9 +53,9 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         None
     }
 
-    /// Whether a merge table's `deletes` may mark its rows in place (`load --sync-deletes`): every SQL warehouse that updates and deletes rows by a correlated subquery.
+    /// Whether a merge table's `deletes` (`load --sync-deletes`, `deletes_from`) may mark its rows in place: only on targets where its mark statements have run, so plan refuses it elsewhere rather than run them untested.
     fn marks_deleted_rows(&self) -> bool {
-        self.runs_sql()
+        false
     }
 
     /// Whether a `postgres_cdc` source applying its changes by `apply` may load into the destination: every SQL warehouse its changes have been applied to live; a files target only as a changelog, having no tables to merge into.
