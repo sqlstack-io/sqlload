@@ -685,11 +685,13 @@ on_empty = "skip"
 
 - The table is skipped and the load exits 0, with the table under `skipped` in `plan` and in
   `load --json`'s `plan.skipped`: `no files to load in orders/ (on_empty = "skip")`. The table is
-  left as it is, even before its first load.
+  left as it is. On a `filesystem` connection that holds even before its first load.
 - Only an existing folder holding no file at all (hidden ones aside) counts as empty. A missing
   folder, one that can't be read, and one holding files of another format or that don't match
-  `path_columns` still fail. On S3 a prefix exists only while it holds files, so an empty one
-  skips too.
+  `path_columns` still fail.
+- S3 and SFTP list a folder that doesn't exist as empty, so SQLLoad can't tell a mistyped `path`
+  from an empty one there. From 0.55.0, on those connections `on_empty = "skip"` skips an empty
+  folder only once its table exists; before its first load it fails, naming the path.
 - `after_load` already skips a folder it emptied once its table exists, without `on_empty`.
 
 ## Columns

@@ -311,7 +311,9 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
   arriving late, after its tombstone loaded, is marked by the next load, as every tombstone is
   checked each time. Marking again changes nothing.
 - A marked row the merge reads again, such as one at the cursor's maximum, is written by the merge
-  and marked again in the same load, with the same time. Between the two it shows as live.
+  and marked again in the same load, with the same time. Between the two it shows as live: under
+  `deletes = "hard"` it is back in the table from the merge's commit until the mark's. This happens
+  only while the source still holds a row its own tombstone says is deleted, such as a late row.
 - Tombstones are read from the latest `deleted_at` already loaded. A tombstone that becomes
   visible later with an earlier time, such as one written by a long transaction, is read only
   with a `lookback` that reaches it: from 0.55.0,

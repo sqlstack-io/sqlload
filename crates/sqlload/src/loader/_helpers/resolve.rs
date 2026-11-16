@@ -1478,8 +1478,16 @@ pub(crate) async fn found_sources<'a>(
             None => false,
         };
         let path = source.source.path.as_deref().unwrap_or_default();
+        let proves_folders = matches!(
+            project.connections.get(&source.source.connection),
+            Some(ConnectionConfig::Filesystem { .. })
+        );
         let problem = match (exists, shared, options.reload) {
             (false, _, _) if source.source.on_empty == OnEmpty::Fail => Some(drained.problem),
+            (false, _, _) if !proves_folders => Some(format!(
+                "[sources.{}]: no files to load in {path}, and {} was never loaded: an object store or SFTP server lists a folder that doesn't exist as empty, so on_empty = \"skip\" skips one only once its table exists. Fix: check the source's path and connection, or load once files arrive",
+                source.name, drained.table.table
+            )),
             (_, true, _) => Some(format!(
                 "[sources.{}]: no files to load in {path}, and other tables load into {} too: a load that cannot see this source could misread or remove its rows, so it fails until files come; run the others with --exclude {}",
                 source.name, drained.table.table, source.name
