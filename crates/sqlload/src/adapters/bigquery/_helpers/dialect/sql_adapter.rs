@@ -21,6 +21,11 @@ impl SqlAdapter for BigQuerySql {
         Some(300)
     }
 
+    /// The mark statements of `deletes` and `deletes_from` ran on BigQuery through every step of the container tests' key scans and tombstones, soft and hard.
+    fn marks_deleted_rows(&self) -> bool {
+        true
+    }
+
     /// Not yet: a later release applies changes to BigQuery once a live round has run them.
     fn captures_changes(&self, _apply: ChangeApply) -> bool {
         false
@@ -101,8 +106,9 @@ impl SqlAdapter for BigQuerySql {
         format!("ALTER TABLE {target} ALTER COLUMN {column} SET DATA TYPE {sql_type}")
     }
 
-    fn render_rebuild_table(&self, target: &str, select: &str) -> String {
-        format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}")
+    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized.
+    fn render_rebuild_table(&self, target: &str, (select, columns): (&str, &str)) -> String {
+        format!("CREATE OR REPLACE TABLE {target} ({columns}) AS SELECT {select} FROM {target}")
     }
 
     /// BigQuery's `DELETE` needs a `WHERE`.
@@ -113,7 +119,7 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
-    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
+    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
     fn render_swap(
         &self,
         target: &TableName,
@@ -125,7 +131,7 @@ impl SqlAdapter for BigQuerySql {
             self.render_qualified_name(build),
         );
         vec![
-            format!("CREATE OR REPLACE TABLE {old} AS SELECT * FROM {new}"),
+            format!("CREATE OR REPLACE TABLE {old} LIKE {new} AS SELECT * FROM {new}"),
             format!("DROP TABLE IF EXISTS {new}"),
         ]
     }

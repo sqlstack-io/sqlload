@@ -11,7 +11,17 @@ pub(crate) fn rebuild_statement<A: SqlAdapter + ?Sized>(
         .iter()
         .map(|column| rebuilt_column(adapter, column, rebuilt))
         .collect();
-    adapter.render_rebuild_table(target, &select.join(", "))
+    let columns: Vec<String> = live
+        .iter()
+        .map(|column| {
+            let sql_type = match rebuilt.iter().find(|(name, _)| *name == column.name) {
+                Some((_, sql_type)) => (*sql_type).to_owned(),
+                None => adapter.render_loader_logical_type(&column.column_type).sql,
+            };
+            format!("{} {sql_type}", adapter.render_exact_identifier(&column.name))
+        })
+        .collect();
+    adapter.render_rebuild_table(target, (&select.join(", "), &columns.join(", ")))
 }
 
 /// A select-list entry keeping `column`, cast when it is one of `rebuilt`.
