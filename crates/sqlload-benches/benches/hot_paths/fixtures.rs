@@ -456,7 +456,8 @@ pub(crate) fn drifting_batches(pages: u64, rows: u64) -> Vec<RecordBatch> {
                     }
                 }
             }
-            columns_batch(gather(&rows), false).unwrap_or_else(|error| panic!("a page converts: {error}"))
+            columns_batch(gather(&rows), false)
+                .unwrap_or_else(|error| panic!("a page converts: {error}"))
         })
         .collect()
 }
