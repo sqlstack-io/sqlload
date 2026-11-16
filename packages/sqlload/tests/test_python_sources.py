@@ -582,6 +582,18 @@ def test_given_a_dict_column_of_mixed_formats_in_paris_when_loading_with_parse_t
 	]
 
 
+def test_given_bytes_in_dict_rows_when_loading_then_they_load_as_a_blob_column(tmp_path: Path) -> None:
+	tables = """
+	@shop.table(description='Blobs.')
+	def blobs(ctx):
+	    yield {'id': 1, 'data': b'\\x00\\xffhi'}
+	    yield {'id': 2, 'data': None}
+	"""
+	project = make_project(tmp_path, DUCKDB_PROJECT, tables)
+	load(project)
+	assert query(project, 'SELECT id, typeof(data), data FROM "RAW".shop__blobs ORDER BY id') == [(1, "BLOB", b"\x00\xffhi"), (2, "BLOB", None)]
+
+
 def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column_but_the_pinned_one_loads_as_text(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', infer_types=False, columns={'amount': 'decimal(18,2)'})(rows)\n")
 	give(

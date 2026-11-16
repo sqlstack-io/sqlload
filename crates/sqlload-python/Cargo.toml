@@ -25,6 +25,7 @@ odbc = ["sqlload/odbc"]
 arrow-array.workspace = true
 arrow-pyarrow.workspace = true
 arrow-schema.workspace = true
+base64.workspace = true
 chrono-tz.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true

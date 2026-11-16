@@ -5753,6 +5753,7 @@ dependencies = [
  "arrow-array",
  "arrow-pyarrow",
  "arrow-schema",
+ "base64 0.22.1",
  "chrono-tz",
  "pyo3",
  "serde_json",

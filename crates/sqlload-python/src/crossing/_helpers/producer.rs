@@ -240,7 +240,7 @@ impl<'py> Producer<'py> {
     }
 }
 
-/// orjson's `dumps` and its options (numpy values as numbers, `str()` for unknown types, and a `Decimal`, `date` or `datetime` refused so its batch is walked and keeps its type) when dicts cross serialised and orjson is installed; without it they are walked.
+/// orjson's `dumps` and its options (numpy values as numbers, `str()` for unknown types, and a `Decimal`, `date`, `datetime` or bytes refused so its batch is walked and keeps its type) when dicts cross serialised and orjson is installed; without it they are walked.
 fn orjson_dumps(
     py: Python<'_>,
     crossing: DictCrossing,

@@ -29,6 +29,8 @@ pub enum Cell {
     TimestampNtz(i64),
     /// A finite Python `Decimal`, as fixed-point text (`-12.50`).
     Decimal(String),
+    /// Python `bytes`, `bytearray` or `memoryview`; base64 text in a column that also holds text.
+    Binary(Vec<u8>),
 }
 
 /// Yielded rows gathered column by column: column names in first-seen order and one cell per row in each.
@@ -80,6 +82,7 @@ impl RowColumns {
                         | Cell::Text(text)
                         | Cell::Json(text)
                         | Cell::Decimal(text) => text.len(),
+                        Cell::Binary(bytes) => bytes.len(),
                         Cell::Null
                         | Cell::Bool(_)
                         | Cell::Int(_)

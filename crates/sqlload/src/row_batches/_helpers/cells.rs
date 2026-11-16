@@ -1,13 +1,15 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    BooleanBuilder, Date32Builder, Decimal128Builder, Float64Builder, Int64Builder, StringBuilder,
-    TimestampMicrosecondBuilder,
+    BinaryBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float64Builder, Int64Builder,
+    StringBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::Float64Type;
 use arrow_array::{Array, ArrayRef, NullArray, TimestampMicrosecondArray};
 use arrow_schema::{DataType, Field};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use chrono::DateTime;
 
 use crate::column_types::constants::MAX_DECIMAL_PRECISION;
@@ -202,6 +204,14 @@ pub(crate) fn column_array(
                 Err(_) => text_array(cells),
             }
         }
+        Some(ColumnType::Binary) => {
+            let mut builder = BinaryBuilder::with_capacity(cells.len(), cells.len() * 16);
+            cells.iter().for_each(|cell| match cell {
+                Cell::Binary(bytes) => builder.append_value(bytes),
+                _ => builder.append_null(),
+            });
+            Arc::new(builder.finish())
+        }
         Some(_) => text_array(cells),
     }
 }
@@ -229,6 +239,7 @@ fn text_array(cells: Vec<Cell>) -> ArrayRef {
                     .map(|time| time.naive_utc().format("%Y-%m-%dT%H:%M:%S%.f").to_string())
                     .unwrap_or_default(),
             ),
+            Cell::Binary(bytes) => builder.append_value(STANDARD.encode(bytes)),
         }
     }
     Arc::new(builder.finish())
@@ -248,6 +259,7 @@ fn cell_type(cell: &Cell, timestamp: bool) -> Option<ColumnType> {
         Cell::Date(_) => Some(ColumnType::Date),
         Cell::TimestampNtz(_) => Some(ColumnType::TimestampNtz),
         Cell::Decimal(text) => Some(decimal_type(text)),
+        Cell::Binary(_) => Some(ColumnType::Binary),
     }
 }
 
