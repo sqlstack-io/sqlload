@@ -293,7 +293,7 @@ write_strategy = "replace"
                 catalog_project(&connection_string, test_case.source, &database),
             )
             .map_err(|error| error.to_string())?;
-            let (succeeded, output, calls) = run_traced(&config, &["plan"])?;
+            let (succeeded, output, calls) = run_traced(&config, &["plan", "-v"])?;
             let (expected_success, expected_texts) = test_case.expected_output;
             assert_eq!(
                 calls, test_case.expected_calls,
