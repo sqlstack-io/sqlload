@@ -6,6 +6,7 @@ pub(in crate::adapters) mod _kept_row_ids;
 pub(in crate::adapters) mod _keyed_merge;
 pub(in crate::adapters) mod _older_rows;
 pub(in crate::adapters) mod _ranked_source;
+pub(in crate::adapters) mod _rebuilt_in_place;
 pub(in crate::adapters) mod _rekeyed_row_ids;
 pub mod bound_parameter;
 pub mod cursor_bound;

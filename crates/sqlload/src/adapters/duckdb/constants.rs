@@ -16,3 +16,7 @@ pub const EXTENSION_EXCEPTION: &str = "threw an exception: ";
 pub const UNLOADED_BATCH_ROWS: i64 = 1 << 48;
 /// The `_sqlload_row` span of one unloaded file in a batch (2^32).
 pub const UNLOADED_FILE_ROWS: i64 = 1 << 32;
+/// MotherDuck's server version, such as `v1.5.6-2026-11-382`.
+pub const MOTHERDUCK_VERSION_QUERY: &str = "SELECT md_version()";
+/// The first DuckDB major version that shreds a VARIANT column's common fields into columns, so queries on them are fast.
+pub const SHREDDING_DUCKDB_MAJOR: u32 = 2;

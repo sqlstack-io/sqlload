@@ -113,6 +113,20 @@ pub(crate) struct FilesSettingsChangeTestCase {
     pub(crate) expected_result: &'static str,
 }
 
+/// A files source loaded once into a DuckDB target with target settings, such as `json_type`.
+pub(crate) struct TargetSettingsFilesTestCase {
+    pub(crate) description: &'static str,
+    /// TOML added under `[targets.dev]`.
+    pub(crate) target_settings: &'static str,
+    /// Source settings after its `path`, starting with its format.
+    pub(crate) source_settings: &'static str,
+    /// The file (name, contents) the load reads.
+    pub(crate) file: (&'static str, &'static str),
+    /// A query on the DuckDB destination after the load, and its expected single text result.
+    pub(crate) check_query: &'static str,
+    pub(crate) expected_result: &'static str,
+}
+
 /// One project with constant columns planned and loaded once on a fresh Postgres.
 pub(crate) struct ConstantLoadTestCase {
     pub(crate) description: &'static str,

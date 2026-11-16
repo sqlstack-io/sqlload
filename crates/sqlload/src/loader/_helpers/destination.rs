@@ -33,7 +33,7 @@ use crate::files_source::constants::{
 use crate::files_source::main::footer_columns::footer_columns;
 use crate::files_source::main::read_footers::read_footers;
 use crate::files_source::models::{DataFile, LoadedFile};
-use crate::files_source::models::{FileColumn, StoredRead};
+use crate::files_source::models::{FileColumn, SourceFormat, StoredRead};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
@@ -491,6 +491,27 @@ pub(crate) fn files_read_as(
         .filter(|name| !filled.contains(&name.as_str()))
         .collect();
     (columns, inferred)
+}
+
+/// Whether unpinned column `name` of `column_type` reads as `text` under `infer_types = false`: a scalar SQLLoad's files or Sheets reader would type by inference (Parquet, a `transform`'s output and columns filled from the path or file keep their types).
+pub(crate) fn read_as_text(spec: &TableSpec, name: &str, column_type: &ColumnType) -> bool {
+    let reader_inferred = match (&spec.files, &spec.sheet) {
+        (Some(files), _) => {
+            files.encoding.format != SourceFormat::Parquet
+                && files.transform.is_none()
+                && !files
+                    .partition_types
+                    .iter()
+                    .any(|(partition, _)| partition == spec.source_table.spelling(name))
+        }
+        (None, Some(_)) => true,
+        (None, None) => false,
+    };
+    !spec.infer_types
+        && reader_inferred
+        && !matches!(column_type, ColumnType::Json | ColumnType::Array(_))
+        && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
+            .contains(&spec.source_table.spelling(name))
 }
 
 /// The columns of `columns` SQLLoad's reader keeps at nanoseconds for `spec`'s warehouse: those the files store at nanoseconds, unless pinned or `live` holds fewer digits.

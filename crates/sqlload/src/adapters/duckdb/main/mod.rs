@@ -10,3 +10,4 @@ pub(in crate::adapters) mod _pull_files;
 pub(in crate::adapters) mod _query_text;
 pub(in crate::adapters) mod _query_texts;
 pub(in crate::adapters) mod _table_shape;
+pub(in crate::adapters) mod _variant_problems;

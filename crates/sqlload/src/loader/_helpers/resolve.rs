@@ -42,7 +42,7 @@ use crate::postgres_source::models::SourceTable;
 use crate::project::main::config_at::config_at;
 use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
-    ConfigLines, ConnectionConfig, ConstantColumns, NewTables, NullCursor, PathsSetting,
+    ConfigLines, ConnectionConfig, ConstantColumns, JsonType, NewTables, NullCursor, PathsSetting,
     ProjectConfig, RenameSetting, SendMode, SourceConfig, SourceKind, TableOverride, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
@@ -601,6 +601,8 @@ pub(crate) struct ResolvedTarget {
     pub(crate) send: SendMode,
     /// Where `send = "at_commit"` holds a commit's rows.
     pub(crate) staging_dir: Option<std::path::PathBuf>,
+    /// `json_type = "variant"`: `json` columns are DuckDB `VARIANT` columns.
+    pub(crate) variant_json: bool,
 }
 
 /// What each table of an `odbc` source reads the primary key its driver reports for: a merge on `unique_key = "{primary_key}"` merges on it; any other merge's plan notes whether it is the same key, a table without a `write_strategy` is suggested one by it, and a ClickHouse table (or one whose target can't be found) is sorted by it unless it sets its own key. Nothing else reads it, so the catalog doesn't ask the driver for it.
@@ -677,6 +679,7 @@ pub(crate) fn source_target(
             compat: target.compat,
             send: target.send.unwrap_or(SendMode::PerBatch),
             staging_dir: target.staging_dir.clone(),
+            variant_json: false,
         });
     }
     let schema = source
@@ -709,6 +712,7 @@ pub(crate) fn source_target(
             },
         ),
         staging_dir: target.staging_dir.clone(),
+        variant_json: target.json_type == Some(JsonType::Variant),
     })
 }
 

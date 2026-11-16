@@ -13,6 +13,8 @@ pub struct DuckDbDestination {
     pub ddl: Arc<tokio::sync::Mutex<()>>,
     /// A MotherDuck database (`md:`), which only takes Arrow batches: it never reads files itself.
     pub motherduck: bool,
+    /// The version of Python's duckdb package the MotherDuck bridge runs, such as `1.5.6`; empty for the bundled DuckDB.
+    pub bridge_duckdb: String,
 }
 
 /// Where a destination's SQL runs.

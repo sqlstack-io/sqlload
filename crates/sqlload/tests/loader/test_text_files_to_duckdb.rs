@@ -6,8 +6,8 @@ use crate::helpers::{
     run_sqlload, run_text_files_scenario, seaweedfs_store, words, zstd,
 };
 use crate::test_types::{
-    FilesSettingsChangeTestCase, PipedOutputTestCase, TextFile, TextFilesRun,
-    TextFilesScenarioTestCase,
+    FilesSettingsChangeTestCase, PipedOutputTestCase, TargetSettingsFilesTestCase, TextFile,
+    TextFilesRun, TextFilesScenarioTestCase,
 };
 
 const EVENTS_NOV_3: TextFile = TextFile {
@@ -556,6 +556,68 @@ fn given_a_loaded_csv_table_when_infer_types_turns_off_then_plan_shows_each_type
             "{}:\n{first}\n{plan}\n{second}",
             test_case.description
         );
+        assert_eq!(
+            duckdb_text(&root.join("out.duckdb"), test_case.check_query)?,
+            test_case.expected_result,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_json_type_variant_on_a_duckdb_target_when_loading_json_files_then_objects_load_as_variant_objects()
+-> Result<(), String> {
+    let test_cases = [
+        TargetSettingsFilesTestCase {
+            description: "an NDJSON file's nested object loads as a VARIANT object",
+            target_settings: "json_type = \"variant\"\n",
+            source_settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
+            file: (
+                "a.ndjson",
+                "{\"id\":1,\"meta\":{\"user\":{\"id\":42}}}\n{\"id\":2,\"meta\":[1,2]}\n",
+            ),
+            check_query: "SELECT string_agg(id || ':' || variant_typeof(meta) || ':' || coalesce(CAST(meta.user.id AS VARCHAR), ''), ',' ORDER BY id) || '|' || (SELECT data_type FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'meta') FROM raw.events",
+            expected_result: "1:OBJECT(user):42,2:ARRAY(2):|VARIANT",
+        },
+        TargetSettingsFilesTestCase {
+            description: "shape = \"record\" loads each record as a VARIANT object",
+            target_settings: "json_type = \"variant\"\n",
+            source_settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\nshape = \"record\"\nrecord_column = \"payload\"\n",
+            file: ("a.ndjson", "{\"user\":{\"id\":42}}\n"),
+            check_query: "SELECT variant_typeof(payload) || ':' || CAST(payload.user.id AS VARCHAR) FROM raw.events",
+            expected_result: "OBJECT(user):42",
+        },
+        TargetSettingsFilesTestCase {
+            description: "without json_type the object stays JSON",
+            target_settings: "",
+            source_settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n",
+            file: ("a.ndjson", "{\"id\":1,\"meta\":{\"user\":{\"id\":42}}}\n"),
+            check_query: "SELECT data_type || ':' || (SELECT json_extract_string(meta, '$.user.id') FROM raw.events) FROM information_schema.columns WHERE table_name = 'events' AND column_name = 'meta'",
+            expected_result: "JSON:42",
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path();
+        let folder = root.join("drop/events");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        std::fs::write(folder.join(test_case.file.0), test_case.file.1)
+            .map_err(|error| error.to_string())?;
+        let config = root.join("sqlload.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[connections.files]\nkind = \"filesystem\"\nroot = \"{root}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{root}/out.duckdb\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n{}\n[sources.events]\nkind = \"files\"\ndescription = \"Events.\"\nconnection = \"files\"\npath = \"drop/events/\"\n{}",
+                test_case.target_settings,
+                test_case.source_settings,
+                root = root.display()
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        let (loaded, output) = run_sqlload(&config, &["load"], ("", ""))?;
+        assert!(loaded, "{}:\n{output}", test_case.description);
         assert_eq!(
             duckdb_text(&root.join("out.duckdb"), test_case.check_query)?,
             test_case.expected_result,

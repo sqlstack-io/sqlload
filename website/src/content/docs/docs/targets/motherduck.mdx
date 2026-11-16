@@ -73,11 +73,29 @@ loads on its own connection in the separate process, so one table's transaction 
 another's. If the process ends mid-load, the open batch isn't committed, the table fails, and the next
 load picks up from the table's committed rows.
 
+### VARIANT columns
+
+`json_type = "variant"` on the target loads `json` columns as `VARIANT`, as on
+[DuckDB](/docs/targets/duckdb/#variant-columns). It needs Python's `duckdb` 1.5 or later in the
+separate process; on 1.4, `plan` fails the table with the fix. MotherDuck's servers run DuckDB 1.5,
+which stores a `VARIANT` column whole rather than splitting its common fields into columns as DuckDB
+2.0 does, so queries on its fields can be much slower than on `JSON`. `plan` and `load` warn on
+each table with `VARIANT` columns, without changing the exit code:
+
+```console
+Warnings (1)
+└── cloud__customers
+    └── MotherDuck runs DuckDB 1.5, which stores VARIANT unshredded: queries on its fields can be much slower than on JSON until MotherDuck moves to DuckDB 2.0; json_type = "json" keeps JSON
+```
+
+The warning goes once MotherDuck's `md_version()` reports DuckDB 2.0. When MotherDuck reports no
+version, it goes by the separate process's `duckdb` and says so.
+
 ## Tested
 
 - Live, against a MotherDuck account on DuckDB 1.5.6: create, load, every write strategy, an
-  incremental load and a rerun that adds nothing, a new column, every portable type, and dropping
-  the test databases afterwards.
+  incremental load and a rerun that adds nothing, a new column, every portable type, `json_type = "variant"`
+  with its warning, and dropping the test databases afterwards.
 - Offline, on every change: every write strategy and portable type loaded through the separate
   process into a stand-in for MotherDuck and compared with the same load into DuckDB, an incremental
   rerun, the process ending mid-load, a value MotherDuck rejects, and the setup errors.

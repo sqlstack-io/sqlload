@@ -15,11 +15,9 @@ use crate::column_parse::main::column_parse::column_parse;
 use crate::column_parse::main::time_zone::time_zone;
 use crate::column_parse::models::ColumnParse;
 use crate::column_types::main::arrow_field::arrow_field;
+use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
-};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
@@ -28,6 +26,7 @@ use crate::files_source::models::{
 };
 use crate::load_naming::main::loaded_name::loaded_name;
 use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
+use crate::loader::_helpers::destination::read_as_text;
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::sources::sheet_rule;
@@ -391,6 +390,7 @@ pub(crate) fn build_spec(
     }
     problems.extend(after_load_problems(context, (strategy, keyed)));
     let layout = table_layout(settings, defaults);
+    let is_duckdb = sql_adapter(context.target.warehouse).parses_variant_pins();
     problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
     let parses = table_parses(overrides).unwrap_or_else(|found| {
         problems.extend(found);
@@ -435,6 +435,7 @@ pub(crate) fn build_spec(
         compat: nesting.compat,
         send: layered(&settings.send, &defaults.send).map_or(context.target.send, |(send, _)| send),
         staging_dir: context.target.staging_dir.clone(),
+        variant_json: context.target.variant_json,
         names: LoadedNames::default(),
         name_rules: NameRules::default(),
         listed: None,
@@ -459,7 +460,20 @@ pub(crate) fn build_spec(
             .pinned
             .iter()
             .filter(|(key, _)| !is_child_column(key, overrides))
-            .map(|(key, column_type)| (key.clone(), column_type.clone()))
+            .map(
+                |(key, column_type)| match is_duckdb && is_variant(column_type) {
+                    true => (key.clone(), ColumnType::Json),
+                    false => (key.clone(), column_type.clone()),
+                },
+            )
+            .collect(),
+        variants: columns
+            .pinned
+            .iter()
+            .filter(|(key, column_type)| {
+                is_duckdb && is_variant(column_type) && !is_child_column(key, overrides)
+            })
+            .map(|(key, _)| key.clone())
             .collect(),
         child_pinned: columns
             .pinned
@@ -1881,27 +1895,6 @@ pub(crate) fn files_read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Ve
         true => Ok(columns),
         false => Err(problems),
     }
-}
-
-/// Whether unpinned column `name` of `column_type` reads as `text` under `infer_types = false`: a scalar SQLLoad's files or Sheets reader would type by inference (Parquet, a `transform`'s output and columns filled from the path or file keep their types).
-fn read_as_text(spec: &TableSpec, name: &str, column_type: &ColumnType) -> bool {
-    let reader_inferred = match (&spec.files, &spec.sheet) {
-        (Some(files), _) => {
-            files.encoding.format != SourceFormat::Parquet
-                && files.transform.is_none()
-                && !files
-                    .partition_types
-                    .iter()
-                    .any(|(partition, _)| partition == spec.source_table.spelling(name))
-        }
-        (None, Some(_)) => true,
-        (None, None) => false,
-    };
-    !spec.infer_types
-        && reader_inferred
-        && !matches!(column_type, ColumnType::Json | ColumnType::Array(_))
-        && ![SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, SOURCE_ROW_COLUMN]
-            .contains(&spec.source_table.spelling(name))
 }
 
 /// The function and the host that run table `name`'s `transform` (its own, else its source's), when it has one the host imported.

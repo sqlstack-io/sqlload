@@ -171,6 +171,10 @@ pub struct TableSpec {
     pub auto_widen: bool,
     /// `infer_types = false`: columns a files, Sheets or Python dict source would type by inference load as `text` instead.
     pub infer_types: bool,
+    /// The target's `json_type = "variant"`: `json` columns are created as DuckDB `VARIANT` and load their values parsed.
+    pub variant_json: bool,
+    /// Columns pinned `native("VARIANT")` on a DuckDB or MotherDuck target: read as `json` (kept in `pinned` as `json`), loaded as `VARIANT`.
+    pub variants: Vec<String>,
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,
@@ -248,6 +252,18 @@ impl TableSpec {
     /// The zone the table's times without an offset are in: its `timezone`, else UTC.
     pub fn zone(&self) -> chrono_tz::Tz {
         self.timezone.map_or(chrono_tz::Tz::UTC, |(zone, _)| zone)
+    }
+
+    /// The type column `name` of `column_type` gets in the table: `native("VARIANT")` for `json` under the target's `json_type = "variant"` or a `native("VARIANT")` pin, else the type itself.
+    pub fn loaded_type(&self, name: &str, column_type: ColumnType) -> ColumnType {
+        match column_type {
+            ColumnType::Json
+                if self.variant_json || self.variants.iter().any(|pin| pin == name) =>
+            {
+                ColumnType::Native(crate::column_types::constants::VARIANT_TYPE.to_owned())
+            }
+            other => other,
+        }
     }
 }
 

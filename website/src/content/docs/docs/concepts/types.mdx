@@ -28,7 +28,7 @@ columns = { total = "decimal(18,2)", closes_at = "timestamp_tz" }
 | `time` | `TIME(9)` | `STRING` ¹ | `TIME` | `String` ¹ | `time` | `TIME` | `Time64` |
 | `timestamp_tz` | `TIMESTAMP_TZ(9)` | `TIMESTAMP` ¹ | `TIMESTAMP` ¹ | `DateTime64(6, 'UTC')` ¹ | `timestamptz` ¹ | `TIMESTAMP WITH TIME ZONE` ¹ | `Timestamp(UTC)` |
 | `timestamp_ntz` | `TIMESTAMP_NTZ(9)` | `TIMESTAMP_NTZ` | `DATETIME` | `DateTime64(6)` ¹ | `timestamp` | `TIMESTAMP` | `Timestamp` |
-| `json` | `VARIANT` | `VARIANT` | `JSON` | `String` ¹ | `jsonb` ¹ | `JSON` | `Utf8` |
+| `json` | `VARIANT` | `VARIANT` | `JSON` | `String` ¹ | `jsonb` ¹ | `JSON` ⁴ | `Utf8` |
 | `uuid` | `VARCHAR(36)` ¹ | `STRING` ¹ | `STRING` ¹ | `UUID` | `uuid` | `UUID` | `Utf8` |
 | `binary` | `BINARY` | `BINARY` | `BYTES` | `String` | `bytea` | `BLOB` | `Binary` |
 | `native("...")` | passed through | passed through | passed through | passed through | passed through | passed through | not available |
@@ -47,6 +47,8 @@ keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` len
 ² `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9.
 
 ³ From 0.27.0. See [Arrays](#arrays).
+
+⁴ From 0.54.0, `VARIANT` with `json_type = "variant"` on the target. See [VARIANT columns](/docs/targets/duckdb/#variant-columns).
 
 Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 

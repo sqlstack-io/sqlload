@@ -200,6 +200,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `compat` | warehouses | From 0.53.0. `sqlload` (default) or `dlt`: the names of the columns a load adds and of the child tables `unnest` makes. A source or table may override it. See [compat](/docs/concepts/nested-data/#compat). |
 | `send` | warehouses | From 0.53.0. `at_commit` or `per_batch`: whether each commit's rows wait locally and reach the target in one burst at the commit, or each batch goes as it's read. Default `at_commit` on Snowflake, Databricks and MotherDuck, `per_batch` elsewhere. A source or table may override it. See [Sending rows at commit](/docs/targets/#sending-rows-at-commit). |
 | `staging_dir` | warehouses | From 0.53.0. The folder `send = "at_commit"` holds rows in until their commit. Default: the system's temporary folder. |
+| `json_type` | DuckDB, MotherDuck | From 0.54.0. `json` (default) or `variant`: whether `json` columns are DuckDB `JSON` or `VARIANT`. See [VARIANT columns](/docs/targets/duckdb/#variant-columns). |
 
 ## Sources
 

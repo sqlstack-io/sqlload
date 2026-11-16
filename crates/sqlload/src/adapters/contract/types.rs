@@ -132,6 +132,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         ColumnType::Native(live.data_type.clone())
     }
 
+    /// Whether a column pinned `native("VARIANT")` reads as `json` and loads its values parsed into the warehouse's `VARIANT` (DuckDB), rather than passing the type through.
+    fn parses_variant_pins(&self) -> bool {
+        false
+    }
+
     /// Whether the warehouse changes a `live` column to `target` without rewriting the table.
     fn widens_in_place(&self, _live: &ColumnType, _target: &ColumnType) -> bool {
         false

@@ -120,6 +120,16 @@ pub(crate) fn target_problems(
                     "{place} loads into MotherDuck, which attaches every database in the account: name the database, in the target or its connection"
                 ));
             }
+            if target.json_type.is_some()
+                && !matches!(
+                    connection,
+                    ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }
+                )
+            {
+                problems.push(format!(
+                    "{place} json_type is for DuckDB and MotherDuck targets"
+                ));
+            }
             if kind == CLICKHOUSE_CONNECTION_KIND && target.database.is_some() {
                 problems.push(format!(
                     "{place} loads into ClickHouse, which has no level above its databases: drop database and name the ClickHouse database in loader_schema"
