@@ -109,6 +109,13 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
             ],
         },
         JobProblemsTestCase {
+            description: "key_path on a request filling two placeholders, one in the path and one in json_body",
+            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orgs/{org}/issues","method":"POST","json_body":{"ids":["{id}"]},"paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$.issueId"},"over":{"kind":"values","values":[{"org":1,"id":2}]}}"#,
+            expected_problems: &[
+                "key_path checks each record against the one key its request sent, but the request fills 2 placeholders (org, id), so a record could match the wrong one; fan out over one placeholder",
+            ],
+        },
+        JobProblemsTestCase {
             description: "indexes in sl.parent and key_path are fine",
             job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"last","path":"$.changes[-1].id","from":{"kind":"parent","levels":1}},{"name":"first","path":"$.items[0].to"}],"key_path":{"path":"$.keys[0]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
             expected_problems: &[],

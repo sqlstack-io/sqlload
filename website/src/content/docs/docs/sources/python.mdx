@@ -296,7 +296,8 @@ api.fan_out(
 - `key_path` on `fan_out` (a path from each record, or `sl.parent(...)`, in the
   [path syntax](#path-syntax)) fails the table when a
   record's key isn't among the keys its request sent (with `batch=`, the batch's), naming the key,
-  for an API that answers for other keys.
+  for an API that answers for other keys. From 0.55.0, a request filling more than one placeholder
+  refuses `key_path`, as a record's key could match another placeholder's value.
 - `sl.parent` and `sl.key` read an `sl.http` job's rows; `sl.json` and `sl.ndjson` refuse them, and
   `cells` can't combine with them.
 

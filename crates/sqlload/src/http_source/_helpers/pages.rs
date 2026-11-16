@@ -140,9 +140,14 @@ pub(crate) async fn paginate(
                 (text.into_bytes(), None)
             }
             (None, Some(document)) if reshaped => (
-                wrapped_rows(document, &rows, (request, own.as_ref()), context)
-                    .map_err(|error| format!("{shown}: {error}"))?
-                    .into_bytes(),
+                wrapped_rows(
+                    (document, &fetched.bytes),
+                    &rows,
+                    (request, own.as_ref()),
+                    context,
+                )
+                .map_err(|error| format!("{shown}: {error}"))?
+                .into_bytes(),
                 None,
             ),
             (Some(_), None) | (None, _) => (fetched.bytes, rows_path.clone()),

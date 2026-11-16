@@ -69,6 +69,8 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/cursor": self.cursor,
 			"/v1/link": self.link,
 			"/v1/flaky": self.flaky,
+			"/v1/last": lambda query: self.reply(200, {"sheets": [{"rows": [{"order_id": 0, "status": "stale"}]}, {"rows": ORDERS[int(query.get("page", "0")) * 3 :][:3]}], "links": [{"href": "/v1/broken"}, {"href": f"/v1/last?page={int(query.get('page', '0')) + 1}" if int(query.get("page", "0")) * 3 + 3 < len(ORDERS) else None}]}),
+			"/v1/grouped": lambda query: self.reply(200, {"groups": [{"name": "g1", "rows": [{"status": "paid", "order_id": 1, "customer": {"name": "Ann", "city": "Leeds"}}]}]}),
 			"/v1/nested": lambda query: self.reply(200, {"items": [{"order_id": 1, "customer": {"name": "Ann", "address": {"city": "Leeds", "geo": {"lat": 1}}}}]}),
 			"/v1/broken": lambda query: self.reply(500, {"message": f"down, token {TOKEN}"}),
 			"/v1/long": lambda query: self.reply(400, {"message": "x" * 280 + f" token {TOKEN} and {TOKEN}"}),
@@ -435,6 +437,7 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		("api.paginate('/gap', paginator=sl.page_number('p'), select='$.items', select_missing='empty')", ALL_ORDERS[:3]),
 		("api.paginate('/moved', paginator=sl.next_link('$.next'), select='$.items')", ALL_ORDERS),
 		("api.paginate('/sparse', paginator=sl.link_header())", ALL_ORDERS[:2]),
+		("api.paginate('/last', paginator=sl.next_link('$.links[-1].href'), select='$.sheets[-1].rows')", ALL_ORDERS),
 	],
 	ids=[
 		"next-link",
@@ -447,6 +450,7 @@ ALL_ORDERS = [(row["order_id"], row["status"]) for row in ORDERS]
 		"page-without-the-selected-key-ends-with-select-missing-empty",
 		"same-origin-redirect-then-relative-next-link",
 		"link-header-through-empty-pages",
+		"select-and-next-link-counting-from-the-end",
 	],
 )
 def test_given_a_paginated_endpoint_when_a_table_returns_its_job_then_every_page_loads(
@@ -1019,6 +1023,28 @@ def test_given_fields_and_keep_record_when_a_paginate_and_a_fan_out_load_then_ro
 	assert columns == ["order", "line_no"]
 	expected = sorted((n, line) for n, lines in ITEMS.items() if n != 4 for line in range(len(lines)))
 	assert query(project, 'SELECT "order", line_no FROM "RAW".shop__items ORDER BY 1, 2') == expected
+
+
+@pytest.mark.parametrize(
+	("options", "expected_columns"),
+	[
+		("", ["status", "order_id", "customer"]),
+		(", fields={'group': sl.parent('$.name'), 'status': '$.status', 'order_id': '$.order_id', 'customer': '$.customer'}, keep_record='raw'", ["group", "status", "order_id", "customer", "raw"]),
+	],
+	ids=["select-through-two-lists", "parent-field-and-kept-record"],
+)
+def test_given_rows_rebuilt_before_they_load_when_they_load_then_they_keep_the_api_key_order(
+	tmp_path: Path, api: ThreadingHTTPServer, options: str, expected_columns: list[str]
+) -> None:
+	project = make_project(tmp_path, api, f"@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/grouped', paginator=sl.single(), select='$.groups[*].rows[*]'{options})\n")
+	done = sqlload(project, "load")
+	assert done.returncode == 0, done.stdout + done.stderr
+	columns = [name for (name,) in query(project, "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__t' AND column_name NOT LIKE '\\_%' ESCAPE '\\' ORDER BY ordinal_position")]
+	assert columns == expected_columns
+	assert query(project, 'SELECT customer FROM "RAW".shop__t') == [('{"name":"Ann","city":"Leeds"}',)]
+	if options:
+		(raw,) = query(project, 'SELECT raw FROM "RAW".shop__t')[0]
+		assert list(json.loads(raw)) == ["status", "order_id", "customer"]
 
 
 @pytest.mark.parametrize(

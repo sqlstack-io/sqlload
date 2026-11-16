@@ -6,6 +6,7 @@ use serde_json::de::SliceRead;
 use serde_json::value::RawValue;
 
 use crate::row_batches::_helpers::json_seed::{ArraySeed, ObjectSeed, RowSink};
+use crate::row_batches::main::item_position::item_position;
 use crate::row_batches::models::RowColumns;
 
 type JsonDeserializer<'a> = serde_json::Deserializer<SliceRead<'a>>;
@@ -72,23 +73,20 @@ pub(crate) fn select_path<'a>(bytes: &'a [u8], path: &str) -> Result<&'a [u8], S
     let mut walked: Vec<&str> = Vec::new();
     for segment in path.split('.') {
         let listed = current.get().trim_start().starts_with('[');
-        let index = segment
-            .strip_prefix('[')
-            .and_then(|rest| rest.strip_suffix(']'))
-            .filter(|_| listed)
-            .map(str::parse::<usize>);
+        let index = segment.starts_with('[') && listed;
         current = match index {
-            Some(Err(_)) | None => {
+            false => {
                 let object: HashMap<String, &RawValue> = serde_json::from_str(current.get())
                     .map_err(|_| format!("path {path}: {} is not a JSON object", shown(&walked)))?;
                 object.get(segment).copied().ok_or_else(|| {
                     format!("path {path}: {} has no key {segment:?}", shown(&walked))
                 })?
             }
-            Some(Ok(index)) => {
+            true => {
                 let items: Vec<&RawValue> = serde_json::from_str(current.get())
                     .map_err(|_| format!("path {path}: {} is not a JSON list", shown(&walked)))?;
-                items.get(index).copied().ok_or_else(|| {
+                let at = item_position(segment, items.len());
+                at.and_then(|at| items.get(at)).copied().ok_or_else(|| {
                     format!("path {path}: {} has no item {segment}", shown(&walked))
                 })?
             }

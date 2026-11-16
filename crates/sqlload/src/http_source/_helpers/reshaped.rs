@@ -1,9 +1,9 @@
 //! Rows rebuilt before they load, for a `select` through more than one list, `sl.parent`, `sl.key` and `key_path`: each row wrapped with the values it takes from around it.
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::column_parse::models::BadValue;
-use crate::http_source::_helpers::selector::{rows_with_parents, step};
+use crate::http_source::_helpers::selector::{raw_rows, rows_with_parents, step};
 use crate::http_source::models::{KeyPath, Request, RowContext, Selector};
 use crate::row_batches::main::field_path::field_path;
 use crate::row_batches::main::projection::projection;
@@ -65,9 +65,9 @@ pub(crate) fn wrapped_projection(request: &Request) -> Result<Option<Projection>
     Ok(projected)
 }
 
-/// The rows `rows` selects in `document`, as a JSON array to load: each checked against the keys `context` says its request sent, when `request` has a `key_path`, then wrapped with the values its parent and key fields read (their paths parsed in `fields`, `request`'s own projection), or left as they are when the request names no fields.
+/// The rows `rows` selects in `document` (parsed from `bytes`), as a JSON array to load: each checked against the keys `context` says its request sent, when `request` has a `key_path`, then wrapped with the values its parent and key fields read (their paths parsed in `fields`, `request`'s own projection), or left as they are when the request names no fields. Each row is written as the API sent it, keeping its keys' order.
 pub(crate) fn wrapped_rows(
-    document: &Value,
+    (document, bytes): (&Value, &[u8]),
     rows: &Selector,
     (request, fields): (&Request, Option<&Projection>),
     context: &RowContext,
@@ -80,8 +80,17 @@ pub(crate) fn wrapped_rows(
         )),
         None => None,
     };
-    let mut loaded: Vec<Value> = Vec::new();
-    for (row, parents) in rows_with_parents(document, rows) {
+    let found = rows_with_parents(document, rows);
+    let texts = raw_rows(bytes, rows)?;
+    if texts.len() != found.len() {
+        return Err(format!(
+            "select found {} rows in the parsed response but {} in its text",
+            found.len(),
+            texts.len()
+        ));
+    }
+    let mut loaded = String::from("[");
+    for (number, ((row, parents), text)) in found.into_iter().zip(texts).enumerate() {
         if let (Some((key_path, segments)), Some(sent)) = (&key_path, &context.sent) {
             checked_key(
                 read_from(row, &parents, &key_path.from, segments),
@@ -89,23 +98,27 @@ pub(crate) fn wrapped_rows(
                 sent,
             )?;
         }
+        if number > 0 {
+            loaded.push(',');
+        }
         let Some(fields) = fields else {
-            loaded.push(row.clone());
+            loaded.push_str(text.get());
             continue;
         };
-        let mut wrapped = Map::new();
-        wrapped.insert(ROW_KEY.to_owned(), row.clone());
+        loaded.push_str(&format!("{{{}:{}", Value::from(ROW_KEY), text.get()));
         for (index, (spec, field)) in specs.iter().zip(&fields.fields).enumerate() {
             let value = match &spec.from {
                 FieldFrom::Row => continue,
                 FieldFrom::Parent { .. } => read_from(row, &parents, &spec.from, &field.path),
                 FieldFrom::Key { name } => context.key.get(name),
             };
-            wrapped.insert(wrapper_key(index), value.cloned().unwrap_or(Value::Null));
+            let value = value.cloned().unwrap_or(Value::Null);
+            loaded.push_str(&format!(",{}:{value}", Value::from(wrapper_key(index))));
         }
-        loaded.push(Value::Object(wrapped));
+        loaded.push('}');
     }
-    Ok(Value::Array(loaded).to_string())
+    loaded.push(']');
+    Ok(loaded)
 }
 
 fn wrapper_key(index: usize) -> String {
