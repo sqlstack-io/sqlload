@@ -13,7 +13,9 @@ components with the SQLQuack, SQLClean and SQLBuild websites.
 
 The header mark (`public/assets/mark.png`) is the SQLLoad icon cropped tight from
 `.github/sqlload-logo-light.png`, so it draws as large as the other product marks; the footer's
-SQLStack symbols are unchanged copies from `sqlstack-io/sqlstack`.
+SQLStack symbols are unchanged copies from `sqlstack-io/sqlstack`. The favicons (`public/favicon.png`,
+`favicon-dark.png` and `favicon.ico`) use the cylinder alone, without the speed lines, so it fills
+the square and stays legible at 16px; everywhere else uses the full mark.
 
 ## Domain
 
