@@ -9,6 +9,7 @@ use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
 };
+use crate::project::_helpers::tombstones::tombstone_problems;
 use crate::project::constants::{
     FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
     TABLE_PLACEHOLDER,
@@ -98,6 +99,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let mut problems: Vec<String> = Vec::new();
     let place = source_place(project, name);
     problems.extend(after_load_problems(project, (name, &place), source));
+    problems.extend(tombstone_problems(&place, source));
     let (kinds, expected): (&[&str], &str) = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => (&["postgres"], "postgres"),
         SourceKind::Snowflake => (&["snowflake"], "snowflake"),

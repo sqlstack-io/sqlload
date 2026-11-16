@@ -1495,7 +1495,7 @@ pub(crate) struct PhaseTimesTestCase {
     pub(crate) expected_phases: Vec<(String, String, String, bool, bool)>,
 }
 
-/// One target's run of the key scan steps: a merge of `public.items` with `deletes` set, each step's rows and what its load said.
+/// One target's run of the delete steps (key scans, or tombstones): a merge of `public.items` with `deletes` set, each step's rows and what its load said.
 pub(crate) struct SyncDeletesTestCase {
     pub(crate) description: &'static str,
     /// The target connection's TOML lines.
@@ -1505,11 +1505,11 @@ pub(crate) struct SyncDeletesTestCase {
     pub(crate) reset: &'static [&'static str],
     /// `deletes = "soft"` or `"hard"`.
     pub(crate) deletes: &'static str,
-    /// What the plan says the scan does to those rows: `soft-deletes` or `deletes`.
+    /// What the plan says the scan or the tombstones do to those rows: `soft-deletes` or `deletes`.
     pub(crate) marks: &'static str,
     /// The table's rows as one text value, `id:state` ordered by id.
     pub(crate) check_query: &'static str,
-    /// After each step: `check_query`'s rows, then ` | ` and the key scan's note, or the load's error.
+    /// After each step: `check_query`'s rows, then ` | ` and the load's note, or its error.
     pub(crate) expected_steps: Vec<String>,
 }
 

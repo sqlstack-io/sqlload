@@ -1,5 +1,7 @@
 use crate::adapters::contract::_helpers::promote::key_join;
-use crate::adapters::contract::models::{MarkWrite, TableName, WriteMode, WriteStatementsRequest};
+use crate::adapters::contract::models::{
+    MarkWrite, TableName, TombstoneWrite, WriteMode, WriteStatementsRequest,
+};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::constants::SQLLOAD_LOADED_AT;
@@ -155,6 +157,55 @@ fn marked_rows<A: SqlAdapter + ?Sized>(
         ),
         conditions.join(" AND "),
     )
+}
+
+/// A query counting, as text, the rows of `table` its tombstones (`tombstones`) mark, then the statement marking them: rows not marked yet when soft-deleting, whose key a tombstone holds, deleted at or after the row's cursor (or of a row without one). Run again, both find nothing more.
+pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    table: &TableName,
+    tombstones: &TombstoneWrite,
+) -> [String; 2] {
+    let name = |alias: &str, column: &str| format!("{alias}.{}", adapter.render_identifier(column));
+    let keys: Vec<String> = tombstones
+        .unique_key
+        .iter()
+        .map(|key| {
+            let nullable = !tombstones.not_null_keys.contains(key);
+            let (row, tombstone) = (name("__target", key), name("__tombstone", key));
+            adapter.render_key_equality((&row, &tombstone), nullable)
+        })
+        .collect();
+    let (cursor, deleted_at) = (
+        name("__target", &tombstones.cursor),
+        name("__tombstone", &tombstones.deleted_at),
+    );
+    let mut conditions: Vec<String> = Vec::new();
+    if tombstones.soft {
+        conditions.push(format!(
+            "{} IS NULL",
+            name("__target", CDC_DELETED_AT_COLUMN)
+        ));
+    }
+    conditions.push(format!(
+        "EXISTS (SELECT 1 FROM {} AS __tombstone WHERE {} AND ({cursor} IS NULL OR {deleted_at} >= {cursor}))",
+        adapter.render_qualified_name(&tombstones.tombstones),
+        keys.join(" AND ")
+    ));
+    let target = format!("{} AS __target", adapter.render_qualified_name(table));
+    let condition = conditions.join(" AND ");
+    let mark = match tombstones.soft {
+        true => format!(
+            "UPDATE {target} SET {} = {} WHERE {condition}",
+            adapter.render_identifier(CDC_DELETED_AT_COLUMN),
+            timestamp(adapter, &tombstones.at)
+        ),
+        false => format!("DELETE FROM {target} WHERE {condition}"),
+    };
+    let count = adapter.render_text_cast("COUNT(*)");
+    [
+        format!("SELECT {count} FROM {target} WHERE {condition}"),
+        mark,
+    ]
 }
 
 /// RFC 3339 `text` as a timestamp with time zone.

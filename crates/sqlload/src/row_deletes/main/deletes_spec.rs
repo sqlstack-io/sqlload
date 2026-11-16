@@ -1,12 +1,12 @@
 //! A merge table's `deletes`, with the limit of its key scans.
 
-use crate::loader::models::DeletesSpec;
-use crate::project::models::{Deletes, TableChecks};
+use crate::loader::models::{DeletesSpec, TombstoneSpec};
+use crate::project::models::{Deletes, DeletesFrom, TableChecks};
 use crate::row_deletes::constants::DEFAULT_MAX_DROP;
 
-/// The table's `deletes` with its key scans' limit, and its `checks` without `max_row_drop`, which under `deletes` limits what a scan marks rather than a commit (`None` once they set no other check).
+/// The table's `deletes` with its key scans' limit and its tombstone table (`deletes_from`), and its `checks` without `max_row_drop`, which under `deletes` limits what a scan marks rather than a commit (`None` once they set no other check).
 pub fn deletes_spec(
-    deletes: Option<Deletes>,
+    (deletes, from): (Option<Deletes>, Option<&DeletesFrom>),
     checks: Option<TableChecks>,
 ) -> (Option<DeletesSpec>, Option<TableChecks>) {
     let Some(apply) = deletes else {
@@ -28,6 +28,10 @@ pub fn deletes_spec(
         apply,
         max_drop,
         scan: false,
+        from: from.map(|from| TombstoneSpec {
+            source_table: from.table.clone(),
+            loaded: None,
+        }),
     };
     (Some(spec), checks)
 }

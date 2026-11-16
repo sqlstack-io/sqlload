@@ -1,11 +1,13 @@
-//! Load one table: read its source (a Python table through the host) and commit its rows batch by batch, then, under `--sync-deletes`, scan its source's keys and mark its rows of the others.
+//! Load one table: read its source (a Python table through the host) and commit its rows batch by batch, then, under `--sync-deletes`, scan its source's keys and mark its rows of the others, and mark its rows its loaded tombstones name (`deletes_from`).
 
+use crate::adapters::dispatch::models::Destination;
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::{open_source, source_readers};
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
-use crate::loader::models::{LoadRun, PythonLoad, TableLoaded, TablePlan};
+use crate::loader::models::{LoadRun, PythonLoad, SourceReader, TableLoaded, TablePlan};
+use crate::row_deletes::main::apply_tombstones::apply_tombstones;
 use crate::row_deletes::main::scan_plan::scan_plan;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -43,18 +45,28 @@ pub(in crate::loader) async fn load_one(
         (None, _) => {
             let reader = open_source(project, source, source_readers(planned)).await?;
             let loaded = publish_table(&reader, planned, (destination, run)).await?;
-            match scan_plan(planned, &now_utc_text()) {
-                Some(scan) => {
-                    let scanned =
-                        Box::pin(publish_table(&reader, &scan, (destination, run))).await?;
-                    TableLoaded {
-                        note: scanned.note,
-                        ..loaded
-                    }
-                }
-                None => loaded,
-            }
+            let note = marked_rows(&reader, planned, (destination, run)).await?;
+            TableLoaded { note, ..loaded }
         }
     };
     Ok((name, loaded))
+}
+
+/// After `planned`'s merge, under `--sync-deletes`, its key scan through `reader`, then its loaded tombstones (`deletes_from`): what each marked, for the table's line; `None` when neither ran.
+async fn marked_rows(
+    reader: &SourceReader,
+    planned: &TablePlan,
+    (destination, run): (&Destination, &LoadRun<'_>),
+) -> Result<Option<String>, LoaderError> {
+    let scanned = match scan_plan(planned, &now_utc_text()) {
+        Some(scan) => {
+            Box::pin(publish_table(reader, &scan, (destination, run)))
+                .await?
+                .note
+        }
+        None => None,
+    };
+    let tombstones = apply_tombstones(planned, destination).await?;
+    let notes: Vec<String> = scanned.into_iter().chain(tombstones).collect();
+    Ok((!notes.is_empty()).then(|| notes.join(" ")))
 }

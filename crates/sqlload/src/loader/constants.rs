@@ -179,5 +179,8 @@ pub const TRANSFORM_REWROTE_NOTE: &str = "transform, table rewritten";
 /// How many windows' rows outside them the load report shows a line for; later ones are counted in one line.
 pub const SHOWN_OUTSIDE_WINDOWS: usize = 3;
 
+/// What a tombstone table's name adds to the name of the table whose `deletes_from` it is.
+pub const TOMBSTONE_SUFFIX: &str = "__sqlload_deletes";
+
 /// Why `--sync-deletes` fails a plan none of whose selected tables sets `deletes`.
 pub const NO_DELETES_TABLES: &str = "--sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes. Fix: set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes";

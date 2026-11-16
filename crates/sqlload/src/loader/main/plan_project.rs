@@ -27,6 +27,7 @@ use crate::loader::models::{
     FilesSource, FoundSource, PlanOptions, ProjectPlan, TablePlan, TableSpec,
 };
 use crate::project::models::{ProjectConfig, SourceConfig, SourceKind};
+use crate::row_deletes::main::link_tombstones::link_tombstones;
 
 /// The plan: what `apply` would change and what `load` would move, read fresh from every system.
 pub async fn plan_project(
@@ -88,7 +89,7 @@ pub async fn plan_project(
     ))
 }
 
-/// One source's `specs`: the selected ones planned against their destinations, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.
+/// One source's `specs`: the selected ones (with the tombstone table of each selected `deletes_from`) planned against their destinations and tied to their tombstone tables, with an ODBC source's tables blocked whose cursor bounds its driver refuses, and the others.
 async fn planned_tables(
     project: &ProjectConfig,
     (source_name, source, files): (&str, &SourceConfig, Option<FilesSource>),
@@ -99,13 +100,21 @@ async fn planned_tables(
     let paths = project.python_http_paths.get(source_name);
     let mut planned: Vec<TablePlan> = Vec::new();
     let mut unselected: Vec<TableSpec> = Vec::new();
+    let chosen: Vec<String> = specs
+        .iter()
+        .filter(|spec| selected(options, (source_name, &spec_names(spec))))
+        .map(|spec| spec.source_table.qualified_name())
+        .collect();
     for mut spec in specs {
         spec.files = files.clone();
         spec.python = module.map(|module| python_table(module, &spec.source_table, paths));
         if let Some(deletes) = &mut spec.deletes {
             deletes.scan = options.sync_deletes;
         }
-        if !selected(options, (source_name, &spec_names(&spec))) {
+        let tombstones = spec.tombstones_of.as_ref();
+        if !selected(options, (source_name, &spec_names(&spec)))
+            && !tombstones.is_some_and(|main| chosen.contains(main))
+        {
             unselected.push(spec);
             continue;
         }
@@ -115,6 +124,7 @@ async fn planned_tables(
         let plan = plan_table(&spec, destination, options).await?;
         planned.push(Box::pin(with_kept_names(project, spec, plan, (destination, options))).await?);
     }
+    link_tombstones(&mut planned);
     if source.kind == SourceKind::Odbc {
         #[cfg(feature = "odbc")]
         block_refused_bounds(project, (source_name, source), &mut planned).await?;

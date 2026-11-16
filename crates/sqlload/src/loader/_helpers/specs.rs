@@ -384,7 +384,8 @@ pub(crate) fn build_spec(
         context.target.warehouse,
         unnests,
     ));
-    let (deletes, checks) = deletes_spec(deletes.filter(|_| cdc.is_none()), checks);
+    let from = overrides.deletes_from.as_ref();
+    let (deletes, checks) = deletes_spec((deletes.filter(|_| cdc.is_none()), from), checks);
     if keyed && !matches!(nesting.unnest, Unnest::None) {
         problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
     }
@@ -509,6 +510,7 @@ pub(crate) fn build_spec(
         }),
         cdc,
         deletes,
+        tombstones_of: overrides.tombstones_of.clone(),
         warehouse_source: match context.source.kind {
             SourceKind::Odbc => Some(WarehouseSource {
                 system: ODBC_SOURCE,

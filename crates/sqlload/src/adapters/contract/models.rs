@@ -48,6 +48,24 @@ pub enum WriteMode {
     MarkMissing(MarkWrite),
 }
 
+/// How a table's tombstones (`deletes_from`) mark its rows: those whose key a tombstone holds, deleted at or after the row's cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TombstoneWrite {
+    /// The loaded tombstone table, holding the table's `unique_key` columns under the same names.
+    pub tombstones: TableName,
+    /// The tombstone table's column holding when each key was deleted.
+    pub deleted_at: String,
+    /// The table's `cursor_column`, which a tombstone's time must not be before.
+    pub cursor: String,
+    pub unique_key: Vec<String>,
+    /// The key columns whose values are never NULL, which compare with `=`; the rest match NULL-safely.
+    pub not_null_keys: Vec<String>,
+    /// `_sqlload_deleted_at` is set to `at` on a row it is NULL on; otherwise the row is removed.
+    pub soft: bool,
+    /// When the marks are made, RFC 3339 UTC.
+    pub at: String,
+}
+
 /// How a key scan marks the table's rows whose key the source no longer holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkWrite {
