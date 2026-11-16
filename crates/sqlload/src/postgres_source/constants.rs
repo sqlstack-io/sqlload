@@ -65,6 +65,20 @@ JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum
 WHERE k.contype = 'p'
 ORDER BY n.nspname, c.relname, key.position";
 
+/// Valid, whole-table unique indexes on plain columns that back no primary key, by table, each with its name and key columns in order: what a table without a primary key could merge on.
+pub const CATALOG_UNIQUE_INDEXES_SQL: &str = "
+SELECT n.nspname, c.relname, ic.relname, array_agg(a.attname::text ORDER BY key.position)
+FROM pg_catalog.pg_index i
+JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS key(attnum, position)
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = key.attnum
+WHERE i.indisunique AND i.indisvalid AND NOT i.indisprimary AND i.indpred IS NULL
+  AND i.indexprs IS NULL AND key.position <= i.indnkeyatts
+GROUP BY 1, 2, 3
+ORDER BY 1, 2, 3";
+
 /// Columns leading a valid, whole-table btree index, by table: reading in their order is cheap.
 pub const CATALOG_INDEXED_COLUMNS_SQL: &str = "
 SELECT DISTINCT n.nspname, c.relname, a.attname

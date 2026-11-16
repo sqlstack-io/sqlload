@@ -4,7 +4,7 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use tokio_postgres::Row;
 
 use crate::postgres_source::_helpers::type_map::{TypeDetails, natural_type, pg_type};
-use crate::postgres_source::models::{SourceColumn, SourceTable};
+use crate::postgres_source::models::{ListedKey, SourceColumn, SourceTable};
 
 /// A matcher for `schema.table` patterns such as `public.*`.
 pub(crate) fn table_matcher(patterns: &[String]) -> Result<GlobSet, String> {
@@ -17,10 +17,10 @@ pub(crate) fn table_matcher(patterns: &[String]) -> Result<GlobSet, String> {
     builder.build().map_err(|error| error.to_string())
 }
 
-/// Group catalog column rows into tables, keeping those `include` matches and `exclude` does not.
+/// Group catalog column rows into tables, keeping those `include` matches and `exclude` does not; a table without a primary key lists its unique indexes.
 pub(crate) fn tables_from_rows(
     column_rows: &[Row],
-    (key_rows, index_rows): (&[Row], &[Row]),
+    (key_rows, index_rows, unique_rows): (&[Row], &[Row], &[Row]),
     include: &GlobSet,
     exclude: &GlobSet,
 ) -> Vec<SourceTable> {
@@ -36,6 +36,16 @@ pub(crate) fn tables_from_rows(
     };
     let keys = by_table(key_rows);
     let indexes = by_table(index_rows);
+    let mut unique: BTreeMap<(String, String), Vec<ListedKey>> = BTreeMap::new();
+    for row in unique_rows {
+        unique
+            .entry((row.get(0), row.get(1)))
+            .or_default()
+            .push(ListedKey {
+                constraint_type: format!("unique index {}", row.get::<_, String>(2)),
+                columns: row.get(3),
+            });
+    }
     let mut tables: BTreeMap<(String, String), SourceTable> = BTreeMap::new();
     for row in column_rows {
         let schema: String = row.get(0);
@@ -46,23 +56,28 @@ pub(crate) fn tables_from_rows(
         }
         let table = tables
             .entry((schema.clone(), name.clone()))
-            .or_insert_with(|| SourceTable {
-                primary_key: keys
-                    .get(&(schema.clone(), name.clone()))
-                    .cloned()
-                    .unwrap_or_default(),
-                indexed_columns: indexes
-                    .get(&(schema.clone(), name.clone()))
-                    .cloned()
-                    .unwrap_or_default(),
-                schema,
-                name,
-                columns: Vec::new(),
-                estimated_rows: row.get(10),
-                estimated_bytes: row.get(11),
-                split_pages: row.get(13),
-                comment: row.get(12),
-                listed_keys: Vec::new(),
+            .or_insert_with(|| {
+                let key = (schema.clone(), name.clone());
+                let primary_key = keys.get(&key).cloned().unwrap_or_default();
+                let listed_keys = match primary_key.is_empty() {
+                    true => unique.get(&key).cloned().unwrap_or_default(),
+                    false => Vec::new(),
+                };
+                SourceTable {
+                    primary_key,
+                    indexed_columns: indexes
+                        .get(&(schema.clone(), name.clone()))
+                        .cloned()
+                        .unwrap_or_default(),
+                    schema,
+                    name,
+                    columns: Vec::new(),
+                    estimated_rows: row.get(10),
+                    estimated_bytes: row.get(11),
+                    split_pages: row.get(13),
+                    comment: row.get(12),
+                    listed_keys,
+                }
             });
         table.columns.push(column_from_row(row));
     }

@@ -5,6 +5,7 @@ use tokio_postgres::Client;
 use crate::postgres_source::_helpers::catalog::{table_matcher, tables_from_rows};
 use crate::postgres_source::constants::{
     CATALOG_COLUMNS_SQL, CATALOG_INDEXED_COLUMNS_SQL, CATALOG_PRIMARY_KEYS_SQL,
+    CATALOG_UNIQUE_INDEXES_SQL,
 };
 use crate::postgres_source::errors::PostgresError;
 use crate::postgres_source::models::SourceTable;
@@ -24,9 +25,10 @@ pub async fn read_catalog(
     let columns = client.query(CATALOG_COLUMNS_SQL, &[]).await?;
     let keys = client.query(CATALOG_PRIMARY_KEYS_SQL, &[]).await?;
     let indexes = client.query(CATALOG_INDEXED_COLUMNS_SQL, &[]).await?;
+    let unique = client.query(CATALOG_UNIQUE_INDEXES_SQL, &[]).await?;
     Ok(tables_from_rows(
         &columns,
-        (&keys, &indexes),
+        (&keys, &indexes, &unique),
         &include,
         &exclude,
     ))
