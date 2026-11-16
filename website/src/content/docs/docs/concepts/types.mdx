@@ -164,6 +164,44 @@ Python values are typed as described in the [Python API](/docs/sources/python/#t
 keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
 want typed differently.
 
+### Loading every column as text
+
+From 0.54.0, `infer_types = false` on a source or table loads every column SQLLoad would infer as
+`text`. Use it for codes that are numeric in some rows and not in others, such as `1099999500115812`
+and `16ZN102RSC`, or that must keep their leading zeros. Columns pinned in `columns` keep their
+types:
+
+```toml
+[sources.products]
+kind = "files"
+path = "drop/products/"
+format = "csv"
+infer_types = false
+
+[sources.products.tables.products]
+columns = { price = "decimal(18,2)", updated = "date" }
+```
+
+Each value is the text a column pinned `text` gets: a CSV field exactly as written, the text a
+Google Sheets cell shows, a JSON number as written in the file, and a Python dict value as its text
+(`true`, `1.5`, a string as it is). Objects and lists stay `json`, so `flatten` and `unnest` work
+as usual, and the child tables `unnest` makes infer their columns. Files may disagree on a
+column's type, since every one loads as `text`.
+
+It applies to CSV, JSON, NDJSON, Excel and XML files, Google Sheets, and the dict rows of Python
+tables and transforms. Parquet files, Arrow tables and DataFrames, and database sources already
+carry declared types and keep them. `plan` says it on the table's `schema` line:
+
+```console
+    ├── schema  every column text except columns pinned, objects and lists (infer_types = false)
+```
+
+Turning it on for a table that exists changes its inferred columns to `text`, a type change that
+`plan` shows column by column and that runs as
+[`type_change_rebuild`](/docs/concepts/contracts/#changes-that-rebuild-a-table) allows. Values
+already loaded become their text in the warehouse, so `123` stays `123`; later loads keep a
+field's leading zeros.
+
 From 0.45.0, a value that a pinned `decimal(p,s)` or integer type can't hold exactly fails the read,
 naming the column and the value, on every source: `12.345` pinned `decimal(10,2)` and `1.5` pinned
 `int` fail rather than load as `12.35` and `1`. Before 0.45.0, Python, Parquet, CSV, JSON and

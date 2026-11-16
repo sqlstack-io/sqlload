@@ -169,6 +169,8 @@ pub struct TableSpec {
     pub on_schema_change: OnSchemaChange,
     /// `auto_widen = true`: an inferred column whose values outgrow it widens along the ladder instead of failing.
     pub auto_widen: bool,
+    /// `infer_types = false`: columns a files, Sheets or Python dict source would type by inference load as `text` instead.
+    pub infer_types: bool,
     pub type_change_rebuild: Policy,
     /// Whether a Python table's `replace` may empty the table when its function yields no rows.
     pub allow_empty: bool,

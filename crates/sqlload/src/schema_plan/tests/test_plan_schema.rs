@@ -168,6 +168,35 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_warnings: 0,
         },
         PlanSchemaTestCase {
+            description: "under infer_types = false an inferred column turning text is a type change that waits for rebuild confirmation, not a refusal",
+            desired: vec![inferred("code", ColumnType::Text)],
+            live: Some(vec![live("CODE", ColumnType::Int)]),
+            rules: SchemaRules {
+                infer_types: false,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "CODE int -> text needs a table rebuild (type_change_rebuild = \"require_confirmation\")",
+            expected_fix_flag: Some("--allow-type-change-rebuild"),
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "under infer_types = false a confirmed rebuild turns the column text",
+            desired: vec![inferred("code", ColumnType::Text)],
+            live: Some(vec![live("CODE", ColumnType::Int)]),
+            rules: SchemaRules {
+                infer_types: false,
+                rebuild_allowed: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["rebuild  CODE int -> text (VARCHAR)"],
+            expected_written: &["code"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
             description: "an inferred column that outgrows the table fails without auto_widen",
             desired: vec![inferred("amount", DECIMAL)],
             live: Some(vec![live("AMOUNT", ColumnType::Int)]),

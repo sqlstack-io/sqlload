@@ -31,6 +31,10 @@ pub fn table_flatten(
         max_depth,
         naming,
         excluded: ExcludePatterns::new(excluded).unwrap_or_default(),
+        as_text: overrides
+            .and_then(|table| table.settings.infer_types)
+            .or(source.defaults.infer_types)
+            == Some(false),
     };
     if let (FlattenObjects::Paths(paths), Some(overrides)) = (&flatten.objects, overrides) {
         problems.extend(paths.iter().filter_map(|path| {

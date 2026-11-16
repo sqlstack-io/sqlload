@@ -21,7 +21,7 @@ use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::batch_plan::main::cursor_rules::cursor_rules;
 use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
-use crate::files_source::models::FilesOrder;
+use crate::files_source::models::{FilesOrder, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::records_files;
 use crate::loader::_helpers::publish::send_line;
@@ -39,7 +39,7 @@ use crate::loader::constants::{
 use crate::loader::models::{
     CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
     ProjectPlan, PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan,
-    TableResult, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
+    TableResult, TableSpec, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
@@ -515,7 +515,9 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     details.extend(
         spec.python
             .as_ref()
-            .map(|python| detail("schema", python_columns_line(table, python))),
+            .map(|python| detail("schema", python_columns_line(table, python)))
+            .into_iter()
+            .chain(text_columns_line(spec).map(|line| detail("schema", line))),
     );
     let unnested: Option<Vec<String>> = match &spec.unnest {
         Unnest::Paths(paths) => Some(paths.clone()),
@@ -1111,6 +1113,24 @@ fn file_column_names(files: &FilesSource) -> Vec<String> {
         .iter()
         .map(|column| column.name.clone())
         .collect()
+}
+
+/// The `schema` line of a table under `infer_types = false` whose source would infer its columns' types.
+fn text_columns_line(spec: &TableSpec) -> Option<&'static str> {
+    let inferring = spec.sheet.is_some()
+        || spec
+            .files
+            .as_ref()
+            .is_some_and(|files| files.encoding.format != SourceFormat::Parquet);
+    match (spec.infer_types, &spec.python) {
+        (false, Some(_)) => Some(
+            "every column of dict rows text except columns pinned, objects and lists (infer_types = false)",
+        ),
+        (false, None) if inferring => {
+            Some("every column text except columns pinned, objects and lists (infer_types = false)")
+        }
+        _ => None,
+    }
 }
 
 /// Where a Python table's columns come from.

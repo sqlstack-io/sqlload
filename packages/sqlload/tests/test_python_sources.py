@@ -582,6 +582,28 @@ def test_given_a_dict_column_of_mixed_formats_in_paris_when_loading_with_parse_t
 	]
 
 
+def test_given_infer_types_false_when_loading_dict_rows_then_every_scalar_column_but_the_pinned_one_loads_as_text(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', infer_types=False, columns={'amount': 'decimal(18,2)'})(rows)\n")
+	give(
+		project,
+		"rows",
+		[
+			{"id": 1, "code": 1099999500115812, "amount": "1.50", "seen": "2026-01-01T00:00:00Z", "meta": {"a": 1}, "ok": True},
+			{"id": 2, "code": "16ZN102RSC", "amount": 2, "seen": None, "meta": None, "ok": False},
+		],
+	)
+	planned = sqlload(project, "plan")
+	assert "every column of dict rows text except columns pinned, objects and lists (infer_types = false)" in planned.stdout, planned.stdout + planned.stderr
+	load(project)
+	assert query(project, 'SELECT typeof(id), typeof(code), typeof(amount), typeof(seen), typeof(meta), typeof(ok) FROM "RAW".shop__rows LIMIT 1') == [
+		("VARCHAR", "VARCHAR", "DECIMAL(18,2)", "VARCHAR", "JSON", "VARCHAR")
+	]
+	assert query(project, 'SELECT id, code, amount, seen, ok FROM "RAW".shop__rows ORDER BY id') == [
+		("1", "1099999500115812", Decimal("1.50"), "2026-01-01T00:00:00Z", "true"),
+		("2", "16ZN102RSC", Decimal("2.00"), None, "false"),
+	]
+
+
 PRICED_TABLE = """
 import decimal
 

@@ -201,7 +201,8 @@ impl Output {
         let started = Instant::now();
         match crossed {
             Crossed::Columns(columns) => {
-                let batch = columns_batch(columns).map_err(CrossError::Data)?;
+                let batch = columns_batch(columns, self.context.flatten.as_text)
+                    .map_err(CrossError::Data)?;
                 open = self.send(batch, started);
             }
             Crossed::Json { bytes, read } => {
@@ -218,7 +219,10 @@ impl Output {
                 }
                 let mut started = started;
                 json_rows(&bytes, &read, &mut |columns| {
-                    let batch = flatten_batch(&columns_batch(columns)?, &self.context.flatten)?;
+                    let batch = flatten_batch(
+                        &columns_batch(columns, self.context.flatten.as_text)?,
+                        &self.context.flatten,
+                    )?;
                     open = open && self.send(batch, started);
                     started = Instant::now();
                     match open {
@@ -318,7 +322,7 @@ impl Output {
         let mut open = true;
         let mut held: Vec<RecordBatch> = Vec::new();
         let parsed = json_rows(&page.bytes, &read, &mut |columns| {
-            let batch = columns_batch(columns)?;
+            let batch = columns_batch(columns, self.context.flatten.as_text)?;
             if transform.is_some() {
                 held.push(batch);
                 return Ok(());

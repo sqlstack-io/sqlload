@@ -790,6 +790,9 @@ pub struct TableSettings {
     pub on_schema_change: Option<OnSchemaChange>,
     #[serde(default)]
     pub auto_widen: Option<bool>,
+    /// `infer_types = false`: every column whose type SQLLoad would infer from sampled values loads as `text` (objects and lists stay `json`); pinned columns keep their types.
+    #[serde(default)]
+    pub infer_types: Option<bool>,
     #[serde(default)]
     pub type_change_rebuild: Option<Policy>,
     /// Let a Python table's `replace` (or `--reload`) empty the table when its function yields no rows.

@@ -380,7 +380,7 @@ fn raw(text: &str, path: &str) -> Result<Box<RawValue>, String> {
 
 /// `level`'s rows as a batch: the items' data columns, then, in dlt's order, the root's id when it has them, the parent's id, the position and the row's own id, named under `compat`; a data column taking one of those names is an error.
 fn level_batch(level: Level, compat: Compat) -> Result<ChildBatch, String> {
-    let data = columns_batch(level.rows)?;
+    let data = columns_batch(level.rows, false)?;
     let schema = data.schema();
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
     let mut columns: Vec<ArrayRef> = data.columns().to_vec();

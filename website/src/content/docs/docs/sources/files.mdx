@@ -621,7 +621,9 @@ on_empty = "skip"
 ## Columns
 
 Parquet columns come from the files' footers. CSV and JSON columns are inferred from a sample of
-records, unless you pin them with `columns`. Each row also gets `_sqlload_source_file`,
+records, unless you pin them with `columns`. From 0.54.0, `infer_types = false` loads every
+column not pinned as `text`, CSV fields exactly as written; see [Loading every column as
+text](/docs/concepts/types/#loading-every-column-as-text). Each row also gets `_sqlload_source_file`,
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
 adds](/docs/concepts/projects/#columns-sqlload-adds)).
 

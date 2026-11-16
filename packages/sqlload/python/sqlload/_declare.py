@@ -27,6 +27,7 @@ TABLE_SETTINGS: frozenset[str] = frozenset(
 		"contract",
 		"cursor_column",
 		"cursor_start",
+		"infer_types",
 		"lookback",
 		"compat",
 		"naming",

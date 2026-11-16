@@ -52,6 +52,7 @@ pub(crate) fn snowflake_rules() -> SchemaRules {
         rebuild_allowed: false,
         compat: crate::load_naming::models::Compat::Sqlload,
         auto_widen: false,
+        infer_types: true,
     }
 }
 

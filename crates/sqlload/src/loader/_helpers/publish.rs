@@ -60,6 +60,7 @@ use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextCheck
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::models::{Compat, MetadataRole};
+use crate::loader::_helpers::destination::files_read_as;
 use crate::loader::_helpers::destination::nanosecond_columns;
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
@@ -82,7 +83,6 @@ use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unarchived;
 use crate::loader::_helpers::sources::unload_source;
 use crate::loader::_helpers::specs::checked_key;
-use crate::loader::_helpers::specs::files_read_as;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
     cursor_binding, source_cursor, source_filter, with_null_cursors,

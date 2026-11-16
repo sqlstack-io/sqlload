@@ -39,6 +39,7 @@ pub fn batch_columns(
             key: &data.file.relative_key,
             replaced,
             widen_numbers: false,
+            as_text: false,
         };
         let (merged, conflicts) = merge_columns(columns, found, merge);
         columns = merged;
