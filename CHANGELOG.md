@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.56.0](https://github.com/sqlstack-io/sqlload/compare/v0.55.0...v0.56.0) (2026-11-16)
+
+
+### Features
+
+* **snowflake:** mark deleted rows with deletes and deletes_from on Snowflake ([1eb5bc3](https://github.com/sqlstack-io/sqlload/commit/1eb5bc32578684a1114411dd44b8c11b4d76f270))
+
+
+### Bug Fixes
+
+* **files:** say a files source into a files target reads from the newest maximum, as it does ([1eb5bc3](https://github.com/sqlstack-io/sqlload/commit/1eb5bc32578684a1114411dd44b8c11b4d76f270))
+* **postgres_cdc:** wait for a stopped load's session to release the slot ([1eb5bc3](https://github.com/sqlstack-io/sqlload/commit/1eb5bc32578684a1114411dd44b8c11b4d76f270))
+* **python:** keep everything a run writes to stdout off the --json document ([1eb5bc3](https://github.com/sqlstack-io/sqlload/commit/1eb5bc32578684a1114411dd44b8c11b4d76f270))
+
+
+### Documentation
+
+* what SQLLoad loads, ODBC databases by name, every files format, Kafka, and ClickHouse out of preview ([#272](https://github.com/sqlstack-io/sqlload/issues/272)) ([aa6e839](https://github.com/sqlstack-io/sqlload/commit/aa6e839d763c4490b863d7b3a6827add4df5306b))
+
 ## [0.55.0](https://github.com/sqlstack-io/sqlload/compare/v0.54.0...v0.55.0) (2026-11-16)
 
 
