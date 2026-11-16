@@ -454,7 +454,8 @@ def test_given_a_slow_table_when_loading_at_once_then_it_does_not_hold_up_the_sm
 	done = sqlload(project, "load", "--concurrency", "2", "api__a_slow", "api__b_small", "api__c_small")
 	assert done.returncode == 0, done.stdout + done.stderr
 	loaded = [line.split()[1] for line in done.stdout.splitlines() if line.startswith("loaded")]
-	assert sorted(loaded[:2]) == ["RAW.api__b_small", "RAW.api__c_small"] and loaded[2] == "RAW.api__a_slow", done.stdout
+	# a_slow reads until c_small has started, which needs b_small's slot: so b_small is done first, and c_small ran while a_slow was still reading. Which of the two commits first is a race.
+	assert loaded[0] == "RAW.api__b_small" and sorted(loaded[1:]) == ["RAW.api__a_slow", "RAW.api__c_small"], done.stdout
 
 
 def test_given_parallel_tables_creating_a_new_schema_when_loading_then_every_table_loads(project: Path) -> None:
