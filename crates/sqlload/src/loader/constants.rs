@@ -194,5 +194,8 @@ pub const MERGE_RUN_ROWS: u64 = 10_000_000;
 /// How `plan` words a run published in one commit.
 pub const PUBLISHED_ONCE: &str = "published in one commit";
 
+/// How `plan` words a `delete_insert` published in one commit.
+pub const RANGE_PUBLISHED_ONCE: &str = "published in one commit replacing the whole range";
+
 /// How `plan` words a merge published in one commit, up to [`MERGE_RUN_ROWS`] rows.
 pub const MERGE_PUBLISHED_ONCE: &str = "published in one commit, or one every 10 million rows";

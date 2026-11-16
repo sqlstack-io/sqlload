@@ -37,7 +37,10 @@ impl TableWriter for ClickHouseWriter {
             .map(|field| field.name().clone())
             .collect();
         let qualified = ClickHouseSql.render_qualified_name(into);
-        if target.builds && self.staged_build.as_ref() != Some(&qualified) {
+        if target.builds
+            && target.staging.is_some()
+            && self.staged_build.as_ref() != Some(&qualified)
+        {
             stage_build(&self.destination, (&into.schema, &into.table), &fields).await?;
             self.staged_build = Some(qualified);
         }

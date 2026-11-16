@@ -543,6 +543,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
+    /// How many of a commit's leading `statements` that swaps a table in run before the destination's schema-change lock is taken, as they copy rows and take the lock only for their own schema changes.
+    fn unguarded_statements(&self, _statements: &[String]) -> usize {
+        0
+    }
+
     /// Whether `statement`, run alone, commits by itself, so a run record cannot share its transaction.
     fn commits_alone(&self, _statement: &str) -> bool {
         false

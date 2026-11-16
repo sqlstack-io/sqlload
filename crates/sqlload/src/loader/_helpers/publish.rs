@@ -94,6 +94,7 @@ use crate::loader::constants::MERGE_PUBLISHED_ONCE;
 use crate::loader::constants::MERGE_RUN_ROWS;
 use crate::loader::constants::PROGRESS_EVERY;
 use crate::loader::constants::PUBLISHED_ONCE;
+use crate::loader::constants::RANGE_PUBLISHED_ONCE;
 use crate::loader::constants::REPLACED_KEYS_SHOWN;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
@@ -1314,11 +1315,21 @@ impl Publisher {
                 }
             }
         }
-        let _held = match self.at_end && !sql_adapter(warehouse).keeps_tables() {
+        let swaps = self.at_end && !sql_adapter(warehouse).keeps_tables();
+        let mut statements = statements;
+        let first = match swaps {
+            true => sql_adapter(warehouse).unguarded_statements(&statements),
+            false => 0,
+        };
+        let guarded = statements.split_off(first);
+        if !statements.is_empty() {
+            execute(&self.destination, statements).await?;
+        }
+        let _held = match swaps {
             true => ddl_guard(&self.destination).await,
             false => None,
         };
-        execute(&self.destination, statements).await?;
+        execute(&self.destination, guarded).await?;
         if let Some(rebuild) = self.rebuild.as_mut() {
             rebuild.records.extend(held);
         }
@@ -1903,6 +1914,7 @@ pub(crate) fn holds_commits(table: &TablePlan) -> bool {
 pub(crate) fn published_once(table: &TablePlan) -> &'static str {
     match table.mode {
         WriteMode::Merge { .. } => MERGE_PUBLISHED_ONCE,
+        WriteMode::DeleteInsert { .. } => RANGE_PUBLISHED_ONCE,
         _ => PUBLISHED_ONCE,
     }
 }

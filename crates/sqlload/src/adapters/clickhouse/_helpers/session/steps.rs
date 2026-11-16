@@ -2,7 +2,7 @@
 
 use crate::adapters::clickhouse::_helpers::dialect::publish::{
     engine_query, partition_key_columns_query, partition_key_query, partition_rows_query,
-    replace_partition, sorted_insert,
+    replace_partition, sorted_insert, stageable_query,
 };
 use crate::adapters::clickhouse::_helpers::session::http::send;
 use crate::adapters::clickhouse::_helpers::session::rows::text_rows;
@@ -129,16 +129,22 @@ async fn insert_sorted(
     }
 }
 
-/// Before `build`'s first rows (a database and a table): when it is partitioned by columns all among `inserted`, put in its place an unpartitioned table with its columns (`PARTITION BY tuple()`, as `CREATE TABLE ... AS` keeps a partition key the new engine clause does not set), sorted by that partition key (inside `tuple()`, as ClickHouse refuses some single keys bare, such as `substring(code, 1, 1)`, and a key of several expressions needs it), so each insert writes one part rather than one for every partition it fills, which a large first load into fine partitions would make hundreds of thousands of; [`fill_build`] partitions the rows at the commit.
+/// Before `build`'s first rows (a database and a table): when it is partitioned by columns all among `inserted`, put in its place an unpartitioned table with its columns (`PARTITION BY tuple()`, as `CREATE TABLE ... AS` keeps a partition key the new engine clause does not set), sorted by that partition key (inside `tuple()`, as ClickHouse refuses some single keys bare, such as `substring(code, 1, 1)`, and a key of several expressions needs it), so each insert writes one part rather than one for every partition it fills (unless its storage cannot be stood in for, see [`stageable_query`]), which a large first load into fine partitions would make hundreds of thousands of; [`fill_build`] partitions the rows at the commit.
 pub(crate) async fn stage_build(
     destination: &ClickHouseDestination,
     (database, build): (&str, &str),
     inserted: &[String],
 ) -> Result<(), ApiError> {
     let (key, key_columns) = partition_key(destination, (database, build)).await?;
-    if key_columns.is_empty() || !key_columns.iter().all(|column| inserted.contains(column)) {
+    if key_columns.is_empty()
+        || !key_columns.iter().all(|column| inserted.contains(column))
+        || first_values(destination, stageable_query(database, build))
+            .await?
+            .is_empty()
+    {
         return Ok(());
     }
+    let _held = destination.ddl.lock().await;
     let name = qualified(database, build);
     let swap = qualified(database, &format!("{build}{SWAP_SUFFIX}"));
     let aside = qualified(database, &format!("{build}{ASIDE_SUFFIX}"));
@@ -157,7 +163,7 @@ pub(crate) async fn stage_build(
         .map(|_| ())
 }
 
-/// When `build`'s rows wait unpartitioned (see [`stage_build`]: `build`'s partition key reads no column and `target`'s does), move them into `swap`, created with `build`'s columns and `target`'s engine, keys and settings, by one insert ordered by the partition key, and exchange the two, so `build` holds them laid out as `target`; nothing otherwise.
+/// Run outside the destination's schema-change lock (see [`SqlAdapter::unguarded_statements`](crate::adapters::contract::types::SqlAdapter::unguarded_statements)), which it takes only for its `CREATE` and `EXCHANGE`, so the copy holds up no other table. When `build`'s rows wait unpartitioned (see [`stage_build`]: `build`'s partition key reads no column and `target`'s does), move them into `swap`, created with `build`'s columns and `target`'s engine, keys and settings, by one insert ordered by the partition key, and exchange the two, so `build` holds them laid out as `target`; nothing otherwise.
 async fn fill_build(
     destination: &ClickHouseDestination,
     ((target_database, target), (database, build)): (&(String, String), &(String, String)),
@@ -175,12 +181,14 @@ async fn fill_build(
         ))
     })?;
     let (name, swapped) = (qualified(database, build), qualified(database, swap));
+    let held = destination.ddl.lock().await;
     for statement in [
         format!("DROP TABLE IF EXISTS {swapped}"),
         format!("CREATE TABLE {swapped} AS {name} ENGINE = {engine}"),
     ] {
         send(destination, None, statement.into_bytes()).await?;
     }
+    drop(held);
     insert_sorted(
         destination,
         (database, swap),
@@ -189,6 +197,7 @@ async fn fill_build(
     )
     .await?;
     let aside = qualified(database, &format!("{build}{ASIDE_SUFFIX}"));
+    let _held = destination.ddl.lock().await;
     exchange(destination, (&name, &swapped, &aside)).await
 }
 

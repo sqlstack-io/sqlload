@@ -122,6 +122,9 @@ write_strategy = "replace"
 
 [sources.old.tables."public.stores"]
 description = "Stores, in a database that cannot exchange tables."
+partition_by = "substring(code, 1, 1)"
+order_by = ["code", "city"]
+primary_key = ["code"]
 "#;
 
 #[test]
@@ -231,7 +234,7 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 expected_result: "L1@8593b9db65212160979d946950601c26622a219c80f1f122679eb69ec5b96600 / substring(code, 1, 1) / L",
             },
             LoadRunTestCase {
-                description: "replace into a database that cannot exchange tables swaps by renames instead",
+                description: "replace into a database that cannot exchange tables swaps by renames instead, into a partitioned table with its own primary key, whose rows go straight into partitions",
                 source_change: "",
                 check_query: "SELECT (SELECT engine FROM system.databases WHERE name = 'legacy') || ': ' || (SELECT arrayStringConcat(groupArray(code), ',') FROM (SELECT code FROM legacy.old__stores ORDER BY code))",
                 expected_result: "Ordinary: L1",

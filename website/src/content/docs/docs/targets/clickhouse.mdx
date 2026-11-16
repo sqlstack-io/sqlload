@@ -155,8 +155,9 @@ still commits each batch of partitions as it goes.
 
 A `merge` keeps the last row read of each key in the run, or the newest by `newest_by`, so a key
 updated between two windows lands once, in its latest version. Matching the run's keys holds them
-in one set on the server, about 90 bytes a key, so a merge also commits at the next window or cut
-once 10 million rows wait: a long backfill publishes in steps of about that size. With
+in one set on the server, about 90 bytes a key, so a merge also commits at the end of the window or
+batch in which 10 million rows are waiting. A single window holding more rows than that is still
+matched at once, so keep `batch_size` windows well under it. With
 `on_duplicate_keys = "fail"` a merge commits each batch, since a key updated during the read would
 be read twice and fail the load. A `merge` without a cursor commits about every 1 GB, as before.
 
@@ -186,8 +187,8 @@ reaches `max_parts_in_total`. Sorted, the same load makes about one part per par
 that every row is written twice on the server, and the move holds about 1 to 2 GiB of server
 memory, which grows with the stage's part count, not its rows (from 5 million to 80 million rows it
 stayed in that range). Where the move runs out of memory, the rows are inserted unsorted instead. An
-unpartitioned table, or one whose partition key reads a column the load doesn't send, takes its
-rows directly as before.
+unpartitioned table takes its rows directly as before, and so does one whose partition key reads a
+column the load doesn't send, or that sets a `PRIMARY KEY` or `SAMPLE BY`.
 
 ## Types
 
