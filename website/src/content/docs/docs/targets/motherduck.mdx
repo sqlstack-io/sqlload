@@ -68,7 +68,9 @@ inserts it with `read_parquet` inside the batch's transaction, then the file is 
 never reads your source files itself: files sources, including Parquet in S3 or a local folder, and a
 Snowflake source's unloaded files are read by SQLLoad. `plan` names that route for every table.
 
-`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB. Each table
+`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB, and so, from
+0.57.0, do [`deletes` and `deletes_from`](/docs/concepts/write-strategies/#rows-deleted-at-the-source)
+on a `merge` table. Each table
 loads on its own connection in the separate process, so one table's transaction never mixes with
 another's. If the process ends mid-load, the open batch isn't committed, the table fails, and the next
 load picks up from the table's committed rows.
