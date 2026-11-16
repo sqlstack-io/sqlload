@@ -11,8 +11,9 @@ components with the SQLQuack, SQLClean and SQLBuild websites.
 - `src/components/`: the page layout, header and page title, replacing Starlight's defaults.
 - `public/fonts/`: self-hosted fonts, each with its licence.
 
-The logo uses the SQLLoad icon from `sqlstack-io/sqlstack` (`assets/icons/sqlload.png`); the
-footer's SQLStack symbols are unchanged copies from the same repository.
+The header mark (`public/assets/mark.png`) is the SQLLoad icon cropped tight from
+`.github/sqlload-logo-light.png`, so it draws as large as the other product marks; the footer's
+SQLStack symbols are unchanged copies from `sqlstack-io/sqlstack`.
 
 ## Domain
 
