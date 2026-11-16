@@ -88,17 +88,23 @@ versions and how to run them yourself.
 | Snowflake | ✓ | ✓ |
 | BigQuery | ✓ | preview |
 | Databricks | | ✓ |
-| ClickHouse | | preview |
+| ClickHouse | | ✓ one self-hosted server¹ |
 | DuckDB | | ✓ |
 | MotherDuck | | beta² |
-| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
+| SQL Server, MySQL, MariaDB, OpenEdge and other databases through ODBC³ | ✓ | |
+| Files | ✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through `pattern` (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
 | Google Sheets | ✓ | |
 | HTTP APIs and Python | ✓ | |
-| ODBC databases¹ | ✓ | |
+| Kafka | ✓ into Snowflake, through the Kafka exporter | |
 
-¹ In the published wheels from 0.39.0; before that, in builds with the `odbc` feature.
+¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
+distributed tables. ClickHouse Cloud is untested.
 
 ² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
+
+³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB
+Connector/ODBC and OpenEdge are checked by hand. Another driver works when it describes prepared
+statements and lists tables: `sqlload plan` shows what it reports.
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.
