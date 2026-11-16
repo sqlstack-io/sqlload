@@ -69,7 +69,8 @@ def main() -> None:
 	sys.stdout.flush()
 	sys.stderr.flush()
 	args = ["sqlload", *sys.argv[1:]]
-	if "--json" not in args:
+	# Help and the version print on stdout as text, so they keep it.
+	if "--json" not in args or {"-h", "--help", "-V", "--version"} & set(args):
 		sys.exit(_native.run_cli(args))
 	# Under --json, stdout holds the one JSON document and nothing else: for the run, file descriptor 1 is stderr, so what a
 	# source's print(), a child process it starts or os.write(1, ...) writes goes there, and the document is written after.
@@ -78,10 +79,13 @@ def main() -> None:
 	try:
 		with contextlib.redirect_stdout(sys.stderr):
 			code, document = _native.run_cli_captured(args)
-		sys.stderr.flush()
 	finally:
+		for stream in (sys.stderr, sys.__stdout__):
+			with contextlib.suppress(Exception):
+				stream.flush()
 		os.dup2(saved, 1)
 		os.close(saved)
-	with open(1, "wb", closefd=False) as stdout:
+	# A reader that has gone keeps the command's exit code, as the native command ignores a closed stdout.
+	with contextlib.suppress(BrokenPipeError), open(1, "wb", closefd=False) as stdout:
 		stdout.write(document.encode())
 	sys.exit(code)

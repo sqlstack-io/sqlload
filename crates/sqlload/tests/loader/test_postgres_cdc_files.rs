@@ -420,10 +420,11 @@ fn given_a_postgres_cdc_slot_another_session_holds_when_a_load_starts_then_it_wa
     let test_cases = [
         HeldSlotTestCase {
             description: "a slot released a moment later is read on",
-            held_seconds: 3,
+            held_seconds: 10,
             source_change: CHANGES,
             expected_success: true,
             expected_output: "Completed",
+            expected_min_seconds: 5,
         },
         HeldSlotTestCase {
             description: "a slot held past the wait fails naming its server process",
@@ -431,6 +432,7 @@ fn given_a_postgres_cdc_slot_another_session_holds_when_a_load_starts_then_it_wa
             source_change: "",
             expected_success: false,
             expected_output: "slot sqlload_log is still in use by server process",
+            expected_min_seconds: 30,
         },
     ];
     run_async(|| async move {
@@ -464,10 +466,12 @@ fn given_a_postgres_cdc_slot_another_session_holds_when_a_load_starts_then_it_wa
                 .batch_execute(test_case.source_change)
                 .await
                 .map_err(|error| error.to_string())?;
+            let started = std::time::Instant::now();
             let (success, output) = run_sqlload(&config, LOG, ("", ""))?;
+            let waited = started.elapsed().as_secs() >= test_case.expected_min_seconds;
             assert_eq!(
-                (success, output.contains(test_case.expected_output)),
-                (test_case.expected_success, true),
+                (success, output.contains(test_case.expected_output), waited),
+                (test_case.expected_success, true, true),
                 "{}\n{output}",
                 test_case.description
             );

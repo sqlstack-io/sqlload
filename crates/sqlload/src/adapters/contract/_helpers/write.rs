@@ -159,7 +159,7 @@ fn marked_rows<A: SqlAdapter + ?Sized>(
     )
 }
 
-/// A query counting, as text, the rows of `table` its tombstones (`tombstones`) mark, then the statement marking them: rows not marked yet when soft-deleting, whose key a tombstone holds, deleted at or after the row's cursor (or of a row without one). A soft mark sets the latest such tombstone's time through a grouped join rather than a correlated subquery, which Snowflake can't always evaluate. Run again, both find nothing more.
+/// A query counting, as text, the rows of `table` its tombstones (`tombstones`) mark, then the statement marking them: rows not marked yet when soft-deleting, whose key a tombstone holds, deleted at or after the row's cursor (or of a row without one). A soft mark sets the latest tombstone of the row's key through a grouped join rather than a correlated subquery, which Snowflake can't always evaluate, on exactly the rows the count counts. Run again, both find nothing more.
 pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     table: &TableName,
@@ -236,7 +236,7 @@ pub(crate) fn tombstone_statements<A: SqlAdapter + ?Sized>(
                 unmarked("__row"),
                 row_keys.join(", "),
                 keys("__target", "__marks"),
-                unmarked("__target")
+                condition
             )
         }
         false => format!("DELETE FROM {target} WHERE {condition}"),

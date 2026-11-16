@@ -673,6 +673,8 @@ pub(crate) struct HeldSlotTestCase {
     pub(crate) expected_success: bool,
     /// Text the next load's output must contain.
     pub(crate) expected_output: &'static str,
+    /// The fewest seconds the next load must have waited for the slot.
+    pub(crate) expected_min_seconds: u64,
 }
 
 /// A `postgres_cdc` scenario into a files target (see [`cdc_files_project`](crate::helpers::cdc_files_project)), with what is planted in the folders after its first step.

@@ -381,7 +381,7 @@ impl CdcSource<'_> {
         }
     }
 
-    /// Wait until no session holds the slot or its backfill slot, up to [`SLOT_RELEASE_WAIT`]: a load that stopped leaves its walsender holding them until Postgres notices the client is gone. A slot still held after that is another load's, or a stopped one's the server hasn't noticed (a lost network connection lasts until `wal_sender_timeout`), and fails naming the server process.
+    /// Wait until no session holds the slot or its backfill slot, up to [`SLOT_RELEASE_WAIT`], before anything is read about the source, as the holder may still change it: a load that stopped leaves its walsender holding them until Postgres notices the client is gone. A slot still held after that is another load's, or a stopped one's the server hasn't noticed (a lost network connection lasts until `wal_sender_timeout`), and fails naming the server process.
     async fn released_slot(&self, control: &Client) -> Result<(), LoaderError> {
         let names = [self.cdc.slot.clone(), self.backfill_slot()];
         let started = std::time::Instant::now();
@@ -553,10 +553,10 @@ impl CdcSource<'_> {
         &self,
     ) -> Result<(BTreeMap<String, u64>, Option<String>), LoaderError> {
         let control = self.connect().await?;
+        self.released_slot(&control).await?;
         let missing = self.ensure_publication(&control).await?;
         self.refuse_unstreamed(&control).await?;
         self.log()?.ensure().await?;
-        self.released_slot(&control).await?;
         let mut slot = self.slot_state(&control).await?;
         if self.run.options.resnapshot && slot.is_some() {
             control

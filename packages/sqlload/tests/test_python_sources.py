@@ -415,6 +415,7 @@ def orders(ctx):
     print("fetching page 1")
     subprocess.run([sys.executable, "-c", "print('child process output')"], check=True)
     os.write(1, b"raw descriptor output\\n")
+    print("original stdout output", file=sys.__stdout__)
     yield {"order_id": 1}
 
 
@@ -428,7 +429,7 @@ def refunds(ctx):
 	result = json.loads(done.stdout)
 	assert (result["ok"], result["summary"]["loaded"], result["summary"]["failed"]) == (False, 1, 0)
 	assert [error["name"] for error in result["plan"]["errors"]] == ["refunds"]
-	assert all(text in done.stderr for text in ["fetching page 1", "child process output", "raw descriptor output"]), done.stderr
+	assert all(text in done.stderr for text in ["fetching page 1", "child process output", "raw descriptor output", "original stdout output"]), done.stderr
 
 def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come_from(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', name='orders', columns={'total': 'decimal(18,2)'})(rows)\nshop.table(description='Test table.', name='stores')(rows)\n")

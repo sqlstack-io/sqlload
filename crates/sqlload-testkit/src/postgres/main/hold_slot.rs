@@ -6,7 +6,7 @@ use tokio_postgres::Client;
 use crate::postgres::constants::{DATABASE, SLOT_ATTEMPTS, SLOT_RETRY_DELAY, USER};
 use crate::postgres::models::Postgres;
 
-/// Stream logical slot `slot` (publication `publication`) with `pg_recvlogical` inside the container for `seconds`, then stop it; returns once `client` sees the slot active, so a load started next finds it held.
+/// Stream logical slot `slot` (publication `publication`) with `pg_recvlogical` inside the container for `seconds`, then stop it; returns once `client` sees `pg_recvlogical` holding it, so a load started next finds it held by that session rather than by a load still ending.
 pub async fn hold_slot(
     postgres: &Postgres,
     client: &Client,
@@ -24,7 +24,7 @@ pub async fn hold_slot(
     for _ in 0..SLOT_ATTEMPTS {
         let active: bool = client
             .query_opt(
-                "SELECT active FROM pg_replication_slots WHERE slot_name = $1",
+                "SELECT EXISTS (SELECT 1 FROM pg_replication_slots AS s JOIN pg_stat_activity AS a ON a.pid = s.active_pid WHERE s.slot_name = $1 AND a.application_name = 'pg_recvlogical')",
                 &[&slot],
             )
             .await
@@ -35,5 +35,5 @@ pub async fn hold_slot(
         }
         tokio::time::sleep(SLOT_RETRY_DELAY).await;
     }
-    Err(format!("slot {slot} never became active"))
+    Err(format!("pg_recvlogical never held slot {slot}"))
 }
