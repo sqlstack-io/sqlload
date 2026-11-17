@@ -37,6 +37,7 @@ kind = "snowflake"
 account = "test-account"
 user = "LOADER"
 auth = {{ method = "key_pair", private_key_file = "{key_file}" }}
+warehouse = "LOAD_WH"
 database = "TEST_DB"
 schema = "RAW"
 base_url = "{base_url}"

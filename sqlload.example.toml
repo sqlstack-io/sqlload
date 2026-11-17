@@ -51,8 +51,8 @@ max_in_flight = 32
 max_pending_files = 32
 # A file Snowpipe reports as failed or partially loaded, or that is gone from the stage:
 # halt stops the stream without committing it; skip logs and counts it, then commits past it.
-# To recover from halt, fix the cause and restart with halt; replays usually get new file names
-# that load normally. Only if the same file is reported failed again, load it with
+# To recover from halt, fix the cause and restart with halt; the restart stages the rows again
+# under new file names. Only if they fail again, load the failed file with
 # COPY INTO ... FILES = (...) and restart once with skip.
 on_load_error = "halt"
 # Files with no report are checked (load history, then the object) after this long, then

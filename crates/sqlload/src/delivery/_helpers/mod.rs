@@ -1,5 +1,6 @@
 pub(crate) mod aws_credentials;
 pub(crate) mod copy;
+pub(crate) mod copy_history;
 pub(crate) mod pending_loads;
 pub(crate) mod stage;
 pub(crate) mod stage_paths;

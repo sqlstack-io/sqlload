@@ -39,8 +39,39 @@ Delivery is at least once: a crash or restart between the write and the Kafka co
 those rows, so a table can hold a record twice. Every row carries its topic, partition and offset
 (see [Envelope columns](/docs/kafka/configuration/#envelope)), so dedupe on those three columns.
 
+Snowflake and Databricks skip a staged file they have loaded before, so each run of the exporter
+names its files with an id of its own (`<stream>_<run>_<digest>`). Rows replayed after the
+exporter restarts therefore always load, even into a table dropped and created again, instead of
+being skipped as already loaded. A retry within a run reuses the batch's files, which load once.
+
 Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes` (default
 32 MiB), whichever comes first, so one write never holds more than that.
+
+### Auto-ingest
+
+With `[staging.s3] auto_ingest = true`, Snowflake loads each file when the bucket's event
+notification reaches the pipe. Snowpipe's load reports don't cover these loads, so the exporter
+reads the table's `COPY_HISTORY` and commits a batch's offsets only once every one of its files
+shows as loaded. That query needs a warehouse, so `destination.warehouse` is required.
+
+- Each check is one query for every file waiting on the stream, from the oldest one's upload. It
+  runs only while files wait, and at most once every `pending_check_after` (default `5m`), after a
+  failed query too. `sqlload plan` says so. While the exporter stops, it checks every 10 seconds
+  for up to a minute, so a restart doesn't load the last minutes' rows again.
+- A stream that never stops always has files waiting, so the warehouse resumes at every check,
+  around the clock. Snowflake bills each resume for at least 60 seconds, so at the default `5m`
+  that is about 12 resumes and 12 billed minutes an hour: roughly 20% of the same warehouse left
+  running. On an X-Small (1 credit an hour) that is about 0.2 credits an hour, or 5 a day.
+- Use a dedicated X-Small warehouse with a short `AUTO_SUSPEND`, such as 60 seconds. To pay less,
+  check less often: `pending_check_after = "15m"` resumes it about 4 times an hour, roughly 7%.
+- Commits trail the loads by up to `pending_check_after`. A busy stream may fill
+  `max_pending_files` in that time and pause; raise it, or lower `pending_check_after` at the cost
+  of more queries.
+- A file that never shows up, for example because notifications don't reach the pipe, keeps
+  its batch and every later one uncommitted, with a warning naming the file. Check
+  `SYSTEM$PIPE_STATUS`. A file gone from the bucket follows `on_load_error`. Truncating the table
+  or re-creating the pipe erases the history of files loaded but not yet confirmed; restart the
+  exporter, which loads their rows again.
 
 ### Databricks
 

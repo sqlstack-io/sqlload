@@ -121,9 +121,13 @@ pub struct StageDelivery {
     pub(crate) path: LoadPath,
     pub(crate) stage_info: Option<StageInfo>,
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
     pub(crate) pending: PendingLoads,
     pub(crate) begin_mark: Option<String>,
+    /// Set while the stream stops: auto-ingest checks COPY_HISTORY on every poll, so the files of the last minutes are committed before it exits.
+    pub(crate) final_checks: bool,
 }
 
 /// Batches handed to Snowpipe whose loads are not all reported yet, oldest first.
@@ -243,6 +247,8 @@ pub struct CopyDelivery {
     pub(crate) stream: Stream,
     /// The bucket, for `staging.kind = "s3"`; otherwise files go to the stream's volume.
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
 }
 
@@ -320,6 +326,7 @@ impl Delivery {
             config: inputs.config.clone(),
             stream: stream.clone(),
             s3,
+            run: uuid::Uuid::new_v4().simple().to_string(),
             staged: None,
         })))
     }
@@ -398,6 +405,13 @@ impl Delivery {
             Self::Streaming(streaming) => streaming.poll().await,
             Self::Stage(stage) => stage.poll().await,
             Self::Zerobus(_) | Self::Copy(_) => Ok(Confirmation::default()),
+        }
+    }
+
+    /// The stream is stopping: auto-ingest checks every waiting file on each poll from now on, instead of once per `pending_check_after`; other routes poll as before.
+    pub fn check_until_stopped(&mut self) {
+        if let Self::Stage(stage) = self {
+            stage.final_checks = true;
         }
     }
 

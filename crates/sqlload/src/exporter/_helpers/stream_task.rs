@@ -562,6 +562,7 @@ impl StreamTask {
             tracing::warn!(stream = %self.stream.name, "final flush did not finish; unconfirmed rows will be delivered again");
         }
         let poll = self.delivery.confirm_interval();
+        self.delivery.check_until_stopped();
         while self.delivery.has_pending() && std::time::Instant::now() < deadline {
             if self.confirm().await.is_err() {
                 break;

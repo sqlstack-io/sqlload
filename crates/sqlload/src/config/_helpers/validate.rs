@@ -50,6 +50,15 @@ fn destination_problems(config: &Config) -> Vec<String> {
     if let Destination::Databricks(databricks) = &config.destination {
         problems.extend(databricks_problems(config, databricks));
     }
+    let auto_ingest = config.staging.kind == StagingKind::S3
+        && config.staging.load != LoadMethod::Copy
+        && config.staging.s3.as_ref().is_some_and(|s3| s3.auto_ingest);
+    if let Destination::Snowflake(snowflake) = &config.destination
+        && auto_ingest
+        && snowflake.warehouse.is_none()
+    {
+        problems.push("staging.s3.auto_ingest needs destination.warehouse: offsets are committed only once the table's COPY_HISTORY shows each file loaded, and that query runs on a warehouse".to_owned());
+    }
     problems
 }
 

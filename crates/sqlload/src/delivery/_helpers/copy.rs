@@ -63,7 +63,7 @@ impl CopyDelivery {
     }
 
     /// The batch's file keys, kept from an earlier failed attempt at the same rows so a retry reuses its names and uploads.
-    fn staged_batch(&self, batch: &Batch, parts: &[Part<'_>]) -> StagedBatch {
+    pub(crate) fn staged_batch(&self, batch: &Batch, parts: &[Part<'_>]) -> StagedBatch {
         let digest = rows_digest(&batch.rows.iter().collect::<Vec<_>>());
         if let Some(staged) = self
             .staged
@@ -83,11 +83,12 @@ impl CopyDelivery {
         StagedBatch { digest, files }
     }
 
-    /// `<folder>/<stream>_<digest>.parquet`: the `s3` path template, or the UTC date in the volume.
+    /// `<folder>/<stream>_<run>_<digest>.parquet`: the `s3` path template, or the UTC date in the volume.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
         let file = format!(
-            "{}_{}.{}",
+            "{}_{}_{}.{}",
             self.stream.name,
+            self.run,
             rows_digest(&part.rows),
             file_extension(FileFormat::Parquet)
         );
