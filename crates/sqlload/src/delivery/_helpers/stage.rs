@@ -5,7 +5,9 @@ use crate::delivery::_helpers::pending_loads::same_path;
 use crate::delivery::_helpers::stage_paths::{
     FolderValues, expired_dates, render_folder, s3_target,
 };
-use crate::delivery::constants::{FORBIDDEN, MAX_HISTORY_PAGES, PRUNE_LOOKBACK};
+use crate::delivery::constants::{
+    FORBIDDEN, HISTORY_MARGIN, MAX_HISTORY_PAGES, PRUNE_LOOKBACK, RECEIVED_BEFORE_LOOKBACK,
+};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{
     CheckTiming, Confirmation, DeliveryReport, PendingLoads, StageClients, StageDelivery,
@@ -64,6 +66,7 @@ impl StageDelivery {
             staged: None,
             pending,
             begin_mark: None,
+            final_checks: false,
         })
     }
 
@@ -179,16 +182,20 @@ impl StageDelivery {
         problem
     }
 
-    /// The auto-ingest route: once any file is due, one COPY_HISTORY query on the warehouse covers every waiting file from the oldest one's send. All of them are then checked again after `pending_recheck_every`, so the warehouse resumes at most once per `pending_check_after`; overdue files gone from the bucket fail.
+    /// The auto-ingest route: once any file is due, one COPY_HISTORY query on the warehouse covers every waiting file from the oldest one's send, within the function's 14 days. No file is checked again sooner than `pending_check_after`, after a failed query too, so the warehouse resumes at most that often; while the stream stops, every poll checks. Overdue files gone from the bucket fail.
     async fn check_copy_history(&mut self, now: i64) -> Result<(), DeliveryError> {
         let overdue = self.pending.overdue(now);
-        if overdue.is_empty() {
+        if overdue.is_empty() && !self.final_checks {
             return Ok(());
         }
         let waiting = self.pending.waiting();
-        let Some(start_ms) = self.pending.history_start(&waiting) else {
+        let Some(oldest_ms) = self.pending.history_start(&waiting) else {
             return Ok(());
         };
+        let start_ms = oldest_ms.max(
+            now - RECEIVED_BEFORE_LOOKBACK.as_millis() as i64 + HISTORY_MARGIN.as_millis() as i64,
+        );
+        let not_before = now + self.config.staging.pending_check_after.as_millis() as i64;
         let statement = copy_history_sql(
             &quote_name(self.config.destination.database()),
             &self.qualified(&self.stream.table),
@@ -198,15 +205,17 @@ impl StageDelivery {
             Ok(rows) => rows,
             Err(error) => {
                 self.pending.check_failed(&waiting, now);
-                return Err(retry("COPY_HISTORY", &error));
+                self.pending.defer(&waiting, not_before);
+                return Err(history_error(&error));
             }
         };
         let root = self.s3.as_ref().map_or(String::new(), |target| {
-            format!("s3://{}/{}", target.bucket, target.prefix)
+            format!("{}/{}", target.bucket, target.prefix)
         });
         self.pending.apply(&history_loads(&rows, &root));
         let still_waiting = self.pending.waiting();
         self.pending.checked(&still_waiting, now);
+        self.pending.defer(&still_waiting, not_before);
         let unreported: Vec<String> = overdue
             .into_iter()
             .filter(|key| still_waiting.contains(key))
@@ -598,6 +607,16 @@ pub(crate) fn rows_digest(rows: &[&BatchRow]) -> String {
         hasher.update(format!("{topic}:{partition}:{first}-{last};").as_bytes());
     }
     hex::encode(&hasher.finalize()[..12])
+}
+
+/// A COPY_HISTORY failure: a 403 means the role cannot use the warehouse or see the table's history, which retrying cannot fix; anything else is retried, as a suspended warehouse may resume.
+fn history_error(error: &ApiError) -> DeliveryError {
+    match error.status() {
+        Some(FORBIDDEN) => DeliveryError::Fatal(format!(
+            "COPY_HISTORY failed: {error}; the role needs USAGE on destination.warehouse and MONITOR on the pipe"
+        )),
+        _ => DeliveryError::Retry(format!("COPY_HISTORY failed: {error}")),
+    }
 }
 
 /// A report endpoint failure; a 403 means the role lacks MONITOR on the pipe, which retrying cannot fix.

@@ -11,7 +11,7 @@ pub(crate) fn copy_history_sql(database: &str, table: &str, start_ms: i64) -> St
     )
 }
 
-/// The history rows as load reports. `FILE_NAME` is relative to `STAGE_LOCATION`, the auto-ingest pipe's own folder, so the two are joined and made relative to `root`, the `s3://bucket/prefix/` staged keys are relative to.
+/// The history rows as load reports, loads first so a stray row for a loaded file cannot fail it. `FILE_NAME` is relative to `STAGE_LOCATION`, the auto-ingest pipe's own folder, so the two are joined and made relative to `root`, the `bucket/prefix/` staged keys are relative to, whatever the URL's scheme.
 pub(crate) fn history_loads(rows: &SqlRows, root: &str) -> Vec<FileLoad> {
     let index = |name: &str| rows.column(name);
     let (Some(location), Some(file), Some(status)) =
@@ -24,11 +24,15 @@ pub(crate) fn history_loads(rows: &SqlRows, root: &str) -> Vec<FileLoad> {
             .and_then(|column| row.get(column).cloned().flatten())
             .map_or(0, |value| value.parse().unwrap_or(0))
     };
-    rows.rows
+    let mut loads: Vec<FileLoad> = rows
+        .rows
         .iter()
         .filter_map(|row| {
             let name = row.get(file).cloned().flatten()?;
             let folder = row.get(location).cloned().flatten().unwrap_or_default();
+            let folder = folder
+                .split_once("://")
+                .map_or(folder.as_str(), |(_, rest)| rest);
             let full = format!(
                 "{}/{}",
                 folder.trim_end_matches('/'),
@@ -43,7 +47,9 @@ pub(crate) fn history_loads(rows: &SqlRows, root: &str) -> Vec<FileLoad> {
                     .and_then(|column| row.get(column).cloned().flatten()),
             })
         })
-        .collect()
+        .collect();
+    loads.sort_by_key(|load| load.status != LoadStatus::Loaded);
+    loads
 }
 
 /// COPY_HISTORY's statuses; a skipped file loaded nothing, so it counts as failed.

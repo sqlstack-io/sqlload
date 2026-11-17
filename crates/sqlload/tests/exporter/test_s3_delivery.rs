@@ -18,9 +18,9 @@ use sqlload_testkit::redpanda::main::produce_records::produce_records;
 
 use crate::helpers::{ORDERS_GROUP, PARTITIONS, committed, run_async, s3_test_config};
 use crate::test_types::{
-    S3AutoIngestTestCase, S3LayoutTestCase, S3LoadFailureTestCase, S3LoadReportTestCase,
-    S3PauseTestCase, S3RetryTestCase, S3ScanFailureTestCase, S3ShutdownTestCase, S3SkipTestCase,
-    S3SlowLoadTestCase,
+    S3AutoIngestStopTestCase, S3AutoIngestTestCase, S3LayoutTestCase, S3LoadFailureTestCase,
+    S3LoadReportTestCase, S3PauseTestCase, S3RetryTestCase, S3ScanFailureTestCase,
+    S3ShutdownTestCase, S3SkipTestCase, S3SlowLoadTestCase,
 };
 
 const SHARED_TABLE: &str = "[batching]\nmax_age = \"1s\"\nmax_rows = 100\n[[naming.rules]]\nmatch = \"orders.{kind}\"\ntable = \"ORDERS\"\n";
@@ -646,6 +646,52 @@ fn given_auto_ingest_when_files_are_uploaded_then_offsets_wait_for_copy_history_
             assert_eq!(
                 distinct_positions(&rows),
                 test_case.records,
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_auto_ingest_when_stopping_cleanly_then_files_loaded_since_the_last_check_are_committed()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [S3AutoIngestStopTestCase {
+            description: "a clean stop checks COPY_HISTORY before the check interval is up, so a restart doesn't load the rows again",
+            records: 200,
+            runs_for: Duration::from_secs(8),
+            expected_checks_while_running: 0,
+            expected_committed: 200,
+        }];
+        for test_case in &test_cases {
+            let stack = start_stack().await?;
+            produce_records(
+                &stack.redpanda.brokers,
+                TOPICS[0],
+                PARTITIONS,
+                &order_values(0, test_case.records),
+            )
+            .await?;
+            stack.fake.deliver_notifications(true);
+            let settings = S3Settings {
+                staging: "pending_check_after = \"10m\"",
+                s3: "path = \"{table}/{date}/\"\nauto_ingest = true",
+                extra: SHARED_TABLE,
+            };
+            let running = start_exporter(s3_test_config(&stack, "orders.*", settings)?);
+            tokio::time::sleep(test_case.runs_for).await;
+            let checks = wait_for_statements(&stack.fake, COPY_HISTORY, 0).await;
+            stop_exporter(running).await?;
+            let after = committed(&stack, TOPICS[0]).await?;
+            assert_eq!(
+                checks?, test_case.expected_checks_while_running,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                after, test_case.expected_committed,
                 "{}",
                 test_case.description
             );

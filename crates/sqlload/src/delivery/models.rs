@@ -126,6 +126,8 @@ pub struct StageDelivery {
     pub(crate) staged: Option<StagedBatch>,
     pub(crate) pending: PendingLoads,
     pub(crate) begin_mark: Option<String>,
+    /// Set while the stream stops: auto-ingest checks COPY_HISTORY on every poll, so the files of the last minutes are committed before it exits.
+    pub(crate) final_checks: bool,
 }
 
 /// Batches handed to Snowpipe whose loads are not all reported yet, oldest first.
@@ -403,6 +405,13 @@ impl Delivery {
             Self::Streaming(streaming) => streaming.poll().await,
             Self::Stage(stage) => stage.poll().await,
             Self::Zerobus(_) | Self::Copy(_) => Ok(Confirmation::default()),
+        }
+    }
+
+    /// The stream is stopping: auto-ingest checks every waiting file on each poll from now on, instead of once per `pending_check_after`; other routes poll as before.
+    pub fn check_until_stopped(&mut self) {
+        if let Self::Stage(stage) = self {
+            stage.final_checks = true;
         }
     }
 

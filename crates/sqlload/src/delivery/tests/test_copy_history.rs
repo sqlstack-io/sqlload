@@ -11,6 +11,7 @@ const SECOND: &str = "ORDERS/2026-11-17/orders_run1_b.json.gz";
 fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batches_commit() {
     let test_cases = [
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "names relative to the pipe's folder, as Snowflake reports them, match the keys under the bucket prefix",
             rows: &[
                 ("2026-11-17/orders_run1_a.json.gz", "Loaded", None),
@@ -20,18 +21,21 @@ fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batc
             expected_halted: None,
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "a name with a leading slash matches too",
             rows: &[("/2026-11-17/orders_run1_a.json.gz", "Loaded", None)],
             expected_confirmed: &[(0, 10)],
             expected_halted: None,
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "an earlier run's file of the same rows confirms nothing",
             rows: &[("2026-11-17/orders_run0_a.json.gz", "Loaded", None)],
             expected_confirmed: &[],
             expected_halted: None,
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "a failed file halts with its first error, and the batch after it waits",
             rows: &[
                 (
@@ -47,12 +51,14 @@ fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batc
             ),
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "a skipped file loaded nothing, so it halts like a failed one",
             rows: &[("2026-11-17/orders_run1_a.json.gz", "Load skipped", None)],
             expected_confirmed: &[],
             expected_halted: Some("ORDERS/2026-11-17/orders_run1_a.json.gz: load failed"),
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "a partly loaded file halts",
             rows: &[(
                 "2026-11-17/orders_run1_a.json.gz",
@@ -65,9 +71,31 @@ fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batc
             ),
         },
         CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
             description: "a load still in progress waits",
             rows: &[("2026-11-17/orders_run1_a.json.gz", "Load in progress", None)],
             expected_confirmed: &[],
+            expected_halted: None,
+        },
+        CopyHistoryTestCase {
+            stage_location: "s3gov://bucket/exports/ORDERS/",
+            description: "a stage URL with another scheme matches too",
+            rows: &[("2026-11-17/orders_run1_a.json.gz", "Loaded", None)],
+            expected_confirmed: &[(0, 10)],
+            expected_halted: None,
+        },
+        CopyHistoryTestCase {
+            stage_location: "s3://bucket/exports/ORDERS/",
+            description: "a stray failed row listed before the file's load does not fail it",
+            rows: &[
+                (
+                    "2026-11-17/orders_run1_a.json.gz",
+                    "Load failed",
+                    Some("duplicate"),
+                ),
+                ("2026-11-17/orders_run1_a.json.gz", "Loaded", None),
+            ],
+            expected_confirmed: &[(0, 10)],
             expected_halted: None,
         },
     ];
@@ -92,7 +120,7 @@ fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batc
                 .iter()
                 .map(|(name, status, error)| {
                     vec![
-                        Some("s3://bucket/exports/ORDERS/".to_owned()),
+                        Some(test_case.stage_location.to_owned()),
                         Some((*name).to_owned()),
                         Some((*status).to_owned()),
                         Some("2".to_owned()),
@@ -102,7 +130,7 @@ fn given_copy_history_rows_when_settling_auto_ingest_files_then_only_loaded_batc
                 })
                 .collect(),
         };
-        loads.apply(&history_loads(&rows, "s3://bucket/exports/"));
+        loads.apply(&history_loads(&rows, "bucket/exports/"));
         let settled = loads.settle();
         assert_eq!(
             settled.confirmed,

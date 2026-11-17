@@ -133,3 +133,12 @@ pub(crate) struct S3AutoIngestTestCase {
     pub(crate) expected_committed_before: i64,
     pub(crate) expected_committed: i64,
 }
+
+pub(crate) struct S3AutoIngestStopTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// How long the exporter runs before it is stopped.
+    pub(crate) runs_for: std::time::Duration,
+    pub(crate) expected_checks_while_running: usize,
+    pub(crate) expected_committed: i64,
+}

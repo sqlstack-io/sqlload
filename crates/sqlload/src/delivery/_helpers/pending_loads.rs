@@ -139,6 +139,13 @@ impl PendingLoads {
             .any(|file| keys.contains(&file.key) && is_unsettled(file))
     }
 
+    /// Check none of `keys` before `not_before`.
+    pub(crate) fn defer(&mut self, keys: &[String], not_before: i64) {
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            file.next_check_ms = file.next_check_ms.max(not_before);
+        }
+    }
+
     /// Every file still waiting or loading.
     pub(crate) fn waiting(&self) -> Vec<String> {
         self.files()

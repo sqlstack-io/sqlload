@@ -121,7 +121,9 @@ pub(crate) type StagedKeys = fn(
 
 pub(crate) struct CopyHistoryTestCase {
     pub(crate) description: &'static str,
-    /// FILE_NAME, STATUS and FIRST_ERROR_MESSAGE of each history row of the pipe's folder `s3://bucket/exports/ORDERS/`.
+    /// The pipe's folder, as every row's STAGE_LOCATION; staged keys are relative to `bucket/exports/`.
+    pub(crate) stage_location: &'static str,
+    /// FILE_NAME, STATUS and FIRST_ERROR_MESSAGE of each history row.
     pub(crate) rows: &'static [(&'static str, &'static str, Option<&'static str>)],
     /// Partition and offset pairs.
     pub(crate) expected_confirmed: &'static [(i32, i64)],
