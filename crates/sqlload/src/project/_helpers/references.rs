@@ -11,8 +11,8 @@ use crate::project::_helpers::targets::{
 };
 use crate::project::_helpers::tombstones::tombstone_problems;
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, STAGE_NAME_PARTS,
-    TABLE_PLACEHOLDER,
+    FILES_CONNECTION_KINDS, MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL,
+    STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
     CdcMode, ConnectionConfig, ConstantColumns, Deletes, ProjectConfig, RenameSetting,
@@ -464,23 +464,28 @@ fn rename_problems(project: &ProjectConfig, place: &str, source: &SourceConfig) 
     problems
 }
 
-/// A `batch_concurrency` above 1 in a project that has not opted in with `microbatch_concurrency = true`.
+/// A `batch_concurrency` above 1 in a project that has not opted in with `microbatch_concurrency = true`, or above [`MAX_BATCH_CONCURRENCY`], as each window read at once holds a source connection.
 fn concurrency_problems(
     project: &ProjectConfig,
     place: &str,
     source: &SourceConfig,
 ) -> Vec<String> {
-    let concurrent = sheet_settings(source).any(|settings| {
-        settings
-            .batch_concurrency
-            .is_some_and(|limit| limit.get() > 1)
-    });
-    match concurrent && !project.microbatch_concurrency {
-        true => vec![format!(
+    let most = sheet_settings(source)
+        .filter_map(|settings| settings.batch_concurrency)
+        .map(std::num::NonZeroUsize::get)
+        .max()
+        .unwrap_or(1);
+    let gated = (most > 1 && !project.microbatch_concurrency).then(|| {
+        format!(
             "{place} batch_concurrency reads several windows at once, which needs microbatch_concurrency = true at the top of the project"
-        )],
-        false => Vec::new(),
-    }
+        )
+    });
+    let capped = (most > MAX_BATCH_CONCURRENCY).then(|| {
+        format!(
+            "{place} batch_concurrency = {most} would hold {most} source connections; read at most {MAX_BATCH_CONCURRENCY} windows at once"
+        )
+    });
+    gated.into_iter().chain(capped).collect()
 }
 
 /// A source's settings and each of its tables'.

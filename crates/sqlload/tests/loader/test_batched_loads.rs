@@ -33,6 +33,7 @@ cursor_column = "at"
 cursor_start = "2026-11-01"
 batch_size = "1d"
 batch_concurrency = 4
+mask = { note = "hash" }
 "#;
 
 const GATED_2_AT_ONCE: &str = r#"
@@ -670,11 +671,11 @@ fn given_windows_read_at_once_when_the_first_is_slowest_or_the_source_moves_then
 -> Result<(), String> {
     let test_cases = [
         GatedWindowsTestCase {
-            description: "the first window finishes reading last, and still commits first",
+            description: "the first window finishes reading last, and still commits first, its masked column hashed once",
             settings: GATED_4_AT_ONCE,
             mid_load_change: "",
-            check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY rowid) FROM raw.app__events",
-            expected_outcome: "ok => 1,2,3,4",
+            check_query: "SELECT string_agg(CAST(id AS VARCHAR), ',' ORDER BY rowid) || ' ' || CAST(bool_and(note = sha256('n' || CAST(id AS VARCHAR))) AS VARCHAR) FROM raw.app__events",
+            expected_outcome: "ok => 1,2,3,4 true",
         },
         GatedWindowsTestCase {
             description: "a row moved to a window read later is read once, as the snapshot every connection shares has it",

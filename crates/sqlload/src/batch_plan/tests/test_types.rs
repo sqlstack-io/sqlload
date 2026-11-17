@@ -69,6 +69,9 @@ pub(crate) struct WindowRowsTestCase {
     pub(crate) expected_text: &'static str,
 }
 
+/// What `read_in_order` did in a case: the results consumed; the most reads running at once, the most results held at once and the first read to finish; and the error.
+pub(crate) type InOrderOutcome = (Vec<u64>, (usize, usize, u64), Option<String>);
+
 pub(crate) struct ReadInOrderTestCase {
     pub(crate) description: &'static str,
     pub(crate) count: u64,
@@ -77,6 +80,6 @@ pub(crate) struct ReadInOrderTestCase {
     pub(crate) failing_read: Option<u64>,
     /// The result whose consumption fails, if any.
     pub(crate) failing_consume: Option<u64>,
-    /// The results consumed, in order; the most reads running at once; the first read to finish; and the error.
-    pub(crate) expected_outcome: (&'static [u64], usize, u64, Option<&'static str>),
+    /// The results consumed, in order; the most reads running at once, the most results held at once and the first read to finish; and the error.
+    pub(crate) expected_outcome: (&'static [u64], (usize, usize, u64), Option<&'static str>),
 }

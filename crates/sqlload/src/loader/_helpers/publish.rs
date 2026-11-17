@@ -681,12 +681,17 @@ impl Publisher {
         if state.is_some() {
             self.state = state;
         }
-        if batch.num_rows() == 0 {
+        let masked = mask_batch(batch, &self.table.spec.masked).map_err(LoaderError::Invalid)?;
+        self.stage_masked(masked).await
+    }
+
+    /// Stage one batch of the source's rows already masked; masking leaves the cursor as it is, as a masked cursor is refused at plan.
+    pub(crate) async fn stage_masked(&mut self, masked: RecordBatch) -> Result<(), LoaderError> {
+        if masked.num_rows() == 0 {
             return Ok(());
         }
-        self.maximum = fold_maximum(self.run.as_ref(), &batch, self.maximum.take())
+        self.maximum = fold_maximum(self.run.as_ref(), &masked, self.maximum.take())
             .map_err(LoaderError::Invalid)?;
-        let masked = mask_batch(batch, &self.table.spec.masked).map_err(LoaderError::Invalid)?;
         let constants: Vec<&(String, ColumnType, String)> =
             added_constants(&self.table.spec, &self.table.read_columns).collect();
         let masked = with_constants(&masked, &constants).map_err(LoaderError::Invalid)?;

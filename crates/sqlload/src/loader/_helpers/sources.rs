@@ -220,7 +220,10 @@ pub(crate) async fn open_source(
             for _ in 1..readers {
                 match connect_source(project, source).await {
                     Ok((helper, _)) => helpers.push(helper),
-                    Err(_) => break,
+                    Err(error) => {
+                        tracing::warn!(%error, "reading over fewer connections: one more did not open");
+                        break;
+                    }
                 }
             }
             Ok(SourceReader::Postgres(client, helpers))
@@ -1508,9 +1511,12 @@ async fn read_each(
         (SourceReader::Postgres(client, helpers), _) => {
             let whole = part.filter.is_none() && part.order_by.is_none();
             let client = match part.connection {
-                0 => client,
-                helper => helpers.get(helper - 1).unwrap_or(client),
-            };
+                0 => Some(client),
+                helper => helpers.get(helper - 1),
+            }
+            .ok_or_else(|| {
+                LoaderError::Invalid("a read was given a connection never opened".to_owned())
+            })?;
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),

@@ -168,12 +168,12 @@ pub(crate) async fn run_gated(
     Ok(format!("{} => {result}", loaded?))
 }
 
-/// One row per day from 2026-11-01 to 11-04; reading a row of 11-01 waits for the advisory lock 1.
+/// One row per day from 2026-11-01 to 11-04, with a `note` of `n<id>`; reading a row of 11-01 waits for the advisory lock 1.
 const GATED: &str = "
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
 CREATE TABLE public.events_raw (id int8, at date NOT NULL);
-CREATE VIEW public.events AS SELECT id, at, CASE WHEN at = '2026-11-01' THEN length(pg_advisory_xact_lock_shared(1)::text) ELSE 0 END AS g FROM public.events_raw;
+CREATE VIEW public.events AS SELECT id, at, 'n' || id AS note, CASE WHEN at = '2026-11-01' THEN length(pg_advisory_xact_lock_shared(1)::text) ELSE 0 END AS g FROM public.events_raw;
 INSERT INTO public.events_raw VALUES (1, '2026-11-01'), (2, '2026-11-02'), (3, '2026-11-03'), (4, '2026-11-04');
 ";
 

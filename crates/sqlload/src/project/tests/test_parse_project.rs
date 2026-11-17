@@ -280,6 +280,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "batch_concurrency reads several windows at once, which needs microbatch_concurrency = true at the top of the project",
         },
         ParseProjectErrorTestCase {
+            description: "batch_concurrency holds a source connection per window, so it is capped",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_concurrency = 17\n",
+            expected_message: "batch_concurrency = 17 would hold 17 source connections; read at most 16 windows at once",
+        },
+        ParseProjectErrorTestCase {
             description: "batch_concurrency reads at least one window",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_concurrency = 0\n",
             expected_message: "nonzero",

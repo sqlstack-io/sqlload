@@ -11,15 +11,15 @@ fn given_reads_that_finish_out_of_order_when_taken_in_order_then_each_is_consume
             limit: 4,
             failing_read: None,
             failing_consume: None,
-            expected_outcome: (&[0, 1, 2, 3], 4, 3, None),
+            expected_outcome: (&[0, 1, 2, 3], (4, 4, 3), None),
         },
         ReadInOrderTestCase {
-            description: "no more reads run at once than the limit",
+            description: "no more results are held at once than the limit, counting the one being consumed",
             count: 5,
             limit: 2,
             failing_read: None,
             failing_consume: None,
-            expected_outcome: (&[0, 1, 2, 3, 4], 2, 1, None),
+            expected_outcome: (&[0, 1, 2, 3, 4], (2, 2, 1), None),
         },
         ReadInOrderTestCase {
             description: "a failed middle read keeps only the results before it, though later reads finished first",
@@ -27,7 +27,7 @@ fn given_reads_that_finish_out_of_order_when_taken_in_order_then_each_is_consume
             limit: 4,
             failing_read: Some(1),
             failing_consume: None,
-            expected_outcome: (&[0], 4, 3, Some("read 1 failed")),
+            expected_outcome: (&[0], (4, 4, 3), Some("read 1 failed")),
         },
         ReadInOrderTestCase {
             description: "a failed consumption stops the results after it",
@@ -35,7 +35,7 @@ fn given_reads_that_finish_out_of_order_when_taken_in_order_then_each_is_consume
             limit: 2,
             failing_read: None,
             failing_consume: Some(2),
-            expected_outcome: (&[0, 1], 2, 1, Some("commit 2 failed")),
+            expected_outcome: (&[0, 1], (2, 2, 1), Some("commit 2 failed")),
         },
         ReadInOrderTestCase {
             description: "a limit of 0 reads one at a time",
@@ -43,13 +43,13 @@ fn given_reads_that_finish_out_of_order_when_taken_in_order_then_each_is_consume
             limit: 0,
             failing_read: None,
             failing_consume: None,
-            expected_outcome: (&[0, 1, 2], 1, 0, None),
+            expected_outcome: (&[0, 1, 2], (1, 1, 0), None),
         },
     ];
     for test_case in test_cases {
-        let (consumed, most, first, error) = in_order(&test_case)?;
+        let (consumed, counts, error) = in_order(&test_case)?;
         assert_eq!(
-            (consumed.as_slice(), most, first, error.as_deref()),
+            (consumed.as_slice(), counts, error.as_deref()),
             test_case.expected_outcome,
             "{}",
             test_case.description

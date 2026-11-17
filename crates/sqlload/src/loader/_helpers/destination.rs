@@ -49,6 +49,7 @@ use crate::loader::models::{CommitRange, Publisher};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
+use crate::masking::main::mask_batch::mask_batch;
 use crate::postgres_source::main::end_snapshot::end_snapshot;
 use crate::postgres_source::main::share_snapshot::share_snapshot;
 use crate::postgres_source::models::ReadColumn;
@@ -919,7 +920,10 @@ impl Publisher {
         };
         let commit = async |held: HeldWindow| self.commit_window(held).await;
         read_in_order((windows.count, connections.len()), read, commit).await?;
-        Ok(end_snapshot(&connections).await?)
+        if let Err(error) = end_snapshot(&connections).await {
+            tracing::warn!(%error, "ending the read-only snapshot of windows already committed failed");
+        }
+        Ok(())
     }
 
     /// Stage a window's held rows and commit them.
@@ -937,7 +941,7 @@ impl Publisher {
                     let batch = batch.map_err(|error| {
                         LoaderError::Invalid(format!("cannot read held rows: {error}"))
                     })?;
-                    self.stage(batch, None).await?;
+                    self.stage_masked(batch).await?;
                 }
             }
         }
@@ -965,7 +969,7 @@ struct HeldWindow {
     read_for: Duration,
 }
 
-/// Read window `index` of `windows` over connection `index` modulo `connections` (the client, then its helpers), holding its rows in a spool made in `parent`.
+/// Read window `index` of `windows` over connection `index` modulo `connections` (the client, then its helpers), holding its rows, masked, in a spool made in `parent`.
 async fn read_window(
     reader: &SourceReader,
     table: &TablePlan,
@@ -985,7 +989,8 @@ async fn read_window(
     };
     let mut spool = Spool::new(parent).map_err(LoaderError::Invalid)?;
     read_source(reader, table, part, async |batch| {
-        spool.hold(0, &batch).map_err(LoaderError::Invalid)
+        let masked = mask_batch(batch, &table.spec.masked).map_err(LoaderError::Invalid)?;
+        spool.hold(0, &masked).map_err(LoaderError::Invalid)
     })
     .await?;
     Ok(HeldWindow {

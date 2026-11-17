@@ -14,7 +14,7 @@ use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::main::window_at::window_at;
 use crate::batch_plan::models::{CursorWindow, WindowSplit};
 use crate::batch_plan::tests::test_types::{
-    BoundArrayTestCase, FileGroupsTestCase, PartitionFiles, ReadInOrderTestCase,
+    BoundArrayTestCase, FileGroupsTestCase, InOrderOutcome, PartitionFiles, ReadInOrderTestCase,
     SplitWindowsTestCase, WindowRowsTestCase,
 };
 use crate::column_types::main::arrow_field::arrow_field;
@@ -205,25 +205,26 @@ pub(crate) fn window_report(
     ))
 }
 
-/// Run the case's reads through `read_in_order` on a paused clock: read `index` sleeps `(count - index) * 10` ms, so later reads finish first, and each consumption sleeps 50 ms. Returns the results consumed, the most reads running at once, the first read to finish, and the error.
-pub(crate) fn in_order(
-    test_case: &ReadInOrderTestCase,
-) -> Result<(Vec<u64>, usize, u64, Option<String>), String> {
+/// Run the case's reads through `read_in_order` on a paused clock: read `index` sleeps `(count - index) * 10` ms, so later reads finish first, and each consumption sleeps 50 ms. Returns the results consumed; the most reads running at once, the most results held at once (from a read's start to the end of its consumption) and the first read to finish; and the error.
+pub(crate) fn in_order(test_case: &ReadInOrderTestCase) -> Result<InOrderOutcome, String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
         .build()
         .map_err(|error| error.to_string())?;
-    let running = std::cell::Cell::new(0_usize);
-    let most = std::cell::Cell::new(0_usize);
+    let (running, most_running) = (std::cell::Cell::new(0_usize), std::cell::Cell::new(0_usize));
+    let (held, most_held) = (std::cell::Cell::new(0_usize), std::cell::Cell::new(0_usize));
     let finished: std::cell::RefCell<Vec<u64>> = std::cell::RefCell::new(Vec::new());
     let mut consumed: Vec<u64> = Vec::new();
     let count = test_case.count;
     let read = |index: u64| {
-        let (running, most, finished) = (&running, &most, &finished);
+        let (running, most_running, finished) = (&running, &most_running, &finished);
+        let (held, most_held) = (&held, &most_held);
         async move {
             running.set(running.get() + 1);
-            most.set(most.get().max(running.get()));
+            most_running.set(most_running.get().max(running.get()));
+            held.set(held.get() + 1);
+            most_held.set(most_held.get().max(held.get()));
             tokio::time::sleep(std::time::Duration::from_millis((count - index) * 10)).await;
             running.set(running.get() - 1);
             finished.borrow_mut().push(index);
@@ -237,6 +238,7 @@ pub(crate) fn in_order(
         read,
         async |index: u64| {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            held.set(held.get() - 1);
             (test_case.failing_consume == Some(index))
                 .then(|| format!("commit {index} failed"))
                 .map_or(Ok(()), Err)
@@ -244,5 +246,9 @@ pub(crate) fn in_order(
         },
     ));
     let first = finished.borrow().first().copied().unwrap_or(u64::MAX);
-    Ok((consumed, most.get(), first, result.err()))
+    Ok((
+        consumed,
+        (most_running.get(), most_held.get(), first),
+        result.err(),
+    ))
 }
