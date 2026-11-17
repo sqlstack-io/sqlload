@@ -7,6 +7,7 @@ use crate::delivery::_helpers::stage_paths::{
 };
 use crate::delivery::constants::{
     FORBIDDEN, HISTORY_MARGIN, MAX_HISTORY_PAGES, PRUNE_LOOKBACK, RECEIVED_BEFORE_LOOKBACK,
+    UNAUTHORIZED,
 };
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{
@@ -609,10 +610,13 @@ pub(crate) fn rows_digest(rows: &[&BatchRow]) -> String {
     hex::encode(&hasher.finalize()[..12])
 }
 
-/// A COPY_HISTORY failure: a 403 means the role cannot use the warehouse or see the table's history, which retrying cannot fix; anything else is retried, as a suspended warehouse may resume.
+/// A COPY_HISTORY failure: rejected credentials, or a 403 because the role cannot use the warehouse or see the table's history, which retrying cannot fix; anything else is retried, as a suspended warehouse may resume.
 fn history_error(error: &ApiError) -> DeliveryError {
-    match error.status() {
-        Some(FORBIDDEN) => DeliveryError::Fatal(format!(
+    match (error, error.status()) {
+        (ApiError::Auth(_), _) | (_, Some(UNAUTHORIZED)) => {
+            DeliveryError::Fatal(format!("COPY_HISTORY failed: {error}"))
+        }
+        (_, Some(FORBIDDEN)) => DeliveryError::Fatal(format!(
             "COPY_HISTORY failed: {error}; the role needs USAGE on destination.warehouse and MONITOR on the pipe"
         )),
         _ => DeliveryError::Retry(format!("COPY_HISTORY failed: {error}")),
