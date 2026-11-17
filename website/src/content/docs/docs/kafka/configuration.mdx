@@ -160,7 +160,9 @@ partition and offset.
 
 On BigQuery the names are lower case and the types are `STRING` for `topic`, `key` and `value`,
 `INT64` for the Kafka timestamp, timestamp type, offset and partition, `TIMESTAMP` for
-`exported_at` and `DATE` for `date`. A `TIMESTAMP` column can also hold the Kafka timestamp, which
+`exported_at` and `DATE` for `date`. Columns can only take these types, or another name for
+`INT64` such as `INTEGER`; a config with any other type is refused. A `TIMESTAMP` column can also
+hold the Kafka timestamp, which
 is read as milliseconds. A `TIMESTAMP` or `DATE` column taken from the record needs RFC 3339 text or
 a date and time without a zone, read as UTC; any other value stops the stream, naming the column
 and the value.

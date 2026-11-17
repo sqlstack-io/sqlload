@@ -24,6 +24,19 @@ pub const DEFAULT_PIPE_TEMPLATE: &str = "{table}_SQLLOAD_PIPE";
 pub const DEFAULT_STREAMING_PIPE_TEMPLATE: &str = "{table}-STREAMING";
 pub const STREAMING_REQUEST_LIMIT: u64 = 4 * 1024 * 1024;
 pub const MAX_NAME_LENGTH: usize = 255;
+/// The BigQuery column types the exporter writes: text, integers under any of their names, instants and dates.
+pub const BIGQUERY_COLUMN_TYPES: &[&str] = &[
+    "STRING",
+    "INT64",
+    "INT",
+    "INTEGER",
+    "BIGINT",
+    "SMALLINT",
+    "TINYINT",
+    "BYTEINT",
+    "TIMESTAMP",
+    "DATE",
+];
 /// Size units and their byte multipliers.
 pub const SIZE_UNITS: &[(&str, f64)] = &[
     ("", 1.0),

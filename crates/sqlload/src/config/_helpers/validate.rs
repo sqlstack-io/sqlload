@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
+use crate::config::constants::{
+    BIGQUERY_COLUMN_TYPES, MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT,
+};
 use crate::config::errors::ConfigError;
 use crate::config::models::{
     BigQueryConfig, Config, DatabricksConfig, Destination, EnvelopeField, FileFormat, LoadMethod,
@@ -61,7 +63,22 @@ fn destination_problems(config: &Config) -> Vec<String> {
 /// BigQuery streams through the Storage Write API, or loads Parquet files uploaded with the load job or from a GCS bucket.
 fn bigquery_problems(config: &Config, bigquery: &BigQueryConfig) -> Vec<String> {
     let staging = &config.staging;
-    let mut problems: Vec<String> = Vec::new();
+    let mut problems: Vec<String> = config
+        .envelope
+        .columns
+        .iter()
+        .filter(|column| {
+            let upper = column.sql_type.trim().to_ascii_uppercase();
+            let family = upper.split(['(', '<', ' ']).next().unwrap_or_default();
+            !BIGQUERY_COLUMN_TYPES.contains(&family)
+        })
+        .map(|column| {
+            format!(
+                "envelope column {} is typed {}; the BigQuery exporter writes STRING, INT64 (or another integer name), TIMESTAMP and DATE columns",
+                column.name, column.sql_type
+            )
+        })
+        .collect();
     let project_ok = bigquery
         .project
         .chars()

@@ -98,6 +98,16 @@ fn given_bigquery_settings_that_cannot_work_when_parsing_then_the_error_names_th
             text: "[staging]\nkind = \"gcs\"\n[staging.gcs]\nbucket = \"b\"\npath = \"{topic}/\"\n",
             expected_error: "staging.gcs.path must contain {date}",
         },
+        ParseConfigErrorTestCase {
+            description: "a column type the exporter doesn't write, such as an unwrapped NUMERIC, is refused up front",
+            text: "[staging]\nkind = \"internal\"\n[[envelope.columns]]\nname = \"amount\"\nfield = \"value\"\ntype = \"NUMERIC(10,2)\"\n",
+            expected_error: "envelope column amount is typed NUMERIC(10,2)",
+        },
+        ParseConfigErrorTestCase {
+            description: "JSON is refused too",
+            text: "[staging]\nkind = \"internal\"\n[[envelope.columns]]\nname = \"payload\"\nfield = \"value\"\ntype = \"JSON\"\n",
+            expected_error: "envelope column payload is typed JSON",
+        },
     ];
     for test_case in &test_cases {
         let error = parse_config(&format!("{BIGQUERY}{}", test_case.text), &|_| None)

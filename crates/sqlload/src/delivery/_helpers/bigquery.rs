@@ -15,7 +15,7 @@ use crate::bigquery_api::main::table_path::table_path;
 use crate::bigquery_api::models::AppendRowsRequest;
 use crate::delivery::_helpers::stage::{retry, rows_digest};
 use crate::delivery::_helpers::stage_paths::{FolderValues, render_folder};
-use crate::delivery::constants::LOAD_JOB_INTERVAL;
+use crate::delivery::constants::{LOAD_JOB_INTERVAL, LOAD_JOB_WAIT};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{BigQueryDelivery, DeliveryReport, StagedLoad};
 use crate::file_format::main::batch_parquet::batch_parquet;
@@ -199,8 +199,11 @@ impl BigQueryDelivery {
                 },
             );
             let name = match prefix.is_empty() {
-                true => format!("{folder}{}_{digest}.parquet", self.stream.name),
-                false => format!("{prefix}/{folder}{}_{digest}.parquet", self.stream.name),
+                true => format!("{folder}{}_{}_{digest}.parquet", self.stream.name, self.run),
+                false => format!(
+                    "{prefix}/{folder}{}_{}_{digest}.parquet",
+                    self.stream.name, self.run
+                ),
             };
             put_object_gcs(&self.api, (&gcs.bucket, &name), body.into())
                 .await
@@ -226,9 +229,16 @@ impl BigQueryDelivery {
             tokio::time::sleep_until(last + LOAD_JOB_INTERVAL).await;
         }
         self.last_load = Some(tokio::time::Instant::now());
-        let resource = load_job(&self.api, &self.job(&job_id, &staged.uris), upload)
-            .await
-            .map_err(|error| retry("the load job", &error))?;
+        let job = self.job(&job_id, &staged.uris);
+        let Ok(started) =
+            tokio::time::timeout(LOAD_JOB_WAIT, load_job(&self.api, &job, upload)).await
+        else {
+            return Err(DeliveryError::Retry(format!(
+                "load job {job_id} did not finish within {} minutes",
+                LOAD_JOB_WAIT.as_secs() / 60
+            )));
+        };
+        let resource = started.map_err(|error| retry("the load job", &error))?;
         let error = &resource["status"]["errorResult"];
         if error.is_null() {
             return Ok(JobEnd::Loaded);
