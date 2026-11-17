@@ -205,8 +205,9 @@ the 600 MiB memory budget leaves the tables 11.7 MiB after DuckDB's 488 MiB, und
 DuckDB keeps values of about 85 KiB and more in memory from their insert until a checkpoint
 writes them to the file. So when the large values of a table's open commit reach a quarter of
 DuckDB's `memory_limit`, SQLLoad commits what it has written as a piece and carries on. Rows that
-go through a staging table first, as a `merge` or `delete_insert` does, count three times. How the
-pieces commit depends on the table:
+go through a staging table first, as a `merge` or `delete_insert` does, count three times. Under
+`send = "at_commit"`, the default on MotherDuck, the rows held for a commit are sent a piece at a
+time as well. How the pieces commit depends on the table:
 
 - A table the load builds and swaps in at the end (a first load, `replace`, `--reload`) commits
   its pieces into the build table, so nothing changes for readers.
@@ -234,7 +235,7 @@ tables load:
 
 - a table whose open row group, the rows past its last full 122,880, holds more large values than
   DuckDB can rewrite at a checkpoint. The message also gives what a full row group of such rows
-  needs:
+  needs. This doesn't apply to MotherDuck, which checkpoints on its own servers:
 
   ```text
   failed  raw.documents  documents: its last row group would hold 366 rows of about 1 MiB each of values over 85 KiB (366 MiB), more than DuckDB rewrites at a checkpoint within its 244 MiB memory_limit; raise memory_limit to at least 2GiB (a row group fills at 122,880 rows, and a table of rows this wide needs a memory_limit of at least 640.1GiB by then)
