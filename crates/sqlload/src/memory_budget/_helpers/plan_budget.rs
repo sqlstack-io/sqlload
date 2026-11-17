@@ -93,7 +93,7 @@ fn least_budget(overhead: u64, duckdb: usize) -> u64 {
 }
 
 /// `bytes` as a `memory_limit` to write: rounded up to whole MiB, or to tenths of a GiB from 1 GiB, as `640MiB` or `1.8GiB`.
-fn setting_text(bytes: u64) -> String {
+pub(in crate::memory_budget) fn setting_text(bytes: u64) -> String {
     let mib = bytes.div_ceil(BINARY_UNIT * BINARY_UNIT);
     match mib < BINARY_UNIT {
         true => format!("{mib}MiB"),

@@ -84,6 +84,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                     mode: &test_case.mode,
                     hashed: &[],
                     built: test_case.built.then_some(&[]),
+                    spared_load: None,
                 },
                 &staging,
                 (None, true),

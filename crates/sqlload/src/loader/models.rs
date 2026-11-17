@@ -1160,6 +1160,30 @@ pub struct Publisher {
     pub transform: Option<(TransformRun, usize)>,
     /// Under `send = "at_commit"`, the batches held locally until their commit sends them; `None` when each batch is sent as it is read.
     pub spool: Option<crate::commit_spool::models::Spool>,
+    /// The commit being cut into pieces under DuckDB's memory share.
+    pub pieces: Pieces,
+}
+
+/// A table's commits cut into pieces, each holding no more large values (those DuckDB keeps in memory until a checkpoint) than DuckDB's share commits at once.
+#[derive(Debug, Default)]
+pub struct Pieces {
+    /// The large values written since the last commit, counted as many times as DuckDB holds them (see [`STAGED_COPIES`](crate::memory_budget::constants::STAGED_COPIES)).
+    pub held: u64,
+    /// The large values of the rows in a row since the last change of the value pieces may only be cut between, which must commit together.
+    pub run: u64,
+    /// That value as text, at the last row written.
+    pub last_key: Option<String>,
+    /// Pieces committed since the last whole commit, which spares this load's rows when it deletes (see [`WriteStatementsRequest::spared_load`](crate::adapters::contract::models::WriteStatementsRequest)).
+    pub committed: u64,
+    /// The recovery marker is written: the table holds this load's rows before its last commit.
+    pub unfinished: bool,
+    /// The commit running is a piece: it records no run and leaves the load's position as it was.
+    pub piece: bool,
+    /// The rows the table held when this load's first large values came, then the rows it has written; `None` before then.
+    pub table_rows: Option<u64>,
+    /// The rows of this load, and their large values, which give its rows' width.
+    pub rows: u64,
+    pub large: u64,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.

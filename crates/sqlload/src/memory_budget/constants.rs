@@ -77,3 +77,9 @@ pub const STOP_PERCENT: u64 = 90;
 
 /// How often the watchdog reads the process's memory: rows of 1 MiB grew it by up to 10 MiB per 10 ms.
 pub const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
+/// How many times a piece's large values count when it goes through a staging table: written there, read back, and written to the table (a merge of 24 rows of 1 MiB from a staging table committed at 256MB; of 32, not).
+pub const STAGED_COPIES: u64 = 3;
+
+/// How much smaller pieces are cut while the watchdog holds the load at 80% of its budget.
+pub const HOLDING_DIVISOR: u64 = 4;

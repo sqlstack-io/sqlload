@@ -42,6 +42,8 @@ fn watch(watched: &Weak<MemoryGuard>) {
                 return;
             }
         };
+        #[cfg(feature = "container-tests")]
+        let held = forced_trip(&guard).unwrap_or(held);
         guard.peak.fetch_max(held, Ordering::Relaxed);
         let percent = u128::from(held) * 100 / u128::from(guard.budget.bytes.max(1));
         let holding = percent >= u128::from(HOLD_PERCENT);
@@ -52,6 +54,19 @@ fn watch(watched: &Weak<MemoryGuard>) {
             stop_largest(&guard, held);
         }
     }
+}
+
+/// In a test build, 95% of the budget while the table `SQLLOAD_TEST_WATCH_TRIP` names holds rows, so a test trips the watchdog on it.
+#[cfg(feature = "container-tests")]
+fn forced_trip(guard: &MemoryGuard) -> Option<u64> {
+    let named = std::env::var("SQLLOAD_TEST_WATCH_TRIP").ok()?;
+    let holding = guard
+        .tables
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|table| table.name.ends_with(&named) && table.held.load(Ordering::Relaxed) > 0);
+    holding.then(|| guard.budget.bytes / 100 * 95)
 }
 
 /// What the process and its bridges hold now.
@@ -93,7 +108,7 @@ fn stop_largest(guard: &MemoryGuard, held: u64) {
         .tripped
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(format!(
-        "{} stopped: the load held {} of its {} memory budget ({percent}%), and this table the most of those loading ({}); raise memory_limit, or lower batch_size",
+        "{} stopped: the load held {} of its {} memory budget ({percent}%, past the {STOP_PERCENT}% at which the table holding the most stops), this table {}; raise memory_limit, or lower batch_size",
         largest.name,
         memory_text(held),
         memory_text(budget),

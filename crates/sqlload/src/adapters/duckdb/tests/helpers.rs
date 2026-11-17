@@ -278,6 +278,7 @@ pub(crate) fn merged_rows(
             mode: &mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         },
         &staging,
         (None, false),

@@ -1652,6 +1652,7 @@ impl ChildTables {
             mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         };
         let dropped: Vec<i64> = match adapter.render_dropped_ordinals(&request, staging) {
             Some(query) => text_values(destination, query)

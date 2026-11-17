@@ -1650,3 +1650,37 @@ pub(crate) struct PlantedTestCase {
     /// Then the target's `rows|loads`, its record count and its markers.
     pub(crate) expected_state: &'static str,
 }
+
+/// Two loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.
+pub(crate) struct WideLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The source table's settings in the project.
+    pub(crate) settings: &'static str,
+    /// The rows of the source table, and how many share each `k`.
+    pub(crate) rows: u32,
+    pub(crate) key_rows: u32,
+    /// Postgres statements between the first and the second load; `None` for one load.
+    pub(crate) change: Option<&'static str>,
+    /// Variables the last load runs with.
+    pub(crate) environment: &'static [(&'static str, &'static str)],
+    pub(crate) expected_success: bool,
+    /// Phrases the last load's output holds (the table's error when it fails).
+    pub(crate) expected_output: &'static [&'static str],
+    /// The table's `rows:distinct ids:rows holding the changed body` after the loads; a small table beside it always loads.
+    pub(crate) expected_result: &'static str,
+}
+
+/// A load killed between its pieces, then run again, beside the same loads without the kill.
+pub(crate) struct KilledLoadTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) key_rows: u32,
+    /// Postgres statements after a first, untouched load that the killed load follows; `None` when the killed load is the first.
+    pub(crate) change: Option<&'static str>,
+    /// Fill the table's recovery marker with a load of `older-load` holding three copied rows, before the rerun.
+    pub(crate) older_marker: bool,
+    /// Whether the killed load left a recovery marker: an append's, whose rows a rerun would not replace.
+    pub(crate) expected_marker: bool,
+    /// The table's `rows:distinct ids:rows holding the changed body` after the rerun, as one clean load leaves it.
+    pub(crate) expected_result: &'static str,
+}

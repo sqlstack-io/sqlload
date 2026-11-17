@@ -39,6 +39,7 @@ use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
+use crate::loader::main::recover_unfinished::recover_unfinished;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
@@ -453,7 +454,12 @@ async fn run_command(
     let (destinations, mut plan) = planning(
         async {
             let destinations = connect_targets(project).await?;
-            let plan = plan_project(project, &destinations, &options).await?;
+            let recovered = match loads {
+                true => recover_unfinished(&destinations).await?,
+                false => Vec::new(),
+            };
+            let mut plan = plan_project(project, &destinations, &options).await?;
+            plan.warnings.extend(recovered);
             Ok::<_, CommandError>((destinations, plan))
         },
         project.sources.len(),
