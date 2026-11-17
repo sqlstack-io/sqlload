@@ -19,6 +19,7 @@ flate2.workspace = true
 parquet = { workspace = true, features = ["json"] }
 rcgen.workspace = true
 rdkafka.workspace = true
+regex.workspace = true
 rsa = { workspace = true, features = ["getrandom"] }
 serde_json.workspace = true
 sqlload = { workspace = true, default-features = true }

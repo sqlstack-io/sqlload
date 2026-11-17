@@ -14,6 +14,7 @@ use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest, LogFormat};
+use crate::playground::main::run_playground::run_playground;
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
 
@@ -57,6 +58,12 @@ fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) 
         Command::Load(args) => (args.json, "load"),
         _ => (false, "plan"),
     };
+    if let Command::Playground(args) = &cli.command {
+        return match run_playground(args.change, args.name.as_deref(), &cli.config) {
+            Ok(lines) => (lines, 0),
+            Err(message) => failed(false, "playground", &message.into()),
+        };
+    }
     let copies = matches!(&cli.command, Command::Copy(_));
     let text = match config_text(&cli.config, copies) {
         Ok(text) => text,

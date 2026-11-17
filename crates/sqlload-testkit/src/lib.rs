@@ -4,6 +4,7 @@
 
 pub mod clickhouse;
 pub mod configs;
+pub mod doc_pages;
 pub mod fake_bigquery;
 pub mod fake_databricks;
 pub mod fake_sheets;

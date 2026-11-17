@@ -1,0 +1,40 @@
+---
+title: "playground"
+description: "Create a self-contained project that loads CSV files into DuckDB, and change its data for an incremental load."
+---
+
+```bash
+sqlload playground [NAME] [--template shop]
+sqlload playground --change
+```
+
+`sqlload playground` writes a project into a new folder, `shop` by default. It loads 50 customers
+and 1,000 orders from CSV files in the project's `data/` folder into the DuckDB file `shop.duckdb`,
+so it needs no database, no Docker and no credentials. The [Quickstart](/docs/quickstart/) runs it
+from start to end, with its output.
+
+| File | What it is |
+|------|------------|
+| `sqlload.toml` | The project: a `filesystem` connection to `data/`, a DuckDB target, and one `files` source per folder, each merging on its key. |
+| `data/customers/customers.csv` | 50 customers. |
+| `data/orders/orders_2026-11-01.csv` | 1,000 orders. |
+| `.gitignore` | Leaves `shop.duckdb` out of Git. |
+
+The folder must not exist yet or must be empty; otherwise the command fails and changes nothing.
+
+## Changing the data
+
+`sqlload playground --change`, run in the project's folder, adds the next file of changed orders
+to `data/orders/` and prints each order it changes or adds. The next `sqlload load` merges only
+that file. With `--config`, it changes the playground whose `sqlload.toml` that is.
+
+Once every change is in the project, `--change` adds nothing and says so. To start again, delete
+`shop.duckdb` and the added files; the next `sqlload load` loads everything again.
+
+## Options
+
+| Option | Meaning |
+|--------|---------|
+| `NAME` | The new project's folder. Default `shop`. |
+| `--template <TEMPLATE>` | The project to create: `shop` (default). |
+| `--change` | Add the next change to an existing playground's data instead of creating one. Takes no `NAME` or `--template`. |
