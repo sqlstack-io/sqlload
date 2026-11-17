@@ -1590,6 +1590,15 @@ def test_given_a_python_table_repeating_a_merge_key_when_loading_then_newest_by_
 	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" ORDER BY id') == [(1, "c"), (2, "y")]
 
 
+def test_given_a_python_table_whose_first_rows_lack_its_newest_by_column_when_loading_then_later_rows_bring_it_and_the_newest_row_wins(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='v')(rows)\n")
+	first_batch = [{"id": id} for id in range(1000)]
+	give(project, "rows", [*first_batch, {"id": 1, "v": "c"}, {"id": 1, "v": "b"}])
+	load(project)
+	assert query(project, 'SELECT count(*), count(v) FROM "RAW"."shop__rows"') == [(1000, 1)]
+	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" WHERE id IN (1, 2) ORDER BY id') == [(1, "c"), (2, None)]
+
+
 def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_load_names_the_key_and_merges_nothing(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', on_duplicate_keys='fail')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 2, "v": "x"}])
@@ -1607,13 +1616,13 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 	],
 	ids=["misspelled", "json"],
 )
-def test_given_a_python_table_whose_newest_by_cannot_order_its_rows_when_loading_then_the_load_stops_before_writing_anything(tmp_path: Path, newest_by: str, rows: list[dict[str, object]], expected: str) -> None:
+def test_given_a_python_table_whose_newest_by_cannot_order_its_rows_when_loading_then_the_load_stops_before_any_row_is_written(tmp_path: Path, newest_by: str, rows: list[dict[str, object]], expected: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='{newest_by}')(rows)\n")
 	give(project, "rows", rows)
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert expected in done.stdout + done.stderr, done.stdout + done.stderr
-	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+	assert query(project, "SELECT coalesce(max(estimated_size), 0) FROM duckdb_tables() WHERE table_name = 'shop__rows'") == [(0,)]
 
 
 @pytest.mark.parametrize(

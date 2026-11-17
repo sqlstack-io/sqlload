@@ -1060,7 +1060,7 @@ impl Publisher {
         }
     }
 
-    /// Load one unload's `files` by having the destination read them itself, where the plan chose that; the destination must load them so. Each unload is a batch of its own, so the next one's row ordinals don't repeat its.
+    /// Load one unload's `files` by having the destination read them itself, where the plan chose that; the destination must load them so.
     pub(crate) async fn load_unloaded(
         &mut self,
         files: &UnloadedFiles,
@@ -1085,7 +1085,6 @@ impl Publisher {
             ))
         })?;
         self.note_direct(&loaded);
-        self.batch += 1;
         Ok(loaded)
     }
 
