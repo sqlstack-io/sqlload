@@ -95,7 +95,7 @@ versions and how to run them yourself.
 | Files | ✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through `pattern` (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
 | Google Sheets | ✓ | |
 | HTTP APIs and Python | ✓ | |
-| Kafka | ✓ into Snowflake or Databricks, through the Kafka exporter | |
+| Kafka | ✓ into Snowflake, Databricks or BigQuery, through the Kafka exporter | |
 
 ¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
 distributed tables. ClickHouse Cloud is untested.

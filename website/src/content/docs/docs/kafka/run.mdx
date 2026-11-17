@@ -1,10 +1,10 @@
 ---
 title: "Run the Kafka exporter"
-description: "Stream Kafka topics into Snowflake or Databricks tables continuously, with a streaming route or staged files."
+description: "Stream Kafka topics into Snowflake, Databricks or BigQuery tables continuously, with a streaming route, staged files or load jobs."
 ---
 
 The [Kafka exporter](/docs/kafka/) reads Kafka topics continuously and writes each one into a
-Snowflake or Databricks table, through a streaming route or staged files. Its `sqlload.toml` is described in
+Snowflake, Databricks or BigQuery table, through a streaming route, staged files or load jobs. Its `sqlload.toml` is described in
 [Kafka exporter configuration](/docs/kafka/configuration/); the repository's
 [`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
 is a complete example.
@@ -27,14 +27,16 @@ configuration.
 
 `[staging] kind` chooses the route:
 
-| `kind` | Snowflake | Databricks (from 0.66.0) |
-|--------|-----------|--------------------------|
-| `none` | Snowpipe Streaming. | Zerobus Ingest: rows sent as JSON records; a batch counts as written once the stream's flush says it's durable. |
-| `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. | Parquet files uploaded to the stream's Unity Catalog volume (`naming.stage`), then one `COPY INTO` per batch. `apply` creates the volume; `retain` prunes its dated folders. |
-| `s3` | Files in your bucket, loaded with Snowpipe or `COPY`. | Parquet files in your bucket, then `COPY INTO` from `s3://...`. Unity Catalog reads the bucket through an external location you create on it. |
+| `kind` | Snowflake | Databricks (from 0.66.0) | BigQuery (from 0.67.0) |
+|--------|-----------|--------------------------|------------------------|
+| `none` | Snowpipe Streaming. | Zerobus Ingest: rows sent as JSON records; a batch counts as written once the stream's flush says it's durable. | The Storage Write API's default stream: rows sent as Arrow; each acknowledged append is committed. |
+| `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. | Parquet files uploaded to the stream's Unity Catalog volume (`naming.stage`), then one `COPY INTO` per batch. `apply` creates the volume; `retain` prunes its dated folders. | One load job per batch, with its Parquet file sent along with the job, so no bucket is needed. |
+| `s3` | Files in your bucket, loaded with Snowpipe or `COPY`. | Parquet files in your bucket, then `COPY INTO` from `s3://...`. Unity Catalog reads the bucket through an external location you create on it. | Refused. |
+| `gcs` | Refused. | Refused. | Parquet files in your Cloud Storage bucket, then one load job per batch reading them. |
 
 Kafka offsets are committed only once the warehouse has the rows: when Snowpipe reports the files
-loaded, when `COPY INTO` returns, or when the streaming route confirms them, oldest batch first.
+loaded, when `COPY INTO` or a load job finishes, or when the streaming route confirms them, oldest
+batch first.
 Delivery is at least once: a crash or restart between the write and the Kafka commit replays
 those rows, so a table can hold a record twice. Every row carries its topic, partition and offset
 (see [Envelope columns](/docs/kafka/configuration/#envelope)), so dedupe on those three columns.
@@ -61,6 +63,26 @@ Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes`
   `s3.auto_ingest` are Snowflake's and are refused.
 - Names are lower case: catalog, schema, tables and volumes. Envelope columns default to
   Databricks types; see [Envelope columns](/docs/kafka/configuration/#envelope).
+
+### BigQuery
+
+- Sign in with a service account's key (`service_account_key`). It needs `roles/bigquery.dataEditor`
+  on the dataset and `roles/bigquery.jobUser` on the project; for `gcs`, also
+  `roles/storage.objectAdmin` on the bucket (or on its `prefix`).
+- The dataset must exist in `location`; `apply` creates the tables in it.
+- BigQuery runs at most 1,500 load jobs per table a day. On `internal` and `gcs` each batch is one
+  load job, and a table's next job starts at least 60 seconds after its previous one, so the
+  exporter stays under that quota whatever `max_age` says; `plan` notes the streams where this
+  pacing, not `max_age`, sets how often they load. Use `max_age = "5m"` or more, which leaves
+  room for retries. The Storage Write API (`none`) has no such limit.
+- Each load job is named after its batch's offsets. When the exporter retries a batch whose job
+  may already have run, it reads that job instead of running another, so a retry doesn't load the
+  rows twice. A crash before the Kafka commit can still replay them, as on every route.
+- Each Storage Write API request holds at most `max_request_bytes` of Arrow rows; BigQuery refuses
+  a request over 10 MB.
+- Files are Parquet; `staging.format = "json"` and `load = "snowpipe"` are refused.
+- Names are lower case: tables and envelope columns. Envelope columns default to BigQuery types;
+  see [Envelope columns](/docs/kafka/configuration/#envelope).
 
 ## Naming topics
 
