@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.62.0](https://github.com/sqlstack-io/sqlload/compare/v0.61.0...v0.62.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** files targets record how each commit ended in _sqlload/decided/, which earlier releases ignore: their loads can undo a repair this release decided, deleting rows. Upgrade every process that writes a files table to 0.62.0 or later before any of them loads it again, and don't load it with an earlier release afterwards.
+
+### Bug Fixes
+
+* **files:** a load that stalled after its lease check can no longer commit over another load's repair and delete a partition's files ([dba6e21](https://github.com/sqlstack-io/sqlload/commit/dba6e211e65dcc4ace6a890392e8af56659f3966))
+
 ## [0.61.0](https://github.com/sqlstack-io/sqlload/compare/v0.60.0...v0.61.0) (2026-11-17)
 
 
