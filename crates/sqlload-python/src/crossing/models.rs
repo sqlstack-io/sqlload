@@ -56,6 +56,8 @@ pub struct ReadContext {
     pub naming: (Naming, Option<usize>),
     /// The table's `timezone`, which an `sl.field` parse without its own `tz` reads times without an offset in; `None` is UTC.
     pub zone: Option<chrono_tz::Tz>,
+    /// The most the pages an `sl.http` job requests ahead may hold: a quarter of the table's share of the run's memory budget; `None` without a budget.
+    pub source_part: Option<u64>,
 }
 
 impl ReadContext {

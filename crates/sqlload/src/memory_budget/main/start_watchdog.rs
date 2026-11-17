@@ -3,15 +3,12 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
-use crate::memory_budget::_helpers::watch::{SOURCE_PART, process_held, stop_largest};
-use crate::memory_budget::constants::{
-    HOLD_PERCENT, STOP_PERCENT, TABLE_SHARE_PARTS, WATCH_INTERVAL,
-};
+use crate::memory_budget::_helpers::watch::{process_held, stop_largest};
+use crate::memory_budget::constants::{HOLD_PERCENT, STOP_PERCENT, WATCH_INTERVAL};
 use crate::memory_budget::models::{MemoryBudget, MemoryGuard};
 
 /// A guard over `budget`, read by a thread of its own every 10 ms until the guard is dropped: what the process and its MotherDuck bridges hold, against the budget. From 80% of it no table or piece starts; from 90% the table holding the most is stopped, one at a time: its DuckDB statements are interrupted (rolling back) and it fails, naming the fix, while the other tables load on. The process is never stopped.
 pub fn start_watchdog(budget: MemoryBudget) -> Arc<MemoryGuard> {
-    SOURCE_PART.store(budget.table_share / TABLE_SHARE_PARTS, Ordering::Relaxed);
     let guard = Arc::new(MemoryGuard {
         budget,
         tables: std::sync::Mutex::default(),
@@ -28,13 +25,6 @@ pub fn start_watchdog(budget: MemoryBudget) -> Arc<MemoryGuard> {
         tracing::warn!(%error, "the memory watchdog could not start; the load runs without it");
     }
     guard
-}
-
-impl Drop for MemoryGuard {
-    /// The load is over: sources no longer have a part of its budget.
-    fn drop(&mut self) {
-        SOURCE_PART.store(0, Ordering::Relaxed);
-    }
 }
 
 /// Read the memory every interval until the guard is gone.

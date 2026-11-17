@@ -25,7 +25,6 @@ use crate::http_source::models::{
     AheadPage, Calls, CellNames, Fetched, HttpPage, Location, Method, PageCall, Paginator, Request,
     RowContext, SelectMissing, Selector,
 };
-use crate::memory_budget::main::source_part::source_part;
 use crate::python_sources::errors::ReadError;
 
 /// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested that many at a time (fewer under a memory budget: only as many as pages the size of the largest yet fit in a quarter of each table's share), each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up, and is aborted when the run ends), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
@@ -60,7 +59,7 @@ pub(crate) async fn paginate(
         let fetched = match (step, ahead) {
             (1, _) | (_, 1) => fetch(calls, &call).await?,
             _ => {
-                let fitting = match (source_part(), largest) {
+                let fitting = match (calls.source_part, largest) {
                     (Some(part), largest) if largest > 0 => (part / largest).max(1),
                     _ => ahead,
                 };

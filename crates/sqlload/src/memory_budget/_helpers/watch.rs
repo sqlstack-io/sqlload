@@ -8,9 +8,6 @@ use crate::memory_budget::models::MemoryGuard;
 use crate::number_text::main::memory_text::memory_text;
 use crate::peak_memory::main::held_bytes::held_bytes;
 
-/// A quarter of each table's share of the running load's budget (see [`source_part`](crate::memory_budget::main::source_part::source_part)); 0 while no load with a budget runs.
-pub(crate) static SOURCE_PART: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 tokio::task_local! {
     /// The table this task loads, with its run's guard; unset outside a watched load.
     pub(crate) static TABLE_WATCH: crate::memory_budget::models::WatchedTable;

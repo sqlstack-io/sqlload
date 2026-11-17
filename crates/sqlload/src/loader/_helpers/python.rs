@@ -67,6 +67,7 @@ use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::masking::models::MaskRules;
+use crate::memory_budget::constants::TABLE_SHARE_PARTS;
 use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
@@ -1247,6 +1248,8 @@ fn table_read(
             sql_adapter(spec.warehouse).max_identifier_length(),
         ),
         zone: spec.timezone.map(|(zone, _)| zone),
+        source_part: (load.project.memory.budget.as_ref())
+            .map(|budget| budget.table_share / TABLE_SHARE_PARTS),
     }
 }
 

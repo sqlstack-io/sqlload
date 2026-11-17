@@ -575,7 +575,7 @@ fn key_problem(request: &Request, wanted: &[String], value: &Value) -> Option<St
 /// Run `job` on a runtime of its own, handing each page to `deliver` in arrival order; `deliver` returning `false` cancels the requests in flight.
 pub(crate) fn drive_job(
     job: HttpJob,
-    connections: &Map<String, Value>,
+    (connections, source_part): (&Map<String, Value>, Option<u64>),
     mut deliver: impl FnMut(HttpPage) -> bool,
 ) -> Result<(), ReadError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -584,7 +584,7 @@ pub(crate) fn drive_job(
         .build()
         .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?;
     let (sender, mut receiver) = channel(PAGES_AHEAD);
-    let task = runtime.spawn(run_job(job, connections.clone(), sender));
+    let task = runtime.spawn(run_job(job, (connections.clone(), source_part), sender));
     while let Some(page) = receiver.blocking_recv() {
         if !deliver(page) {
             task.abort();
@@ -602,7 +602,7 @@ pub(crate) fn drive_job(
 /// Run `job`, sending every page to `pages`.
 async fn run_job(
     job: HttpJob,
-    connections: Map<String, Value>,
+    (connections, source_part): (Map<String, Value>, Option<u64>),
     pages: Sender<HttpPage>,
 ) -> Result<(), ReadError> {
     let posts = match &job {
@@ -612,12 +612,18 @@ async fn run_job(
     let http = job_client(posts)?;
     match job {
         HttpJob::Paginate(request) => {
-            let calls = request_calls(&request, &connections, &http)?;
+            let calls = request_calls(&request, &connections, (&http, source_part))?;
             let context = RowContext::default();
             paginate(&calls, (&request, &context), &request.path, &pages).await
         }
         HttpJob::FanOut(fan_out) => {
-            run_fan_out(*fan_out, &connections, &http, Sink::Pages(pages)).await
+            run_fan_out(
+                *fan_out,
+                &connections,
+                (&http, source_part),
+                Sink::Pages(pages),
+            )
+            .await
         }
     }
 }
@@ -665,7 +671,7 @@ fn same_origin_redirect(attempt: reqwest::redirect::Attempt<'_>) -> reqwest::red
 fn request_calls(
     request: &Request,
     connections: &Map<String, Value>,
-    http: &reqwest::Client,
+    (http, source_part): (&reqwest::Client, Option<u64>),
 ) -> Result<Calls, String> {
     let client = &request.client;
     let limiter = client
@@ -690,6 +696,7 @@ fn request_calls(
         retries: client.retries,
         on_status,
         full_page_seen: std::sync::Arc::default(),
+        source_part,
     })
 }
 
@@ -697,23 +704,26 @@ fn request_calls(
 fn run_fan_out<'a>(
     fan_out: FanOut,
     connections: &'a Map<String, Value>,
-    http: &'a reqwest::Client,
+    (http, source_part): (&'a reqwest::Client, Option<u64>),
     sink: Sink,
 ) -> LevelRun<'a> {
     Box::pin(async move {
-        let calls = request_calls(&fan_out.request, connections, http)?;
+        let calls = request_calls(&fan_out.request, connections, (http, source_part))?;
         let (key_sender, key_receiver) = channel::<FanKey>(fan_out.concurrency * 2);
         let keys = Arc::new(Mutex::new(key_receiver));
         let mut tasks: JoinSet<Result<(), ReadError>> = JoinSet::new();
         let nested = matches!(sink, Sink::Keys(_)) || matches!(fan_out.over, Over::FanOut(_));
         let feed = match fan_out.over.clone() {
             Over::Values { values } => KeyFeed::Values(values),
-            Over::Paginate(over) => {
-                KeyFeed::Pages(Box::new((request_calls(&over, connections, http)?, *over)))
-            }
-            Over::FanOut(inner) => {
-                KeyFeed::FanOut(Box::new((*inner, connections.clone(), http.clone())))
-            }
+            Over::Paginate(over) => KeyFeed::Pages(Box::new((
+                request_calls(&over, connections, (http, source_part))?,
+                *over,
+            ))),
+            Over::FanOut(inner) => KeyFeed::FanOut(Box::new((
+                *inner,
+                connections.clone(),
+                (http.clone(), source_part),
+            ))),
         };
         let wanted = fan_out_placeholders(&fan_out.request);
         tasks.spawn(feed_keys(feed, wanted, key_sender, nested));
@@ -922,8 +932,8 @@ async fn feed_keys(
             paged.and(forwarded)
         }
         KeyFeed::FanOut(level) => {
-            let (inner, connections, http) = *level;
-            run_fan_out(inner, &connections, &http, Sink::Keys(keys)).await
+            let (inner, connections, (http, source_part)) = *level;
+            run_fan_out(inner, &connections, (&http, source_part), Sink::Keys(keys)).await
         }
     }
 }
