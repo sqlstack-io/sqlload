@@ -959,7 +959,9 @@ pub(crate) struct S3ProfileTestCase {
     pub(crate) profile: &'static str,
     /// The `sqlload` command run, with no AWS keys in its environment.
     pub(crate) command: &'static str,
-    /// Text its output must contain.
+    /// AWS variables set for the command.
+    pub(crate) variables: &'static [(&'static str, &'static str)],
+    /// Text its output must contain; it never holds the file's keys.
     pub(crate) expected_text: &'static str,
     pub(crate) expected_ok: bool,
 }

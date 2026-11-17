@@ -213,3 +213,27 @@ fn unloaded_value(output: &ColumnType, quoted: &str) -> String {
         _ => format!("f.{quoted}"),
     }
 }
+
+/// The statement, with its parameters, that gives DuckDB a temporary secret for `bucket`: scoped to it and named after it (hex, so two buckets never share a name), in `region`, with `keys` (key id, secret and session token, empty when there is none) passed as parameters and never in SQL, or else the AWS credential chain.
+pub(crate) fn s3_secret(
+    bucket: &str,
+    region: String,
+    keys: Option<&[String; 3]>,
+) -> (String, Vec<String>) {
+    let name: String = bucket.bytes().map(|byte| format!("{byte:02x}")).collect();
+    let scope = format!("s3://{bucket}/");
+    match keys {
+        Some([key, secret, token]) => (
+            format!(
+                "CREATE OR REPLACE TEMPORARY SECRET sqlload_s3_{name} (TYPE s3, KEY_ID ?, SECRET ?, SESSION_TOKEN ?, REGION ?, SCOPE ?)"
+            ),
+            vec![key.clone(), secret.clone(), token.clone(), region, scope],
+        ),
+        None => (
+            format!(
+                "CREATE OR REPLACE TEMPORARY SECRET sqlload_s3_{name} (TYPE s3, PROVIDER credential_chain, REGION ?, SCOPE ?)"
+            ),
+            vec![region, scope],
+        ),
+    }
+}
