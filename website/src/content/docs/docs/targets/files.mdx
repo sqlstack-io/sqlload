@@ -116,10 +116,25 @@ instead, with an error a rerun clears:
 orders: another load changed the table's files in out/orders/ after this load was planned, so what it would read may already be loaded; stopped before writing. Run the load again
 ```
 
-From 0.61.0, repairing a load found writing leaves its marker in `_sqlload/pending/` as an
-`aborted` tombstone for 7 days. That load may only have lost its lease and still be running: any
-file it stores later is deleted by the next load, rather than counting as written. After 7 days the
-next load deletes the tombstone.
+From 0.61.0, repairing a load found writing leaves an `aborted` tombstone for 7 days. That load
+may only have lost its lease and still be running: any file it stores later is deleted by the next
+load, rather than counting as written. After 7 days the next load deletes the tombstone.
+
+From 0.62.0, how each commit ended is a file in `_sqlload/decided/`, which is only ever created,
+never overwritten: a load commits by creating it as `replacing`, and a load repairing the table
+creates it as `aborted` (the tombstone). Of a load committing late and a load repairing it, only
+one decides the commit: a repair that finds the commit already finished withdraws its `aborted`
+and keeps the load's files. If that repair stops before withdrawing it, the `aborted` still isn't
+taken for a tombstone: a tombstone keeps the load's marker in `_sqlload/pending/` beside it, and the
+next load deletes an `aborted` without one, and nothing else. A load that checked its lease, then stalled past it while another load
+repaired the table, fails when it resumes, without deleting any file:
+
+```text
+…/_sqlload/decided/<commit>: this commit was already decided, by another load that repaired this table after this load's lease lapsed (or by this load's own retried write); stopped before deleting any files
+```
+
+This uses the same create-only writes as the lease, so it needs no more of the store. A store that
+can't do them fails the load rather than skip the check.
 
 ## Replacing a table
 
@@ -187,10 +202,15 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 - Before 0.27.0, a files source can't load into a files target.
 - The lease (from 0.27.0) trusts the clocks of the machines that load, and
   needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
-  A load paused for longer than its lease, or an S3-compatible store that ignores that header, can
-  still let two loads write one table. With `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail
-  instead.
+  An S3-compatible store that ignores that header can still let two loads write one table, as can,
+  before 0.62.0, a load paused for longer than its lease (but see the next point). With
+  `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail instead.
+- In a local folder, `replace` and `--reload` write the table into a hidden folder beside it and swap
+  it in. A load doing that which pauses for longer than its lease isn't covered: the next load
+  deletes its hidden folder, and when it resumes it can still swap in a table missing rows, counted
+  as loaded.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.
-- A load that lost its lease and keeps writing for more than 7 days after another load repaired it
-  isn't covered: once the `aborted` tombstone is gone, files it stores count as written.
+- A load that lost its lease and keeps going for more than 7 days after another load repaired it
+  isn't covered: once the `aborted` tombstone is gone, files it stores count as written, and from
+  0.62.0, a commit is refused only while the tombstone exists.

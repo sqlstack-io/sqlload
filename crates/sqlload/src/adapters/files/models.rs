@@ -269,7 +269,7 @@ pub struct PendingLoad {
     pub deletes: Vec<String>,
     /// The run record a logged table's load writes once its files are complete; repair writes it if the load stopped first.
     pub run: Option<PendingRun>,
-    /// An `aborted` marker old enough for repair to delete.
+    /// An `aborted` marker repair deletes: old enough, or a withdrawn decision.
     pub expired: bool,
 }
 
