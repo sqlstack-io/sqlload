@@ -18,6 +18,18 @@ fn given_an_encoded_row_when_streaming_to_zerobus_then_typed_columns_take_its_js
             expected_record: r#"{"exported_at":1794934800123000}"#,
         },
         ZerobusRecordTestCase {
+            description: "a date and time without a zone, from user data, is read as UTC",
+            columns: &[("sent_at", "TIMESTAMP")],
+            line: r#"{"sent_at":"2026-11-17 09:00:00"}"#,
+            expected_record: r#"{"sent_at":1794906000000000}"#,
+        },
+        ZerobusRecordTestCase {
+            description: "an unwrapped member arrives as quoted JSON text and is still read",
+            columns: &[("sent_at", "TIMESTAMP"), ("day", "DATE")],
+            line: r#"{"sent_at":"\"2026-11-17T09:00:00Z\"","day":"\"1970-01-03\""}"#,
+            expected_record: r#"{"sent_at":1794906000000000,"day":2}"#,
+        },
+        ZerobusRecordTestCase {
             description: "a date becomes days since the epoch",
             columns: &[("date", "DATE")],
             line: r#"{"date":"1970-01-03"}"#,
@@ -110,6 +122,14 @@ fn given_a_stream_that_would_not_open_when_classifying_it_then_only_transient_fa
                     "no MODIFY"
                 ))
             )),
+        },
+        OpenErrorTestCase {
+            description: "a token request refused as a bad client, such as a wrong secret, stops the exporter",
+            error: ZerobusError::InvalidUCTokenError("Client error (400): invalid_client".to_owned()),
+            expected_error: DeliveryError::Fatal(
+                "Zerobus Ingest open stream failed: Specified UC token is in invalid format: Client error (400): invalid_client."
+                    .to_owned(),
+            ),
         },
         OpenErrorTestCase {
             description: "a timeout retries as the SDK classes it",

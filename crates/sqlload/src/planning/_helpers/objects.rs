@@ -135,7 +135,11 @@ fn table_object(
 ) -> PlannedObject {
     let state = match existing.tables.get(&stream.table) {
         None => ObjectState::Missing,
-        Some(columns) => match column_problems(&config.envelope.columns, columns) {
+        Some(columns) => match column_problems(
+            &config.envelope.columns,
+            columns,
+            !config.destination.is_snowflake(),
+        ) {
             problems if problems.is_empty() => ObjectState::Exists,
             problems => ObjectState::Incompatible(problems),
         },

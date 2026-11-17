@@ -52,6 +52,13 @@ fn given_databricks_routes_when_planning_then_tables_and_volumes_are_lower_case(
             expected_sql: &[],
         },
         DatabricksPlanTestCase {
+            description: "a MAP column matches the type Databricks reports without spaces",
+            staging: "[staging]\nkind = \"none\"\n[[envelope.columns]]\nname = \"headers\"\nfield = \"headers\"\ntype = \"MAP<STRING, STRING>\"\n",
+            existing_columns: &[("headers", "map<string,string>")],
+            expected_objects: &["=table shop__orders"],
+            expected_sql: &[],
+        },
+        DatabricksPlanTestCase {
             description: "a column of another family is incompatible",
             staging: "[staging]\nkind = \"none\"\n",
             existing_columns: &[("topic", "string"), ("kafka_offset", "string")],

@@ -106,6 +106,11 @@ impl Destination {
             Self::Databricks(databricks) => &databricks.schema,
         }
     }
+
+    /// True for Snowflake, whose unquoted names are upper case; Databricks names are lower case.
+    pub fn is_snowflake(&self) -> bool {
+        matches!(self, Self::Snowflake(_))
+    }
 }
 
 /// A Snowflake account.

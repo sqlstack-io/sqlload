@@ -55,6 +55,14 @@ fn given_a_delivery_mode_when_planning_then_each_stream_needs_the_matching_objec
             expected_objects: &["=table SHOP__ORDERS"],
             expected_problems: 0,
         },
+        BuildPlanTestCase {
+            description: "a lower-case configured name is a quoted column on Snowflake, not the upper-case one",
+            staging: "[staging]\nkind = \"none\"\n[[envelope.columns]]\nname = \"value\"\nfield = \"value\"\ntype = \"VARCHAR\"\n",
+            key_pair: false,
+            existing_columns: &[("VALUE", "TEXT")],
+            expected_objects: &["!table SHOP__ORDERS"],
+            expected_problems: 1,
+        },
     ];
     for test_case in &test_cases {
         let plan = plan_for(

@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
 use crate::config::errors::ConfigError;
 use crate::config::models::{
-    Config, DatabricksConfig, Destination, FileFormat, LoadMethod, S3Config, StagingKind,
+    Config, DatabricksConfig, Destination, EnvelopeField, FileFormat, LoadMethod, S3Config,
+    StagingKind,
 };
 
 /// Reject settings that parse but cannot work together.
@@ -55,7 +56,16 @@ fn destination_problems(config: &Config) -> Vec<String> {
 /// Databricks loads Parquet files with COPY INTO, or streams through Zerobus Ingest.
 fn databricks_problems(config: &Config, databricks: &DatabricksConfig) -> Vec<String> {
     let staging = &config.staging;
-    let mut problems: Vec<String> = Vec::new();
+    let mut problems: Vec<String> = config
+        .envelope
+        .columns
+        .iter()
+        .filter(|column| {
+            column.field == EnvelopeField::Timestamp
+                && column.sql_type.trim().to_ascii_uppercase().starts_with("TIMESTAMP")
+        })
+        .map(|column| format!("envelope column {} holds the Kafka timestamp, milliseconds since the epoch, which Databricks would read as another unit; type it BIGINT", column.name))
+        .collect();
     if staging.kind == StagingKind::None && databricks.zerobus_endpoint.is_none() {
         problems.push("staging.kind = \"none\" on Databricks streams through Zerobus Ingest and needs destination.zerobus_endpoint (https://<workspace-id>.zerobus.<region>.cloud.databricks.com)".to_owned());
     }

@@ -16,6 +16,7 @@ use crate::delivery::models::{CopyDelivery, DeliveryReport, StagedBatch, StagedF
 use crate::file_format::main::databricks_copy::databricks_copy;
 use crate::file_format::main::encode_file::encode_file;
 use crate::file_format::main::file_extension::file_extension;
+use crate::http::errors::ApiError;
 use crate::naming::main::databricks_table::databricks_table;
 use crate::stage_api::main::put_object::put_object;
 use crate::stage_api::models::{ObjectUpload, PutOutcome};
@@ -150,7 +151,7 @@ impl CopyDelivery {
                 databricks_copy(&table, &self.config.envelope.columns, &location, &files);
             execute_statement(&self.api, &statement)
                 .await
-                .map_err(|error| retry("COPY INTO", &error))?;
+                .map_err(copy_error)?;
         }
         Ok(())
     }
@@ -190,5 +191,13 @@ impl CopyDelivery {
                 .map_err(|error| retry("volume cleanup", &error))?;
         }
         Ok(removed)
+    }
+}
+
+/// A `COPY INTO` that failed is retried, within the batch time limit, unless sign-in was refused: a warehouse restart cancels statements and concurrent Delta commits conflict, and a retry loads only the files not loaded yet.
+fn copy_error(error: ApiError) -> DeliveryError {
+    match error {
+        ApiError::Auth(_) => DeliveryError::Fatal(format!("COPY INTO failed: {error}")),
+        error => DeliveryError::Retry(format!("COPY INTO failed: {error}")),
     }
 }

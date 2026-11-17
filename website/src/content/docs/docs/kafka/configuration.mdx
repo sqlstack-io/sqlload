@@ -133,7 +133,11 @@ Every table has the same columns, filled from each record. On Snowflake:
 On Databricks the names are lower case and the types are `STRING` for `topic`, `key` and `value`,
 `BIGINT` for `kafka_timestamp` and `kafka_offset`, `INT` for `kafka_timestamp_type` and
 `kafka_partition`, `TIMESTAMP` for `exported_at` and `DATE` for `date`. A `VARIANT` column holds the
-parsed JSON value; `MAP`, `STRUCT` and `ARRAY` columns are read from the JSON text.
+parsed JSON value; `MAP`, `STRUCT` and `ARRAY` columns are read from the JSON text. The Kafka
+timestamp is milliseconds since the epoch, so its column must stay `BIGINT`. With Zerobus Ingest, a
+`TIMESTAMP` column taken from the record (`key`, `value` or an unwrapped member) needs RFC 3339 text
+or a date and time without a zone, read as UTC; any other value stops the stream with its topic,
+partition and offset.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

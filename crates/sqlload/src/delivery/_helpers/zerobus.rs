@@ -27,7 +27,12 @@ impl ZerobusDelivery {
         let mut records: Vec<(u64, String)> = Vec::with_capacity(batch.rows.len());
         let mut skipped_rows = 0;
         for row in &batch.rows {
-            let record = zerobus_record(&self.columns, &kinds, &row.line)?;
+            let record = zerobus_record(&self.columns, &kinds, &row.line).map_err(|error| {
+                DeliveryError::Fatal(format!(
+                    "{}/{} offset {}: {error}",
+                    row.topic, row.partition, row.offset
+                ))
+            })?;
             match record.len() as u64 > self.max_request_bytes {
                 false => records.push((record.len() as u64, record)),
                 true if self.oversized == OversizedPolicy::Skip => {
@@ -118,14 +123,14 @@ pub(crate) fn zerobus_kind(column: &ColumnConfig) -> ZerobusKind {
     }
 }
 
-/// One encoded row as Zerobus Ingest's JSON: timestamps in microseconds, dates in days, VARIANT values as JSON text.
+/// One encoded row as Zerobus Ingest's JSON: timestamps in microseconds, dates in days, VARIANT values as JSON text; the error names a value no timestamp or date column can take.
 pub(crate) fn zerobus_record(
     columns: &[ColumnConfig],
     kinds: &[ZerobusKind],
     line: &str,
-) -> Result<String, DeliveryError> {
-    let mut row: Map<String, Value> = serde_json::from_str(line)
-        .map_err(|error| DeliveryError::Fatal(format!("row is not a JSON object: {error}")))?;
+) -> Result<String, String> {
+    let mut row: Map<String, Value> =
+        serde_json::from_str(line).map_err(|error| format!("row is not a JSON object: {error}"))?;
     for (column, kind) in columns.iter().zip(kinds) {
         let Some(value) = row.get_mut(&column.name) else {
             continue;
@@ -134,18 +139,14 @@ pub(crate) fn zerobus_record(
             continue;
         }
         *value = match (kind, value.as_str()) {
-            (ZerobusKind::Timestamp, Some(text)) => {
-                match chrono::DateTime::parse_from_rfc3339(text) {
-                    Ok(instant) => Value::from(instant.timestamp_micros()),
-                    Err(error) => return Err(unexpected(&column.name, text, &error)),
-                }
-            }
-            (ZerobusKind::Date, Some(text)) => {
-                match chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
-                    Ok(date) => Value::from((date - chrono::NaiveDate::default()).num_days()),
-                    Err(error) => return Err(unexpected(&column.name, text, &error)),
-                }
-            }
+            (ZerobusKind::Timestamp, Some(text)) => match instant_micros(text) {
+                Some(micros) => Value::from(micros),
+                None => return Err(unreadable(&column.name, text, "timestamp")),
+            },
+            (ZerobusKind::Date, Some(text)) => match epoch_days(text) {
+                Some(days) => Value::from(days),
+                None => return Err(unreadable(&column.name, text, "date")),
+            },
             (ZerobusKind::Variant, _) => Value::from(value.to_string()),
             _ => continue,
         };
@@ -153,11 +154,34 @@ pub(crate) fn zerobus_record(
     Ok(Value::Object(row).to_string())
 }
 
-/// An envelope value sqlload wrote itself that does not parse: a bug, never retried.
-fn unexpected(column: &str, text: &str, error: &chrono::ParseError) -> DeliveryError {
-    DeliveryError::Fatal(format!(
-        "column {column} holds {text:?}, which is not the time sqlload writes: {error}"
-    ))
+/// Microseconds since the epoch from RFC 3339 text, or a date and time without a zone read as UTC; an unwrapped member arrives as its JSON text, quoted.
+fn instant_micros(text: &str) -> Option<i64> {
+    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
+    if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(&text) {
+        return Some(instant.timestamp_micros());
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        match chrono::NaiveDateTime::parse_from_str(&text, format) {
+            Ok(naive) => return Some(naive.and_utc().timestamp_micros()),
+            Err(_) => continue,
+        }
+    }
+    None
+}
+
+/// Days since the epoch from `YYYY-MM-DD`, quoted or not.
+fn epoch_days(text: &str) -> Option<i64> {
+    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
+    match chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d") {
+        Ok(date) => Some((date - chrono::NaiveDate::default()).num_days()),
+        Err(_) => None,
+    }
+}
+
+fn unreadable(column: &str, text: &str, kind: &str) -> String {
+    format!(
+        "column {column} holds {text:?}, which Zerobus Ingest cannot take as a {kind}; fix the producer, or type the column STRING to keep such values as text"
+    )
 }
 
 /// Records grouped into requests of at most `limit` bytes each, in order.
@@ -187,7 +211,9 @@ fn oversized_message(row: &BatchRow, bytes: usize, limit: u64) -> String {
 /// Opening a stream retries what the SDK calls transient, and also an authorisation refusal: Zerobus Ingest refuses some first token requests for a table it grants seconds later. The exporter's batch retry gives up after its usual limit, naming the grants a lasting refusal needs; every other open failure stops the exporter.
 pub(crate) fn open_error(table: &str, client_id: &str, error: &ZerobusError) -> DeliveryError {
     let refused = match error {
-        ZerobusError::InvalidUCTokenError(_) => true,
+        ZerobusError::InvalidUCTokenError(message) => {
+            message.starts_with("Client error (401)") || message.starts_with("Client error (403)")
+        }
         ZerobusError::CreateStreamError(status) => {
             matches!(
                 status.code(),

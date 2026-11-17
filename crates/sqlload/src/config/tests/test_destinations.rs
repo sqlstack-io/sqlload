@@ -145,6 +145,11 @@ fn given_databricks_settings_that_cannot_work_when_parsing_then_the_error_names_
             expected_error: "Unity Catalog external location",
         },
         ParseConfigErrorTestCase {
+            description: "the Kafka timestamp, in milliseconds, cannot be a TIMESTAMP column",
+            text: "[staging]\nkind = \"internal\"\n[[envelope.columns]]\nname = \"kafka_timestamp\"\nfield = \"timestamp\"\ntype = \"TIMESTAMP\"\n",
+            expected_error: "envelope column kafka_timestamp holds the Kafka timestamp",
+        },
+        ParseConfigErrorTestCase {
             description: "Snowflake keys are unknown on Databricks",
             text: "account = \"a\"\n[staging]\nkind = \"internal\"\n",
             expected_error: "unknown field `account`",
