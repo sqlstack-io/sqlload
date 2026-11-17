@@ -10,6 +10,8 @@ mod pull_insert;
 mod pulled_unloaded;
 #[path = "tests/test_reserved_names.rs"]
 mod reserved_names;
+#[path = "tests/test_s3_secret.rs"]
+mod s3_secret;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_unloaded_insert.rs"]

@@ -2,6 +2,7 @@
 
 use crate::adapters::contract::main::_files_direct_problem::files_direct_problem;
 use crate::adapters::duckdb::_helpers::direct_checks::{custom_endpoint, reserved_name};
+use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
 use crate::files_source::models::{FilesRead, SourceFormat};
 use crate::loader::models::TableSpec;
 
@@ -11,7 +12,7 @@ pub(in crate::adapters) fn direct_problem(spec: &TableSpec, read: &FilesRead) ->
     let problems = [
         (files.encoding.format != SourceFormat::Parquet)
             .then(|| "only Parquet files are read by DuckDB itself".to_owned()),
-        custom_endpoint(&files.location.store),
+        custom_endpoint(&files.location.store, &environment_variable),
         files.table.columns.iter().find_map(reserved_name),
         (!spec.masked.columns.is_empty()).then(|| "the table masks columns".to_owned()),
         files_direct_problem(files, read),
