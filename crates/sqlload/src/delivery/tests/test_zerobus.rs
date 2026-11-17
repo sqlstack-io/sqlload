@@ -24,6 +24,12 @@ fn given_an_encoded_row_when_streaming_to_zerobus_then_typed_columns_take_its_js
             expected_record: r#"{"sent_at":1794906000000000}"#,
         },
         ZerobusRecordTestCase {
+            description: "a date column fed a timestamp takes its UTC date",
+            columns: &[("day", "DATE")],
+            line: r#"{"day":"1970-01-03T23:30:00-01:00"}"#,
+            expected_record: r#"{"day":3}"#,
+        },
+        ZerobusRecordTestCase {
             description: "an unwrapped member arrives as quoted JSON text and is still read",
             columns: &[("sent_at", "TIMESTAMP"), ("day", "DATE")],
             line: r#"{"sent_at":"\"2026-11-17T09:00:00Z\"","day":"\"1970-01-03\""}"#,
@@ -125,9 +131,9 @@ fn given_a_stream_that_would_not_open_when_classifying_it_then_only_transient_fa
         },
         OpenErrorTestCase {
             description: "a token request refused as a bad client, such as a wrong secret, stops the exporter",
-            error: ZerobusError::InvalidUCTokenError("Client error (400): invalid_client".to_owned()),
+            error: ZerobusError::InvalidUCTokenError("Client error (401): invalid_client".to_owned()),
             expected_error: DeliveryError::Fatal(
-                "Zerobus Ingest open stream failed: Specified UC token is in invalid format: Client error (400): invalid_client."
+                "Zerobus Ingest open stream failed: Specified UC token is in invalid format: Client error (401): invalid_client."
                     .to_owned(),
             ),
         },

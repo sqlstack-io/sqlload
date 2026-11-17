@@ -169,12 +169,12 @@ fn instant_micros(text: &str) -> Option<i64> {
     None
 }
 
-/// Days since the epoch from `YYYY-MM-DD`, quoted or not.
+/// Days since the epoch from `YYYY-MM-DD`, quoted or not, or the UTC date of a timestamp.
 fn epoch_days(text: &str) -> Option<i64> {
-    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
-    match chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d") {
+    let unquoted = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
+    match chrono::NaiveDate::parse_from_str(&unquoted, "%Y-%m-%d") {
         Ok(date) => Some((date - chrono::NaiveDate::default()).num_days()),
-        Err(_) => None,
+        Err(_) => instant_micros(text).map(|micros| micros.div_euclid(86_400_000_000)),
     }
 }
 
@@ -212,7 +212,8 @@ fn oversized_message(row: &BatchRow, bytes: usize, limit: u64) -> String {
 pub(crate) fn open_error(table: &str, client_id: &str, error: &ZerobusError) -> DeliveryError {
     let refused = match error {
         ZerobusError::InvalidUCTokenError(message) => {
-            message.starts_with("Client error (401)") || message.starts_with("Client error (403)")
+            (message.starts_with("Client error (401)") || message.starts_with("Client error (403)"))
+                && !message.contains("invalid_client")
         }
         ZerobusError::CreateStreamError(status) => {
             matches!(
