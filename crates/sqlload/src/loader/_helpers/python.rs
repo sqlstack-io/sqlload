@@ -389,7 +389,7 @@ pub(crate) fn source_spelling(stored: &str, spec: &TableSpec) -> String {
 pub(crate) struct YieldedData<'a> {
     pub(crate) schema: &'a Schema,
     pub(crate) null_columns: &'a BTreeSet<String>,
-    /// True on the last plan, once every row is in: every column is typed then.
+    /// True on the last plan, once every row is in: every column is typed then, and every newest_by column must be written unless there are no rows to merge.
     pub(crate) settled: bool,
     pub(crate) rows: u64,
 }
@@ -812,10 +812,11 @@ impl PythonFeed {
         }
         let adapter = sql_adapter(self.table.spec.warehouse);
         let write_columns = &self.table.schema.write_columns;
-        if let Some(problem) = self
-            .table
-            .spec
-            .newest_by
+        let merged_by = match self.rows {
+            0 => &[][..],
+            _ => &self.table.spec.newest_by[..],
+        };
+        if let Some(problem) = merged_by
             .iter()
             .find_map(|name| newest_by_problem(adapter, write_columns, name))
         {
@@ -1190,7 +1191,7 @@ async fn replan(
             field.name().eq_ignore_ascii_case(name)
                 && !data.null_columns.iter().any(|null| null.eq_ignore_ascii_case(name))
         };
-        data.settled || data.schema.fields().iter().any(typed)
+        (data.settled && data.rows > 0) || data.schema.fields().iter().any(typed)
     };
     let newest_by = columns.spec.newest_by.iter().filter(seen);
     if let Some(problem) = newest_by

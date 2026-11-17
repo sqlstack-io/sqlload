@@ -1599,6 +1599,16 @@ def test_given_a_python_table_whose_first_rows_lack_its_newest_by_column_when_lo
 	assert query(project, 'SELECT id, v FROM "RAW"."shop__rows" WHERE id IN (1, 2) ORDER BY id') == [(1, "c"), (2, None)]
 
 
+def test_given_newest_by_added_to_a_python_table_when_a_run_yields_no_rows_then_it_loads_nothing_without_failing(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id')(rows)\n")
+	give(project, "rows", [{"id": 1}])
+	load(project)
+	(project / "sources" / "shop.py").write_text(SHOP_MODULE.replace("{tables}", "shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='v')(rows)\n"))
+	give(project, "rows", [])
+	load(project)
+	assert query(project, 'SELECT id FROM "RAW"."shop__rows"') == [(1,)]
+
+
 def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_load_names_the_key_and_merges_nothing(tmp_path: Path) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='merge', unique_key='id', on_duplicate_keys='fail')(rows)\n")
 	give(project, "rows", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}, {"id": 2, "v": "x"}])
