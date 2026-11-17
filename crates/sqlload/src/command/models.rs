@@ -70,6 +70,29 @@ pub enum Command {
     },
     /// Copy one table once, between connections named in sqlload.toml or URIs (sqlload.toml is optional).
     Copy(CopyArgs),
+    /// Create a self-contained project that loads CSV files into DuckDB, or with --change add the next change to its data.
+    Playground(PlaygroundArgs),
+}
+
+/// `sqlload playground`'s folder and template, or `--change`.
+#[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
+pub struct PlaygroundArgs {
+    /// The new project's folder (default: shop).
+    #[arg(value_name = "NAME", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    pub name: Option<String>,
+    /// The project to create; `shop` is the only one.
+    #[arg(long, value_enum, default_value_t = PlaygroundTemplate::Shop)]
+    pub template: PlaygroundTemplate,
+    /// Add the next change to the data of the playground in this folder, for an incremental load.
+    #[arg(long, conflicts_with_all = ["name", "template"])]
+    pub change: bool,
+}
+
+/// The projects `sqlload playground` creates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PlaygroundTemplate {
+    /// Customers and orders as CSV files, merged into DuckDB.
+    Shop,
 }
 
 /// What `sqlload contract` does.

@@ -24,6 +24,7 @@ check-ci:
 
 test-unit:
 	cargo test --workspace --lib --features sqlload/odbc --quiet
+	cargo test -p sqlload --test playground --quiet
 
 # CI's rust-cache can restore DuckDB's unpacked bundled sources without their `.complete` marker;
 # libduckdb-sys then fails to unpack over them ("Directory not empty") whenever its build script
@@ -39,6 +40,7 @@ clean-partial-duckdb-sources:
 test-containers:
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test exporter --quiet -- --test-threads=2
 	AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test loader --quiet -- --test-threads=2
+	cargo test -p sqlload --features container-tests,odbc --test playground --quiet -- postgres
 
 # The ClickHouse container tests again, on the newer server.
 test-clickhouse-latest:

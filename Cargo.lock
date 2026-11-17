@@ -5775,6 +5775,7 @@ dependencies = [
  "parquet",
  "rcgen",
  "rdkafka",
+ "regex",
  "rsa 0.9.10",
  "serde_json",
  "sqlload",

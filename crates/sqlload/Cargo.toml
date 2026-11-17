@@ -149,6 +149,11 @@ path = "tests/adapters.rs"
 required-features = ["container-tests"]
 
 [[test]]
+name = "playground"
+path = "tests/playground.rs"
+required-features = ["cli", "duckdb"]
+
+[[test]]
 name = "loader"
 path = "tests/loader.rs"
 required-features = ["container-tests", "duckdb"]

@@ -46,5 +46,6 @@ pub(crate) async fn run_exporter_command(
         ),
         Command::Contract { .. } => Err("contract runs on loader projects; this file is an exporter configuration".to_owned()),
         Command::Copy(_) => Err("copy runs outside the exporter; this file is an exporter configuration".to_owned()),
+        Command::Playground(_) => Err("playground runs outside the exporter; this file is an exporter configuration".to_owned()),
     }
 }
