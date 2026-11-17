@@ -12,6 +12,7 @@ use crate::adapters::dispatch::models::Destination;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
 use crate::auth::main::google_token_cache_file::google_token_cache_file;
 use crate::auth::models::GoogleUser;
+use crate::batch_plan::main::source_readers::source_readers;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
@@ -66,18 +67,17 @@ use crate::loader::_helpers::specs::{path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 use crate::loader::constants::NO_TRANSFORM_HOST;
 use crate::loader::constants::{
-    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READERS, PRIMARY_KEY_PLACEHOLDER,
-    RELOAD_FIX, SOURCE_BATCH_ROWS,
+    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX,
+    SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesTransform;
 use crate::loader::models::TransformRun;
 use crate::loader::models::{
-    CommitRule, DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd,
-    SourceProblem, SourceReader, TablePlan, TableSpec,
+    DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd, SourceProblem,
+    SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
-use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
@@ -185,22 +185,10 @@ pub(crate) fn files_location(
         .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order (windows and cursor-ordered reads keep one connection).
-pub(crate) fn source_readers(table: &TablePlan) -> usize {
-    let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
-    let postgres = table.spec.python.is_none()
-        && table.spec.files.is_none()
-        && table.spec.sheet.is_none()
-        && table.spec.warehouse_source.is_none();
-    let large = table
-        .spec
-        .source_table
-        .split_pages
-        .is_some_and(|pages| pages >= SPLIT_READ_MIN_PAGES);
-    match whole && postgres && large {
-        true => PARALLEL_READERS,
-        false => 1,
-    }
+/// The plan's note on a read over several Postgres connections (see [`source_readers`]); `None` for a read over one.
+pub(crate) fn readers_note(table: &TablePlan) -> Option<String> {
+    let readers = source_readers(table);
+    (readers > 1).then(|| format!("reads over {readers} connections, in one snapshot"))
 }
 
 /// A connected reader for `source`, with up to `readers` connections in all for a Postgres table read in parallel (a helper that cannot connect is left out).
@@ -216,7 +204,10 @@ pub(crate) async fn open_source(
             for _ in 1..readers {
                 match connect_source(project, source).await {
                     Ok((helper, _)) => helpers.push(helper),
-                    Err(_) => break,
+                    Err(error) => {
+                        tracing::warn!(%error, "reading over fewer connections: one more did not open");
+                        break;
+                    }
                 }
             }
             Ok(SourceReader::Postgres(client, helpers))
@@ -1473,6 +1464,8 @@ pub(crate) struct ReadPart {
     pub(crate) batch_bytes: Option<usize>,
     /// What runs the table's `transform`; `None` without a Python host.
     pub(crate) transform: Option<TransformRun>,
+    /// The Postgres connection that reads it: 0 for the client, `n` for its `n`th helper.
+    pub(crate) connection: usize,
 }
 
 /// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch` with its `parse` columns parsed; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
@@ -1513,6 +1506,13 @@ async fn read_each(
     match (reader, &table.files) {
         (SourceReader::Postgres(client, helpers), _) => {
             let whole = part.filter.is_none() && part.order_by.is_none();
+            let client = match part.connection {
+                0 => Some(client),
+                helper => helpers.get(helper - 1),
+            }
+            .ok_or_else(|| {
+                LoaderError::Invalid("a read was given a connection never opened".to_owned())
+            })?;
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),

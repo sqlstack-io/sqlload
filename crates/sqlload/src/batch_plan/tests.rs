@@ -6,6 +6,8 @@ mod cut_index;
 mod file_groups;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_read_in_order.rs"]
+mod read_in_order;
 #[path = "tests/test_split_windows.rs"]
 mod split_windows;
 #[path = "tests/test_types.rs"]

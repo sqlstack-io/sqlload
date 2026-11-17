@@ -450,6 +450,7 @@ pub(crate) fn build_spec(
         newest_by,
         cursor,
         batch,
+        batch_concurrency: settings.batch_concurrency.or(defaults.batch_concurrency),
         constants,
         shared_destination: false,
         #[cfg(feature = "container-tests")]

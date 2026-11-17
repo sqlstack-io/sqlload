@@ -286,6 +286,41 @@ loaded  raw.app__orders  1,000 rows 0.1s
 A Python table with `batch_size` is called once per window, with `ctx.cursor_value` and
 `ctx.cursor_end` set to it.
 
+### Reading windows at once
+
+From 0.65.0, a Postgres table with `batch_size` can read several windows at once while still
+committing them one at a time, in window order. Set `microbatch_concurrency = true` at the top of
+the project, then `batch_concurrency` on the table or its source:
+
+```toml
+microbatch_concurrency = true
+
+[sources.app.tables."public.events"]
+description = "Events, one row per event."
+write_strategy = "delete_insert"
+cursor_column = "occurred_at"
+cursor_start = "2026-01-01"
+batch_size = "1d"
+batch_concurrency = 4
+```
+
+Each window is read over its own connection, and every connection shares one snapshot, so the
+windows see the source as it was when the load began and no row is read twice or missed while the
+source changes. A window read ahead of its turn is held, masked, in a local folder (the target's
+`staging_dir`, or the system's temporary folder) until every window before it has committed; at
+most `batch_concurrency` windows are held at once, counting the one committing, so a read starts
+only once the window that many places before it has committed. `batch_concurrency` is at most 16. A
+window that fails stops the load with only the windows before it committed, as a read of one
+window at a time would, and the next run carries on from there.
+
+It pays off when reading a window takes longer than committing it. In a local run of 8 daily
+windows of 400,000 rows from Postgres, 4 at once cut a ClickHouse load from 8.9 s to 6.7 s, while a
+DuckDB load, whose commits take longer than its reads, gained nothing.
+
+`plan -v` shows it on the `commits` line, such as `5 windows of 1day, one commit each, read 4 at
+once`, and notes the connections the read uses. Other sources, and tables that commit no
+`batch_size` windows, read one window at a time; `plan` warns that the setting is ignored.
+
 ## Rows outside the window
 
 From 0.53.0. A Python table's function is asked for one window at a time, from `ctx.cursor_value`

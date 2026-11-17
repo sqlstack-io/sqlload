@@ -91,6 +91,7 @@ write_strategy = "merge"
 unique_key = "{primary_key}"
 cursor_column = "updated_at"
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RUNS,
@@ -110,6 +111,7 @@ unique_key = "{primary_key}"
 cursor_column = "updated_at"
 null_cursor = "include"
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RUNS,
@@ -129,6 +131,7 @@ unique_key = "{primary_key}"
 cursor_column = "updated_at"
 null_cursor = "ignore"
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RUNS,
@@ -147,6 +150,7 @@ write_strategy = "merge"
 unique_key = "{primary_key}"
 cursor_column = ["updated_at", "created_at"]
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RUNS,
@@ -166,6 +170,7 @@ unique_key = "{primary_key}"
 cursor_column = "updated_at"
 null_cursor = "include"
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RELOAD_RUNS,
@@ -184,6 +189,7 @@ unique_key = "{primary_key}"
 cursor_column = "updated_at"
 null_cursor = "ignore"
 "#,
+                project: "",
                 batch_bytes: None,
                 concurrency: None,
                 runs: RELOAD_RUNS,

@@ -10,8 +10,8 @@ use crate::adapters::files::models::{PartitionBy, PartitionWindowRequest};
 use crate::column_types::models::ColumnType;
 use crate::loader::_helpers::table_plan::{Window, source_cursor, source_filter};
 use crate::loader::constants::{EXCLUSIVE_BOUND, INCLUSIVE_BOUND};
-use crate::loader::models::CursorBinding;
-use crate::loader::models::FilesWindowRequest;
+use crate::loader::models::{CursorBinding, CursorSpec};
+use crate::loader::models::{FilesWindowRequest, FilesWindowStarts};
 use crate::project::models::WriteStrategy;
 
 /// The source filter, write mode and `plan` note: partitions from the newest one (`delete_insert`) or rows after the newest files' maximum (`append`; from it for a files source, which picks whole files of the newest partition on).
@@ -50,19 +50,12 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 .to_owned(),
         );
     }
-    let flag = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(|text| cursor_text(text, cursor_type, spec.zone()))
-            .transpose()
-    };
-    let (start, end) = (flag(&options.start_cursor)?, flag(&options.end_cursor)?);
-    let newest = request
-        .listed
-        .partitions
-        .last()
-        .and_then(|partition| partition.value.as_deref())
-        .filter(|_| !options.reload);
+    let FilesWindowStarts {
+        start,
+        end,
+        cursor_start,
+        newest,
+    } = window_starts(request, cursor, cursor_type)?;
     let column = cursor.column.as_str();
     let expression = source_cursor(spec, request.read_columns, Some(cursor_type))
         .unwrap_or_else(|| column.to_owned());
@@ -78,7 +71,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 start: start.as_deref(),
                 start_flag: options.range_flags.start,
                 end: end.as_deref(),
-                cursor_start: cursor.start.as_deref(),
+                cursor_start: cursor_start.as_deref(),
                 reload: options.reload,
             })?;
             (window.from, window.to, window.note, INCLUSIVE_BOUND)
@@ -97,7 +90,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 }
                 _ => None,
             };
-            let (from, note, operator) = match (start, maximum, &cursor.start) {
+            let (from, note, operator) = match (start, maximum, &cursor_start) {
                 (Some(start), _, _) => (
                     Some(start.clone()),
                     format!("{column} from {start} ({})", options.range_flags.start),
@@ -152,6 +145,31 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
         note: Some(note),
         inclusive: operator == INCLUSIVE_BOUND,
         maximum: data_maximum,
+    })
+}
+
+/// What the window can start and end at: `--start-cursor`, `--end-cursor` and `cursor_start` as cursor text, read as other targets read them, and the value of the target's newest partition, which `--reload` ignores, as it rewrites them all.
+fn window_starts<'a>(
+    request: &FilesWindowRequest<'a>,
+    cursor: &CursorSpec,
+    cursor_type: &ColumnType,
+) -> Result<FilesWindowStarts<'a>, String> {
+    let (options, zone) = (request.options, request.spec.zone());
+    let text = |value: &Option<String>| {
+        (value.as_deref())
+            .map(|text| cursor_text(text, cursor_type, zone))
+            .transpose()
+    };
+    let (start, end) = (text(&options.start_cursor)?, text(&options.end_cursor)?);
+    let cursor_start = text(&cursor.start).map_err(|problem| format!("cursor_start: {problem}"))?;
+    let newest = (request.listed.partitions.last())
+        .and_then(|partition| partition.value.as_deref())
+        .filter(|_| !options.reload);
+    Ok(FilesWindowStarts {
+        start,
+        end,
+        cursor_start,
+        newest,
     })
 }
 

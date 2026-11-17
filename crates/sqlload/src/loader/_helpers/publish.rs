@@ -54,6 +54,7 @@ use crate::load_events::models::EventKind;
 use crate::number_text::main::memory_text::memory_text;
 use crate::project::models::SendMode;
 
+use crate::batch_plan::main::window_concurrency::window_concurrency;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
@@ -680,12 +681,17 @@ impl Publisher {
         if state.is_some() {
             self.state = state;
         }
-        if batch.num_rows() == 0 {
+        let masked = mask_batch(batch, &self.table.spec.masked).map_err(LoaderError::Invalid)?;
+        self.stage_masked(masked).await
+    }
+
+    /// Stage one batch of the source's rows already masked; masking leaves the cursor as it is, as a masked cursor is refused at plan.
+    pub(crate) async fn stage_masked(&mut self, masked: RecordBatch) -> Result<(), LoaderError> {
+        if masked.num_rows() == 0 {
             return Ok(());
         }
-        self.maximum = fold_maximum(self.run.as_ref(), &batch, self.maximum.take())
+        self.maximum = fold_maximum(self.run.as_ref(), &masked, self.maximum.take())
             .map_err(LoaderError::Invalid)?;
-        let masked = mask_batch(batch, &self.table.spec.masked).map_err(LoaderError::Invalid)?;
         let constants: Vec<&(String, ColumnType, String)> =
             added_constants(&self.table.spec, &self.table.read_columns).collect();
         let masked = with_constants(&masked, &constants).map_err(LoaderError::Invalid)?;
@@ -1679,6 +1685,12 @@ async fn feed(
     let batch_bytes = run.options.batch_bytes;
     let fed = async {
         match &table.commits {
+            CommitRule::Windows(windows) if window_concurrency(table) > 1 => {
+                let limit = window_concurrency(table);
+                publisher
+                    .feed_windows(reader, (windows, limit, batch_bytes))
+                    .await?;
+            }
             CommitRule::Windows(windows) => {
                 snapshot(reader, SNAPSHOT_BEGIN).await?;
                 for index in 0..windows.count {
@@ -1859,7 +1871,7 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Load
 }
 
 /// The source filter reading one cursor window, in the source's dialect, and the values bound to its placeholders: an ODBC source's date and timestamp bounds (`split_windows` cuts only number and time cursors, never a text one). Under `null_cursor = "include"` the `first` window reads the rows whose cursor is NULL too, once per run.
-fn window_filter(
+pub(crate) fn window_filter(
     table: &TablePlan,
     window: &CursorWindow,
     first: bool,

@@ -30,6 +30,7 @@ use crate::adapters::files::main::output_problems::output_problems;
 use crate::adapters::files::models::{OutputCheck, PartitionBy, TablePath};
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
+use crate::batch_plan::main::ignored_concurrency::ignored_concurrency;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
@@ -260,6 +261,7 @@ pub(crate) async fn plan_table(
         None => plan,
     };
     plan.schema.warnings.extend(ignored_batch(&plan));
+    plan.schema.warnings.extend(ignored_concurrency(&plan));
     let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
     with_transform_version(plan, destination).await
 }

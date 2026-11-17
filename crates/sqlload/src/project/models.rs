@@ -36,6 +36,9 @@ pub struct ProjectConfig {
     /// The most tables loading at once (each table's batches still commit one at a time); `--concurrency` overrides it.
     #[serde(default)]
     pub concurrency: Option<usize>,
+    /// Let a Postgres table read several of its `batch_size` windows at once (`batch_concurrency`), still committing them in order; off by default.
+    #[serde(default)]
+    pub microbatch_concurrency: bool,
     #[serde(default)]
     pub connections: BTreeMap<String, ConnectionConfig>,
     #[serde(default)]
@@ -838,6 +841,9 @@ pub struct TableSettings {
     /// Read and commit the cursor range one window at a time: a duration (`"1d"`) for date and timestamp cursors, an integer step for integer ones; `"none"` commits the whole read once.
     #[serde(default, deserialize_with = "deserialize_optional_batch")]
     pub batch_size: Option<BatchStep>,
+    /// The most `batch_size` windows of a Postgres table read at once, committed in order; needs `microbatch_concurrency = true`.
+    #[serde(default)]
+    pub batch_concurrency: Option<std::num::NonZeroUsize>,
     /// Checks the staged rows must pass before they are published.
     #[serde(default)]
     pub checks: Option<TableChecks>,

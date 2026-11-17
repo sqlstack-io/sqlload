@@ -150,6 +150,8 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
+    /// `batch_concurrency`: the most windows read at once, still committed in order; unset reads one at a time.
+    pub batch_concurrency: Option<std::num::NonZeroUsize>,
     /// `constant_columns`: each column's name, type and value as text, the same in every row; added after the source's columns (a files source's reader fills them itself).
     pub constants: Vec<(String, ColumnType, String)>,
     /// Whether another configured table loads into the same destination table, so this one's incremental cursor reads only the rows of its own `constants`.
@@ -1231,6 +1233,15 @@ pub enum SourceReader {
     Odbc(Box<crate::odbc_source::models::OdbcReader>),
     /// A Google Sheets client and the spreadsheet it reads.
     Sheets(crate::sheets_source::models::SheetsClient, String),
+}
+
+/// Where a files table's window can start and end: `--start-cursor`, `--end-cursor` and `cursor_start` as cursor text, and the value of the target's newest partition (none under `--reload`).
+#[derive(Debug)]
+pub struct FilesWindowStarts<'a> {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub cursor_start: Option<String>,
+    pub newest: Option<&'a str>,
 }
 
 /// What decides one files table's cursor window.

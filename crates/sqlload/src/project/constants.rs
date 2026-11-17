@@ -18,6 +18,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_nonfinite",
     "type_change_rebuild",
     "batch_size",
+    "batch_concurrency",
     "checks",
     "engine",
     "order_by",
@@ -199,3 +200,6 @@ pub const FLATTEN_ALL: &str = "all";
 
 /// How many levels down `unnest` makes child tables and `flatten` flattens objects when `max_depth` is not set: dlt's own default nesting limit (1.32.0).
 pub const DEFAULT_MAX_DEPTH: u32 = 1000;
+
+/// The most `batch_size` windows a table may read at once (`batch_concurrency`), each over its own source connection.
+pub const MAX_BATCH_CONCURRENCY: usize = 16;

@@ -19,21 +19,21 @@ use crate::adapters::files::models::{PendingLoad, PendingPhase};
 use crate::adapters::snowflake::models::PlannedStage;
 use crate::batch_plan::constants::{BATCH_BYTES, MAX_BATCH_FILES};
 use crate::batch_plan::main::cursor_rules::cursor_rules;
+use crate::batch_plan::main::read_at_once::read_at_once;
 use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{FilesOrder, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::{published_once, records_files, send_lines};
-use crate::loader::_helpers::python::list_choices;
-use crate::loader::_helpers::python::unnested_table;
+use crate::loader::_helpers::python::{list_choices, unnested_table};
 use crate::loader::_helpers::resolve::display_name;
-use crate::loader::_helpers::sources::{source_readers, unarchived};
+use crate::loader::_helpers::sources::{readers_note, unarchived};
 use crate::loader::_helpers::table_plan::{
     archived_reason, is_direct, publishes_once, pulls_unloaded,
 };
 use crate::loader::constants::{
-    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PARALLEL_READERS,
-    PLAN_DETAIL_COLUMN, PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
+    CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PLAN_DETAIL_COLUMN,
+    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
@@ -739,12 +739,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             "windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)",
         ));
     }
-    if source_readers(table) > 1 {
-        details.push(detail(
-            "note",
-            format!("reads over {PARALLEL_READERS} connections, in one snapshot"),
-        ));
-    }
+    details.extend(readers_note(table).map(|text| detail("note", text)));
     details.extend(
         (spec
             .row_filter
@@ -823,7 +818,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 (false, true) => &format!("staged one after another and {}", published_once(table)),
                 (false, false) => "one commit each",
             };
-            format!("{windows} of {step}, {commits}{end}")
+            format!("{windows} of {step}, {commits}{}{end}", read_at_once(table))
         }
         (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(

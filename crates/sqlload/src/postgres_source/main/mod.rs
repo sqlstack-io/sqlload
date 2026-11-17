@@ -3,6 +3,8 @@ pub mod copy_table;
 pub mod count_rows;
 pub mod cursor_end;
 pub mod decode_copy;
+pub mod end_snapshot;
 pub mod plan_read;
 pub mod read_catalog;
 pub mod relay_tls;
+pub mod share_snapshot;

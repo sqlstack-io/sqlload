@@ -15,7 +15,7 @@ impl Spool {
             .tempdir_in(parent)
             .map_err(|error| {
                 format!(
-                    "send = \"at_commit\" cannot make a folder in {} to hold rows until they commit: {error}",
+                    "cannot make a folder in {} to hold rows until they commit: {error}",
                     parent.display()
                 )
             })?;
@@ -35,7 +35,7 @@ impl Spool {
         self.made += 1;
         let failed = |error: String| {
             format!(
-                "send = \"at_commit\" cannot hold rows in {}: {error}",
+                "cannot hold rows in {} until they commit: {error}",
                 path.display()
             )
         };
