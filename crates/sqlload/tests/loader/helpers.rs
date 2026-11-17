@@ -21,7 +21,7 @@ use sqlload::project::main::parse_project::parse_project;
 use sqlload::project::models::ProjectConfig;
 use sqlload::store_paths::models::{Location, StoreKind};
 use sqlload_testkit::postgres::constants::{PASSWORD, USER};
-use sqlload_testkit::seaweedfs::constants::REGION;
+use sqlload_testkit::seaweedfs::constants::{PROFILE_KEY, REGION};
 use tokio_postgres::Client;
 
 use crate::files_target_helpers::file_batches;
@@ -1965,4 +1965,12 @@ pub(crate) fn run_peak_memory(test_case: &PeakMemoryTestCase) -> Result<PeakMemo
             .unwrap_or(0),
         tables,
     })
+}
+
+/// The shared credentials file: keys SeaweedFS accepts under `lake`, keys it refuses under `stale`, none under `default`.
+pub(crate) fn s3_credentials_file() -> String {
+    let (key_id, secret) = PROFILE_KEY;
+    format!(
+        "[default]\nregion = eu-west-2\n\n[lake]\naws_access_key_id = {key_id}\naws_secret_access_key = {secret}\n\n[stale]\naws_access_key_id = {key_id}\naws_secret_access_key = not-{secret}\n"
+    )
 }

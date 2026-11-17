@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.63.0](https://github.com/sqlstack-io/sqlload/compare/v0.62.0...v0.63.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** every process that writes a local files table must be on 0.63.0 or later, as an earlier release can still swap in a stale table.
+
+### Bug Fixes
+
+* **files:** a local replace or --reload stalled past its lease can no longer swap in a table missing rows ([486d778](https://github.com/sqlstack-io/sqlload/commit/486d77896429e62024081e348ffe6b03f3ec5eec))
+
 ## [0.62.0](https://github.com/sqlstack-io/sqlload/compare/v0.61.0...v0.62.0) (2026-11-17)
 
 
