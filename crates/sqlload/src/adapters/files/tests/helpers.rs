@@ -18,7 +18,7 @@ use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::models::{
-    FolderClaim, PartitionBy, PartitionFolder, PendingPhase, PendingRun, TablePath,
+    FolderClaim, PartitionBy, PartitionFolder, PendingPhase, PendingRun, TablePath, TableState,
 };
 use crate::adapters::files::tests::test_types::CommittedRepairTestCase;
 use crate::adapters::files::tests::test_types::CsvRenderTestCase;
@@ -31,17 +31,17 @@ use crate::project::models::{CsvOutput, FilesFormat, OutputEncoding};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
+use crate::table_lease::main::lease_now::lease_now;
+use crate::table_lease::main::release_lease::release_lease;
+use crate::table_lease::main::take_lease::take_lease;
 
 /// 2026-11-04 00:00:00.000001 UTC, in microseconds.
 const NOV_4_PLUS_1_US: i64 = 1_793_750_400_000_001;
 /// What `watch_folder` records when the folder is missing.
-pub(crate) const NO_FOLDER: &str = "<no folder>";
-/// What a reader may also see while a folder is swapped in: nothing on Windows, which cannot swap two folders in one rename, so the old one is moved aside first.
-pub(crate) const MID_SWAP: &[&str] = match cfg!(windows) {
-    true => &[NO_FOLDER],
-    false => &[],
-};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const NO_FOLDER: &str = "<no folder>";
 /// How the data files a load writes are named.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PART_NAME_START: &str = "part-";
 
 /// An S3 bucket in eu-west-2.
@@ -279,9 +279,7 @@ pub(crate) fn repair_committed(
         let state = read_table_state(&folder, &orders_path(None), None)
             .await
             .map_err(failed)?;
-        repair_table(&folder, (&state.pending, &state.records))
-            .await
-            .map_err(failed)?;
+        repair(&folder, &state).await?;
         let files = list_files(&folder)
             .await
             .map_err(|error| error.to_string())?;
@@ -314,7 +312,17 @@ pub(crate) fn csv_file(
     finish_file(file)
 }
 
+/// The data files directly in `folder`, sorted.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn top_parts(folder: &std::path::Path) -> Vec<String> {
+    local_files(folder)
+        .into_iter()
+        .filter(|key| key.starts_with(PART_NAME_START))
+        .collect()
+}
+
 /// The files under `folder`, hidden ones included, as sorted relative keys.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn local_files(folder: &std::path::Path) -> Vec<String> {
     let mut keys: Vec<String> = walk(folder)
         .into_iter()
@@ -328,6 +336,7 @@ pub(crate) fn local_files(folder: &std::path::Path) -> Vec<String> {
     keys
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn walk(folder: &std::path::Path) -> Vec<std::path::PathBuf> {
     let entries: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
         .into_iter()
@@ -344,6 +353,7 @@ fn walk(folder: &std::path::Path) -> Vec<std::path::PathBuf> {
 }
 
 /// List `folder`'s data files (named `part-*`) over and over on another thread until `stop` is set; every distinct set of names seen.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn watch_folder(
     folder: std::path::PathBuf,
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -357,6 +367,7 @@ pub(crate) fn watch_folder(
 }
 
 /// The names of `folder`'s `part-*` files, sorted; `NO_FOLDER` when there is no folder.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn part_names(folder: &std::path::Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return vec![NO_FOLDER.to_owned()];
@@ -448,4 +459,17 @@ pub(crate) fn gunzip(bytes: &[u8]) -> Result<Vec<u8>, String> {
 /// zstd bytes decompressed.
 pub(crate) fn unzstd(bytes: &[u8]) -> Result<Vec<u8>, String> {
     zstd::decode_all(bytes).map_err(|error| error.to_string())
+}
+
+/// Repair the table as a load would: take its lease, repair `state` (as read from the table), give the lease back.
+pub(crate) async fn repair(folder: &OpenFolder, state: &TableState) -> Result<(), String> {
+    let lease = take_lease(folder, &uuid::Uuid::new_v4().to_string(), lease_now())
+        .await
+        .map_err(|error| error.to_string())??;
+    repair_table((folder, &lease), (&state.pending, &state.records))
+        .await
+        .map_err(|error| error.to_string())??;
+    release_lease(folder, &lease)
+        .await
+        .map_err(|error| error.to_string())
 }

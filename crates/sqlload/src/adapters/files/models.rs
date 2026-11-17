@@ -7,8 +7,10 @@ use chrono::NaiveDate;
 use parquet::arrow::ArrowWriter;
 
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::files::_helpers::layout::swap::{local_folder, staged_stem};
-use crate::adapters::files::types::CommitFiles;
+use crate::adapters::files::_helpers::layout::swap::{
+    exchange, exchange_support, local_folder, staged_stem,
+};
+use crate::adapters::files::types::{CommitFiles, Exchange};
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::project::models::{OutputEncoding, WriteStrategy};
@@ -92,6 +94,38 @@ impl TablePath {
             store: self.folder.store.clone(),
             prefix: format!("{parent}{}{load_id}/", staged_stem(name)),
         })
+    }
+
+    /// The folder this load stages its table in (see `staged_folder`) when the filesystem swaps two folders in one rename, checked once, before the load writes anything; `None` where it can't (NFS, Windows), so the load writes into the table folder, then deletes the older files, as in S3. The folder is created here, with an open handle on it the swap checks it against.
+    pub fn staging(
+        &self,
+        mode: &WriteMode,
+        load_id: &str,
+    ) -> std::io::Result<Option<(Location, std::fs::File)>> {
+        self.staging_with(mode, load_id, exchange)
+    }
+
+    /// `staging`, checking the filesystem with `exchange`.
+    pub fn staging_with(
+        &self,
+        mode: &WriteMode,
+        load_id: &str,
+        exchange: Exchange,
+    ) -> std::io::Result<Option<(Location, std::fs::File)>> {
+        let (Some(staged), Some((live, _, name))) = (
+            self.staged_folder(mode, load_id),
+            local_folder(&self.folder),
+        ) else {
+            return Ok(None);
+        };
+        let (Some((path, _, _)), true) = (
+            local_folder(&staged),
+            exchange_support(&live, &staged_stem(name), exchange)?,
+        ) else {
+            return Ok(None);
+        };
+        std::fs::create_dir(&path)?;
+        Ok(Some((staged, std::fs::File::open(&path)?)))
     }
 }
 

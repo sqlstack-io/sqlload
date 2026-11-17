@@ -5,10 +5,9 @@ use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::main::commit_replaced::commit_replaced;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::read_table_state::read_table_state;
-use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::models::{PartitionBy, PendingPhase};
 use crate::adapters::files::tests::helpers::{
-    block_on, orders_path, repair_committed, scratch_folder,
+    block_on, orders_path, repair, repair_committed, scratch_folder,
 };
 use crate::adapters::files::tests::test_types::{
     AbortedTestCase, CommittedRepairTestCase, CompactTestCase, LoadedRecordsTestCase,
@@ -47,9 +46,7 @@ fn given_a_failed_write_that_kept_its_marker_when_repairing_then_its_files_go_by
             let state = read_table_state(&folder, &path, Some(&ColumnType::Date))
                 .await
                 .map_err(failed)?;
-            repair_table(&folder, (&state.pending, &state.records))
-                .await
-                .map_err(failed)?;
+            repair(&folder, &state).await?;
             let files = list_files(&folder)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -262,9 +259,7 @@ fn given_a_load_found_writing_when_it_stores_a_file_after_repair_then_the_next_r
             let state = read_table_state(&folder, &path, None)
                 .await
                 .map_err(failed)?;
-            repair_table(&folder, (&state.pending, &state.records))
-                .await
-                .map_err(failed)?;
+            repair(&folder, &state).await?;
             let marker = root.join("orders/_sqlload/decided/lapsed");
             let age = std::time::Duration::from_secs(test_case.marker_age_days * 24 * 60 * 60);
             std::fs::File::options()
@@ -282,9 +277,7 @@ fn given_a_load_found_writing_when_it_stores_a_file_after_repair_then_the_next_r
             let state = read_table_state(&folder, &path, None)
                 .await
                 .map_err(failed)?;
-            repair_table(&folder, (&state.pending, &state.records))
-                .await
-                .map_err(failed)?;
+            repair(&folder, &state).await?;
             let files = list_files(&folder).await.map_err(wrote)?;
             let left: Vec<String> = files.into_iter().map(|file| file.relative_key).collect();
             Ok::<_, String>((left, marker.exists()))
@@ -346,9 +339,7 @@ fn given_more_records_than_the_limit_when_repairing_then_one_merged_record_holds
             let before = read_table_state(&folder, &path, None)
                 .await
                 .map_err(failed)?;
-            repair_table(&folder, (&before.pending, &before.records))
-                .await
-                .map_err(failed)?;
+            repair(&folder, &before).await?;
             let after = read_table_state(&folder, &path, None)
                 .await
                 .map_err(failed)?;
@@ -434,9 +425,7 @@ fn given_a_load_stalled_after_its_lease_check_when_another_load_repaired_the_tab
                 let state = read_table_state(&folder, &path, None)
                     .await
                     .map_err(failed)?;
-                repair_table(&folder, (&state.pending, &state.records))
-                    .await
-                    .map_err(failed)?;
+                repair(&folder, &state).await?;
             }
             let mut listed = Vec::new();
             for _ in 0..test_case.repairs_listed_before_commit {
@@ -448,9 +437,7 @@ fn given_a_load_stalled_after_its_lease_check_when_another_load_repaired_the_tab
             }
             let resumed = commit_replaced(&folder, "stalled.00001", (&replaced, None)).await;
             for state in &listed {
-                repair_table(&folder, (&state.pending, &state.records))
-                    .await
-                    .map_err(failed)?;
+                repair(&folder, state).await?;
             }
             let aborted = marker_text(PendingPhase::Aborted, &[], None);
             for _ in 0..test_case.aborted_after_commit {
@@ -465,9 +452,7 @@ fn given_a_load_stalled_after_its_lease_check_when_another_load_repaired_the_tab
             let state = read_table_state(&folder, &path, None)
                 .await
                 .map_err(failed)?;
-            repair_table(&folder, (&state.pending, &state.records))
-                .await
-                .map_err(failed)?;
+            repair(&folder, &state).await?;
             let files = list_files(&folder).await.map_err(wrote)?;
             let left: Vec<String> = files.into_iter().map(|file| file.relative_key).collect();
             let decided = list_files(&decided_folder(&folder)).await.map_err(wrote)?;

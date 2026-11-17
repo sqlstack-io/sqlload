@@ -1203,6 +1203,8 @@ pub struct FilesSink {
 pub struct FolderSwap {
     pub live: OpenFolder,
     pub replaced: std::collections::BTreeSet<String>,
+    /// An open handle on the staged folder, which the swap checks is still the folder this load made.
+    pub held: std::fs::File,
 }
 
 /// A connected source, ready to read.

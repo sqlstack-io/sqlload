@@ -703,7 +703,9 @@ impl Publisher {
         )
         .await?;
         if let Some(swap) = self.sink()?.swap.as_ref().filter(|_| last) {
-            swap_folder(&swap.live, &folder, &swap.replaced).await?;
+            swap_folder((&swap.live, &lease), &folder, (&swap.replaced, &swap.held))
+                .await?
+                .map_err(|why| LoaderError::Transient(format!("{}: {why}", swap.live.location)))?;
         }
         if let Some(sink) = self.files.as_mut() {
             sink.deleted.extend(keys);
