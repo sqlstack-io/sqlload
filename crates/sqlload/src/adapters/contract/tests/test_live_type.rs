@@ -1,7 +1,9 @@
+use crate::adapters::contract::main::newest_by_problem::newest_by_problem;
 use crate::adapters::contract::tests::helpers::live;
-use crate::adapters::contract::tests::test_types::LiveTypeTestCase;
+use crate::adapters::contract::tests::test_types::{LiveTypeTestCase, NewestByTestCase};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
 #[test]
 fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portable_type() {
@@ -249,6 +251,111 @@ fn given_a_reported_column_type_when_reading_it_back_then_it_maps_to_the_portabl
             sql_adapter(test_case.warehouse).live_type(&test_case.live),
             test_case.expected_type,
             "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_newest_by_column_type_when_planning_then_only_types_the_warehouse_can_order_pass() {
+    let test_cases = [
+        NewestByTestCase {
+            description: "BigQuery can't order GEOGRAPHY",
+            warehouse: Warehouse::BigQuery,
+            column_type: ColumnType::Native("GEOGRAPHY".to_owned()),
+            expected_problem: "newest_by column version is native(\"GEOGRAPHY\"), which BigQuery can't order to say which row is newer; pin a portable type for it in columns, or name another column",
+        },
+        NewestByTestCase {
+            description: "BigQuery can't order a STRUCT, whatever its fields",
+            warehouse: Warehouse::BigQuery,
+            column_type: ColumnType::Native("STRUCT<a INT64>".to_owned()),
+            expected_problem: "which BigQuery can't order",
+        },
+        NewestByTestCase {
+            description: "BigQuery orders INTERVAL, a native type with no portable twin",
+            warehouse: Warehouse::BigQuery,
+            column_type: ColumnType::Native("INTERVAL".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "Snowflake can't order a semi-structured ARRAY",
+            warehouse: Warehouse::Snowflake,
+            column_type: ColumnType::Native("ARRAY".to_owned()),
+            expected_problem: "which Snowflake can't order",
+        },
+        NewestByTestCase {
+            description: "Snowflake orders a structured ARRAY",
+            warehouse: Warehouse::Snowflake,
+            column_type: ColumnType::Native("ARRAY(NUMBER)".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "Snowflake can't order VARIANT, even spelt in lower case",
+            warehouse: Warehouse::Snowflake,
+            column_type: ColumnType::Native("variant".to_owned()),
+            expected_problem: "which Snowflake can't order",
+        },
+        NewestByTestCase {
+            description: "Databricks can't order a MAP",
+            warehouse: Warehouse::Databricks,
+            column_type: ColumnType::Native("MAP<STRING, INT>".to_owned()),
+            expected_problem: "which Databricks can't order",
+        },
+        NewestByTestCase {
+            description: "Databricks orders a STRUCT",
+            warehouse: Warehouse::Databricks,
+            column_type: ColumnType::Native("STRUCT<a: INT>".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "ClickHouse can't order a Variant inside Nullable",
+            warehouse: Warehouse::ClickHouse,
+            column_type: ColumnType::Native("Nullable(Variant(String, UInt64))".to_owned()),
+            expected_problem: "which ClickHouse can't order",
+        },
+        NewestByTestCase {
+            description: "ClickHouse orders a LowCardinality string",
+            warehouse: Warehouse::ClickHouse,
+            column_type: ColumnType::Native("LowCardinality(String)".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "Postgres can't order xml",
+            warehouse: Warehouse::Postgres,
+            column_type: ColumnType::Native("xml".to_owned()),
+            expected_problem: "which Postgres can't order",
+        },
+        NewestByTestCase {
+            description: "Postgres orders jsonb",
+            warehouse: Warehouse::Postgres,
+            column_type: ColumnType::Native("jsonb".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "DuckDB documents no native type it can't order",
+            warehouse: Warehouse::DuckDb,
+            column_type: ColumnType::Native("UNION(a INTEGER, b VARCHAR)".to_owned()),
+            expected_problem: "",
+        },
+        NewestByTestCase {
+            description: "JSON has no order on any warehouse",
+            warehouse: Warehouse::DuckDb,
+            column_type: ColumnType::Json,
+            expected_problem: "newest_by column version is json, which has no order",
+        },
+    ];
+    for test_case in &test_cases {
+        let columns = [DesiredColumn {
+            name: "Version".to_owned(),
+            column_type: test_case.column_type.clone(),
+            origin: ColumnOrigin::Pinned,
+        }];
+        let problem = newest_by_problem(sql_adapter(test_case.warehouse), &columns, "version");
+        let problem = problem.unwrap_or_default();
+        assert!(
+            problem.contains(test_case.expected_problem)
+                && problem.is_empty() == test_case.expected_problem.is_empty(),
+            "{}: {problem}",
             test_case.description
         );
     }

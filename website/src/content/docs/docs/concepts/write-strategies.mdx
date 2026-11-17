@@ -142,6 +142,12 @@ never fails on the warehouse's own error about it.
   same rule in each column, two NULLs tying and moving on to the next.
 - `newest_by` columns can't be in the key, masked, JSON or an array, or repeated, and need a
   `merge` table. A higher value is always newer, so `newest_by` takes no direction.
+- From 0.67.1, `plan` also refuses a `newest_by` column of a native type the target's documentation
+  says it can't order: `ARRAY`, `STRUCT`, `GEOGRAPHY`, `JSON` and graph types on BigQuery, `MAP`,
+  `VARIANT` and `OBJECT` on Databricks, semi-structured `VARIANT`, `OBJECT` and `ARRAY` on
+  Snowflake, `Variant` and `Dynamic` on ClickHouse, and `json` and `xml` on Postgres. Pin a
+  portable type for it in `columns`, or name another column. A Python table's `newest_by` is
+  checked once it yields its first rows, before anything is written.
 - From 0.51.0, a NULL in a key column counts as a value: rows whose keys hold the same values and
   NULLs in the same columns are collapsed like any other repeat, by the same rule. Before 0.51.0
   each of them was inserted.

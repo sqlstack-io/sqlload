@@ -48,6 +48,11 @@ impl SqlAdapter for DatabricksSql {
         logical_type(column_type)
     }
 
+    /// Databricks can't order MAP (https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-qry-select-orderby) or VARIANT and OBJECT values (https://docs.databricks.com/aws/en/semi-structured/variant).
+    fn orders_native(&self, family: &str, _parameterised: bool) -> bool {
+        !matches!(family, "MAP" | "VARIANT" | "OBJECT")
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

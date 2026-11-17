@@ -1600,6 +1600,23 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 
 
 @pytest.mark.parametrize(
+	("newest_by", "rows", "expected"),
+	[
+		("vv", [{"id": 1, "v": "b"}, {"id": 1, "v": "c"}], "newest_by column vv is not written to the table"),
+		("v", [{"id": 1, "v": {"n": 2}}, {"id": 1, "v": {"n": 3}}], "newest_by column v is json, which has no order to say which row is newer"),
+	],
+	ids=["misspelled", "json"],
+)
+def test_given_a_python_table_whose_newest_by_cannot_order_its_rows_when_loading_then_the_load_stops_before_writing_anything(tmp_path: Path, newest_by: str, rows: list[dict[str, object]], expected: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', write_strategy='merge', unique_key='id', newest_by='{newest_by}')(rows)\n")
+	give(project, "rows", rows)
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert expected in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+
+
+@pytest.mark.parametrize(
 	("settings", "expected"),
 	[
 		("write_strategy='append', newest_by='v'", 'newest_by is for write_strategy = "merge", which matches rows on unique_key; append keeps every row'),

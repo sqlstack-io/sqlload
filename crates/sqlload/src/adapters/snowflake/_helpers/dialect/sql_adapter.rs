@@ -61,6 +61,11 @@ impl SqlAdapter for SnowflakeSql {
         logical_type(column_type)
     }
 
+    /// Snowflake doesn't order semi-structured VARIANT, OBJECT and ARRAY values consistently across their types (https://docs.snowflake.com/en/sql-reference/constructs/order-by); structured ARRAY(...), OBJECT(...) and MAP(...) compare (https://docs.snowflake.com/en/sql-reference/data-types-structured).
+    fn orders_native(&self, family: &str, parameterised: bool) -> bool {
+        !(matches!(family, "VARIANT") || (matches!(family, "OBJECT" | "ARRAY") && !parameterised))
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

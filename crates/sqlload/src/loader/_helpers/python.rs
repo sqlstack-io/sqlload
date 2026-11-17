@@ -1,5 +1,6 @@
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::newest_by_problem::newest_by_problem;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
@@ -1167,6 +1168,20 @@ async fn replan(
             .map(|column| &column.column_type)
     });
     if let Some(problem) = append_problem(&columns.spec, cursor_type) {
+        return Err(LoaderError::Invalid(problem));
+    }
+    let adapter = sql_adapter(columns.spec.warehouse);
+    let typed = |name: &&String| {
+        !data
+            .null_columns
+            .iter()
+            .any(|null| null.eq_ignore_ascii_case(name))
+    };
+    let newest_by = columns.spec.newest_by.iter().filter(typed);
+    if let Some(problem) = newest_by
+        .filter_map(|name| newest_by_problem(adapter, &columns.schema.write_columns, name))
+        .next()
+    {
         return Err(LoaderError::Invalid(problem));
     }
     let loaded: Vec<String> = columns
