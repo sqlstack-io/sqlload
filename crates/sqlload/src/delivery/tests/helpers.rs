@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::batching::models::Partition;
+use crate::batching::models::{Batch, Partition};
 use crate::config::models::LoadErrorPolicy;
-use crate::delivery::models::{CheckTiming, PendingLoads};
+use crate::delivery::_helpers::stage::split_parts;
+use crate::delivery::models::{CheckTiming, Delivery, PendingLoads};
 use crate::stage_api::models::{FileLoad, LoadStatus};
 
 pub(crate) const SENT_MS: i64 = 1_710_072_000_000;
@@ -71,4 +72,22 @@ pub(crate) fn value_columns(columns: &[(&str, &str)]) -> Vec<crate::config::mode
             sql_type: (*sql_type).to_owned(),
         })
         .collect()
+}
+
+/// The keys a Snowflake stage delivery stages `batch` under.
+pub(crate) fn stage_keys(delivery: &Delivery, batch: &Batch) -> Result<Vec<String>, String> {
+    let Delivery::Stage(stage) = delivery else {
+        return Err(format!("not a stage delivery: {delivery:?}"));
+    };
+    let staged = stage.staged_batch(batch, &split_parts(batch, false));
+    Ok(staged.files.into_iter().map(|file| file.key).collect())
+}
+
+/// The keys a Databricks `COPY INTO` delivery stages `batch` under.
+pub(crate) fn copy_keys(delivery: &Delivery, batch: &Batch) -> Result<Vec<String>, String> {
+    let Delivery::Copy(copy) = delivery else {
+        return Err(format!("not a COPY INTO delivery: {delivery:?}"));
+    };
+    let staged = copy.staged_batch(batch, &split_parts(batch, false));
+    Ok(staged.files.into_iter().map(|file| file.key).collect())
 }

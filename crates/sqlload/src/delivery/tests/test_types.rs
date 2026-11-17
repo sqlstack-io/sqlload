@@ -101,3 +101,20 @@ pub(crate) struct OpenErrorTestCase {
     pub(crate) error: ZerobusError,
     pub(crate) expected_error: DeliveryError,
 }
+
+pub(crate) struct StagedNamesTestCase {
+    pub(crate) description: &'static str,
+    /// The `[destination]` and `[staging]` sections.
+    pub(crate) config: &'static str,
+    /// The batch's staged keys, as the route's delivery names them.
+    pub(crate) keys: StagedKeys,
+    /// Whether the second naming of the batch comes from a new delivery, as after a restart, rather than a retry in the same one.
+    pub(crate) restarted: bool,
+    pub(crate) expected_same_names: bool,
+}
+
+/// How a test reads the keys a delivery stages a batch under.
+pub(crate) type StagedKeys = fn(
+    &crate::delivery::models::Delivery,
+    &crate::batching::models::Batch,
+) -> Result<Vec<String>, String>;

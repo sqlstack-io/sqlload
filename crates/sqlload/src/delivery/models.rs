@@ -121,6 +121,8 @@ pub struct StageDelivery {
     pub(crate) path: LoadPath,
     pub(crate) stage_info: Option<StageInfo>,
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
     pub(crate) pending: PendingLoads,
     pub(crate) begin_mark: Option<String>,
@@ -243,6 +245,8 @@ pub struct CopyDelivery {
     pub(crate) stream: Stream,
     /// The bucket, for `staging.kind = "s3"`; otherwise files go to the stream's volume.
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
 }
 
@@ -320,6 +324,7 @@ impl Delivery {
             config: inputs.config.clone(),
             stream: stream.clone(),
             s3,
+            run: uuid::Uuid::new_v4().simple().to_string(),
             staged: None,
         })))
     }

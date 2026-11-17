@@ -4,6 +4,8 @@ mod helpers;
 mod pending_loads;
 #[path = "tests/test_stage_paths.rs"]
 mod stage_paths;
+#[path = "tests/test_staged_names.rs"]
+mod staged_names;
 #[path = "tests/test_types.rs"]
 mod test_types;
 #[path = "tests/test_zerobus.rs"]
