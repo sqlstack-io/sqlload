@@ -149,8 +149,7 @@ table folder, carry over every file of the table folder that the load doesn't re
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
 reader sees the old files or the new ones, never both. A hidden folder left by a stopped or failed
 load is deleted by the next load. One ending in `-old`, which an earlier release left when it stopped
-while moving the old table aside, is kept with a warning, as it may hold the table's only copy. A table at the root of the folder connection has no folder beside
-it to swap, so it is replaced as in S3.
+while moving the old table aside, is kept with a warning, as it may hold the table's only copy.
 
 From 0.63.0, a load checks that it still holds the table's lease right before that rename, and
 writes nothing in between. A load that takes the table first moves every hidden folder other loads
@@ -173,13 +172,24 @@ orders: lost the table's lease to load 3f9c…, as it was not refreshed for 10 m
 This needs every process that writes the table on 0.63.0 or later: an earlier release recreates a
 missing hidden folder at the swap, and deletes other loads' hidden folders without moving them first.
 
-On a Linux filesystem that can't swap two folders in one rename, such as NFS, `replace` and
-`--reload` into a local folder fail rather than move the old folder aside in steps another load
-could interleave with. On Windows, which has no such rename, they write the new files into the table
-folder, then delete the older ones, as in S3. Before 0.63.0, both moved the old folder aside first.
+Which path `replace` and `--reload` take:
 
-In S3, `replace` writes the new files first, then deletes the older ones, so a reader in between sees
-both. `delete_insert` works this way in both stores, as the plan's `note` says.
+| Where the table is | How the new table is written | What a reader sees |
+|---|---|---|
+| A local folder on Linux (ext4, XFS, Btrfs, tmpfs) or macOS (APFS) | In a hidden folder beside the table folder, swapped in with one rename | The old files or the new ones, never both |
+| A local folder on a filesystem that can't swap two folders in one rename (NFS, EFS, SMB mounts), or on Windows | Into the table folder; the older files are deleted once the commit's marker in `_sqlload/decided/` records it | Both, for a moment between the write and the delete |
+| A table at the root of the folder connection | As the row above, since it has no folder beside it | Both, for a moment |
+| S3 | As the row above | Both, for a moment |
+
+From 0.63.0, a load picks its path once, before it writes anything: it tries the one-rename swap on
+two empty folders beside the table folder, and takes the second row's path if the filesystem doesn't
+support it. A load that started staging never switches path: if the swap then fails, it stops
+without changing the table. Either path keeps a load that stalled past its lease from losing rows.
+Before 0.63.0, a filesystem without the swap moved the old folder aside first, leaving a moment with
+no folder.
+
+`delete_insert` writes the new files first, then deletes the older ones, in every store, as the
+plan's `note` says.
 
 ## CSV files
 

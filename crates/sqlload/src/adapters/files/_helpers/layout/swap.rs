@@ -9,6 +9,7 @@ use object_store::path::Path as ObjectPath;
 
 use crate::adapters::files::constants::{LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, STAGED_FOLDER_MARK};
 use crate::adapters::files::errors::FilesDestinationError;
+use crate::adapters::files::types::Exchange;
 use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -36,7 +37,7 @@ pub(crate) fn swap_dirs(staged: &Path, live: &Path) -> std::io::Result<()> {
         false => std::fs::rename(staged, live),
         true => exchange(staged, live).map_err(|error| match error.kind() == std::io::ErrorKind::Unsupported {
             true => std::io::Error::other(format!(
-                "this filesystem cannot swap two folders in one rename ({error}), so the table is not replaced; load it into a folder on a filesystem that can, such as ext4, XFS, Btrfs, tmpfs or APFS"
+                "this filesystem swapped two folders in one rename when the load started, but no longer can ({error}); stopped before changing the table"
             )),
             false => error,
         }),
@@ -64,7 +65,7 @@ fn staged_dir(entry: &std::fs::DirEntry, stem: &str) -> Option<(PathBuf, bool)> 
 
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
+pub(crate) fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
     use rustix::io::Errno;
     renameat_with(CWD, staged, CWD, live, RenameFlags::EXCHANGE).map_err(|errno| {
@@ -77,7 +78,7 @@ fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
 
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn exchange(_staged: &Path, _live: &Path) -> std::io::Result<()> {
+pub(crate) fn exchange(_staged: &Path, _live: &Path) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
@@ -200,4 +201,32 @@ pub(crate) async fn remove_staged(live: &Location) -> Result<(), FilesDestinatio
                 "cannot move away a staging folder an earlier load left beside the table: {reason}"
             ),
         })
+}
+
+/// Whether `exchange` swaps two folders in one rename (its support) beside table folder `live` (named by `stem`): tried on two empty folders created there, named like staging folders so the next load deletes any a stop leaves; `false` only where it fails with `Unsupported`.
+pub(crate) fn exchange_support(
+    live: &Path,
+    stem: &str,
+    exchange: Exchange,
+) -> std::io::Result<bool> {
+    let Some(parent) = live.parent() else {
+        return Ok(false);
+    };
+    std::fs::create_dir_all(parent)?;
+    let probes = [
+        parent.join(format!("{stem}{}", uuid::Uuid::new_v4())),
+        parent.join(format!("{stem}{}", uuid::Uuid::new_v4())),
+    ];
+    probes.iter().try_for_each(std::fs::create_dir)?;
+    let swapped = exchange(&probes[0], &probes[1]);
+    for probe in &probes {
+        if let Err(error) = std::fs::remove_dir(probe) {
+            tracing::warn!(%error, folder = %probe.display(), "cannot delete an empty folder made to check the filesystem; the next load deletes it");
+        }
+    }
+    match swapped {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Ok(false),
+        Err(error) => Err(error),
+    }
 }

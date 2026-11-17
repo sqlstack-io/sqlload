@@ -4,16 +4,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::_helpers::layout::swap::{carry_over, remove_staged, swap_in};
+use crate::adapters::files::main::commit_replaced::commit_replaced;
+use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::main::swap_folder::swap_folder;
-use crate::adapters::files::models::TablePath;
+use crate::adapters::files::models::{PendingPhase, TablePath};
 use crate::adapters::files::tests::helpers::{
-    block_on, local_files, top_parts, watch_folder, write_all,
+    block_on, local_files, repair, top_parts, watch_folder, write_all,
 };
 use crate::adapters::files::tests::test_types::{
-    LateSwapTestCase, RemoveStagedTestCase, RenameRaceTestCase, StalledSwapTestCase,
-    SwapFolderTestCase,
+    LateSwapTestCase, MarkerPathStallTestCase, RemoveStagedTestCase, RenameRaceTestCase,
+    StagingTestCase, StalledSwapTestCase, SwapFolderTestCase,
 };
 use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::{Location, StoreKind};
@@ -432,6 +434,147 @@ fn given_a_stalled_swap_landing_after_another_load_took_the_table_when_that_load
             (lost, top_parts(&live_path)),
             (
                 test_case.expected_lost,
+                test_case
+                    .expected_parts
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>()
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_starts_then_it_writes_in_place_and_leaves_no_probe()
+-> Result<(), String> {
+    let test_cases = [
+        StagingTestCase {
+            description: "where two folders swap in one rename, a replace stages its table",
+            mode: WriteMode::Replace,
+            exchange: |_, _| Ok(()),
+            expected_staged: Some(true),
+        },
+        StagingTestCase {
+            description: "where the swap is unsupported (NFS, Windows), a replace writes into the table folder",
+            mode: WriteMode::Replace,
+            exchange: |_, _| Err(std::io::ErrorKind::Unsupported.into()),
+            expected_staged: Some(false),
+        },
+        StagingTestCase {
+            description: "an append never stages, whatever the filesystem",
+            mode: WriteMode::Append,
+            exchange: |_, _| Ok(()),
+            expected_staged: Some(false),
+        },
+        StagingTestCase {
+            description: "any other failure of the check fails the load rather than pick a path",
+            mode: WriteMode::Recreate,
+            exchange: |_, _| Err(std::io::ErrorKind::PermissionDenied.into()),
+            expected_staged: None,
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        write_all(directory.path(), TABLE_PREFIX, &["part-old-0.csv"], "old")?;
+        let path = TablePath {
+            folder: Location {
+                store: StoreKind::Filesystem { root },
+                prefix: TABLE_PREFIX.to_owned(),
+            },
+            partition: None,
+        };
+        let staged = path
+            .staging_with(&test_case.mode, "load", test_case.exchange)
+            .ok()
+            .map(|staged| staged.is_some());
+        assert_eq!(
+            (staged, local_files(&directory.path().join("app"))),
+            (
+                test_case.expected_staged,
+                vec!["orders/part-old-0.csv".to_owned()]
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_stalls_past_its_lease_then_its_commit_fails_and_no_rows_are_lost()
+-> Result<(), String> {
+    let test_cases = [
+        MarkerPathStallTestCase {
+            description: "with no takeover, the replace writes in place and its commit replaces the old file",
+            takeovers: 0,
+            expected_failed: false,
+            expected_parts: &["part-stalled.00001-0.parquet"],
+        },
+        MarkerPathStallTestCase {
+            description: "after another load took the table and repaired it, the resumed commit fails and the old file stays",
+            takeovers: 1,
+            expected_failed: true,
+            expected_parts: &["part-old-0.parquet"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        let live = Location {
+            store: StoreKind::Filesystem { root },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        write_all(
+            directory.path(),
+            TABLE_PREFIX,
+            &["part-old-0.parquet"],
+            "old",
+        )?;
+        let path = TablePath {
+            folder: live.clone(),
+            partition: None,
+        };
+        let outcome = block_on(async {
+            let failed = |error: String| error;
+            let folder = open_folder(&live).map_err(|error| error.to_string())?;
+            let taken_at = lease_now() - chrono::Duration::minutes(11);
+            take_lease(&folder, "stalled", taken_at)
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(failed)?;
+            let staged = path
+                .staging_with(&WriteMode::Replace, "stalled", |_, _| {
+                    Err(std::io::ErrorKind::Unsupported.into())
+                })
+                .map_err(|error| error.to_string())?;
+            let target = staged.clone().unwrap_or_else(|| live.clone());
+            mark_pending(&folder, "stalled.00001", PendingPhase::Writing, (&[], None))
+                .await
+                .map_err(|error| error.to_string())?;
+            write_all(
+                directory.path(),
+                &target.prefix,
+                &["part-stalled.00001-0.parquet"],
+                "new",
+            )?;
+            for _ in 0..test_case.takeovers {
+                let state = read_table_state(&folder, &path, None)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                repair(&folder, &state).await?;
+            }
+            let replaced = ["part-old-0.parquet".to_owned()];
+            let resumed = commit_replaced(&folder, "stalled.00001", (&replaced, None)).await;
+            Ok::<_, String>((staged.is_none(), resumed.is_err()))
+        })?;
+        assert_eq!(
+            (outcome, top_parts(&directory.path().join(TABLE_PREFIX))),
+            (
+                (true, test_case.expected_failed),
                 test_case
                     .expected_parts
                     .iter()

@@ -5,6 +5,7 @@ use arrow_schema::Field;
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::models::{FolderClaim, PartitionBy, PendingPhase};
+use crate::adapters::files::types::Exchange;
 use crate::column_types::models::ColumnType;
 use crate::project::models::{CsvOutput, OutputCompression, WriteStrategy};
 use crate::store_paths::models::StoreKind;
@@ -237,6 +238,25 @@ pub(crate) struct LateSwapTestCase {
     pub(crate) swaps_after_take: bool,
     /// Whether the other load's repair fails, having lost the lease.
     pub(crate) expected_lost: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// Whether a load stages its table, given its mode and what the filesystem's one-rename swap does.
+pub(crate) struct StagingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) mode: WriteMode,
+    /// Stands in for the filesystem's one-rename swap of two folders.
+    pub(crate) exchange: Exchange,
+    /// Whether the load stages; `None` when the check fails the load.
+    pub(crate) expected_staged: Option<bool>,
+}
+
+/// A replace on a filesystem that can't swap folders in one rename, stalled before its commit while other loads may take the table.
+pub(crate) struct MarkerPathStallTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
     /// The data files in the table folder afterwards.
     pub(crate) expected_parts: &'static [&'static str],
 }
