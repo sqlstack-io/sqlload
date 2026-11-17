@@ -57,6 +57,10 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
             .transpose()
     };
     let (start, end) = (flag(&options.start_cursor)?, flag(&options.end_cursor)?);
+    let cursor_start = (cursor.start.as_deref())
+        .map(|text| cursor_text(text, cursor_type, spec.zone()))
+        .transpose()
+        .map_err(|problem| format!("cursor_start: {problem}"))?;
     let newest = request
         .listed
         .partitions
@@ -78,7 +82,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 start: start.as_deref(),
                 start_flag: options.range_flags.start,
                 end: end.as_deref(),
-                cursor_start: cursor.start.as_deref(),
+                cursor_start: cursor_start.as_deref(),
                 reload: options.reload,
             })?;
             (window.from, window.to, window.note, INCLUSIVE_BOUND)
@@ -97,7 +101,7 @@ pub(in crate::loader) fn files_window(request: &FilesWindowRequest<'_>) -> Resul
                 }
                 _ => None,
             };
-            let (from, note, operator) = match (start, maximum, &cursor.start) {
+            let (from, note, operator) = match (start, maximum, &cursor_start) {
                 (Some(start), _, _) => (
                     Some(start.clone()),
                     format!("{column} from {start} ({})", options.range_flags.start),
