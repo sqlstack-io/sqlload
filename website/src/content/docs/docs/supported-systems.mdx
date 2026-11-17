@@ -44,7 +44,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | ODBC (from 0.27.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
 | BigQuery (from 0.30.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
-| Databricks (from 0.64.0) | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, against a fake | Yes, untested |
+| Databricks (from 0.64.0) | Yes, untested | Yes, untested | Yes, untested | Yes, tested live | Yes, tested live | Yes, tested live | Yes, tested live |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
 | Files on an SFTP server (from 0.32.0) | Yes, read by SQLLoad, tested live | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -67,7 +67,7 @@ them into DuckDB.
 | DuckDB | Real, in process. |
 | MotherDuck | Live against a MotherDuck account on DuckDB 1.5.6: every write strategy, an incremental load and rerun, a new column and every portable type. Offline, every change loads through the separate process into a stand-in for MotherDuck and compares with DuckDB. See [MotherDuck](/docs/targets/motherduck/#tested). |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB, plus a live round from SQL Server and MySQL into Databricks. |
-| Databricks source | A fake Statement Execution API in tests (catalog discovery, result files in several chunks, an expired link fetched again, cursor reads, no token on downloads). Not yet tested on a real workspace. |
+| Databricks source | A fake Statement Execution API in tests (catalog discovery, result files in several chunks, an expired link fetched again, cursor reads, no token on downloads), plus a live round from a real SQL warehouse into DuckDB, Parquet files, Postgres and ClickHouse: tables, a view, a windowed query table, merges and every column shape. See [Databricks](/docs/sources/databricks/#tested). |
 | BigQuery source | A fake Storage Read API in tests (parallel streams, a broken stream resumed, cursor filters), and live loads from a sandbox project into DuckDB: tables, views, query tables, and integer, timestamp, text, `NUMERIC` and `BIGNUMERIC` cursors, plus a live round into Databricks. |
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |

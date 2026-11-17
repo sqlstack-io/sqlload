@@ -38,11 +38,6 @@ cursor_column = "ordered_at"
 write_strategy = "append"
 ```
 
-:::note
-The Databricks source is tested against a local fake of the Statement Execution API, not yet on a
-real workspace. See [Tested](#tested).
-:::
-
 ## Connection
 
 A source uses a [`databricks` connection](/docs/targets/databricks/#connection), the same kind a
@@ -143,4 +138,14 @@ external links turned off can't be read this way.
 
 A local fake of the Statement Execution API covers discovery from `information_schema`, result
 files in several chunks, an expired link fetched again, cursor reads of only new rows, and that no
-download carries the Databricks token. The source has not yet run against a real workspace.
+download carries the Databricks token.
+
+A live round on a real serverless SQL warehouse loaded tables, a view and a `sql` query table read
+in daily cursor windows into DuckDB, Parquet files, Postgres and ClickHouse, twice: a first load,
+then updated and new rows merged by primary key. Row counts and sums matched on every target, as
+did a table of every shape: `STRUCT`, `ARRAY`, `MAP`, `BINARY`, `DECIMAL(38,10)`,
+`TIMESTAMP_NTZ`, NULLs and dates from year 1 to 9999.
+
+Reading a table through the result links took about 1 s for 100,000 rows and 10 s for 10 million
+rows (1.2 GB of Arrow). Unloading the same table to Parquet in a volume first is no faster below a
+million rows and about 3 s faster at ten million, so SQLLoad always reads through the result links.
