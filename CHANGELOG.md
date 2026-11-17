@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.64.0](https://github.com/sqlstack-io/sqlload/compare/v0.63.1...v0.64.0) (2026-11-17)
+
+
+### Features
+
+* **databricks:** a databricks connection that only a source uses needs no volume ([ac8dc4b](https://github.com/sqlstack-io/sqlload/commit/ac8dc4bcfaa6c87b0e1352aef7884eb9aa1e47a2))
+* **databricks:** read Databricks tables, views and queries as a source, as Arrow through the Statement Execution API ([ac8dc4b](https://github.com/sqlstack-io/sqlload/commit/ac8dc4bcfaa6c87b0e1352aef7884eb9aa1e47a2))
+
 ## [0.63.1](https://github.com/sqlstack-io/sqlload/compare/v0.63.0...v0.63.1) (2026-11-17)
 
 
