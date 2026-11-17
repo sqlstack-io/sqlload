@@ -3,15 +3,19 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::files::main::repair_table::repair_table;
+use crate::adapters::files::_helpers::layout::swap::{remove_staged, swap_in};
 use crate::adapters::files::main::swap_folder::swap_folder;
-use crate::adapters::files::models::{LiveRecords, TablePath};
+use crate::adapters::files::models::TablePath;
 use crate::adapters::files::tests::helpers::{
-    MID_SWAP, NO_FOLDER, block_on, local_files, watch_folder, write_all,
+    block_on, local_files, top_parts, watch_folder, write_all,
 };
-use crate::adapters::files::tests::test_types::{RemoveStagedTestCase, SwapFolderTestCase};
+use crate::adapters::files::tests::test_types::{
+    RemoveStagedTestCase, RenameRaceTestCase, StalledSwapTestCase, SwapFolderTestCase,
+};
 use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::{Location, StoreKind};
+use crate::table_lease::main::lease_now::lease_now;
+use crate::table_lease::main::take_lease::take_lease;
 
 /// The table folder below the scratch directory.
 const TABLE_PREFIX: &str = "app/orders/";
@@ -23,7 +27,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
 -> Result<(), String> {
     let test_cases = [
         SwapFolderTestCase {
-            description: "the run log, a tombstone's two markers and a file beside the data are carried over; replaced files are not",
+            description: "the run log, the lease, a tombstone's two markers and a file beside the data are carried over; replaced files are not",
             live: &[
                 "part-old-0.csv",
                 "part-old-1.csv",
@@ -37,6 +41,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             expected_live: &[
                 "README.txt",
                 "_sqlload/decided/crashed",
+                "_sqlload/lease/00000000000000000001",
                 "_sqlload/pending/crashed",
                 "_sqlload/runs/r1.json",
                 "_sqlload/runs/r2.json",
@@ -44,11 +49,11 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             ],
         },
         SwapFolderTestCase {
-            description: "a first load renames its folder into place",
+            description: "a first load, whose folder holds only its lease, swaps its table in",
             live: &[],
             replaced: &[],
             staged: &["part-new-0.csv"],
-            expected_live: &["part-new-0.csv"],
+            expected_live: &["_sqlload/lease/00000000000000000001", "part-new-0.csv"],
         },
     ];
     for test_case in test_cases {
@@ -62,6 +67,12 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
         };
         let live_path = directory.path().join(TABLE_PREFIX);
         write_all(directory.path(), TABLE_PREFIX, test_case.live, "old")?;
+        let lease = block_on(async {
+            let folder = open_folder(&live).map_err(|error| error.to_string())?;
+            take_lease(&folder, "swapping", lease_now())
+                .await
+                .map_err(|error| error.to_string())?
+        })?;
         let replaced: BTreeSet<String> = test_case
             .replaced
             .iter()
@@ -83,7 +94,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
                 open_folder(&staged).map_err(|error| error.to_string())?,
             );
             block_on(async {
-                swap_folder(&live_folder, &staged_folder, &replaced)
+                swap_folder((&live_folder, &lease), &staged_folder, &replaced)
                     .await
                     .map_err(|error| error.to_string())
             })
@@ -91,9 +102,8 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
         stop.store(true, Ordering::Relaxed);
         let seen = watcher.join().map_err(|_| "the watcher panicked")?;
         swapped?;
-        let folder = open_folder(&live).map_err(|error| error.to_string())?;
         block_on(async {
-            repair_table(&folder, (&[], &LiveRecords::default()))
+            remove_staged(&live)
                 .await
                 .map_err(|error| error.to_string())
         })?;
@@ -101,8 +111,6 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             .replaced
             .iter()
             .copied()
-            .chain(test_case.live.is_empty().then_some(NO_FOLDER))
-            .chain(MID_SWAP.iter().copied())
             .map(str::to_owned)
             .collect();
         let new: Vec<String> = vec!["part-new-0.csv".to_owned()];
@@ -137,33 +145,22 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
 }
 
 #[test]
-fn given_folders_left_beside_a_table_when_repairing_then_staged_ones_go_and_a_moved_aside_table_comes_back()
--> Result<(), String> {
-    let test_cases = [
-        RemoveStagedTestCase {
-            description: "a stopped load's staging folder is deleted, other folders that only look alike are kept",
-            before: &[
-                "orders/part-a-0.csv",
-                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/part-b-0.csv",
-                ".orders.sqlload-x/keep.csv",
-                "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
-            ],
-            expected_after: &[
-                ".orders.sqlload-x/keep.csv",
-                "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
-                "orders/part-a-0.csv",
-            ],
-        },
-        RemoveStagedTestCase {
-            description: "a table moved aside by a stopped swap is put back, and the new one beside it deleted",
-            before: &[
-                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11-old/part-a-0.csv",
-                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11-old/_sqlload/runs/r1.json",
-                ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/part-b-0.csv",
-            ],
-            expected_after: &["orders/_sqlload/runs/r1.json", "orders/part-a-0.csv"],
-        },
-    ];
+fn given_folders_left_beside_a_table_when_a_load_takes_it_then_staged_ones_go() -> Result<(), String>
+{
+    let test_cases = [RemoveStagedTestCase {
+        description: "a stopped load's staging folder is deleted, other folders that only look alike are kept",
+        before: &[
+            "orders/part-a-0.csv",
+            ".orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/part-b-0.csv",
+            ".orders.sqlload-x/keep.csv",
+            "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
+        ],
+        expected_after: &[
+            ".orders.sqlload-x/keep.csv",
+            "orders.sqlload-0b5e7a52-2f8a-4a0e-9a35-6f3f1d2c8e11/keep.csv",
+            "orders/part-a-0.csv",
+        ],
+    }];
     for test_case in test_cases {
         let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
         write_all(directory.path(), "app/", test_case.before, "x")?;
@@ -173,15 +170,165 @@ fn given_folders_left_beside_a_table_when_repairing_then_staged_ones_go_and_a_mo
             },
             prefix: TABLE_PREFIX.to_owned(),
         };
-        let folder = open_folder(&live).map_err(|error| error.to_string())?;
         block_on(async {
-            repair_table(&folder, (&[], &LiveRecords::default()))
+            remove_staged(&live)
                 .await
                 .map_err(|error| error.to_string())
         })?;
         assert_eq!(
             local_files(&directory.path().join("app")),
             test_case.expected_after,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_load_stalled_before_its_swap_when_another_load_took_the_table_then_its_swap_fails_and_the_table_is_kept()
+-> Result<(), String> {
+    let test_cases = [
+        StalledSwapTestCase {
+            description: "with its lease held, the staged table is swapped in",
+            lease_age_minutes: 0,
+            takeovers: 0,
+            expected_failed: false,
+            expected_parts: &["part-new-0.csv"],
+        },
+        StalledSwapTestCase {
+            description: "after its lease lapsed and another load took the table, the swap fails and the old table stays",
+            lease_age_minutes: 11,
+            takeovers: 1,
+            expected_failed: true,
+            expected_parts: &["part-old-0.csv"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        let live = Location {
+            store: StoreKind::Filesystem { root },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        write_all(directory.path(), TABLE_PREFIX, &["part-old-0.csv"], "old")?;
+        let path = TablePath {
+            folder: live.clone(),
+            partition: None,
+        };
+        let load_id = uuid::Uuid::new_v4().to_string();
+        let staged = path
+            .staged_folder(&WriteMode::Replace, &load_id)
+            .ok_or("no staging folder")?;
+        write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+        let replaced: BTreeSet<String> = BTreeSet::from(["part-old-0.csv".to_owned()]);
+        let swapped = block_on(async {
+            let failed = |error: String| error;
+            let live_folder = open_folder(&live).map_err(|error| error.to_string())?;
+            let staged_folder = open_folder(&staged).map_err(|error| error.to_string())?;
+            let taken_at = lease_now()
+                - chrono::Duration::minutes(
+                    i64::try_from(test_case.lease_age_minutes)
+                        .map_err(|error| error.to_string())?,
+                );
+            let lease = take_lease(&live_folder, &load_id, taken_at)
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(failed)?;
+            for _ in 0..test_case.takeovers {
+                take_lease(&live_folder, "other", lease_now())
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map_err(failed)?;
+                remove_staged(&live)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            Ok::<_, String>(
+                swap_folder((&live_folder, &lease), &staged_folder, &replaced)
+                    .await
+                    .is_err(),
+            )
+        })?;
+        assert_eq!(
+            (swapped, top_parts(&directory.path().join(TABLE_PREFIX))),
+            (
+                test_case.expected_failed,
+                test_case
+                    .expected_parts
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>()
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_load_that_checked_its_lease_when_another_load_takes_the_table_before_its_rename_then_the_rename_fails_and_the_table_is_kept()
+-> Result<(), String> {
+    let test_cases = [
+        RenameRaceTestCase {
+            description: "the rename comes first: the new table is in place, and the load taking the table deletes the old one beside it",
+            takeovers: 0,
+            expected_failed: false,
+            expected_parts: &["part-new-0.csv"],
+        },
+        RenameRaceTestCase {
+            description: "the other load moves the staged table away first: the rename fails and the old table stays",
+            takeovers: 1,
+            expected_failed: true,
+            expected_parts: &["part-old-0.csv"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        let live = Location {
+            store: StoreKind::Filesystem { root },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        write_all(directory.path(), TABLE_PREFIX, &["part-old-0.csv"], "old")?;
+        let staged = TablePath {
+            folder: live.clone(),
+            partition: None,
+        }
+        .staged_folder(&WriteMode::Replace, &uuid::Uuid::new_v4().to_string())
+        .ok_or("no staging folder")?;
+        write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+        let staged_path = directory.path().join(&staged.prefix);
+        let live_path = directory.path().join(TABLE_PREFIX);
+        for _ in 0..test_case.takeovers {
+            block_on(async {
+                remove_staged(&live)
+                    .await
+                    .map_err(|error| error.to_string())
+            })?;
+        }
+        let renamed = swap_in(&staged_path, &live_path);
+        block_on(async {
+            remove_staged(&live)
+                .await
+                .map_err(|error| error.to_string())
+        })?;
+        assert_eq!(
+            (
+                renamed.is_err(),
+                top_parts(&live_path),
+                local_files(&directory.path().join("app")).len()
+            ),
+            (
+                test_case.expected_failed,
+                test_case
+                    .expected_parts
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>(),
+                1
+            ),
             "{}",
             test_case.description
         );

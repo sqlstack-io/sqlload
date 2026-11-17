@@ -36,11 +36,6 @@ use crate::store_paths::models::{Location, StoreKind};
 const NOV_4_PLUS_1_US: i64 = 1_793_750_400_000_001;
 /// What `watch_folder` records when the folder is missing.
 pub(crate) const NO_FOLDER: &str = "<no folder>";
-/// What a reader may also see while a folder is swapped in: nothing on Windows, which cannot swap two folders in one rename, so the old one is moved aside first.
-pub(crate) const MID_SWAP: &[&str] = match cfg!(windows) {
-    true => &[NO_FOLDER],
-    false => &[],
-};
 /// How the data files a load writes are named.
 const PART_NAME_START: &str = "part-";
 
@@ -312,6 +307,14 @@ pub(crate) fn csv_file(
             add_rows(file, batch, encoding)
         })?;
     finish_file(file)
+}
+
+/// The data files directly in `folder`, sorted.
+pub(crate) fn top_parts(folder: &std::path::Path) -> Vec<String> {
+    local_files(folder)
+        .into_iter()
+        .filter(|key| key.starts_with(PART_NAME_START))
+        .collect()
 }
 
 /// The files under `folder`, hidden ones included, as sorted relative keys.

@@ -147,10 +147,24 @@ From sqlload 0.27.0: in a local folder, `replace` and `--reload` write the new t
 table folder, carry over every file of the table folder that the load doesn't replace (the
 `_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
-reader sees the old files or the new ones, never both. Where the filesystem can't swap folders in one
-rename, as on Windows, SQLLoad moves the old folder aside first and warns, which leaves a moment with no folder. A
-hidden folder left by a stopped or failed load is deleted by the next load. A table at the root of the
-folder connection has no folder beside it to swap, so it is replaced as in S3.
+reader sees the old files or the new ones, never both. A hidden folder left by a stopped or failed
+load is deleted by the next load. A table at the root of the folder connection has no folder beside
+it to swap, so it is replaced as in S3.
+
+From 0.63.0, a load checks that it still holds the table's lease right before that rename, and
+writes nothing in between. A load that takes the table moves every hidden folder other loads staged
+beside it away, in one rename each, before it reads the table. So a load that checked its lease,
+then paused past it while another load took the table, finds its hidden folder gone and fails at the
+rename, leaving the table as it was:
+
+```text
+out/orders/: cannot swap the new table in: No such file or directory (os error 2)
+```
+
+On a Linux filesystem that can't swap two folders in one rename, such as NFS, `replace` and
+`--reload` into a local folder fail rather than move the old folder aside in steps another load
+could interleave with. On Windows, which has no such rename, they write the new files into the table
+folder, then delete the older ones, as in S3. Before 0.63.0, both moved the old folder aside first.
 
 In S3, `replace` writes the new files first, then deletes the older ones, so a reader in between sees
 both. `delete_insert` works this way in both stores, as the plan's `note` says.
@@ -210,10 +224,8 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
   An S3-compatible store that ignores that header can still let two loads write one table, as can,
   before 0.62.0, a load paused for longer than its lease (but see the next point). With
   `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail instead.
-- In a local folder, `replace` and `--reload` write the table into a hidden folder beside it and swap
-  it in. A load doing that which pauses for longer than its lease isn't covered: the next load
-  deletes its hidden folder, and when it resumes it can still swap in a table missing rows, counted
-  as loaded.
+- Before 0.63.0, a local `replace` or `--reload` that paused for longer than its lease, after its
+  last lease check, could still swap in a table missing rows, counted as loaded.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.
 - A load that lost its lease and keeps going for more than 7 days after another load repaired it

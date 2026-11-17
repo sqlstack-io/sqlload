@@ -84,9 +84,10 @@ pub struct TablePath {
 }
 
 impl TablePath {
-    /// The hidden folder beside the table folder that a `replace` or `--reload` of a local directory writes the table into, to swap it in at commit: `.<table folder>.sqlload-<load id>/`; `None` for other write modes, other stores and a table at the directory's root.
+    /// The hidden folder beside the table folder that a `replace` or `--reload` of a local directory writes the table into, to swap it in at commit: `.<table folder>.sqlload-<load id>/`; `None` for other write modes, other stores, a table at the directory's root, and on systems other than Linux and macOS, which can't swap two folders in one rename.
     pub fn staged_folder(&self, mode: &WriteMode, load_id: &str) -> Option<Location> {
-        let rewrites = matches!(mode, WriteMode::Replace | WriteMode::Recreate);
+        let rewrites = matches!(mode, WriteMode::Replace | WriteMode::Recreate)
+            && cfg!(any(target_os = "linux", target_os = "macos"));
         let (_, parent, name) = local_folder(&self.folder).filter(|_| rewrites)?;
         Some(Location {
             store: self.folder.store.clone(),

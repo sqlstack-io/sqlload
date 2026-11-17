@@ -16,12 +16,12 @@ use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::Location;
 use bytes::Bytes;
 
-/// For each unfinished load, delete its files (it stopped writing) or finish it (its files are complete): write the run record it holds, delete the files it replaces; then delete its marker. A load found writing may only have lost its lease and still be running, so repair first decides it `aborted` (created only if the load has not decided `replacing` meanwhile, in which case it is left to finish). The load may also have committed in full since the table was listed, deleting its decided marker: it deletes its pending marker first and never writes it again, so a pending marker gone once `aborted` is created means it committed, and repair withdraws the decision and leaves its files. A decision that holds keeps the pending marker beside it (so one left without it, by a repair that stopped while withdrawing it, is deleted alone); it has the late commit fail, and later repairs delete files the load still stores, until it expires. Then merge the table's live records (`records`, which never count the files repair deletes) once there are many. In a local directory, first delete the hidden folders beside the table that earlier loads staged in, putting back a table a stopped swap left moved aside.
+/// For each unfinished load, delete its files (it stopped writing) or finish it (its files are complete): write the run record it holds, delete the files it replaces; then delete its marker. A load found writing may only have lost its lease and still be running, so repair first decides it `aborted` (created only if the load has not decided `replacing` meanwhile, in which case it is left to finish). The load may also have committed in full since the table was listed, deleting its decided marker: it deletes its pending marker first and never writes it again, so a pending marker gone once `aborted` is created means it committed, and repair withdraws the decision and leaves its files. A decision that holds keeps the pending marker beside it (so one left without it, by a repair that stopped while withdrawing it, is deleted alone); it has the late commit fail, and later repairs delete files the load still stores, until it expires. Then merge the table's live records (`records`, which never count the files repair deletes) once there are many. In a local directory, first take away the hidden folders beside the table that other loads staged a table in, so none can be swapped in any more. Whether the table may have changed since `pending` was read: a load was repaired, or a staged folder was taken away.
 pub async fn repair_table(
     folder: &OpenFolder,
     (pending, records): (&[PendingLoad], &LiveRecords),
-) -> Result<(), FilesDestinationError> {
-    remove_staged(&folder.location).await;
+) -> Result<bool, FilesDestinationError> {
+    let moved = remove_staged(&folder.location).await?;
     let (markers, decided) = (pending_folder(folder), decided_folder(folder));
     for load in pending {
         if let (PendingPhase::Replacing, Some(run)) = (load.phase, &load.run) {
@@ -61,5 +61,6 @@ pub async fn repair_table(
             }
         }
     }
-    compact_records(folder, records).await
+    compact_records(folder, records).await?;
+    Ok(moved || !pending.is_empty())
 }

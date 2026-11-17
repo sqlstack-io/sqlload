@@ -7,7 +7,8 @@ use futures_util::TryStreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 
-use crate::adapters::files::constants::{LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, STAGED_FOLDER_MARK};
+use crate::adapters::files::constants::{LOAD_ID_LENGTH, STAGED_FOLDER_MARK};
+use crate::adapters::files::errors::FilesDestinationError;
 use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -29,45 +30,27 @@ pub(crate) fn staged_stem(name: &str) -> String {
     format!(".{name}{STAGED_FOLDER_MARK}")
 }
 
-/// Put `staged` at `live` and `live`'s old contents at `staged`. With an existing `live` this is one `renameat2(RENAME_EXCHANGE)` (`renameatx_np(RENAME_SWAP)` on macOS), so a reader sees one folder or the other; where the system or filesystem has no swap, `live` is moved aside first, leaving a moment with no folder.
+/// Put `staged` at `live` and `live`'s old contents at `staged`, in one `renameat2(RENAME_EXCHANGE)` (`renameatx_np(RENAME_SWAP)` on macOS), so a reader sees one folder or the other. Neither is created: when `staged` is gone because a load that took the table after this load's lease lapsed moved it away, this fails and changes nothing. A missing `live` is renamed into place. Where the system or filesystem has no such rename this fails too, rather than move `live` aside in steps another load could interleave with.
 pub(crate) fn swap_dirs(staged: &Path, live: &Path) -> std::io::Result<()> {
     match live.try_exists()? {
         false => std::fs::rename(staged, live),
-        true => exchange(staged, live).or_else(|error| match error.kind() == std::io::ErrorKind::Unsupported {
-            true => {
-                tracing::warn!(%error, folder = %live.display(), "this filesystem cannot swap folders in one rename; moving the old folder aside first");
-                move_aside(staged, live)
-            }
-            false => Err(error),
+        true => exchange(staged, live).map_err(|error| match error.kind() == std::io::ErrorKind::Unsupported {
+            true => std::io::Error::other(format!(
+                "this filesystem cannot swap two folders in one rename ({error}), so the table is not replaced; load it into a folder on a filesystem that can, such as ext4, XFS, Btrfs, tmpfs or APFS"
+            )),
+            false => error,
         }),
     }
 }
 
-/// Swap two existing directories with three renames, through `staged` with `-old` added; when the new folder cannot be put in place, the old one is put back. A stop between the first two renames leaves the old folder at the `-old` name, which the next load puts back (see `remove_staged`).
-fn move_aside(staged: &Path, live: &Path) -> std::io::Result<()> {
-    let mut aside = staged.as_os_str().to_owned();
-    aside.push(MOVED_ASIDE_SUFFIX);
-    let aside = PathBuf::from(aside);
-    std::fs::rename(live, &aside)?;
-    if let Err(error) = std::fs::rename(staged, live) {
-        std::fs::rename(&aside, live)?;
-        return Err(error);
-    }
-    std::fs::rename(&aside, staged)
-}
-
-/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`, and whether it is the old table moved aside, `<stem><load id>-old`.
-pub(crate) fn staged_entry(entry: &str, stem: &str) -> Option<bool> {
-    let rest = entry.strip_prefix(stem)?;
-    let (load_id, aside) = match rest.strip_suffix(MOVED_ASIDE_SUFFIX) {
-        Some(load_id) => (load_id, true),
-        None => (rest, false),
-    };
-    let is_load_id = load_id.len() == LOAD_ID_LENGTH
-        && load_id
-            .chars()
-            .all(|character| character.is_ascii_hexdigit() || character == '-');
-    is_load_id.then_some(aside)
+/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`.
+pub(crate) fn staged_entry(entry: &str, stem: &str) -> bool {
+    entry.strip_prefix(stem).is_some_and(|load_id| {
+        load_id.len() == LOAD_ID_LENGTH
+            && load_id
+                .chars()
+                .all(|character| character.is_ascii_hexdigit() || character == '-')
+    })
 }
 
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
@@ -89,7 +72,7 @@ fn exchange(_staged: &Path, _live: &Path) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
-/// Copy into `staged` every file of `live` the load does not replace and that is not a pending marker: by hard link, or by copying the bytes where the filesystem has no hard links. Returns the key that failed and why.
+/// Copy into `staged` every file of `live` the load does not replace: by hard link, or by copying the bytes where the filesystem has no hard links. Returns the key that failed and why.
 pub(crate) async fn carry_over(
     live: &OpenFolder,
     staged: &OpenFolder,
@@ -143,9 +126,8 @@ async fn copy_file(
     }
 }
 
-/// Swap the staged folder in, then delete the old table now at `staged`; a missing staged folder (nothing written) is created first, and a failed delete only warns.
+/// Swap the staged folder in, then delete the old table now at `staged`; a failed delete only warns.
 pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(staged)?;
     swap_dirs(staged, live)?;
     let removed = match std::fs::remove_dir_all(staged) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -157,48 +139,54 @@ pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Delete the staging folders of table folder `live` (named by `stem`) in its parent; when `live` is missing because a stop came while its old table was moved aside, put that table back first.
-pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<()> {
+/// Move every staging folder of table folder `live` (named by `stem`) in its parent away to a fresh name, each in one rename, then delete them: the renames fail the call, a failed delete only warns (the folder keeps a staging name no load owns, so the next load deletes it). Whether any was moved.
+pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<bool> {
     let Some(parent) = live.parent() else {
-        return Ok(());
+        return Ok(false);
     };
-    let entries: Vec<(PathBuf, bool)> = match std::fs::read_dir(parent) {
+    let entries: Vec<PathBuf> = match std::fs::read_dir(parent) {
         Ok(entries) => entries
             .filter_map(Result::ok)
-            .filter_map(|entry| staged_dir(&entry, stem))
+            .filter(|entry| staged_entry(&entry.file_name().to_string_lossy(), stem))
+            .map(|entry| entry.path())
             .collect(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error),
     };
-    let mut missing = !live.try_exists()?;
-    for (entry, aside) in entries {
-        match aside && missing {
-            true => {
-                std::fs::rename(&entry, live)?;
-                missing = false;
+    let mut moved: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let away = parent.join(format!("{stem}{}", uuid::Uuid::new_v4()));
+        match std::fs::rename(&entry, &away) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            renamed => {
+                renamed?;
+                moved.push(away);
             }
-            false => std::fs::remove_dir_all(&entry)?,
         }
     }
-    Ok(())
+    let any = !moved.is_empty();
+    for away in moved {
+        if let Err(error) = std::fs::remove_dir_all(&away) {
+            tracing::warn!(%error, folder = %away.display(), "cannot delete a staging folder beside the table; the next load deletes it");
+        }
+    }
+    Ok(any)
 }
 
-/// A directory entry that is a staging folder of the table named by `stem`, and whether it is a moved-aside old table.
-fn staged_dir(entry: &std::fs::DirEntry, stem: &str) -> Option<(PathBuf, bool)> {
-    staged_entry(&entry.file_name().to_string_lossy(), stem).map(|aside| (entry.path(), aside))
-}
-
-/// Delete every hidden folder beside table folder `live` that a load of it staged in: one a stopped load left, or the old table a load swapped out but could not delete. When the table folder is missing because a load stopped while moving the old table aside, that old table is put back first. Best effort: a failure only warns, and the next load tries again.
-pub(crate) async fn remove_staged(live: &Location) {
+/// Before a load that holds the table's lease reads it: take away every hidden folder beside table folder `live` that another load staged a new table in, so that load can't swap it in any more. Each goes in one rename, then is deleted. A load whose lease lapsed may still be about to swap: either its swap came first, and what is moved away is the old table it swapped out, or this rename did, and its swap fails. A rename that fails stops this load before it writes anything. Whether any folder was moved: the table may have changed since it was read.
+pub(crate) async fn remove_staged(live: &Location) -> Result<bool, FilesDestinationError> {
     let Some((path, _, name)) = local_folder(live) else {
-        return;
+        return Ok(false);
     };
     let stem = staged_stem(name);
-    let removed = tokio::task::spawn_blocking(move || clear_staged(&path, &stem)).await;
-    if let Err(error) = removed
+    tokio::task::spawn_blocking(move || clear_staged(&path, &stem))
+        .await
         .map_err(|error| error.to_string())
         .and_then(|removed| removed.map_err(|error| error.to_string()))
-    {
-        tracing::warn!(%error, folder = %live, "cannot delete a staging folder an earlier load left beside the table; the next load tries again");
-    }
+        .map_err(|reason| FilesDestinationError::Write {
+            key: live.to_string(),
+            reason: format!(
+                "cannot move away a staging folder an earlier load left beside the table: {reason}"
+            ),
+        })
 }

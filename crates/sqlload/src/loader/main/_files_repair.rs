@@ -45,17 +45,16 @@ pub(in crate::loader) async fn files_to_replace(
     .map_err(LoaderError::Invalid)
 }
 
-/// The table once every unfinished load is repaired and the records of loads it no longer holds are deleted; an error if files are not where the path puts them. An empty listing is read again, as the repair may have put back a table a stopped swap moved aside.
+/// The table once every unfinished load is repaired and the records of loads it no longer holds are deleted; an error if files are not where the path puts them. It is read again when the repair changed it, or took away a table another load staged beside it in a local directory (whose swap may have landed after the first read).
 async fn repaired_state(
     folder: &OpenFolder,
     path: &TablePath,
     cursor_type: Option<&ColumnType>,
 ) -> Result<TableState, LoaderError> {
     let state = read_table_state(folder, path, cursor_type).await?;
-    repair_table(folder, (&state.pending, &state.records)).await?;
-    let state = match state.pending.is_empty() && !state.listed.keys().is_empty() {
-        true => state,
-        false => read_table_state(folder, path, cursor_type).await?,
+    let state = match repair_table(folder, (&state.pending, &state.records)).await? {
+        false => state,
+        true => read_table_state(folder, path, cursor_type).await?,
     };
     delete_files(folder, &state.stale_loaded).await?;
     match state.listed.problems.first() {

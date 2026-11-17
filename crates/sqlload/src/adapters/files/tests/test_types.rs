@@ -208,6 +208,28 @@ pub(crate) struct SwapFolderTestCase {
     pub(crate) expected_live: &'static [&'static str],
 }
 
+/// A load that staged a table stalls before swapping it in, while another load may take the table.
+pub(crate) struct StalledSwapTestCase {
+    pub(crate) description: &'static str,
+    /// How many minutes before the swap the stalled load took its lease.
+    pub(crate) lease_age_minutes: u64,
+    /// How many other loads take the table (taking the lease and moving staged tables away) while it stalls.
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// A load that checked its lease renames its staged table in, while another load may take the table first.
+pub(crate) struct RenameRaceTestCase {
+    pub(crate) description: &'static str,
+    /// How many other loads move staged tables away before the rename.
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
 pub(crate) struct RemoveStagedTestCase {
     pub(crate) description: &'static str,
     /// Files below the table's parent folder before the cleanup.
