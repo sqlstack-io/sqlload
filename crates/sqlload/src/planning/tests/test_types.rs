@@ -26,3 +26,18 @@ pub(crate) struct DatabricksPlanTestCase {
     /// The create statements of the objects to create.
     pub(crate) expected_sql: &'static [&'static str],
 }
+
+pub(crate) struct BigQueryPlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) staging: &'static str,
+    /// Columns of an existing `shop__orders` table, as INFORMATION_SCHEMA lists them.
+    pub(crate) existing_columns: &'static [(&'static str, &'static str)],
+    pub(crate) expected_objects: &'static [&'static str],
+    pub(crate) expected_sql: &'static [&'static str],
+}
+
+pub(crate) struct LoadPacingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) staging: &'static str,
+    pub(crate) expected_line: Option<&'static str>,
+}

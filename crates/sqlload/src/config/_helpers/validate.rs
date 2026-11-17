@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
 use crate::config::errors::ConfigError;
 use crate::config::models::{
-    Config, DatabricksConfig, Destination, EnvelopeField, FileFormat, LoadMethod, S3Config,
-    StagingKind,
+    BigQueryConfig, Config, DatabricksConfig, Destination, EnvelopeField, FileFormat, LoadMethod,
+    S3Config, StagingKind,
 };
 
 /// Reject settings that parse but cannot work together.
@@ -30,15 +30,16 @@ pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
 }
 
 fn destination_problems(config: &Config) -> Vec<String> {
-    let names = match &config.destination {
-        Destination::Snowflake(snowflake) => [
+    let names: Vec<(&str, &String)> = match &config.destination {
+        Destination::Snowflake(snowflake) => vec![
             ("destination.database", &snowflake.database),
             ("destination.schema", &snowflake.schema),
         ],
-        Destination::Databricks(databricks) => [
+        Destination::Databricks(databricks) => vec![
             ("destination.catalog", &databricks.catalog),
             ("destination.schema", &databricks.schema),
         ],
+        Destination::BigQuery(bigquery) => vec![("destination.dataset", &bigquery.dataset)],
     };
     let mut problems: Vec<String> = names
         .into_iter()
@@ -47,8 +48,44 @@ fn destination_problems(config: &Config) -> Vec<String> {
             format!("{key} {name:?} must be an unquoted identifier (letters, digits, _ and $)")
         })
         .collect();
-    if let Destination::Databricks(databricks) = &config.destination {
-        problems.extend(databricks_problems(config, databricks));
+    match &config.destination {
+        Destination::Snowflake(_) => {}
+        Destination::Databricks(databricks) => {
+            problems.extend(databricks_problems(config, databricks));
+        }
+        Destination::BigQuery(bigquery) => problems.extend(bigquery_problems(config, bigquery)),
+    }
+    problems
+}
+
+/// BigQuery streams through the Storage Write API, or loads Parquet files uploaded with the load job or from a GCS bucket.
+fn bigquery_problems(config: &Config, bigquery: &BigQueryConfig) -> Vec<String> {
+    let staging = &config.staging;
+    let mut problems: Vec<String> = Vec::new();
+    let project_ok = bigquery
+        .project
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | ':'));
+    if bigquery.project.is_empty() || !project_ok {
+        problems.push(format!(
+            "destination.project {:?} must be a Google Cloud project ID",
+            bigquery.project
+        ));
+    }
+    if staging.kind == StagingKind::S3 {
+        problems.push("staging.kind = \"s3\" is not a BigQuery route; files for a load job go to \"internal\" (sent with the job) or \"gcs\" (a Cloud Storage bucket)".to_owned());
+    }
+    if staging.kind != StagingKind::None && staging.format == FileFormat::Json {
+        problems.push(
+            "BigQuery loads Parquet files; remove staging.format or set it to \"parquet\""
+                .to_owned(),
+        );
+    }
+    if staging.load == LoadMethod::Snowpipe {
+        problems.push(
+            "staging.load = \"snowpipe\" is for Snowflake; BigQuery loads with load jobs"
+                .to_owned(),
+        );
     }
     problems
 }
@@ -208,6 +245,19 @@ fn staging_problems(config: &Config) -> Vec<String> {
                 .to_owned(),
         );
     }
+    let is_gcs = config.staging.kind == StagingKind::Gcs;
+    let bigquery = matches!(config.destination, Destination::BigQuery(_));
+    if is_gcs && !bigquery {
+        problems.push("staging.kind = \"gcs\" is for BigQuery".to_owned());
+    }
+    problems.extend(match (is_gcs, config.staging.gcs.as_ref()) {
+        (true, None) => vec!["staging.kind = \"gcs\" needs a [staging.gcs] section".to_owned()],
+        (false, Some(_)) => {
+            vec!["[staging.gcs] is only used when staging.kind = \"gcs\"".to_owned()]
+        }
+        (_, Some(gcs)) => path_problems("staging.gcs.path", &gcs.path),
+        (false, None) => Vec::new(),
+    });
     problems.extend(match (is_s3, config.staging.s3.is_some()) {
         (true, false) => vec!["staging.kind = \"s3\" needs a [staging.s3] section".to_owned()],
         (false, true) => vec!["[staging.s3] is only used when staging.kind = \"s3\"".to_owned()],
@@ -222,29 +272,8 @@ fn staging_problems(config: &Config) -> Vec<String> {
 }
 
 fn s3_problems(s3: &S3Config, snowflake: bool) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    let path = &s3.path;
-    let mut rest = path.as_str();
-    while let Some(start) = rest.find('{') {
-        let Some(length) = rest[start..].find('}') else {
-            problems.push(format!("staging.s3.path {path:?} has an unclosed {{"));
-            break;
-        };
-        let name = &rest[start + 1..start + length];
-        if !S3_PATH_PLACEHOLDERS.contains(&name) {
-            problems.push(format!(
-                "staging.s3.path has an unknown placeholder {{{name}}}"
-            ));
-        }
-        rest = &rest[start + length + 1..];
-    }
-    if !path.contains("{date}") {
-        problems.push("staging.s3.path must contain {date}".to_owned());
-    }
-    if !path.contains("{topic}") && !path.contains("{table}") {
-        problems.push("staging.s3.path must contain {topic} or {table}".to_owned());
-    }
-    if s3.auto_ingest && !path.trim_start_matches('/').starts_with("{table}/") {
+    let mut problems = path_problems("staging.s3.path", &s3.path);
+    if s3.auto_ingest && !s3.path.trim_start_matches('/').starts_with("{table}/") {
         problems.push(
             "staging.s3.auto_ingest needs a path starting with {table}/, so each pipe watches one folder"
                 .to_owned(),
@@ -256,6 +285,30 @@ fn s3_problems(s3: &S3Config, snowflake: bool) -> Vec<String> {
         [""] => problems.push("staging.s3.stage must name the external stage".to_owned()),
         [_] | [_, _, _] => {}
         _ => problems.push("staging.s3.stage must be NAME or DATABASE.SCHEMA.NAME".to_owned()),
+    }
+    problems
+}
+
+/// A bucket folder template's problems: unknown placeholders, and a missing `{date}` or `{topic}`/`{table}`.
+fn path_problems(key: &str, path: &str) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        let Some(length) = rest[start..].find('}') else {
+            problems.push(format!("{key} {path:?} has an unclosed {{"));
+            break;
+        };
+        let name = &rest[start + 1..start + length];
+        if !S3_PATH_PLACEHOLDERS.contains(&name) {
+            problems.push(format!("{key} has an unknown placeholder {{{name}}}"));
+        }
+        rest = &rest[start + length + 1..];
+    }
+    if !path.contains("{date}") {
+        problems.push(format!("{key} must contain {{date}}"));
+    }
+    if !path.contains("{topic}") && !path.contains("{table}") {
+        problems.push(format!("{key} must contain {{topic}} or {{table}}"));
     }
     problems
 }

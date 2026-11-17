@@ -12,6 +12,7 @@ use crate::naming::main::shard_of::shard_of;
 use crate::naming::models::{NameSource, TopicTable};
 use crate::planning::main::apply_plan::apply_plan;
 use crate::planning::main::build_plan::build_plan;
+use crate::planning::main::load_pacing::load_pacing;
 use crate::planning::main::read_existing::read_existing;
 use crate::planning::models::{ObjectState, Plan, PlannedObject, StreamPlan};
 use crate::status::main::check_connections::check_connections;
@@ -58,11 +59,11 @@ pub(crate) async fn plan(config: &Config) -> Result<Vec<String>, String> {
     lines.push(String::new());
     lines.push("Objects:".to_owned());
     let shards = config.source.shards;
-    lines.extend(
-        plan.streams
-            .iter()
-            .flat_map(|stream| stream_lines(stream, shards)),
-    );
+    lines.extend(plan.streams.iter().flat_map(|stream| {
+        stream_lines(stream, shards)
+            .into_iter()
+            .chain(load_pacing(config, stream))
+    }));
     let problems = plan.problems();
     lines.push(String::new());
     lines.push(format!(

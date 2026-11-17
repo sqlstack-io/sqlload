@@ -7,6 +7,8 @@ use crate::batching::models::{Batch, BatchRow};
 use crate::config::models::{ColumnConfig, OversizedPolicy};
 use crate::delivery::errors::DeliveryError;
 use crate::delivery::models::{DeliveryReport, ZerobusDelivery, ZerobusLink};
+use crate::time_text::main::parse_date::parse_date;
+use crate::time_text::main::parse_instant::parse_instant;
 
 /// How Zerobus Ingest's JSON records carry one column's value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,12 +141,12 @@ pub(crate) fn zerobus_record(
             continue;
         }
         *value = match (kind, value.as_str()) {
-            (ZerobusKind::Timestamp, Some(text)) => match instant_micros(text) {
-                Some(micros) => Value::from(micros),
+            (ZerobusKind::Timestamp, Some(text)) => match parse_instant(text) {
+                Some(instant) => Value::from(instant.timestamp_micros()),
                 None => return Err(unreadable(&column.name, text, "timestamp")),
             },
-            (ZerobusKind::Date, Some(text)) => match epoch_days(text) {
-                Some(days) => Value::from(days),
+            (ZerobusKind::Date, Some(text)) => match parse_date(text) {
+                Some(date) => Value::from((date - chrono::NaiveDate::default()).num_days()),
                 None => return Err(unreadable(&column.name, text, "date")),
             },
             (ZerobusKind::Variant, _) => Value::from(value.to_string()),
@@ -152,30 +154,6 @@ pub(crate) fn zerobus_record(
         };
     }
     Ok(Value::Object(row).to_string())
-}
-
-/// Microseconds since the epoch from RFC 3339 text, or a date and time without a zone read as UTC; an unwrapped member arrives as its JSON text, quoted.
-fn instant_micros(text: &str) -> Option<i64> {
-    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
-    if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(&text) {
-        return Some(instant.timestamp_micros());
-    }
-    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
-        match chrono::NaiveDateTime::parse_from_str(&text, format) {
-            Ok(naive) => return Some(naive.and_utc().timestamp_micros()),
-            Err(_) => continue,
-        }
-    }
-    None
-}
-
-/// Days since the epoch from `YYYY-MM-DD`, quoted or not.
-fn epoch_days(text: &str) -> Option<i64> {
-    let text = serde_json::from_str::<String>(text).unwrap_or_else(|_| text.to_owned());
-    match chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d") {
-        Ok(date) => Some((date - chrono::NaiveDate::default()).num_days()),
-        Err(_) => None,
-    }
 }
 
 fn unreadable(column: &str, text: &str, kind: &str) -> String {

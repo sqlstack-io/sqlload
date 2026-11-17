@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::config::models::ColumnConfig;
 
-/// The comparable family of a Snowflake or Databricks column type; `MAP<…>` and `STRUCT<…>` compare as `MAP` and `STRUCT`, since Databricks reports them without spaces.
+/// The comparable family of a Snowflake, Databricks or BigQuery column type; `MAP<…>` and `STRUCT<…>` compare as `MAP` and `STRUCT`, since Databricks reports them without spaces.
 pub(crate) fn type_family(sql_type: &str) -> String {
     let upper = sql_type.trim().to_ascii_uppercase();
     let base = upper.split(['(', '<', ' ']).next().unwrap_or_default();
@@ -10,7 +10,7 @@ pub(crate) fn type_family(sql_type: &str) -> String {
         "VARCHAR" | "STRING" | "TEXT" | "CHAR" | "CHARACTER" | "NCHAR" | "NVARCHAR"
         | "NVARCHAR2" => "TEXT",
         "NUMBER" | "DECIMAL" | "NUMERIC" | "INT" | "INTEGER" | "BIGINT" | "SMALLINT"
-        | "TINYINT" | "BYTEINT" => "NUMBER",
+        | "TINYINT" | "BYTEINT" | "INT64" => "NUMBER",
         "FLOAT" | "FLOAT4" | "FLOAT8" | "DOUBLE" | "REAL" => "FLOAT",
         "TIMESTAMP" | "DATETIME" | "TIMESTAMP_NTZ" => "TIMESTAMP_NTZ",
         "VARBINARY" | "BINARY" => "BINARY",

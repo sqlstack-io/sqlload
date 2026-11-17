@@ -57,6 +57,18 @@ pub const SNOWFLAKE_COLUMNS: &[(&str, &str, &str)] = &[
     ("EXPORTED_AT", "exported_at", "TIMESTAMP_TZ"),
     ("DATE", "date", "DATE"),
 ];
+/// BigQuery's envelope columns: name, record field, type.
+pub const BIGQUERY_COLUMNS: &[(&str, &str, &str)] = &[
+    ("topic", "topic", "STRING"),
+    ("kafka_timestamp", "timestamp", "INT64"),
+    ("kafka_timestamp_type", "timestamp_type", "INT64"),
+    ("kafka_offset", "offset", "INT64"),
+    ("kafka_partition", "partition", "INT64"),
+    ("key", "key", "STRING"),
+    ("value", "value", "STRING"),
+    ("exported_at", "exported_at", "TIMESTAMP"),
+    ("date", "date", "DATE"),
+];
 /// Databricks' envelope columns: name, record field, type.
 pub const DATABRICKS_COLUMNS: &[(&str, &str, &str)] = &[
     ("topic", "topic", "STRING"),

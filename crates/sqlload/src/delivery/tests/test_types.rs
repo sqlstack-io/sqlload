@@ -101,3 +101,28 @@ pub(crate) struct OpenErrorTestCase {
     pub(crate) error: ZerobusError,
     pub(crate) expected_error: DeliveryError,
 }
+
+pub(crate) struct BigQueryRowsTestCase {
+    pub(crate) description: &'static str,
+    /// Column names and types.
+    pub(crate) columns: &'static [(&'static str, &'static str)],
+    pub(crate) line: &'static str,
+    /// The first column's Arrow type and first value, or the error.
+    pub(crate) expected_value: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct LoadJobIdTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) stream: &'static str,
+    pub(crate) attempt: u32,
+    pub(crate) expected_id: &'static str,
+}
+
+pub(crate) struct AppendChunksTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) rows: usize,
+    pub(crate) limit: usize,
+    pub(crate) expected_split: bool,
+    /// Requests over the limit, requests with an offset, and requests to another stream.
+    pub(crate) expected_faults: (usize, usize, usize),
+}

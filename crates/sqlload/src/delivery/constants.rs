@@ -17,3 +17,5 @@ pub const HISTORY_MARGIN: Duration = Duration::from_secs(60);
 pub const RECEIVED_BEFORE_LOOKBACK: Duration = Duration::from_secs(14 * 86_400);
 /// The most history scan pages (10,000 entries each) read for one check; the scan stops sooner once every checked file is found.
 pub const MAX_HISTORY_PAGES: usize = 50;
+/// The least time between two load jobs into one BigQuery table: BigQuery runs at most 1,500 loads per table a day, one a minute leaves room for retries.
+pub const LOAD_JOB_INTERVAL: Duration = Duration::from_secs(60);

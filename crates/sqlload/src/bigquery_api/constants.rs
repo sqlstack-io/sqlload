@@ -71,3 +71,16 @@ pub const GRPC_KEEP_ALIVE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 /// How long a unary Storage Write API call (create, finalize, commit) may take.
 pub const GRPC_UNARY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// The OAuth scope Cloud Storage uploads ask for.
+pub const STORAGE_SCOPE: &str = "https://www.googleapis.com/auth/devstorage.read_write";
+
+/// Cloud Storage's upload root.
+pub const STORAGE_UPLOAD_URL: &str = "https://storage.googleapis.com/upload/storage/v1";
+
+/// The HTTP status of a job id already taken.
+pub const CONFLICT: u16 = 409;
+
+/// The first and longest wait between reads of a running load job.
+pub const JOB_POLL_FIRST: std::time::Duration = std::time::Duration::from_millis(500);
+pub const JOB_POLL_MAX: std::time::Duration = std::time::Duration::from_secs(5);

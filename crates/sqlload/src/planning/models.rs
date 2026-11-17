@@ -15,6 +15,12 @@ pub enum LoadPath {
     Zerobus,
     /// Databricks: a Unity Catalog volume, then `COPY INTO`.
     VolumeCopy,
+    /// BigQuery: the Storage Write API's default stream.
+    WriteApi,
+    /// BigQuery: a load job with the file sent along with it.
+    UploadLoad,
+    /// BigQuery: files in a Cloud Storage bucket, then a load job.
+    GcsLoad,
 }
 
 /// The warehouse object types sqlload creates.

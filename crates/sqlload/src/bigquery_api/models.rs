@@ -29,6 +29,8 @@ pub struct BigQueryClient {
     pub(crate) storage_url: String,
     /// The Storage Write API's gRPC channel, opened on its first call.
     pub(crate) channel: Arc<tokio::sync::OnceCell<tonic::transport::Channel>>,
+    /// The current Cloud Storage token and when it expires, kept apart from the BigQuery one, which has another scope.
+    pub(crate) storage_token: Arc<tokio::sync::Mutex<Option<(Secret, i64)>>>,
 }
 
 impl BigQueryClient {
@@ -59,6 +61,7 @@ impl BigQueryClient {
                 .trim_end_matches('/')
                 .to_owned(),
             channel: Arc::default(),
+            storage_token: Arc::default(),
         }
     }
 }

@@ -1,5 +1,6 @@
 //! The `check` command.
 
+use crate::bigquery_api::main::run_query::run_query;
 use crate::config::models::{Config, StagingKind};
 use crate::databricks_api::main::execute_statement::execute_statement;
 use crate::delivery::models::Warehouse;
@@ -47,6 +48,14 @@ pub async fn check_connections(config: &Config, clients: &Clients) -> Result<Vec
                 .map_err(|error| format!("Databricks SQL warehouse: {error}"))?;
             let row = identity.rows.first().cloned().unwrap_or_default();
             findings.push(format!("Databricks: user {}", cell(&row, 0)));
+            findings.push(format!("delivery: {path:?}"));
+        }
+        Warehouse::BigQuery(bigquery) => {
+            let identity = run_query(bigquery, "SELECT SESSION_USER()")
+                .await
+                .map_err(|error| format!("BigQuery: {error}"))?;
+            let row = identity.rows.first().cloned().unwrap_or_default();
+            findings.push(format!("BigQuery: user {}", cell(&row, 0)));
             findings.push(format!("delivery: {path:?}"));
         }
     }

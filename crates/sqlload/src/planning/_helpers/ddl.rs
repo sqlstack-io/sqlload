@@ -1,7 +1,7 @@
 use crate::config::models::Config;
 use crate::file_format::main::copy_into::copy_into;
-use crate::naming::main::databricks_table::databricks_table;
 use crate::naming::main::quote_name::quote_name;
+use crate::naming::main::quoted_table::quoted_table;
 use crate::planning::constants::FILE_FORMAT;
 use crate::planning::models::StagePipe;
 
@@ -60,8 +60,8 @@ pub(crate) fn create_stage_pipe(config: &Config, pipe: &StagePipe<'_>) -> String
     )
 }
 
-/// `CREATE TABLE IF NOT EXISTS` for a Databricks table: a managed Delta table, which Zerobus Ingest and `COPY INTO` both write.
-pub(crate) fn create_databricks_table(config: &Config, table: &str) -> String {
+/// `CREATE TABLE IF NOT EXISTS` for a Databricks table (a managed Delta table, which Zerobus Ingest and `COPY INTO` both write) or a BigQuery table, in the same backtick-quoted form.
+pub(crate) fn create_quoted_table(config: &Config, table: &str) -> String {
     let columns: Vec<String> = config
         .envelope
         .columns
@@ -70,7 +70,7 @@ pub(crate) fn create_databricks_table(config: &Config, table: &str) -> String {
         .collect();
     format!(
         "CREATE TABLE IF NOT EXISTS {} ({})",
-        databricks_table(config, table),
+        quoted_table(config, table),
         columns.join(", ")
     )
 }
@@ -78,7 +78,7 @@ pub(crate) fn create_databricks_table(config: &Config, table: &str) -> String {
 pub(crate) fn create_volume(config: &Config, volume: &str) -> String {
     format!(
         "CREATE VOLUME IF NOT EXISTS {}",
-        databricks_table(config, volume)
+        quoted_table(config, volume)
     )
 }
 

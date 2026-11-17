@@ -1,3 +1,5 @@
+#[path = "tests/test_bigquery.rs"]
+mod bigquery;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_pending_loads.rs"]
