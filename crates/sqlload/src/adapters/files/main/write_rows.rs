@@ -3,10 +3,10 @@
 use arrow_array::RecordBatch;
 
 use crate::adapters::files::_helpers::write::data_files::{
-    add_rows, new_file, next_key, open_bytes, store_file,
+    add_rows, new_file, next_key, open_bytes, store_file, value_folder,
 };
 use crate::adapters::files::_helpers::write::spill::spill_order;
-use crate::adapters::files::_helpers::write::split::partition_rows;
+use crate::adapters::files::_helpers::write::split::{partition_rows, row_sources};
 use crate::adapters::files::constants::{
     FILE_MAX_BYTES, FILE_MAX_ROWS, OPEN_FILES_MAX, OPEN_FILES_MAX_BYTES, SINGLE_FILE_MAX_BYTES,
 };
@@ -86,6 +86,14 @@ async fn add_part(
         Some(file) => file,
         None => new_file(&writer.schema, &writer.encoding).map_err(failed)?,
     };
+    let sources = row_sources(&part).map_err(failed)?;
+    if !sources.is_empty() {
+        writer
+            .sources
+            .entry(value_folder(writer, &value))
+            .or_default()
+            .extend(sources);
+    }
     let file = add_rows(file, &part, &writer.encoding).map_err(failed)?;
     writer.rows += part.num_rows() as u64;
     writer.partitions.insert(value.clone());

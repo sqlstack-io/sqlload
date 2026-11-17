@@ -170,6 +170,8 @@ pub(crate) struct LoadedRecordsTestCase {
     pub(crate) records: &'static [(&'static str, &'static str)],
     /// The source files that count as loaded, by name.
     pub(crate) expected_loaded: &'static [&'static str],
+    /// Whether the records cannot be read, as one is in an older SQLLoad's format (a problem naming `--reload`).
+    pub(crate) expected_old: bool,
     /// The records repair deletes.
     pub(crate) expected_stale: &'static [&'static str],
 }
@@ -212,4 +214,23 @@ pub(crate) struct RemoveStagedTestCase {
     pub(crate) before: &'static [&'static str],
     /// Files below the parent folder after it.
     pub(crate) expected_after: &'static [&'static str],
+}
+
+/// A load found writing, repaired, that stores a file later.
+pub(crate) struct AbortedTestCase {
+    pub(crate) description: &'static str,
+    /// How long ago the `aborted` marker was written, in days.
+    pub(crate) marker_age_days: u64,
+    /// Files below the table folder after the second repair.
+    pub(crate) expected_left: &'static [&'static str],
+    /// Whether the `aborted` marker is still there after it.
+    pub(crate) expected_marker: bool,
+}
+
+/// A table with more live records than a load keeps before merging them.
+pub(crate) struct CompactTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// Live record keys after repair, by whether each is a merged one.
+    pub(crate) expected_merged: &'static [bool],
 }

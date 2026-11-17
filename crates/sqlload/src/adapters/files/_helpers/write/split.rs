@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch, UInt32Array};
@@ -8,6 +8,7 @@ use arrow_select::take::take_record_batch;
 
 use crate::adapters::files::_helpers::layout::shape::shape_batch;
 use crate::adapters::files::models::{FilesWriter, PartitionBy};
+use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 
 /// `batch` shaped to the writer's columns and split by partition (one part, keyed `""`, without partitions).
 pub(crate) fn partition_rows(
@@ -64,4 +65,34 @@ pub(crate) fn split_batch(
         parts.push((value.to_owned(), part));
     }
     Ok(parts)
+}
+
+/// The distinct source files (name and version) `part`'s rows came from, from its source file columns; empty when it has none.
+pub(crate) fn row_sources(part: &RecordBatch) -> Result<BTreeSet<(String, String)>, String> {
+    let column = |name: &str| {
+        let schema = part.schema();
+        let position = schema
+            .fields()
+            .iter()
+            .position(|field| field.name().eq_ignore_ascii_case(name))?;
+        Some(cast(part.column(position), &DataType::Utf8).map_err(|error| error.to_string()))
+    };
+    let (Some(files), Some(versions)) = (column(SOURCE_FILE_COLUMN), column(SOURCE_VERSION_COLUMN))
+    else {
+        return Ok(BTreeSet::new());
+    };
+    let (files, versions) = (files?, versions?);
+    let (files, versions) = (files.as_string::<i32>(), versions.as_string::<i32>());
+    let mut sources: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut last: Option<(&str, &str)> = None;
+    for (file, version) in files.iter().zip(versions.iter()) {
+        let (Some(file), Some(version)) = (file, version) else {
+            continue;
+        };
+        if last != Some((file, version)) {
+            sources.insert((file.to_owned(), version.to_owned()));
+            last = Some((file, version));
+        }
+    }
+    Ok(sources)
 }

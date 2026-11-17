@@ -279,7 +279,7 @@ pub(crate) fn repair_committed(
         let state = read_table_state(&folder, &orders_path(None), None)
             .await
             .map_err(failed)?;
-        repair_table(&folder, &state.pending)
+        repair_table(&folder, (&state.pending, &state.records))
             .await
             .map_err(failed)?;
         let files = list_files(&folder)

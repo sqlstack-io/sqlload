@@ -61,6 +61,12 @@ pub const PENDING_WRITING: &str = "writing";
 /// The first line of a pending marker while the load deletes the files it replaces.
 pub const PENDING_REPLACING: &str = "replacing";
 
+/// The first line of the marker repair leaves for a load it found writing: the load may only have lost its lease and still be writing, so any file it stores later is deleted too.
+pub const PENDING_ABORTED: &str = "aborted";
+
+/// How long repair keeps an `aborted` marker (7 days), well past any lease a load still writing could have held.
+pub const ABORTED_KEPT_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
 /// At most this many partitions have a file open at once; beyond it the largest is written out.
 pub const OPEN_FILES_MAX: usize = 256;
 
@@ -72,6 +78,12 @@ pub const PENDING_RUN_PREFIX: &str = "@run\t";
 
 /// Records of loaded source files read at once while planning.
 pub const RECORD_READS: usize = 16;
+
+/// The start of a record's name that merges the records of several commits, which no commit's own record starts with (load ids are UUIDs).
+pub const COMPACTED_PREFIX: &str = "compacted.";
+
+/// A load merges a table's live records into one once there are more than this many.
+pub const RECORDS_COMPACTED_ABOVE: usize = 64;
 
 /// The file name suffix of the CSV files written, before any compression suffix.
 pub const CSV_SUFFIX: &str = ".csv";

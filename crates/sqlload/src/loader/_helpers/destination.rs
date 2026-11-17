@@ -709,7 +709,7 @@ impl Publisher {
         let (folder, lease) = (sink.folder.clone(), sink.lease.clone());
         let table_folder = leased_folder(sink).clone();
         if !sink.reading.is_empty() {
-            write_loaded_files(&folder, &writer.file_id, &sink.reading).await?;
+            write_loaded_files(&folder, &writer, &sink.reading).await?;
         }
         replace_files(
             (&folder, (&table_folder, &lease)),
