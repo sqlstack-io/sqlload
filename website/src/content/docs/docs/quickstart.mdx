@@ -1,44 +1,200 @@
 ---
 title: "Quickstart"
-description: "Copy a folder of Parquet files into DuckDB, then load a Postgres database with a project."
+description: "Create a playground project, load it into DuckDB, change its data and load again; then point SQLLoad at your own Postgres."
 ---
 
-This page copies one folder into DuckDB with no configuration, then sets up a project that loads a
-Postgres database into DuckDB and keeps it up to date. It needs SQLLoad
-([Install](/docs/install/)) and, for the second part, Docker.
+`sqlload playground` writes a project that loads a sample shop into DuckDB. Its source is CSV
+files on disk, so it needs no database, no Docker and no credentials: install SQLLoad
+([Install](/docs/install/)) and run the commands below. They load the shop, change its data, and
+load again, merging only what changed.
 
-## Copy one table
+The playground loads files. To load a database, with incremental reads by a cursor column, see
+[Point it at your own Postgres](#point-it-at-your-own-postgres).
 
-`sqlload copy` loads one table once and needs no configuration file. Here, a folder of Parquet
-files, `orders/`, is loaded into a DuckDB table:
+## Create a playground
 
 ```console
-$ sqlload copy orders/ duckdb://shop.duckdb#raw.orders
-✓ Plan complete  1 object to create, 1 to load   (sqlload plan shows the tree)
+$ sqlload playground
+SQLLoad playground created
 
-created  raw.orders  9 columns
-loaded  raw.orders      3 rows 0.0s
+  Project  shop
+  Source   CSV files in shop/data/: 50 customers, 1,000 orders
+  Target   DuckDB shop/shop.duckdb, schema raw
 
-✓ Completed  1 loaded, 3 rows, 0.1s
-├── slowest      raw.orders 0.0s
-└── peak memory  72.3 MiB
+Try:
+  cd shop
+  sqlload debug
+  sqlload plan
+  sqlload apply
+  sqlload load
+  sqlload playground --change
+  sqlload load
+$ cd shop
 ```
 
-The plan's closing line comes first: one table to create and load. DuckDB reads the Parquet files
-itself, so the rows never pass through SQLLoad. The table's 9 columns are the files' 4 and the
-`_sqlload_*` columns, which record which file and row each row came from, and when it loaded.
+The project is a `sqlload.toml` file and a folder of CSV files, `data/`:
 
-Add `--print-toml` to print the same copy as a `sqlload.toml` project instead of running it. See
-[`sqlload copy`](/docs/cli/copy/).
+```toml
+# Written by `sqlload playground`: CSV files in data/ load into the DuckDB file shop.duckdb.
+# `sqlload playground --change` adds a file of changed orders to data/orders/.
 
-## Load a database with a project
+default_target = "local"
 
-A project is a `sqlload.toml` file that names connections, targets and sources. `plan`, `apply`
-and `load` then work on every table in it.
+[connections.files]
+kind = "filesystem"
+root = "data"
 
-### 1. Start Postgres with some data
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
 
-Save this as `seed.sql`:
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.customers]
+kind = "files"
+connection = "files"
+path = "customers/"
+format = "csv"
+description = "Customers, one row per customer."
+write_strategy = "merge"
+unique_key = ["customer_id"]
+order = "path"
+
+[sources.orders]
+kind = "files"
+connection = "files"
+path = "orders/"
+format = "csv"
+description = "Orders, one row per order. Each file updates the orders it holds."
+write_strategy = "merge"
+unique_key = ["order_id"]
+order = "path"
+```
+
+- `[connections]` say how to reach each system: the `data/` folder, and the DuckDB file
+  `shop.duckdb`, which SQLLoad creates the first time it connects.
+- `[targets.local]` loads into that file, in schema `raw`.
+- Each `[sources]` entry loads one folder of CSV files into one table. `merge` upserts each new file
+  on its `unique_key`, one file at a time in path order, and later loads skip the files already
+  merged.
+- Each table SQLLoad writes needs a description, which becomes the table's comment.
+
+## Check, plan, apply and load
+
+`sqlload debug` validates the file and tests each connection:
+
+```console
+$ sqlload debug
+ok    config  2 connections, 1 targets, 2 sources
+ok    target local  DuckDB v2.0.0
+ok    source customers  data/customers/ lists (1 entries at the top)
+ok    source orders  data/orders/ lists (1 entries at the top)
+```
+
+`sqlload plan` shows what `apply` and `load` would do, and changes nothing:
+
+```console
+$ sqlload plan
+✓ Connected   local DuckDB   0.01s
+✓ Discovered  2 tables in 2 sources   0.01s
+
+Objects (2)                                                                     sqlload apply
+├── raw.customers  create table, 9 columns
+└── raw.orders     create table, 10 columns
+
+Loads (2)  into DuckDB local                                                    sqlload load
+├── customers data/customers/  into raw
+│   └── customers   merge on customer_id   1 new of 1 files
+└── orders data/orders/  into raw
+    └── orders      merge on order_id      1 new of 1 files
+
+✓ Plan complete  2 objects to create, 2 to load
+```
+
+Each table gets one line under its source: the write strategy and key, then which files it reads.
+`sqlload plan -v` shows every column's type and the route, files and memory lines too.
+
+`sqlload apply` creates the tables, and `sqlload load` fills them. `apply` prints the plan first;
+`load` prints the plan's closing line, then a line per table:
+
+```console
+$ sqlload apply
+…
+created  raw.customers  9 columns
+created  raw.orders     10 columns
+
+✓ Completed  0.1s
+$ sqlload load
+✓ Connected   local DuckDB   0.02s
+✓ Discovered  2 tables in 2 sources   0.01s
+
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
+
+loaded  raw.customers     50 rows 0.0s
+loaded  raw.orders     1,000 rows 0.0s
+
+✓ Completed  2 loaded, 1,050 rows, 0.2s
+├── slowest      raw.orders 0.0s
+└── peak memory  100 MiB
+```
+
+Each table holds the files' columns and the `_sqlload_*` columns, which record which file and row
+each row came from, and when it loaded.
+
+## Change the data and load again
+
+`sqlload playground --change` adds a file of changed orders to `data/orders/`, and prints each
+order it changes:
+
+```console
+$ sqlload playground --change
+added  data/orders/orders_2026-11-02.csv  1 changed, 1 new
+├── order 42    status placed → cancelled, updated_at 2026-11-01 00:56:00 → 2026-11-02 09:00:00
+└── order 1001  new: customer_id 7, status placed, total 99.90, updated_at 2026-11-02 09:05:00
+
+Run `sqlload load` to merge it.
+```
+
+`plan` reads only the new file. `customers` has nothing new, so it is skipped:
+
+```console
+$ sqlload plan
+✓ Connected   local DuckDB   0.02s
+✓ Discovered  2 tables in 2 sources   0.01s
+
+Loads (1)  into DuckDB local                                                    sqlload load
+└── orders data/orders/  into raw
+    └── orders   merge on order_id   1 new of 2 files
+
+Skipped (1)
+└── up to date   customers (1 file)
+
+✓ Plan complete  1 to load, 1 skipped
+$ sqlload load
+✓ Connected   local DuckDB   0.02s
+✓ Discovered  2 tables in 2 sources   0.01s
+
+✓ Plan complete  1 to load, 1 skipped   (sqlload plan shows the tree)
+
+loaded  raw.orders      2 rows 0.0s
+
+✓ Completed  1 loaded, 2 rows, 0.1s
+├── slowest      raw.orders 0.0s
+└── peak memory  90.5 MiB
+```
+
+Two rows: `merge` updates order 42 in place and adds order 1001. SQLLoad keeps no state file for
+this: the files it merged are recorded in the DuckDB file. Delete `shop.duckdb`, and the next run
+loads everything again.
+
+## Point it at your own Postgres
+
+A project that loads a Postgres database names it as a connection, and reads each table
+incrementally by a cursor column: each run continues from the highest value already loaded.
+
+If you have no Postgres at hand, start one in Docker with some data. Save this as `seed.sql`:
 
 ```sql
 CREATE TABLE customers (
@@ -74,7 +230,7 @@ docker run -d --name shop-db -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:1
 docker exec -i shop-db psql -q -U postgres < seed.sql
 ```
 
-### 2. Write `sqlload.toml`
+In a new folder, write `sqlload.toml`. For your own server, change `host`, `user` and `database`:
 
 ```toml
 default_target = "local"
@@ -119,27 +275,25 @@ description = "Customers, one row per customer."
 - `orders` is incremental: each run continues from the highest `updated_at` already loaded.
 - Each table SQLLoad writes needs a description, which becomes the table's comment.
 
-### 3. Check, plan, apply and load
-
 ```bash
 export PGPASSWORD=secret
 ```
 
-`sqlload debug` validates the file and tests each connection:
+Then check, plan, apply and load as with the playground. `debug` tests the Postgres connection too:
 
 ```console
 $ sqlload debug
 ok    config  2 connections, 1 targets, 1 sources
 ok    target local  DuckDB v2.0.0
-ok    source app  postgres@postgres, PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2)
+ok    source app  postgres@postgres, PostgreSQL 17.12 (Debian 17.12-1.pgdg13+1), not encrypted
 ```
 
-`sqlload plan` shows what `apply` and `load` would do, and changes nothing:
+`plan` lists the tables it found in Postgres:
 
 ```console
 $ sqlload plan
 ✓ Connected   local DuckDB · app PostgreSQL   0.03s
-✓ Discovered  2 tables in 1 source   0.01s
+✓ Discovered  2 tables in 1 source   0.03s
 
 Objects (2)                                                                     sqlload apply
 ├── raw.app__customers  create table, 6 columns
@@ -158,8 +312,7 @@ its source: the write strategy and key, then where an incremental table's read s
 shows only what is specific to the table or asks you to act; `sqlload plan -v` shows every
 column's type mapping and the route, commit and memory lines too.
 
-`sqlload apply` creates the tables, and `sqlload load` fills them. `apply` prints the plan first,
-here cut to the last lines; `load` prints the plan's closing line, then a line per table:
+`apply` creates the tables, and `load` fills them:
 
 ```console
 $ sqlload apply
@@ -169,6 +322,9 @@ created  raw.app__orders     7 columns
 
 ✓ Completed  0.1s
 $ sqlload load
+✓ Connected   local DuckDB · app PostgreSQL   0.02s
+✓ Discovered  2 tables in 1 source   0.01s
+
 ✓ Plan complete  2 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__customers     50 rows 0.0s
@@ -176,12 +332,10 @@ loaded  raw.app__orders     1,000 rows 0.0s
 
 ✓ Completed  2 loaded, 1,050 rows, 0.1s
 ├── slowest      raw.app__orders 0.0s
-└── peak memory  85.4 MiB
+└── peak memory  91 MiB
 ```
 
-### 4. Load again
-
-Change one order and add another:
+Change one order and add another, here in the Docker container:
 
 ```bash
 docker exec -i shop-db psql -q -U postgres -c "UPDATE orders SET status = 'refunded', updated_at = now() WHERE order_id = 42; INSERT INTO orders VALUES (1001, 7, 'placed', 99.90, now());"
@@ -193,7 +347,7 @@ the read commits.
 
 ```console
 $ sqlload plan app__orders
-✓ Connected   local DuckDB · app PostgreSQL   0.03s
+✓ Connected   local DuckDB · app PostgreSQL   0.04s
 ✓ Discovered  2 tables in 1 source   0.02s
 
 Loads (1)  into DuckDB local                                                    sqlload load
@@ -202,18 +356,26 @@ Loads (1)  into DuckDB local                                                    
 
 ✓ Plan complete  1 to load
 $ sqlload load app__orders
+✓ Connected   local DuckDB · app PostgreSQL   0.02s
+✓ Discovered  2 tables in 1 source   0.02s
+
 ✓ Plan complete  1 to load   (sqlload plan shows the tree)
 
 loaded  raw.app__orders      3 rows 0.0s
 
 ✓ Completed  1 loaded, 3 rows, 0.1s
 ├── slowest      raw.app__orders 0.0s
-└── peak memory  80.8 MiB
+└── peak memory  84.5 MiB
 ```
 
 Three rows: the two changed ones, and the row at the previous maximum, which the cursor includes.
 `merge` updates order 42 in place. SQLLoad keeps no state file for this. Delete the DuckDB file,
 and the next run loads everything again.
+
+## Copy one table
+
+`sqlload copy` loads one table once and needs no `sqlload.toml`, from a folder, a file or a
+database URI. See [`sqlload copy`](/docs/cli/copy/).
 
 ## Next
 

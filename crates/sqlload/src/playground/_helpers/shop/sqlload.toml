@@ -1,0 +1,36 @@
+# Written by `sqlload playground`: CSV files in data/ load into the DuckDB file shop.duckdb.
+# `sqlload playground --change` adds a file of changed orders to data/orders/.
+
+default_target = "local"
+
+[connections.files]
+kind = "filesystem"
+root = "data"
+
+[connections.warehouse]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[targets.local]
+connection = "warehouse"
+loader_schema = "raw"
+
+[sources.customers]
+kind = "files"
+connection = "files"
+path = "customers/"
+format = "csv"
+description = "Customers, one row per customer."
+write_strategy = "merge"
+unique_key = ["customer_id"]
+order = "path"
+
+[sources.orders]
+kind = "files"
+connection = "files"
+path = "orders/"
+format = "csv"
+description = "Orders, one row per order. Each file updates the orders it holds."
+write_strategy = "merge"
+unique_key = ["order_id"]
+order = "path"

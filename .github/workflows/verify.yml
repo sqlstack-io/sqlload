@@ -46,6 +46,10 @@ jobs:
           while IFS= read -r -d '' path; do
             changed=true
             case "${path}" in
+              # Its output blocks are checked by running its commands (tests/playground).
+              website/src/content/docs/docs/quickstart.mdx)
+                code=true
+                ;;
               docs/*|website/*|.github/workflows/website.yml|.github/demos/*|.github/*.png|*.md|LICENSE|.gitignore)
                 ;;
               *)

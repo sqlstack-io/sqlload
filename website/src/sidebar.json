@@ -106,6 +106,7 @@
 			"docs/cli/apply",
 			"docs/cli/load",
 			"docs/cli/copy",
+			"docs/cli/playground",
 			"docs/cli/contract",
 			"docs/cli/debug",
 			"docs/cli/logged-state",

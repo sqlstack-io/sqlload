@@ -11,6 +11,12 @@ make test-python      # builds the sqlload extension into .venv and runs its tes
 
 `make check-ci` is what CI runs, and must be clean, including fensu with 0 faults.
 
+The quickstart page's output blocks come from real runs. `make test-unit` runs its playground
+sections and `make test-containers` its Postgres section, and both fail when the page differs from
+the run; `SQLLOAD_UPDATE_DOCS=1 cargo test -p sqlload --test playground` (with
+`--features container-tests` for Postgres, and `-- --test-threads=1` so the two sections don't
+write the page at once) rewrites the blocks from the run instead.
+
 The unit and container tests, and `make test-python` (the wheel includes ODBC), link the ODBC source against unixODBC's `libodbc.so`, and the
 container tests also need the PostgreSQL ODBC driver: `unixodbc-dev odbc-postgresql` on Debian and Ubuntu, `unixodbc psqlodbc`
 with Homebrew.
