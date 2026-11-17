@@ -1320,6 +1320,9 @@ impl Publisher {
     /// Write `batch` where the table's batches go.
     async fn write_part(&mut self, batch: RecordBatch) -> Result<(), LoaderError> {
         self.stopped()?;
+        if let Some(spool) = self.spool.as_mut() {
+            return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
+        }
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
@@ -1343,6 +1346,7 @@ impl Publisher {
                     execute(&self.destination, vec![marker.mark.clone()]).await?;
                 }
                 self.flush_batch().await?;
+                Box::pin(self.send_held()).await?;
             }
             false => {
                 self.flush_batch().await?;
@@ -1417,16 +1421,16 @@ impl Publisher {
         self.pieces.unfinished = false;
     }
 
-    /// Before a commit's transaction ends: under a DuckDB memory share, once the load wrote large values, check the table's last row group, which the next checkpoint rewrites whole, still fits DuckDB's `memory_limit` (see [`DUCKDB_ROW_GROUP_PERCENT`]); past it the commit rolls back and the table stops, naming its row width and the `memory_limit` it needs.
+    /// Before a commit's transaction ends: under a DuckDB memory share, once the load wrote large values, check the table's last row group, which the next checkpoint rewrites whole, still fits DuckDB's `memory_limit` (see [`DUCKDB_ROW_GROUP_PERCENT`]); past it the commit rolls back and the table stops, naming its row width and the `memory_limit` it needs. Returns the table's rows, for the next check's last full row group, when it counted them.
     pub(in crate::loader) async fn check_row_group(
-        &mut self,
+        &self,
         into: &TableName,
-    ) -> Result<(), LoaderError> {
+    ) -> Result<Option<u64>, LoaderError> {
         let Some(share) = self.writer.memory_share() else {
-            return Ok(());
+            return Ok(None);
         };
         if self.pieces.large == 0 || self.pieces.rows == 0 {
-            return Ok(());
+            return Ok(None);
         }
         let adapter = crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(
             self.table.spec.warehouse,
@@ -1445,8 +1449,7 @@ impl Publisher {
         let width = self.pieces.large / self.pieces.rows;
         let group = group_rows.saturating_mul(width);
         if group <= share.row_group_bytes {
-            self.pieces.table_rows = Some(rows);
-            return Ok(());
+            return Ok(Some(rows));
         }
         let needed = group.saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
         let full = (DUCKDB_ROW_GROUP_ROWS * width).saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
@@ -1487,9 +1490,12 @@ impl Publisher {
         }
         let commit = statements.pop();
         execute(&self.destination, statements).await?;
-        if let Err(error) = self.check_row_group(into).await {
-            let _ = execute(&self.destination, vec![ROLLBACK_STATEMENT.to_owned()]).await;
-            return Err(error);
+        match self.check_row_group(into).await {
+            Ok(rows) => self.pieces.table_rows = rows.or(self.pieces.table_rows),
+            Err(error) => {
+                let _ = execute(&self.destination, vec![ROLLBACK_STATEMENT.to_owned()]).await;
+                return Err(error);
+            }
         }
         execute(&self.destination, commit.into_iter().collect()).await
     }

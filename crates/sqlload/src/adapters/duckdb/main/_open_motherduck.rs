@@ -11,7 +11,7 @@ use crate::adapters::motherduck_bridge::main::_open_bridge::open_bridge;
 use crate::memory_budget::models::DuckDbShare;
 use crate::project::models::ConnectionConfig;
 
-/// Open the MotherDuck database of `connection` (`target_database` when the target names one) through DuckDB's `md:` connection on the MotherDuck bridge, signed in with its token, else the token in the `motherduck_token` or `MOTHERDUCK_TOKEN` variable. Without a token MotherDuck would wait for a browser sign-in, so it is refused instead. `python` runs the bridge; `None` picks it as the bridge does. Under `memory`, its part of the run's memory budget, the bridge's DuckDB gets that `memory_limit` and thread count.
+/// Open the MotherDuck database of `connection` (`target_database` when the target names one) through DuckDB's `md:` connection on the MotherDuck bridge, signed in with its token, else the token in the `motherduck_token` or `MOTHERDUCK_TOKEN` variable. Without a token MotherDuck would wait for a browser sign-in, so it is refused instead. `python` runs the bridge; `None` picks it as the bridge does. Under `memory`, its part of the run's memory budget, the bridge's DuckDB gets that `memory_limit` and thread count, and commits are cut into pieces that fit it; a table's row groups set no limit, as MotherDuck checkpoints them on its servers.
 pub(in crate::adapters) fn open_motherduck(
     connection: &ConnectionConfig,
     target_database: Option<&str>,
@@ -45,7 +45,10 @@ pub(in crate::adapters) fn open_motherduck(
         ddl: Arc::default(),
         motherduck: true,
         bridge_duckdb,
-        memory,
+        memory: memory.map(|share| DuckDbShare {
+            row_group_bytes: u64::MAX,
+            ..share
+        }),
         unflushed: Arc::default(),
     })
 }

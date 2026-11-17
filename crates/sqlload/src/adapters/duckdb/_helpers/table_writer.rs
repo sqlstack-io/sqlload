@@ -5,7 +5,9 @@ use arrow_array::RecordBatch;
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
-use crate::adapters::duckdb::constants::{CHECKPOINT_BUSY, CHECKPOINT_RETRY, CHECKPOINT_STATEMENT};
+use crate::adapters::duckdb::constants::{
+    CHECKPOINT_BUSY, CHECKPOINT_RETRY, CHECKPOINT_STATEMENT, CHECKPOINT_WAIT,
+};
 use crate::adapters::duckdb::main::_append_batch::append_batch;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::models::DuckDbWriter;
@@ -98,11 +100,16 @@ impl TableWriter for DuckDbWriter {
         if self.destination.motherduck || !(force || unflushed >= share.checkpoint_bytes) {
             return Ok(());
         }
+        let started = std::time::Instant::now();
         while let Err(error) =
             execute_statements(&self.destination, vec![CHECKPOINT_STATEMENT.to_owned()]).await
         {
             if !error.to_string().contains(CHECKPOINT_BUSY) {
                 return Err(error.into());
+            }
+            if started.elapsed() >= CHECKPOINT_WAIT {
+                tracing::warn!(%error, "DuckDB's checkpoint waited too long for other transactions; it is left for the next one");
+                return Ok(());
             }
             tokio::time::sleep(CHECKPOINT_RETRY).await;
         }

@@ -780,9 +780,6 @@ impl Publisher {
         if self.files.is_some() {
             return self.stage_files(batch).await;
         }
-        if let Some(spool) = self.spool.as_mut() {
-            return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
-        }
         self.write_rows(batch).await
     }
 
@@ -900,7 +897,9 @@ impl Publisher {
         {
             tracing::warn!(table = %spec.destination.table, %error, "the swapped-in table kept no description: setting its comment failed");
         }
-        self.writer.checkpoint(true).await?;
+        if !self.child {
+            self.writer.checkpoint(true).await?;
+        }
         Ok(self.committed_rows)
     }
 
@@ -989,7 +988,8 @@ impl Publisher {
                 if self.batch_rows > 0 && (self.direct || self.builds) {
                     let into = (self.staging.clone())
                         .unwrap_or_else(|| self.table.spec.destination.clone());
-                    self.check_row_group(&into).await?;
+                    let rows = self.check_row_group(&into).await?;
+                    self.pieces.table_rows = rows.or(self.pieces.table_rows);
                 }
                 let columns = staged_columns(&self.table);
                 let target = write_target(
@@ -1157,6 +1157,15 @@ impl Publisher {
             }
             if !loads {
                 break 'send Ok(());
+            }
+            if self.direct || self.builds {
+                match self
+                    .check_row_group(target.staging.unwrap_or(target.table))
+                    .await
+                {
+                    Ok(rows) => self.pieces.table_rows = rows.or(self.pieces.table_rows),
+                    Err(error) => break 'send Err(error),
+                }
             }
             if let Err(error) = self.writer.finish_files(&target).await {
                 break 'send Err(error);

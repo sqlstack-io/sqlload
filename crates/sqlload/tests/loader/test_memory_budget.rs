@@ -81,6 +81,20 @@ fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_ever
             expected_output: &[],
         },
         WideLoadTestCase {
+            description: "merge sending its rows at commit holds them and sends them a piece at a time",
+            table: "wide_held",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nsend = \"at_commit\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
             description: "delete_insert by replace_key replaces keys of ten rows in pieces cut between keys",
             table: "wide_keyed",
             settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
