@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.67.0](https://github.com/sqlstack-io/sqlload/compare/v0.66.0...v0.67.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** a unique_key, replace_key, cursor_column or newest_by that names a column in neither its source spelling nor its loaded name, including in another case, now fails plan with the nearest column; use the spelling it suggests.
+
+### Bug Fixes
+
+* **loader:** a table whose column names were numbered loads again beside other table overrides ([#302](https://github.com/sqlstack-io/sqlload/issues/302)) ([8481e06](https://github.com/sqlstack-io/sqlload/commit/8481e0606a066e8c6fea789ea0abeecda62e8d9c))
+* **loader:** plan checks the columns table settings name, and a load with plan errors no longer reads as completed ([#303](https://github.com/sqlstack-io/sqlload/issues/303)) ([fd20aec](https://github.com/sqlstack-io/sqlload/commit/fd20aec2a1c520f2f8ff53274f792c5f6d3075e5))
+
 ## [0.66.0](https://github.com/sqlstack-io/sqlload/compare/v0.65.0...v0.66.0) (2026-11-17)
 
 
