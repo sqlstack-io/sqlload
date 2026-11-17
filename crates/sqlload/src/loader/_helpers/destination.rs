@@ -1131,17 +1131,20 @@ impl Publisher {
         batch: RecordBatch,
     ) -> Result<(), LoaderError> {
         let share = self.writer.memory_share();
+        if self.pieces.overflow {
+            return self.count_overflow(&batch);
+        }
         let large = share.and_then(|_| large_values(&batch));
         let (Some(share), Some(large)) = (share, large) else {
             return self.write_part(batch).await;
         };
         self.pieces.rows += batch.num_rows() as u64;
         self.pieces.large += large.iter().sum::<u64>();
-        let staged = self.staging.is_some() && !self.builds;
-        let copies = match staged {
+        self.pieces.copies = match self.staging.is_some() && !self.builds {
             true => STAGED_COPIES,
             false => 1,
         };
+        let copies = self.pieces.copies;
         let cuts = self.cuts();
         let keys = match &cuts {
             Cuts::Between(columns) => Some(row_keys(&batch, columns)?),
@@ -1167,8 +1170,12 @@ impl Publisher {
                 }
             }
             self.pieces.run += bytes;
-            if self.pieces.run > share.memory_limit {
-                return Err(self.too_large(&cuts, share));
+            if self.pieces.run * copies > share.commit_bytes {
+                self.pieces.overflow = true;
+                return match cuts {
+                    Cuts::Anywhere => Err(self.too_large()),
+                    _ => self.count_overflow(&batch.slice(row + 1, batch.num_rows() - row - 1)),
+                };
             }
             written += bytes * copies;
             let held = carried + written;
@@ -1243,34 +1250,61 @@ impl Publisher {
     }
 
     /// Why the table stops: rows that must commit together hold more large values than DuckDB's `memory_limit`.
-    fn too_large(&self, cuts: &Cuts, share: DuckDbShare) -> LoaderError {
-        let what = match cuts {
-            Cuts::Between(columns) => format!(
-                "the rows of one {} value hold more than {} of values over {}, which a delete_insert replaces together",
-                columns.join(", "),
-                memory_text(share.memory_limit),
-                memory_text(LARGE_VALUE_BYTES as u64)
-            ),
-            Cuts::Never(why) => format!(
-                "one commit holds more than {} of values over {}, and {why}",
-                memory_text(share.memory_limit),
-                memory_text(LARGE_VALUE_BYTES as u64)
-            ),
-            Cuts::Anywhere => format!(
-                "one row holds more than {} of values",
-                memory_text(share.memory_limit)
-            ),
+    fn too_large(&self) -> LoaderError {
+        let Some(share) = self.writer.memory_share() else {
+            return LoaderError::Invalid(
+                "a commit outgrew a memory share it has none of".to_owned(),
+            );
         };
+        let run = memory_text(self.pieces.run);
+        let large = memory_text(LARGE_VALUE_BYTES as u64);
+        let what = match self.cuts() {
+            Cuts::Between(columns) => format!(
+                "the rows of one {} value hold {run} of values over {large}, which a delete_insert replaces in one commit",
+                columns.join(", ")
+            ),
+            Cuts::Never(why) => format!("one commit holds {run} of values over {large}, and {why}"),
+            Cuts::Anywhere => format!("one row holds {run} of values over {large}"),
+        };
+        let staged = match self.pieces.copies {
+            1 => String::new(),
+            _ => " (through a staging table, they count three times)".to_owned(),
+        };
+        let needed =
+            (self.pieces.run * self.pieces.copies).saturating_mul(100) / DUCKDB_COMMIT_PERCENT;
         LoaderError::Invalid(format!(
-            "{}: {what}, past DuckDB's {} memory_limit; {}",
+            "{}: {what}, past the {} of them DuckDB's {} memory_limit commits at once{staged}; {}",
             self.table.spec.destination.table,
+            memory_text(share.commit_bytes),
             memory_text(share.memory_limit),
-            needed_budget(self.pieces.run.saturating_mul(100) / DUCKDB_COMMIT_PERCENT)
+            needed_budget(needed)
         ))
     }
 
-    /// The watchdog's stop of this table, once it stopped it: an interrupt only reaches a statement running, so the table checks before each write and commit too.
+    /// After rows that must commit together outgrew DuckDB's share (see [`Pieces::overflow`]): count the rest of them in `batch`, writing nothing, so the stop names their whole size; the table stops at the first row of another value.
+    fn count_overflow(&mut self, batch: &RecordBatch) -> Result<(), LoaderError> {
+        let keys = match self.cuts() {
+            Cuts::Between(columns) => Some(row_keys(batch, &columns)?),
+            _ => None,
+        };
+        let large = large_values(batch).unwrap_or_else(|| vec![0; batch.num_rows()]);
+        for (row, bytes) in large.iter().enumerate() {
+            let other = keys
+                .as_ref()
+                .is_some_and(|keys| self.pieces.last_key.as_ref() != Some(&keys[row]));
+            if other {
+                return Err(self.too_large());
+            }
+            self.pieces.run += bytes;
+        }
+        Ok(())
+    }
+
+    /// The table's stop: rows that must commit together outgrew DuckDB's share, or the watchdog stopped it (an interrupt only reaches a statement running, so the table checks before each write and commit too).
     pub(in crate::loader) fn stopped(&self) -> Result<(), LoaderError> {
+        if self.pieces.overflow {
+            return Err(self.too_large());
+        }
         let Some(watched) = table_memory() else {
             return Ok(());
         };
@@ -1417,7 +1451,7 @@ impl Publisher {
         let needed = group.saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
         let full = (DUCKDB_ROW_GROUP_ROWS * width).saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
         Err(LoaderError::Invalid(format!(
-            "{}: its last row group would hold {} rows with about {} each of values over {} ({}), more than a DuckDB checkpoint rewrites within its {} memory_limit; {} (a row group holds up to {} rows, so a table of rows this wide needs up to {} for DuckDB, {})",
+            "{}: its last row group would hold {} rows of about {} each of values over {} ({}), more than DuckDB rewrites at a checkpoint within its {} memory_limit; {} (a row group fills at {} rows, and a table of rows this wide needs a memory_limit of {} by then)",
             self.table.spec.destination.table,
             thousands(group_rows),
             memory_text(width),
@@ -1426,8 +1460,7 @@ impl Publisher {
             memory_text(share.memory_limit),
             needed_budget(needed),
             thousands(DUCKDB_ROW_GROUP_ROWS),
-            memory_text(full),
-            needed_budget(full)
+            needed_budget(full).replace("raise memory_limit to ", "")
         )))
     }
 

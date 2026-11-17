@@ -1195,6 +1195,10 @@ pub struct Pieces {
     /// The rows of this load, and their large values, which give its rows' width.
     pub rows: u64,
     pub large: u64,
+    /// How many times DuckDB holds the large values of a piece: three through a staging table, else once.
+    pub copies: u64,
+    /// The rows of `run` outgrew what DuckDB commits at once: the rest of them are counted, not written, and the table stops.
+    pub overflow: bool,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.

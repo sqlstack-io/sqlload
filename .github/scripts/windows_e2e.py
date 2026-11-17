@@ -9,11 +9,14 @@ incrementally. With --cursor-drivers, a millisecond timestamp cursor and a date 
 Microsoft's ODBC Driver 18 (SQL Server LocalDB instance `sqlload`, datetime2 and legacy datetime), MySQL
 Connector/ODBC (a MySQL server on 127.0.0.1:3307, user root without a password) and psqlODBC, and the
 next load must read exactly the rows after each boundary; needs the pyodbc package. With --cdc, a postgres_cdc source snapshots a table and then streams its changes, which
-on Windows go through the loopback TLS relay (that server needs wal_level = logical). Needs the
+on Windows go through the loopback TLS relay (that server needs wal_level = logical). With --job-object,
+last, this script puts itself in a job object limiting each process to 1.5 GiB, which sqlload inherits:
+its plan must take its memory budget from that limit, and a load must run under it. Needs the
 duckdb Python package to read the results back.
 """
 
 import argparse
+import ctypes
 import json
 import os
 import pathlib
@@ -329,6 +332,97 @@ description = "Orders, captured."
     )
 
 
+JOB_MEMORY_LIMIT = 1536 * 1024 * 1024
+JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x100
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+
+
+class IoCounters(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in ("reads", "writes", "others", "read_bytes", "written_bytes", "other_bytes")]
+
+
+class BasicLimits(ctypes.Structure):
+    _fields_ = [
+        ("per_process_user_time", ctypes.c_longlong),
+        ("per_job_user_time", ctypes.c_longlong),
+        ("limit_flags", ctypes.c_uint32),
+        ("minimum_working_set", ctypes.c_size_t),
+        ("maximum_working_set", ctypes.c_size_t),
+        ("active_processes", ctypes.c_uint32),
+        ("affinity", ctypes.c_size_t),
+        ("priority_class", ctypes.c_uint32),
+        ("scheduling_class", ctypes.c_uint32),
+    ]
+
+
+class ExtendedLimits(ctypes.Structure):
+    _fields_ = [
+        ("basic", BasicLimits),
+        ("io", IoCounters),
+        ("process_memory_limit", ctypes.c_size_t),
+        ("job_memory_limit", ctypes.c_size_t),
+        ("peak_process_memory", ctypes.c_size_t),
+        ("peak_job_memory", ctypes.c_size_t),
+    ]
+
+
+def enter_job(limit):
+    """Put this process, and so every process it starts, in a new job object limiting each process to `limit` bytes."""
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    kernel32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        sys.exit(f"CreateJobObjectW: {ctypes.WinError(ctypes.get_last_error())}")
+    limits = ExtendedLimits()
+    limits.basic.limit_flags = JOB_OBJECT_LIMIT_PROCESS_MEMORY
+    limits.process_memory_limit = limit
+    if not kernel32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(limits), ctypes.sizeof(limits)):
+        sys.exit(f"SetInformationJobObject: {ctypes.WinError(ctypes.get_last_error())}")
+    if not kernel32.AssignProcessToJobObject(job, kernel32.GetCurrentProcess()):
+        sys.exit(f"AssignProcessToJobObject: {ctypes.WinError(ctypes.get_last_error())}")
+
+
+def job_object_checks(exe, work):
+    """Under a job object's 1.5 GiB process limit, plan's budget is 80% of it, and a load into DuckDB runs within it."""
+    source = work / "in" / "job"
+    source.mkdir(parents=True, exist_ok=True)
+    (source / "rows.csv").write_text("id,name\n" + "".join(f"{i},row {i}\n" for i in range(1, 1001)), encoding="utf-8")
+    database = work / "job.duckdb"
+    config = work / "job.toml"
+    config.write_text(
+        f"""
+[connections.local]
+kind = "duckdb"
+database = '{database}'
+
+[connections.files]
+kind = "filesystem"
+root = '{work / "in"}'
+
+[targets.dev]
+connection = "local"
+loader_schema = "raw"
+
+[sources.job]
+kind = "files"
+description = "Rows loaded under a job object."
+connection = "files"
+path = "job/"
+format = "csv"
+write_strategy = "replace"
+""",
+        encoding="utf-8",
+    )
+    enter_job(JOB_MEMORY_LIMIT)
+    planned = sqlload(exe, "plan", config=config)
+    expect("1.2 GiB budget (80% of the 1.5 GiB job object limit)" in planned, True, "plan's budget is 80% of the job object's limit")
+    sqlload(exe, "load", config=config)
+    expect(query(database, "SELECT count(*) FROM raw.job"), [(1000,)], "a load under the job object's limit")
+
+
 def main():
     # sqlload prints UTF-8 (box drawing, check marks); a Windows console or pipe defaults to cp1252.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -340,6 +434,7 @@ def main():
     parser.add_argument("--odbc-driver")
     parser.add_argument("--cursor-drivers", action="store_true")
     parser.add_argument("--cdc", action="store_true")
+    parser.add_argument("--job-object", action="store_true")
     arguments = parser.parse_args()
     files_checks(arguments.exe, arguments.work, arguments.share)
     if arguments.odbc_driver:
@@ -348,6 +443,8 @@ def main():
         cursor_checks(arguments.exe, arguments.work)
     if arguments.cdc:
         cdc_checks(arguments.exe, arguments.work)
+    if arguments.job_object:
+        job_object_checks(arguments.exe, arguments.work)
 
 
 if __name__ == "__main__":

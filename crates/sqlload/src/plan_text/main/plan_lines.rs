@@ -11,7 +11,7 @@ use crate::plan_text::models::PlanParts;
 pub fn plan_lines(parts: &PlanParts<'_>) -> Vec<String> {
     let objects: Vec<PlanItem> = parts.view.objects.iter().map(object_line).collect();
     let mut lines: Vec<String> = (parts.view.memory.iter())
-        .map(|memory| format!("Memory  {memory}"))
+        .flat_map(|memory| [format!("Memory  {memory}"), String::new()])
         .collect();
     lines.extend(section("Objects", "sqlload apply", &objects));
     lines.extend(loads_section(&parts.tables));

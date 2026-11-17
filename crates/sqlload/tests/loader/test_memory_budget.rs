@@ -12,7 +12,7 @@ fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_ever
 -> Result<(), String> {
     let test_cases = [
         WideLoadTestCase {
-            description: "replace builds the table in pieces, the first load and the next",
+            description: "replace builds the table in pieces, the first load and the next, under the memory line plan prints first",
             table: "wide_replace",
             settings: "write_strategy = \"replace\"",
             rows: 300,
@@ -23,7 +23,11 @@ fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_ever
                 (true, "300:300:0|2:2:0|none"),
                 (true, "300:300:300|2:2:0|none"),
             ],
-            expected_output: &[],
+            expected_output: &[
+                "Memory  1.1 GiB budget (--memory-limit); ",
+                "; DuckDB 488 MiB (memory_limit 244 MiB, 2 threads); ",
+                " at once\n\n✓ Plan complete",
+            ],
         },
         WideLoadTestCase {
             description: "append by an ordered cursor commits pieces straight into the table it creates",

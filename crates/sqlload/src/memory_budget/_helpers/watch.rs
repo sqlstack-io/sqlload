@@ -67,7 +67,7 @@ pub(crate) fn stop_largest(guard: &MemoryGuard, held: u64) {
         .tripped
         .lock()
         .unwrap_or_else(PoisonError::into_inner) = Some(format!(
-        "{} stopped: the load held {} of its {} memory budget ({percent}%, past the {STOP_PERCENT}% at which the table holding the most stops), this table {}; raise memory_limit, or lower batch_size",
+        "{} stopped: the load held {} of its {} memory budget ({percent}%); from {STOP_PERCENT}% the table holding the most rows in memory stops, here this one with {}; raise memory_limit, or lower batch_size",
         largest.name,
         memory_text(held),
         memory_text(budget),

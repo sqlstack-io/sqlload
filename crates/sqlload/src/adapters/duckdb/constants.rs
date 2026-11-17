@@ -22,6 +22,10 @@ pub const MOTHERDUCK_VERSION_QUERY: &str = "SELECT md_version()";
 pub const SHREDDING_DUCKDB_MAJOR: u32 = 2;
 /// Writes what DuckDB holds since its last checkpoint to its file.
 pub const CHECKPOINT_STATEMENT: &str = "CHECKPOINT";
+/// Part of the error a `CHECKPOINT` is refused with while another connection's open transaction updates rows or changes the catalog (appends and deletes don't block it). `FORCE CHECKPOINT` would wait instead, but blocks every other connection from beginning a transaction meanwhile, which can deadlock the load's tables.
+pub const CHECKPOINT_BUSY: &str = "other write transactions active";
+/// How long a refused `CHECKPOINT` waits before it tries again; the transactions that refuse it are single commits, which end within moments.
+pub const CHECKPOINT_RETRY: std::time::Duration = std::time::Duration::from_millis(20);
 /// The settings a DuckDB target opens with under a memory budget, before its `memory_limit` and `threads`: no automatic checkpoint, whose running out of memory would make the database unusable; SQLLoad checkpoints after each piece's commit as needed and after each table instead.
 pub const NO_AUTOCHECKPOINT: &str = "SET checkpoint_threshold = '1TB'";
 /// The suffix of a DuckDB file's write-ahead log.
