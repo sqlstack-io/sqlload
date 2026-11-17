@@ -1,118 +1,127 @@
 //! Rows of 1 MiB loaded into a DuckDB file under a memory budget that gives DuckDB a `memory_limit` of 256MB, which one commit of 300 of them overflows.
 
 use crate::helpers::run_async;
-use crate::memory_helpers::{run_killed_load, run_wide_load, wide_postgres};
-use crate::test_types::{KilledLoadTestCase, WideLoadTestCase};
-
-/// Every row's body changed, as the second load must write it.
-const NEW_BODY: &str = "UPDATE public.{table} SET body = repeat(md5('n' || id::text), 32768);";
-
-/// Every row's body changed and its cursors moved past the last load's.
-const NEW_BODY_LATER: &str = "UPDATE public.{table} SET body = repeat(md5('n' || id::text), 32768), at = at + interval '400 days', at2 = at2 + interval '400 days';";
-
-/// The watchdog reads the process as past 90% of the budget while the table named holds rows (test builds only).
-const TRIP: &[(&str, &str)] = &[("SQLLOAD_TEST_WATCH_TRIP", "wide_tripped")];
-
-const fn wide(
-    description: &'static str,
-    settings: &'static str,
-    (rows, key_rows): (u32, u32),
-    change: Option<&'static str>,
-    expected_result: &'static str,
-) -> WideLoadTestCase {
-    WideLoadTestCase {
-        description,
-        settings,
-        rows,
-        key_rows,
-        change,
-        environment: &[],
-        expected_success: true,
-        expected_output: &[],
-        expected_result,
-    }
-}
+use crate::memory_helpers::{
+    KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OLDER_MARKER,
+    expected_loads, missing_phrases, run_wide_load, wide_postgres,
+};
+use crate::test_types::WideLoadTestCase;
 
 #[test]
 fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_every_strategy_loads_them_in_pieces()
 -> Result<(), String> {
+    let test_cases = [
+        WideLoadTestCase {
+            description: "replace builds the table in pieces, the first load and the next",
+            table: "wide_replace",
+            settings: "write_strategy = \"replace\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "append by an ordered cursor commits pieces straight into the table it creates",
+            table: "wide_append",
+            settings: "write_strategy = \"append\"\ncursor_column = \"at\"\nappend_cursor_inclusive = false",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD],
+            expected_results: &[(true, "300:300:0|2:2:0|0")],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "append without a cursor commits pieces straight into the table it creates",
+            table: "wide_append_all",
+            settings: "write_strategy = \"append\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD],
+            expected_results: &[(true, "300:300:0|2:2:0|0")],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "merge creates the table, then updates every row of it in pieces",
+            table: "wide_merge",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"at\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY_LATER],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "merge by newest_by updates every row in pieces, each newer than the table's",
+            table: "wide_newest",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnewest_by = \"at\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY_LATER],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "delete_insert by replace_key replaces keys of ten rows in pieces cut between keys",
+            table: "wide_keyed",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
+            rows: 300,
+            key_rows: 10,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "delete_insert by cursor windows replaces each window in pieces cut between cursor values",
+            table: "wide_window",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"at\"\nbatch_size = \"1 day\"\ncursor_start = \"2026-10-31T00:00:00Z\"\nlookback = \"100 days\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
+            ],
+            expected_output: &[],
+        },
+    ];
     run_async(|| async move {
         let (postgres, client) = wide_postgres().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let test_cases = [
-            (
-                "wide_replace",
-                wide(
-                    "replace builds the table in pieces, the first load and the next",
-                    "write_strategy = \"replace\"",
-                    (300, 1),
-                    Some(NEW_BODY),
-                    "300:300:300",
-                ),
-            ),
-            (
-                "wide_append",
-                wide(
-                    "append by an ordered cursor commits pieces straight into the table it creates",
-                    "write_strategy = \"append\"\ncursor_column = \"at\"\nappend_cursor_inclusive = false",
-                    (300, 1),
-                    None,
-                    "300:300:0",
-                ),
-            ),
-            (
-                "wide_append_all",
-                wide(
-                    "append without a cursor commits pieces straight into the table it creates",
-                    "write_strategy = \"append\"",
-                    (300, 1),
-                    None,
-                    "300:300:0",
-                ),
-            ),
-            (
-                "wide_merge",
-                wide(
-                    "merge creates the table, then updates every row of it in pieces",
-                    "write_strategy = \"merge\"\nunique_key = [\"id\"]\ncursor_column = \"at\"",
-                    (300, 1),
-                    Some(NEW_BODY_LATER),
-                    "300:300:300",
-                ),
-            ),
-            (
-                "wide_newest",
-                wide(
-                    "merge by newest_by updates every row in pieces, each newer than the table's",
-                    "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnewest_by = \"at\"",
-                    (300, 1),
-                    Some(NEW_BODY_LATER),
-                    "300:300:300",
-                ),
-            ),
-            (
-                "wide_keyed",
-                wide(
-                    "delete_insert by replace_key replaces keys of ten rows in pieces cut between keys",
-                    "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
-                    (300, 10),
-                    Some(NEW_BODY),
-                    "300:300:300",
-                ),
-            ),
-            (
-                "wide_window",
-                wide(
-                    "delete_insert by cursor windows replaces each window in pieces cut between cursor values",
-                    "write_strategy = \"delete_insert\"\ncursor_column = \"at\"\nbatch_size = \"1 day\"\ncursor_start = \"2026-10-31T00:00:00Z\"\nlookback = \"100 days\"",
-                    (300, 1),
-                    Some(NEW_BODY),
-                    "300:300:300",
-                ),
-            ),
-        ];
-        for (name, test_case) in &test_cases {
-            run_wide_load((&client, postgres.port), folder.path(), (name, test_case)).await?;
+        for test_case in &test_cases {
+            let (loads, output) =
+                run_wide_load((&client, postgres.port), folder.path(), test_case).await?;
+            assert_eq!(
+                loads,
+                expected_loads(test_case.expected_results),
+                "{}:\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                missing_phrases(test_case.expected_output, (test_case.table, &output)),
+                Vec::<String>::new(),
+                "{}: phrases missing from:\n{output}",
+                test_case.description
+            );
         }
         Ok(())
     })
@@ -121,56 +130,65 @@ fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_ever
 #[test]
 fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_naming_the_memory_limit_it_needs()
 -> Result<(), String> {
+    let test_cases = [
+        WideLoadTestCase {
+            description: "768 rows of 1 MiB fill one row group past what a checkpoint at 256MB rewrites: the table stops before it, the other loads",
+            table: "wide_768",
+            settings: "write_strategy = \"replace\"",
+            rows: 768,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD],
+            expected_results: &[(false, "0:0:0|2:2:0|none")],
+            expected_output: &["{table}", "row group", "memory_limit"],
+        },
+        WideLoadTestCase {
+            description: "one replace_key value of 300 MiB can't be cut between keys: the table stops, keeping its rows",
+            table: "wide_one_key",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
+            rows: 300,
+            key_rows: 1000,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (false, "300:300:0|2:2:0|none"),
+            ],
+            expected_output: &["{table}", "one k value", "memory_limit"],
+        },
+        WideLoadTestCase {
+            description: "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads",
+            table: "wide_tripped",
+            settings: "write_strategy = \"replace\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, NEW_BODY_TRIPPED],
+            expected_results: &[
+                (true, "300:300:0|2:2:0|none"),
+                (false, "300:300:0|2:2:0|none"),
+            ],
+            expected_output: &["{table}", "90%", "memory_limit", "batch_size"],
+        },
+    ];
     run_async(|| async move {
         let (postgres, client) = wide_postgres().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let test_cases = [
-            (
-                "wide_768",
-                WideLoadTestCase {
-                    expected_success: false,
-                    expected_output: &["{table}", "row group", "memory_limit"],
-                    ..wide(
-                        "768 rows of 1 MiB fill one row group past what a checkpoint at 256MB rewrites: the table stops before it, the other loads",
-                        "write_strategy = \"replace\"",
-                        (768, 1),
-                        None,
-                        "0:0:0",
-                    )
-                },
-            ),
-            (
-                "wide_one_key",
-                WideLoadTestCase {
-                    expected_success: false,
-                    expected_output: &["{table}", "one k", "memory_limit"],
-                    ..wide(
-                        "one replace_key value of 300 MiB can't be cut between keys: the table stops, keeping its rows",
-                        "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
-                        (300, 1000),
-                        Some(NEW_BODY),
-                        "300:300:0",
-                    )
-                },
-            ),
-            (
-                "wide_tripped",
-                WideLoadTestCase {
-                    environment: TRIP,
-                    expected_success: false,
-                    expected_output: &["{table}", "90%", "memory_limit", "batch_size"],
-                    ..wide(
-                        "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads",
-                        "write_strategy = \"replace\"",
-                        (300, 1),
-                        Some(NEW_BODY),
-                        "300:300:0",
-                    )
-                },
-            ),
-        ];
-        for (name, test_case) in &test_cases {
-            run_wide_load((&client, postgres.port), folder.path(), (name, test_case)).await?;
+        for test_case in &test_cases {
+            let (loads, output) =
+                run_wide_load((&client, postgres.port), folder.path(), test_case).await?;
+            assert_eq!(
+                loads,
+                expected_loads(test_case.expected_results),
+                "{}:\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                missing_phrases(test_case.expected_output, (test_case.table, &output)),
+                Vec::<String>::new(),
+                "{}: phrases missing from:\n{output}",
+                test_case.description
+            );
         }
         Ok(())
     })
@@ -179,82 +197,100 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
 #[test]
 fn given_a_load_killed_between_its_pieces_when_it_runs_again_then_the_table_is_what_one_clean_load_leaves()
 -> Result<(), String> {
+    let test_cases = [
+        WideLoadTestCase {
+            description: "append without a cursor: the killed load's first piece of 61 rows stays marked, and the rerun removes it before loading all 300",
+            table: "killed_append_all",
+            settings: "write_strategy = \"append\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &[],
+            steps: &[KILLED, LOAD],
+            expected_results: &[(false, "61:61:0|1"), (true, "300:300:0|0")],
+            expected_output: &["killed_append_all: removed the rows of load"],
+        },
+        WideLoadTestCase {
+            description: "append by an unindexed cursor: the rerun removes the killed load's rows and reads from before it",
+            table: "killed_unordered",
+            settings: "write_strategy = \"append\"\ncursor_column = \"at2\"\nappend_cursor_inclusive = false",
+            rows: 300,
+            key_rows: 1,
+            beside: &[],
+            steps: &[KILLED, LOAD],
+            expected_results: &[(false, "61:61:0|1"), (true, "300:300:0|0")],
+            expected_output: &["killed_unordered: removed the rows of load"],
+        },
+        WideLoadTestCase {
+            description: "append by a text cursor: the rerun removes the killed load's rows and reads from before it",
+            table: "killed_text",
+            settings: "write_strategy = \"append\"\ncursor_column = \"tag\"\nappend_cursor_inclusive = false",
+            rows: 300,
+            key_rows: 1,
+            beside: &[],
+            steps: &[KILLED, LOAD],
+            expected_results: &[(false, "61:61:0|1"), (true, "300:300:0|0")],
+            expected_output: &["killed_text: removed the rows of load"],
+        },
+        WideLoadTestCase {
+            description: "delete_insert by replace_key: the killed load replaced the 19 rows of its first keys, and the rerun replaces every key",
+            table: "killed_keyed",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
+            rows: 300,
+            key_rows: 10,
+            beside: &[],
+            steps: &[LOAD, NEW_BODY_KILLED, LOAD],
+            expected_results: &[
+                (true, "300:300:0|none"),
+                (false, "300:300:19|none"),
+                (true, "300:300:300|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "delete_insert by cursor windows: the killed load replaced the 11 rows of its first window, whose day starts at 02:00 after the lookback, and 20 of the next, and the rerun replaces every window",
+            table: "killed_window",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"at\"\nbatch_size = \"1 day\"\ncursor_start = \"2026-10-31T00:00:00Z\"\nlookback = \"100 days\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &[],
+            steps: &[LOAD, NEW_BODY_KILLED, LOAD],
+            expected_results: &[
+                (true, "300:300:0|none"),
+                (false, "300:300:31|none"),
+                (true, "300:300:300|none"),
+            ],
+            expected_output: &[],
+        },
+        WideLoadTestCase {
+            description: "a marker of another load removes only that load's three rows, never the rows of the load before it",
+            table: "killed_older",
+            settings: "write_strategy = \"append\"\ncursor_column = \"at\"\nappend_cursor_inclusive = false",
+            rows: 300,
+            key_rows: 1,
+            beside: &[],
+            steps: &[LOAD, OLDER_MARKER],
+            expected_results: &[(true, "300:300:0|0"), (true, "300:300:0|0")],
+            expected_output: &["killed_older: removed the rows of load older-load"],
+        },
+    ];
     run_async(|| async move {
         let (postgres, client) = wide_postgres().await?;
         let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let killed = |description, settings, (key_rows, change, older_marker), expected_marker, expected_result| KilledLoadTestCase {
-            description,
-            settings,
-            key_rows,
-            change,
-            older_marker,
-            expected_marker,
-            expected_result,
-        };
-        let test_cases = [
-            (
-                "killed_append_all",
-                killed(
-                    "append without a cursor: the rerun removes the killed load's rows first",
-                    "write_strategy = \"append\"",
-                    (1, None, false),
-                    true,
-                    "300:300:0",
-                ),
-            ),
-            (
-                "killed_unordered",
-                killed(
-                    "append by an unindexed cursor: the rerun reads from before the killed load",
-                    "write_strategy = \"append\"\ncursor_column = \"at2\"\nappend_cursor_inclusive = false",
-                    (1, None, false),
-                    true,
-                    "300:300:0",
-                ),
-            ),
-            (
-                "killed_text",
-                killed(
-                    "append by a text cursor: the rerun reads from before the killed load",
-                    "write_strategy = \"append\"\ncursor_column = \"tag\"\nappend_cursor_inclusive = false",
-                    (1, None, false),
-                    true,
-                    "300:300:0",
-                ),
-            ),
-            (
-                "killed_keyed",
-                killed(
-                    "delete_insert by replace_key: the rerun replaces the keys the killed load replaced",
-                    "write_strategy = \"delete_insert\"\nreplace_key = [\"k\"]",
-                    (10, Some(NEW_BODY), false),
-                    false,
-                    "300:300:300",
-                ),
-            ),
-            (
-                "killed_window",
-                killed(
-                    "delete_insert by cursor windows: the rerun replaces the windows the killed load replaced",
-                    "write_strategy = \"delete_insert\"\ncursor_column = \"at\"\nbatch_size = \"1 day\"\ncursor_start = \"2026-10-31T00:00:00Z\"\nlookback = \"100 days\"",
-                    (1, Some(NEW_BODY), false),
-                    false,
-                    "300:300:300",
-                ),
-            ),
-            (
-                "killed_older",
-                killed(
-                    "a marker of an older load removes only that load's rows, never the rows of the load running",
-                    "write_strategy = \"append\"\ncursor_column = \"at\"\nappend_cursor_inclusive = false",
-                    (1, None, true),
-                    true,
-                    "300:300:0",
-                ),
-            ),
-        ];
-        for (name, test_case) in &test_cases {
-            run_killed_load((&client, postgres.port), folder.path(), (name, test_case)).await?;
+        for test_case in &test_cases {
+            let (loads, output) =
+                run_wide_load((&client, postgres.port), folder.path(), test_case).await?;
+            assert_eq!(
+                loads,
+                expected_loads(test_case.expected_results),
+                "{}:\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                missing_phrases(test_case.expected_output, (test_case.table, &output)),
+                Vec::<String>::new(),
+                "{}: phrases missing from:\n{output}",
+                test_case.description
+            );
         }
         Ok(())
     })

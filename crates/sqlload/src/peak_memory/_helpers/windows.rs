@@ -51,7 +51,10 @@ pub(crate) fn job_memory_limit() -> Result<Option<u64>, String> {
     let mut in_job = 0;
     let read = unsafe { IsProcessInJob(current_process(), std::ptr::null_mut(), &mut in_job) };
     if read == 0 {
-        return Err(format!("IsProcessInJob: {}", std::io::Error::last_os_error()));
+        return Err(format!(
+            "IsProcessInJob: {}",
+            std::io::Error::last_os_error()
+        ));
     }
     if in_job == 0 {
         return Ok(None);
@@ -75,7 +78,8 @@ pub(crate) fn job_memory_limit() -> Result<Option<u64>, String> {
         ));
     }
     let flags = limits.BasicLimitInformation.LimitFlags;
-    let process = (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0).then_some(limits.ProcessMemoryLimit);
+    let process =
+        (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0).then_some(limits.ProcessMemoryLimit);
     let job = (flags & JOB_OBJECT_LIMIT_JOB_MEMORY != 0).then_some(limits.JobMemoryLimit);
     let lowest = match (process, job) {
         (Some(process), Some(job)) => Some(process.min(job)),

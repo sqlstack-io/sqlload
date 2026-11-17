@@ -4,15 +4,16 @@ use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::main::_open_duckdb::open_duckdb;
 use crate::adapters::duckdb::main::_open_motherduck::open_motherduck;
 use crate::adapters::duckdb::models::DuckDbDestination;
-use crate::memory_budget::models::DuckDbShare;
+use crate::memory_budget::models::MemoryBudget;
 use crate::project::models::ConnectionConfig;
 
-/// Open the database of a `duckdb` connection, or of a `motherduck` connection (`target_database` when the target names one), with `memory`, its part of the run's memory budget.
+/// Open the database of a `duckdb` connection, or of a `motherduck` connection (`target_database` when the target names one), with its part of the run's memory `budget`.
 pub(in crate::adapters) fn open_destination(
     connection: &ConnectionConfig,
     target_database: Option<&str>,
-    memory: Option<DuckDbShare>,
+    budget: Option<MemoryBudget>,
 ) -> Result<DuckDbDestination, DuckDbError> {
+    let memory = budget.and_then(|budget| budget.duckdb);
     match connection {
         ConnectionConfig::DuckDb { database } => open_duckdb(database, memory),
         ConnectionConfig::MotherDuck { .. } => {

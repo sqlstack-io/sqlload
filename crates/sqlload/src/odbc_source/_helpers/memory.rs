@@ -37,7 +37,9 @@ pub(crate) fn budget_note(budget: &MemoryBudget) -> String {
             "{bytes} fetch buffer per table (default; each table's share of the memory budget is {})",
             memory_text(share)
         ),
-        (_, None) => format!("{bytes} fetch buffer per table (default; the run has no memory budget)"),
+        (_, None) => {
+            format!("{bytes} fetch buffer per table (default; the run has no memory budget)")
+        }
     }
 }
 

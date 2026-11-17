@@ -3,8 +3,8 @@ use crate::odbc_source::_helpers::memory::{budget_note, fetch_budget, memory_lin
 use crate::odbc_source::main::memory_warning::memory_warning;
 use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize};
 use crate::odbc_source::tests::test_types::{
-    BudgetNoteTestCase, FetchBudgetTestCase, FetchSizeTestCase,
-    MemoryLineTestCase, MemoryWarningTestCase,
+    BudgetNoteTestCase, FetchBudgetTestCase, FetchSizeTestCase, MemoryLineTestCase,
+    MemoryWarningTestCase,
 };
 
 const MIB: usize = 1024 * 1024;

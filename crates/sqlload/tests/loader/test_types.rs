@@ -1651,36 +1651,30 @@ pub(crate) struct PlantedTestCase {
     pub(crate) expected_state: &'static str,
 }
 
-/// Two loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.
+/// One load of a [`WideLoadTestCase`]: what changes before it, and how it runs.
+pub(crate) struct WideStep {
+    /// Postgres statements before the load (`{table}` is the table's name).
+    pub(crate) change: &'static str,
+    /// DuckDB statements on the target's file before the load.
+    pub(crate) prepare: &'static str,
+    /// Variables the load runs with.
+    pub(crate) environment: &'static [(&'static str, &'static str)],
+}
+
+/// Loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.
 pub(crate) struct WideLoadTestCase {
     pub(crate) description: &'static str,
-    /// The source table's settings in the project.
+    /// The Postgres and DuckDB table's name, and its settings in the project.
+    pub(crate) table: &'static str,
     pub(crate) settings: &'static str,
     /// The rows of the source table, and how many share each `k`.
     pub(crate) rows: u32,
     pub(crate) key_rows: u32,
-    /// Postgres statements between the first and the second load; `None` for one load.
-    pub(crate) change: Option<&'static str>,
-    /// Variables the last load runs with.
-    pub(crate) environment: &'static [(&'static str, &'static str)],
-    pub(crate) expected_success: bool,
-    /// Phrases the last load's output holds (the table's error when it fails).
+    /// Tables of two narrow rows loaded beside it, each replaced.
+    pub(crate) beside: &'static [&'static str],
+    pub(crate) steps: &'static [WideStep],
+    /// For each load: whether it succeeded, then each table's `rows:distinct ids:rows holding the changed body` and the recovery markers left, `|`-separated (`none` for a missing table).
+    pub(crate) expected_results: &'static [(bool, &'static str)],
+    /// Phrases the last load's output holds (`{table}` is the table's name).
     pub(crate) expected_output: &'static [&'static str],
-    /// The table's `rows:distinct ids:rows holding the changed body` after the loads; a small table beside it always loads.
-    pub(crate) expected_result: &'static str,
-}
-
-/// A load killed between its pieces, then run again, beside the same loads without the kill.
-pub(crate) struct KilledLoadTestCase {
-    pub(crate) description: &'static str,
-    pub(crate) settings: &'static str,
-    pub(crate) key_rows: u32,
-    /// Postgres statements after a first, untouched load that the killed load follows; `None` when the killed load is the first.
-    pub(crate) change: Option<&'static str>,
-    /// Fill the table's recovery marker with a load of `older-load` holding three copied rows, before the rerun.
-    pub(crate) older_marker: bool,
-    /// Whether the killed load left a recovery marker: an append's, whose rows a rerun would not replace.
-    pub(crate) expected_marker: bool,
-    /// The table's `rows:distinct ids:rows holding the changed body` after the rerun, as one clean load leaves it.
-    pub(crate) expected_result: &'static str,
 }

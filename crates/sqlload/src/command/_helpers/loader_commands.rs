@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::dispatch::main::session::recover_unfinished::recover_unfinished;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::column_types::models::ColumnType;
@@ -30,16 +31,14 @@ use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::main::take_timings::take_timings;
 use crate::load_events::models::{EventKind, LoadEvent};
+use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::constants::{NO_PYTHON_HOST, NO_RENAME_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
-use crate::memory_budget::main::run_memory::run_memory;
-use crate::memory_budget::models::BudgetOrigin;
 use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
 use crate::loader::main::plan_project::plan_project;
-use crate::loader::main::recover_unfinished::recover_unfinished;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::main::render_tally::render_tally;
 use crate::loader::main::state_command::state_command;
@@ -47,13 +46,14 @@ use crate::loader::models::{
     LoadRun, PlanOptions, ProjectPlan, RangeFlags, RunReport, StateKind, StateRequest,
     TableOutcome, TablePlan, TypedCursors,
 };
+use crate::memory_budget::main::run_memory::run_memory;
+use crate::memory_budget::models::BudgetOrigin;
 use crate::number_text::main::thousands::thousands;
 use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
 use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::loader::constants::DEFAULT_THREADS;
 use crate::project::models::{
     ConnectionConfig, ProjectConfig, RenameSetting, SourceKind, TableSettings,
 };
@@ -454,10 +454,10 @@ async fn run_command(
     let (destinations, mut plan) = planning(
         async {
             let destinations = connect_targets(project).await?;
-            let recovered = match loads {
-                true => recover_unfinished(&destinations).await?,
-                false => Vec::new(),
-            };
+            let mut recovered: Vec<String> = Vec::new();
+            for destination in destinations.values().filter(|_| loads) {
+                recovered.extend(recover_unfinished(destination).await?);
+            }
             let mut plan = plan_project(project, &destinations, &options).await?;
             plan.warnings.extend(recovered);
             Ok::<_, CommandError>((destinations, plan))

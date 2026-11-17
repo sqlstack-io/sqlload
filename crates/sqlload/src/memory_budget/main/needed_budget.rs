@@ -10,11 +10,9 @@ pub fn needed_budget(duckdb_limit: u64) -> String {
         let budget = watched.guard.budget;
         (budget.overhead, budget.duckdb_targets.max(1) as u64)
     });
-    let shares = u128::from(duckdb_limit)
-        * u128::from(DUCKDB_FOOTPRINT)
-        * u128::from(targets)
-        * 100
-        / u128::from(DUCKDB_SHARE_PERCENT);
+    let shares =
+        u128::from(duckdb_limit) * u128::from(DUCKDB_FOOTPRINT) * u128::from(targets) * 100
+            / u128::from(DUCKDB_SHARE_PERCENT);
     let needed = u64::try_from(shares)
         .unwrap_or(u64::MAX)
         .saturating_add(overhead)

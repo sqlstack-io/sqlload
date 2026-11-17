@@ -38,6 +38,15 @@ pub const UNFINISHED_TABLE: &str = "_sqlload_unfinished";
 pub const UNFINISHED_COLUMNS: &[(&str, crate::column_types::models::ColumnType)] = &[
     ("table_name", crate::column_types::models::ColumnType::Text),
     ("load_id", crate::column_types::models::ColumnType::Text),
-    ("load_id_column", crate::column_types::models::ColumnType::Text),
-    ("started_at", crate::column_types::models::ColumnType::TimestampTz),
+    (
+        "load_id_column",
+        crate::column_types::models::ColumnType::Text,
+    ),
+    (
+        "started_at",
+        crate::column_types::models::ColumnType::TimestampTz,
+    ),
 ];
+
+/// The separator of the fields recovery reads as one text per row (`chr(31)` in SQL), which no table name or load id holds.
+pub const UNFINISHED_SEPARATOR: char = '\u{1f}';

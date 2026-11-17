@@ -34,7 +34,10 @@ pub(in crate::adapters) fn open_duckdb(
                 "{path}: DuckDB could not write the {} an earlier run left in its write-ahead log ({path}{WAL_SUFFIX}) within its {} memory_limit ({error}); raise memory_limit for one run until plan's memory line gives DuckDB a memory_limit of about {}, which writes it",
                 memory_text(wal),
                 memory_text(share.memory_limit),
-                memory_text(wal.saturating_mul(2).max(share.memory_limit.saturating_mul(2)))
+                memory_text(
+                    wal.saturating_mul(2)
+                        .max(share.memory_limit.saturating_mul(2))
+                )
             )));
         }
     }

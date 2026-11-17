@@ -1164,6 +1164,17 @@ pub struct Publisher {
     pub pieces: Pieces,
 }
 
+/// Where a table's commit may be cut into pieces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cuts {
+    /// Between any two rows.
+    Anywhere,
+    /// Only where these columns' value changes: a `delete_insert` replaces each value's rows together.
+    Between(Vec<String>),
+    /// Nowhere, and why.
+    Never(&'static str),
+}
+
 /// A table's commits cut into pieces, each holding no more large values (those DuckDB keeps in memory until a checkpoint) than DuckDB's share commits at once.
 #[derive(Debug, Default)]
 pub struct Pieces {

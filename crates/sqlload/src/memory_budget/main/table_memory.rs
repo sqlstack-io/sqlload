@@ -5,5 +5,8 @@ use crate::memory_budget::models::WatchedTable;
 
 /// The table the running task loads, with its run's guard; `None` outside a watched load.
 pub fn table_memory() -> Option<WatchedTable> {
-    TABLE_WATCH.try_with(Clone::clone).ok()
+    let Ok(watched) = TABLE_WATCH.try_with(Clone::clone) else {
+        return None;
+    };
+    Some(watched)
 }

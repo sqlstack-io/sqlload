@@ -1,5 +1,4 @@
 pub(in crate::loader) mod _check_source;
-pub(in crate::loader) mod _commit_pieces;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;
@@ -15,7 +14,6 @@ pub mod files_columns;
 pub mod json_report;
 pub mod load_tables;
 pub mod plan_project;
-pub mod recover_unfinished;
 pub mod render_plan;
 pub mod render_tally;
 pub mod selected_specs;

@@ -38,7 +38,10 @@ pub fn run_memory(
     };
     match plan_budget(&request) {
         Ok(budget) => RunMemory {
-            line: Some(budget_line(budget.as_ref(), (concurrency, unreadable.as_deref()))),
+            line: Some(budget_line(
+                budget.as_ref(),
+                (concurrency, unreadable.as_deref()),
+            )),
             budget,
             problem: None,
             guard: None,

@@ -125,16 +125,18 @@ fn given_a_limit_or_a_setting_when_planning_the_memory_budget_then_duckdb_and_th
     for test_case in test_cases {
         let request = BudgetRequest {
             set: test_case.set,
-            limit: test_case.limit.map(|(bytes, origin)| MemoryLimit { bytes, origin }),
+            limit: test_case
+                .limit
+                .map(|(bytes, origin)| MemoryLimit { bytes, origin }),
             overhead: test_case.overhead,
             duckdb: test_case.duckdb,
             concurrency: test_case.concurrency,
             cores: test_case.cores,
         };
         let planned = plan_budget(&request);
-        let line = planned.as_ref().map(|budget| {
-            budget_line(budget.as_ref(), (test_case.concurrency, None))
-        });
+        let line = planned
+            .as_ref()
+            .map(|budget| budget_line(budget.as_ref(), (test_case.concurrency, None)));
         assert_eq!(
             line.as_ref()
                 .map(String::as_str)
@@ -145,10 +147,23 @@ fn given_a_limit_or_a_setting_when_planning_the_memory_budget_then_duckdb_and_th
         );
         let budget = planned.ok().flatten();
         let duckdb = budget.and_then(|budget| budget.duckdb).map(|share| {
-            (share.bytes, share.memory_limit, share.threads, share.commit_bytes)
+            (
+                share.bytes,
+                share.memory_limit,
+                share.threads,
+                share.commit_bytes,
+            )
         });
-        assert_eq!(duckdb, test_case.expected_duckdb, "{}", test_case.description);
+        assert_eq!(
+            duckdb, test_case.expected_duckdb,
+            "{}",
+            test_case.description
+        );
         let tables = budget.map_or((0, 0), |budget| (budget.table_share, budget.tables_at_once));
-        assert_eq!(tables, test_case.expected_tables, "{}", test_case.description);
+        assert_eq!(
+            tables, test_case.expected_tables,
+            "{}",
+            test_case.description
+        );
     }
 }

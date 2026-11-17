@@ -32,7 +32,7 @@ pub async fn connect_destination(
         ) => Destination::DuckDb(open_destination(
             connection,
             target.database.as_deref(),
-            project.memory.budget.and_then(|budget| budget.duckdb),
+            project.memory.budget,
         )?),
         #[cfg(not(feature = "duckdb"))]
         Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {

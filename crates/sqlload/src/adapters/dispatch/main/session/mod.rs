@@ -7,6 +7,7 @@ pub mod execute;
 pub mod execute_ddl;
 pub mod helper_process;
 pub mod live_columns;
+pub mod recover_unfinished;
 pub mod single_text;
 pub mod table_destination;
 pub mod table_names;

@@ -3,9 +3,9 @@
 use arrow_array::RecordBatch;
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
-use crate::adapters::duckdb::constants::CHECKPOINT_STATEMENT;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
+use crate::adapters::duckdb::constants::CHECKPOINT_STATEMENT;
 use crate::adapters::duckdb::main::_append_batch::append_batch;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::models::DuckDbWriter;

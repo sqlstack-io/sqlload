@@ -63,6 +63,7 @@ use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::models::{Compat, MetadataRole};
 use crate::loader::_helpers::destination::files_read_as;
 use crate::loader::_helpers::destination::nanosecond_columns;
+use crate::loader::_helpers::destination::{commit_mode, deletes_range, piece_mode};
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -99,7 +100,6 @@ use crate::loader::constants::RANGE_PUBLISHED_ONCE;
 use crate::loader::constants::REPLACED_KEYS_SHOWN;
 use crate::loader::constants::SNAPSHOT_BEGIN;
 use crate::loader::errors::LoaderError;
-use crate::loader::main::_commit_pieces::{commit_mode, deletes_range, piece_mode};
 use crate::loader::main::_files_repair::files_to_replace;
 use crate::loader::models::ChildTables;
 use crate::loader::models::CommitRange;
@@ -107,8 +107,8 @@ use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
 use crate::loader::models::FilesSource;
 use crate::loader::models::FolderSwap;
-use crate::loader::models::Publisher;
 use crate::loader::models::Pieces;
+use crate::loader::models::Publisher;
 use crate::loader::models::ReplacedKeys;
 use crate::loader::models::RunEntry;
 use crate::loader::models::SourceReader;
@@ -849,6 +849,7 @@ impl Publisher {
 
     /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in or rebuilt table gets its description as its comment again (a table refilled in place keeps its own), where a failure only warns, as its rows are already in.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
+        self.stopped()?;
         self.finish_pieces().await?;
         self.flush_batch().await?;
         if state.is_some() {
@@ -1192,6 +1193,7 @@ impl Publisher {
 
     /// Apply the write strategy to the waiting rows in one transaction, with a logged table's record and the emptying of the staging table for the next batches.
     pub(in crate::loader) async fn commit(&mut self, last: bool) -> Result<(), LoaderError> {
+        self.stopped()?;
         if self.files.is_some() {
             self.waiting_range = None;
             if let Some(children) = &mut self.children {
@@ -1262,10 +1264,6 @@ impl Publisher {
             &staging,
             (run_insert, self.at_end),
         );
-        let statements = match self.marker_statement(last) {
-            Some(marker) => sql_adapter(warehouse).render_logged(statements, marker),
-            None => statements,
-        };
         let checked = CheckedCommit {
             destination: &self.destination,
             warehouse,
@@ -1349,7 +1347,7 @@ impl Publisher {
             true => ddl_guard(&self.destination).await,
             false => None,
         };
-        self.execute_checked(guarded, target).await?;
+        self.execute_checked(guarded, (target, last)).await?;
         if let Some(rebuild) = self.rebuild.as_mut() {
             rebuild.records.extend(held);
         }
@@ -1359,16 +1357,7 @@ impl Publisher {
         if let Some(replaced) = replaced {
             self.replaced = Some(ReplacedKeys::added(self.replaced.take(), replaced));
         }
-        if !self.pieces.piece {
-            self.committed_state = self.state.clone();
-            self.pieces = Pieces {
-                unfinished: self.pieces.unfinished && !last,
-                table_rows: self.pieces.table_rows,
-                rows: self.pieces.rows,
-                large: self.pieces.large,
-                ..Pieces::default()
-            };
-        }
+        self.end_commit(last);
         self.settled_files.append(&mut self.fed_files);
         Ok(())
     }

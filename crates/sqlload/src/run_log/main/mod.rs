@@ -13,4 +13,5 @@ pub mod runs_setup;
 pub mod runs_table;
 pub mod select_runs;
 pub mod unfinished_marker;
+pub mod unfinished_recovery;
 pub mod unreadable_line;
