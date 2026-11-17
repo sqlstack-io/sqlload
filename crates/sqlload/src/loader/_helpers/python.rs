@@ -1124,16 +1124,12 @@ async fn replan(
         data,
         planned.live.as_deref(),
     );
-    let mut project = load.project.clone();
-    if let Some(source) = project.sources.get_mut(&spec.source_name) {
-        source.tables.retain(|name, _| *name == table.name);
-    }
     let named = KnownNames {
         numbered: Vec::new(),
         named: Some(names.loaded.clone()),
         existing: Vec::new(),
     };
-    let resolved = resolve_known(&project, &spec.source_name, &[table], &named);
+    let resolved = resolve_known(load.project, &spec.source_name, &[table], &named);
     let problems: Vec<String> = resolved
         .problems
         .into_iter()

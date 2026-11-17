@@ -67,6 +67,8 @@ pub(crate) struct LoadOutputTestCase {
     pub(crate) rows_width: usize,
     pub(crate) elapsed_ms: u64,
     pub(crate) exit_code: u8,
+    /// Tables the plan's errors kept from loading.
+    pub(crate) plan_errors: usize,
     pub(crate) expected_lines: &'static str,
 }
 

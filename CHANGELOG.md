@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.66.0](https://github.com/sqlstack-io/sqlload/compare/v0.65.0...v0.66.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **exporter:** staging.s3.auto_ingest needs destination.warehouse, which runs the COPY_HISTORY check; plan refuses the configuration without it. Add a warehouse, ideally a dedicated X-Small with a 60-second AUTO_SUSPEND.
+
+### Features
+
+* **cli:** sqlload playground, and a quickstart whose output comes from real runs ([#297](https://github.com/sqlstack-io/sqlload/issues/297)) ([91728f0](https://github.com/sqlstack-io/sqlload/commit/91728f08459336cf26b32b57b0fbe725bf1071d8))
+* **exporter:** export Kafka topics to Databricks ([#299](https://github.com/sqlstack-io/sqlload/issues/299)) ([b389528](https://github.com/sqlstack-io/sqlload/commit/b389528ed47b2ffd043cd0ddf7f3208ce3990b4d))
+
+
+### Bug Fixes
+
+* **exporter:** name staged files after the exporter's run, so a replay after DELETE, a re-created table or a consumer group reset can no longer be skipped as already loaded while its offsets are committed (Snowflake COPY, Snowpipe insertFiles and auto-ingest, Databricks COPY INTO), and deployments sharing a bucket path no longer overwrite each other's files ([8f091d4](https://github.com/sqlstack-io/sqlload/commit/8f091d42e65daf0d1aae51b05ef2641694e5c9ea))
+* **exporter:** Snowpipe auto-ingest commits offsets only once COPY_HISTORY shows the files loaded, instead of when the upload succeeds ([8f091d4](https://github.com/sqlstack-io/sqlload/commit/8f091d42e65daf0d1aae51b05ef2641694e5c9ea))
+
 ## [0.65.0](https://github.com/sqlstack-io/sqlload/compare/v0.64.0...v0.65.0) (2026-11-17)
 
 
