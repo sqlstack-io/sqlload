@@ -230,3 +230,22 @@ pub(crate) fn exchange_support(
         Err(error) => Err(error),
     }
 }
+
+/// Fail unless `path` is still the folder `held` was opened on. While the handle is open its folder can't be reused, so a folder another load moved away, and this load's later writes made again at `path` (missing the files written before), never matches.
+#[cfg(unix)]
+pub(crate) fn check_held(held: &std::fs::File, path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let (was, now) = (held.metadata()?, std::fs::symlink_metadata(path)?);
+    match (was.dev(), was.ino()) == (now.dev(), now.ino()) {
+        true => Ok(()),
+        false => Err(std::io::Error::other(
+            "another load moved away the folder this load staged its table in, so it lacks files this load wrote; the table is left as it was",
+        )),
+    }
+}
+
+/// Fail unless `path` is still the folder `held` was opened on; no system without `check_held` stages a table.
+#[cfg(not(unix))]
+pub(crate) fn check_held(_held: &std::fs::File, _path: &Path) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}

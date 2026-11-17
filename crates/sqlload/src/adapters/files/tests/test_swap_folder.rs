@@ -3,7 +3,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::adapters::contract::models::WriteMode;
-use crate::adapters::files::_helpers::layout::swap::{carry_over, remove_staged, swap_in};
+use crate::adapters::files::_helpers::layout::swap::{
+    carry_over, exchange, remove_staged, swap_in,
+};
 use crate::adapters::files::main::commit_replaced::commit_replaced;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::read_table_state::read_table_state;
@@ -14,8 +16,8 @@ use crate::adapters::files::tests::helpers::{
     block_on, local_files, repair, top_parts, watch_folder, write_all,
 };
 use crate::adapters::files::tests::test_types::{
-    LateSwapTestCase, MarkerPathStallTestCase, RemoveStagedTestCase, RenameRaceTestCase,
-    StagingTestCase, StalledSwapTestCase, SwapFolderTestCase,
+    HeldFolderTestCase, LateSwapTestCase, MarkerPathStallTestCase, RemoveStagedTestCase,
+    RenameRaceTestCase, StagingTestCase, StalledSwapTestCase, SwapFolderTestCase,
 };
 use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::{Location, StoreKind};
@@ -94,12 +96,14 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
                 .staged_folder(&WriteMode::Replace, &uuid::Uuid::new_v4().to_string())
                 .ok_or("no staging folder")?;
             write_all(directory.path(), &staged.prefix, test_case.staged, "new")?;
+            let held = std::fs::File::open(directory.path().join(&staged.prefix))
+                .map_err(|error| error.to_string())?;
             let (live_folder, staged_folder) = (
                 open_folder(&live).map_err(|error| error.to_string())?,
                 open_folder(&staged).map_err(|error| error.to_string())?,
             );
             block_on(async {
-                swap_folder((&live_folder, &lease), &staged_folder, &replaced)
+                swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
                     .await
                     .map_err(|error| error.to_string())
             })
@@ -240,6 +244,8 @@ fn given_a_load_stalled_before_its_swap_when_another_load_took_the_table_then_it
             .staged_folder(&WriteMode::Replace, &load_id)
             .ok_or("no staging folder")?;
         write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+        let held = std::fs::File::open(directory.path().join(&staged.prefix))
+            .map_err(|error| error.to_string())?;
         let replaced: BTreeSet<String> = BTreeSet::from(["part-old-0.csv".to_owned()]);
         let swapped = block_on(async {
             let failed = |error: String| error;
@@ -264,7 +270,7 @@ fn given_a_load_stalled_before_its_swap_when_another_load_took_the_table_then_it
                     .map_err(|error| error.to_string())?;
             }
             Ok::<_, String>(
-                swap_folder((&live_folder, &lease), &staged_folder, &replaced)
+                swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
                     .await
                     .is_err(),
             )
@@ -458,6 +464,12 @@ fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_starts_then_it_wri
             expected_staged: Some(true),
         },
         StagingTestCase {
+            description: "the real one-rename swap works on this test's filesystem, so a replace stages",
+            mode: WriteMode::Replace,
+            exchange,
+            expected_staged: Some(true),
+        },
+        StagingTestCase {
             description: "where the swap is unsupported (NFS, Windows), a replace writes into the table folder",
             mode: WriteMode::Replace,
             exchange: |_, _| Err(std::io::ErrorKind::Unsupported.into()),
@@ -468,6 +480,12 @@ fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_starts_then_it_wri
             mode: WriteMode::Append,
             exchange: |_, _| Ok(()),
             expected_staged: Some(false),
+        },
+        StagingTestCase {
+            description: "probe folders another load moved away fail the check rather than pick a path",
+            mode: WriteMode::Replace,
+            exchange: |_, _| Err(std::io::ErrorKind::NotFound.into()),
+            expected_staged: None,
         },
         StagingTestCase {
             description: "any other failure of the check fails the load rather than pick a path",
@@ -551,7 +569,9 @@ fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_stalls_past_its_le
                     Err(std::io::ErrorKind::Unsupported.into())
                 })
                 .map_err(|error| error.to_string())?;
-            let target = staged.clone().unwrap_or_else(|| live.clone());
+            let target = staged
+                .as_ref()
+                .map_or_else(|| live.clone(), |(location, _)| location.clone());
             mark_pending(&folder, "stalled.00001", PendingPhase::Writing, (&[], None))
                 .await
                 .map_err(|error| error.to_string())?;
@@ -575,6 +595,79 @@ fn given_a_filesystem_that_cannot_swap_folders_when_a_replace_stalls_past_its_le
             (outcome, top_parts(&directory.path().join(TABLE_PREFIX))),
             (
                 (true, test_case.expected_failed),
+                test_case
+                    .expected_parts
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>()
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_lapsed_load_that_moved_the_staged_folder_away_when_the_lease_holder_swaps_then_it_fails_and_the_table_is_kept()
+-> Result<(), String> {
+    let test_cases = [
+        HeldFolderTestCase {
+            description: "with its staged folder untouched, the load swaps in every file it wrote",
+            moved_away: 0,
+            expected_failed: false,
+            expected_parts: &["part-new-0.csv", "part-new-1.csv"],
+        },
+        HeldFolderTestCase {
+            description: "after a lapsed load moved the folder away and a later write made it again, the swap fails and the old table stays",
+            moved_away: 1,
+            expected_failed: true,
+            expected_parts: &["part-old-0.csv"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        let live = Location {
+            store: StoreKind::Filesystem { root },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        write_all(directory.path(), TABLE_PREFIX, &["part-old-0.csv"], "old")?;
+        let path = TablePath {
+            folder: live.clone(),
+            partition: None,
+        };
+        let load_id = uuid::Uuid::new_v4().to_string();
+        let swapped = block_on(async {
+            let failed = |error: String| error;
+            let live_folder = open_folder(&live).map_err(|error| error.to_string())?;
+            let lease = take_lease(&live_folder, &load_id, lease_now())
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(failed)?;
+            let (staged, held) = path
+                .staging_with(&WriteMode::Replace, &load_id, |_, _| Ok(()))
+                .map_err(|error| error.to_string())?
+                .ok_or("no staging folder")?;
+            write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+            for _ in 0..test_case.moved_away {
+                remove_staged(&live)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            write_all(directory.path(), &staged.prefix, &["part-new-1.csv"], "new")?;
+            let staged_folder = open_folder(&staged).map_err(|error| error.to_string())?;
+            let replaced = BTreeSet::from(["part-old-0.csv".to_owned()]);
+            Ok::<_, String>(
+                swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
+                    .await
+                    .is_err(),
+            )
+        })?;
+        assert_eq!(
+            (swapped, top_parts(&directory.path().join(TABLE_PREFIX))),
+            (
+                test_case.expected_failed,
                 test_case
                     .expected_parts
                     .iter()

@@ -96,8 +96,12 @@ impl TablePath {
         })
     }
 
-    /// The folder this load stages its table in (see `staged_folder`) when the filesystem swaps two folders in one rename, checked once, before the load writes anything; `None` where it can't (NFS, Windows), so the load writes into the table folder, then deletes the older files, as in S3.
-    pub fn staging(&self, mode: &WriteMode, load_id: &str) -> std::io::Result<Option<Location>> {
+    /// The folder this load stages its table in (see `staged_folder`) when the filesystem swaps two folders in one rename, checked once, before the load writes anything; `None` where it can't (NFS, Windows), so the load writes into the table folder, then deletes the older files, as in S3. The folder is created here, with an open handle on it the swap checks it against.
+    pub fn staging(
+        &self,
+        mode: &WriteMode,
+        load_id: &str,
+    ) -> std::io::Result<Option<(Location, std::fs::File)>> {
         self.staging_with(mode, load_id, exchange)
     }
 
@@ -107,14 +111,21 @@ impl TablePath {
         mode: &WriteMode,
         load_id: &str,
         exchange: Exchange,
-    ) -> std::io::Result<Option<Location>> {
+    ) -> std::io::Result<Option<(Location, std::fs::File)>> {
         let (Some(staged), Some((live, _, name))) = (
             self.staged_folder(mode, load_id),
             local_folder(&self.folder),
         ) else {
             return Ok(None);
         };
-        Ok(exchange_support(&live, &staged_stem(name), exchange)?.then_some(staged))
+        let (Some((path, _, _)), true) = (
+            local_folder(&staged),
+            exchange_support(&live, &staged_stem(name), exchange)?,
+        ) else {
+            return Ok(None);
+        };
+        std::fs::create_dir(&path)?;
+        Ok(Some((staged, std::fs::File::open(&path)?)))
     }
 }
 

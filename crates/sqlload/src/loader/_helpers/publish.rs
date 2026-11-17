@@ -516,36 +516,23 @@ impl Publisher {
                 let lease = take_lease(&live, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Transient)?;
-                let prepared = async {
-                    let replaced = files_to_replace((&live, &lease), &table, output).await?;
-                    let staged = output
-                        .path
-                        .staging(&table.mode, &load_id)
-                        .map_err(|error| {
-                            LoaderError::Invalid(format!(
-                                "{}: cannot check whether the filesystem swaps folders in one rename: {error}",
-                                output.path.folder
-                            ))
-                        })?
-                        .map(|staged| open_folder(&staged))
-                        .transpose()?;
-                    Ok::<_, LoaderError>((replaced, staged))
-                };
-                let (replaced, staged) = match prepared.await {
-                    Ok(prepared) => prepared,
-                    Err(error) => {
-                        give_back(&live, &lease).await;
-                        return Err(error);
-                    }
-                };
+                let (replaced, staged) =
+                    match files_to_replace((&live, &lease), &table, output).await {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            give_back(&live, &lease).await;
+                            return Err(error);
+                        }
+                    };
                 let keeper = keep_in_background(&live, &lease);
                 let (folder, replaced, swap) = match staged {
-                    Some(staged) => (
+                    Some((staged, held)) => (
                         staged,
                         ReplacedFiles::default(),
                         Some(FolderSwap {
                             live,
                             replaced: replaced.keys(&BTreeSet::new()).into_iter().collect(),
+                            held,
                         }),
                     ),
                     None => (live, replaced, None),

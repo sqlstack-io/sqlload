@@ -261,6 +261,16 @@ pub(crate) struct MarkerPathStallTestCase {
     pub(crate) expected_parts: &'static [&'static str],
 }
 
+/// A load stages its table while a load whose lease lapsed may move the staged folder away, after which this load writes more files.
+pub(crate) struct HeldFolderTestCase {
+    pub(crate) description: &'static str,
+    /// How many times the lapsed load moves the staged folder away between this load's two writes.
+    pub(crate) moved_away: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
 pub(crate) struct RemoveStagedTestCase {
     pub(crate) description: &'static str,
     /// Files below the table's parent folder before the cleanup.
