@@ -1,10 +1,10 @@
 //! Run a statement that has DuckDB read files itself, giving it access to the files' bucket first.
 
 use crate::adapters::duckdb::_helpers::blocking::with_connection;
-use crate::adapters::duckdb::_helpers::pull_sql::s3_secret;
+use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
+use crate::adapters::duckdb::_helpers::pull_sql::{default_region, s3_secret};
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbDestination;
-use crate::file_store::main::aws_variable::aws_variable;
 use crate::file_store::main::s3_keys::s3_keys;
 use crate::stage_api::models::AwsCredentials;
 use crate::store_paths::models::StoreKind;
@@ -29,9 +29,7 @@ pub(in crate::adapters) async fn pull_files(
         ),
         StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => (None, None),
     };
-    let region = aws_variable("AWS_REGION")
-        .or_else(|| aws_variable("AWS_DEFAULT_REGION"))
-        .unwrap_or_else(|| "us-east-1".to_owned());
+    let region = default_region(&environment_variable);
     with_connection(destination, move |connection| {
         if let Some((bucket, bucket_region)) = bucket {
             connection.execute_batch("INSTALL httpfs; LOAD httpfs;")?;

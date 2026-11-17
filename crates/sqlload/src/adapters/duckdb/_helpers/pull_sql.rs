@@ -237,3 +237,11 @@ pub(crate) fn s3_secret(
         ),
     }
 }
+
+/// The region a secret without its connection's own gets: `AWS_REGION`, else `AWS_DEFAULT_REGION` (each as `variable` reads it from the environment, unset when empty), else us-east-1, as SQLLoad's reader picks it.
+pub(crate) fn default_region(variable: &dyn Fn(&str) -> Option<String>) -> String {
+    let set = |name: &str| variable(name).filter(|value| !value.is_empty());
+    set("AWS_REGION")
+        .or_else(|| set("AWS_DEFAULT_REGION"))
+        .unwrap_or_else(|| "us-east-1".to_owned())
+}

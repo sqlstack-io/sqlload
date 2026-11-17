@@ -1,13 +1,16 @@
 //! The DuckDB-only checks that decide whether DuckDB may read a files table's files itself.
 
-use crate::file_store::main::aws_variable::aws_variable;
 use crate::files_source::models::FileColumn;
 use crate::store_paths::models::StoreKind;
 
-/// Why an S3 store points somewhere DuckDB would not read: an endpoint in the connection or in `AWS_ENDPOINT` / `AWS_ENDPOINT_URL` (unset when empty, as SQLLoad's reader reads them), which SQLLoad's reader follows.
-pub(crate) fn custom_endpoint(store: &StoreKind) -> Option<String> {
-    let from_env =
-        aws_variable("AWS_ENDPOINT").is_some() || aws_variable("AWS_ENDPOINT_URL").is_some();
+/// Why an S3 store points somewhere DuckDB would not read: an endpoint in the connection or in `AWS_ENDPOINT` / `AWS_ENDPOINT_URL` (each as `variable` reads it from the environment, unset when empty, as SQLLoad's reader reads them), which SQLLoad's reader follows.
+pub(crate) fn custom_endpoint(
+    store: &StoreKind,
+    variable: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let from_env = ["AWS_ENDPOINT", "AWS_ENDPOINT_URL"]
+        .iter()
+        .any(|name| variable(name).is_some_and(|value| !value.is_empty()));
     match store {
         StoreKind::S3 {
             endpoint: Some(_), ..

@@ -1,4 +1,3 @@
-pub mod aws_variable;
 pub mod create_file;
 pub mod current_version;
 pub mod delete_files;

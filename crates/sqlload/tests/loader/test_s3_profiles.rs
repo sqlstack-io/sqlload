@@ -29,7 +29,7 @@ fn given_keys_only_in_a_shared_credentials_file_when_loading_from_s3_then_the_co
             expected_ok: true,
         },
         S3ProfileTestCase {
-            description: "a session token left in the environment is not sent with the file's keys",
+            description: "a session token left in the environment doesn't stop the file's keys working (the emulator ignores tokens; the unit tests check it is never sent)",
             profile: "lake",
             command: "load",
             variables: &[("AWS_SESSION_TOKEN", "STALE")],
@@ -41,7 +41,7 @@ fn given_keys_only_in_a_shared_credentials_file_when_loading_from_s3_then_the_co
             profile: "stale",
             command: "load",
             variables: &[],
-            expected_text: "error",
+            expected_text: "SignatureDoesNotMatch",
             expected_ok: false,
         },
         S3ProfileTestCase {
