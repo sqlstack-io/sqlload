@@ -33,6 +33,8 @@ use crate::load_events::models::{EventKind, LoadEvent};
 use crate::loader::constants::{NO_PYTHON_HOST, NO_RENAME_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
+use crate::memory_budget::main::run_memory::run_memory;
+use crate::memory_budget::models::BudgetOrigin;
 use crate::loader::main::debug_project::debug_project;
 use crate::loader::main::json_report::json_report;
 use crate::loader::main::load_tables::load_tables;
@@ -50,7 +52,10 @@ use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::project::models::{ProjectConfig, RenameSetting, SourceKind, TableSettings};
+use crate::loader::constants::DEFAULT_THREADS;
+use crate::project::models::{
+    ConnectionConfig, ProjectConfig, RenameSetting, SourceKind, TableSettings,
+};
 use crate::python_sources::types::PythonHost;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
@@ -124,6 +129,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         end_cursor: args.end_cursor,
         range_flags: RangeFlags::default(),
         concurrency: args.concurrency.map(usize::from),
+        memory_limit: args.memory_limit,
         resnapshot: args.resnapshot,
         sync_deletes: args.sync_deletes,
         fail_fast: args.fail_fast,
@@ -132,6 +138,33 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
     })
+}
+
+/// `project` with its run's memory budget: `--memory-limit`, else its `memory_limit`, else the limit the OS sets, shared with its DuckDB and MotherDuck targets.
+fn with_memory(project: &ProjectConfig, options: &PlanOptions) -> ProjectConfig {
+    let set = match (options.memory_limit, project.memory_limit) {
+        (Some(bytes), _) => Some((bytes, BudgetOrigin::Flag)),
+        (None, Some(size)) => Some((size.0, BudgetOrigin::Setting)),
+        (None, None) => None,
+    };
+    let duckdb = project
+        .targets
+        .values()
+        .filter(|target| {
+            matches!(
+                project.connections.get(&target.connection),
+                Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. })
+            )
+        })
+        .count();
+    let concurrency = options
+        .concurrency
+        .or(project.concurrency)
+        .unwrap_or(DEFAULT_THREADS);
+    ProjectConfig {
+        memory: run_memory(set, duckdb, concurrency),
+        ..project.clone()
+    }
 }
 
 /// The project in `request.text`, with where its settings are written in its file; a project `sqlload copy` wrote has neither those lines nor the variables its connections read.
@@ -415,6 +448,7 @@ async fn run_command(
         Progress::Auto => streams && !json && !log_json && std::io::stderr().is_terminal(),
     };
     let options = options(args)?;
+    let project = &with_memory(project, &options);
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let (destinations, mut plan) = planning(
         async {

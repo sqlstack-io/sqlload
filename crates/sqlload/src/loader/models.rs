@@ -560,8 +560,6 @@ pub struct FetchMemory {
     pub memory: String,
     /// The fetch buffer and why, `plan`'s `buffer` line.
     pub budget_note: String,
-    /// The machine's memory limit the budget was worked out from, in bytes; `None` when it can't be read.
-    pub limit: Option<u64>,
 }
 
 /// A logged table's run log and what it means for this run.
@@ -663,6 +661,8 @@ pub struct ProjectPlan {
     pub unread_sharing: Vec<UnreadSharing>,
     /// How long each target's and source's connection and each source's discovery took, when the command line timed them.
     pub phases: Vec<PhaseTiming>,
+    /// The run's memory budget and how it is shared, `plan`'s `memory` line; `None` when the command line didn't work it out.
+    pub memory: Option<String>,
 }
 
 /// The tables a source that could not be read would load, as far as its settings name them.
@@ -785,6 +785,8 @@ pub struct PlanOptions {
     pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
+    /// `--memory-limit`: the run's memory budget, overriding the project's `memory_limit`.
+    pub memory_limit: Option<u64>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
@@ -1335,6 +1337,8 @@ pub struct PlanView {
     pub warnings: Vec<PlanItem>,
     /// How long each connection and discovery took before the plan.
     pub phases: Vec<PhaseTiming>,
+    /// The run's memory budget and how it is shared.
+    pub memory: Option<String>,
 }
 
 /// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.

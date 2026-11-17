@@ -13,25 +13,35 @@ use crate::loader::_helpers::run_log::record_numbered;
 use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
+use crate::loader::errors::LoaderError;
+use crate::memory_budget::main::watch_table::watch_table;
+use crate::memory_budget::models::MemoryGuard;
 use crate::peak_memory::main::with_table_peak::with_table_peak;
 use crate::project::models::ProjectConfig;
 
-/// The most tables loading at once.
+/// The most tables loading at once: `--concurrency`, else the project's `concurrency`, lowered to as many as the memory budget gives a share.
 pub(crate) fn thread_count(run: &LoadRun<'_>) -> usize {
     if run.options.memory_per_table {
         return 1;
     }
-    run.options
+    let concurrency = run
+        .options
         .concurrency
         .or(run.project.concurrency)
         .unwrap_or(DEFAULT_THREADS)
-        .max(1)
+        .max(1);
+    match run.project.memory.budget {
+        Some(budget) => concurrency.min(budget.tables_at_once.max(1)),
+        None => concurrency,
+    }
 }
 
-/// What every table's thread needs, owned.
-pub(crate) fn shared_run(run: &LoadRun<'_>) -> Arc<SharedRun> {
+/// What every table's thread needs, owned, with the load's memory `guard`.
+pub(crate) fn shared_run(run: &LoadRun<'_>, guard: Option<Arc<MemoryGuard>>) -> Arc<SharedRun> {
+    let mut project = run.project.clone();
+    project.memory.guard = guard;
     Arc::new(SharedRun {
-        project: run.project.clone(),
+        project,
         destinations: run.destinations.clone(),
         host: run.host.clone(),
         options: run.options.clone(),
@@ -47,11 +57,15 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
         options: &shared.options,
     };
     let started = std::time::Instant::now();
-    let (loaded, peak_memory_bytes) = with_table_peak(
-        shared.options.memory_per_table,
-        Box::pin(load_one(&run, &table)),
-    )
-    .await;
+    let guard = shared.project.memory.guard.as_ref();
+    let name = table.outcome_name();
+    let watched = watch_table(guard, &name, load_one(&run, &table));
+    let ((loaded, tripped), peak_memory_bytes) =
+        with_table_peak(shared.options.memory_per_table, Box::pin(watched)).await;
+    let loaded = match (loaded, tripped) {
+        (Err(_), Some(tripped)) => Err(LoaderError::Invalid(tripped)),
+        (loaded, _) => loaded,
+    };
     match loaded {
         Ok((name, loaded)) => TableOutcome {
             table: name,

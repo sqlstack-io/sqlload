@@ -38,6 +38,8 @@ pub async fn plan_project(
     PLANNED_SOURCES.store(0, Ordering::Relaxed);
     let found = found_sources(project, destinations, options).await?;
     let (mut plan, claims, configured) = (found.plan, found.claims, found.configured);
+    plan.memory = project.memory.line.clone();
+    plan.problems.extend(project.memory.problem.clone());
     let (unresolved, drained) = (found.unresolved, found.drained);
     PLANNED_SOURCES.store(
         project.sources.len() - found.sources.len(),
@@ -128,7 +130,7 @@ async fn planned_tables(
     planned = block_failing_reads(project, (source_name, source), planned).await?;
     #[cfg(feature = "odbc")]
     if source.kind == SourceKind::Odbc {
-        planned = with_fetch_memory(project, source, planned, options).await?;
+        planned = with_fetch_memory(project, source, planned).await?;
     }
     Ok((planned, unselected))
 }
@@ -149,24 +151,19 @@ fn block_conflicts(
     }
     #[cfg(feature = "odbc")]
     {
-        let fetches: Vec<(usize, &str, Option<u64>)> = plan
+        let fetches: Vec<(usize, &str)> = plan
             .tables
             .iter()
             .filter(|table| table.schema.blocked.is_none())
             .filter_map(|table| {
                 let fetch = table.fetch_memory.as_ref()?;
-                Some((
-                    fetch.estimate?,
-                    table.spec.source_name.as_str(),
-                    fetch.limit,
-                ))
+                Some((fetch.estimate?, table.spec.source_name.as_str()))
             })
             .collect();
-        let concurrency = options.concurrency.or(project.concurrency);
+        let share = project.memory.budget.map(|budget| budget.table_share);
         plan.warnings
             .extend(crate::odbc_source::main::memory_warning::memory_warning(
-                &fetches,
-                concurrency.unwrap_or(crate::loader::constants::DEFAULT_THREADS),
+                &fetches, share,
             ));
     }
     let mut plan = block_shared_destinations(plan, configured);

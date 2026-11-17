@@ -417,7 +417,6 @@ pub(crate) async fn with_fetch_memory(
     project: &ProjectConfig,
     source: &SourceConfig,
     mut planned: Vec<TablePlan>,
-    options: &PlanOptions,
 ) -> Result<Vec<TablePlan>, LoaderError> {
     let reader = odbc_source_reader(project, source)?;
     let open: Vec<usize> = (0..planned.len())
@@ -442,25 +441,16 @@ pub(crate) async fn with_fetch_memory(
     let set = source
         .max_batch_memory
         .map(|size| usize::try_from(size.0).unwrap_or(usize::MAX));
-    let fetches = crate::odbc_source::main::plan_fetches::plan_fetches(
-        &reader,
-        &requests,
-        (
-            set,
-            options
-                .concurrency
-                .or(project.concurrency)
-                .unwrap_or(crate::loader::constants::DEFAULT_THREADS),
-        ),
-    )
-    .await;
+    let share = project.memory.budget.map(|budget| budget.table_share);
+    let fetches =
+        crate::odbc_source::main::plan_fetches::plan_fetches(&reader, &requests, (set, share))
+            .await;
     for (index, fetch) in open.into_iter().zip(fetches) {
         planned[index].fetch_memory = Some(crate::loader::models::FetchMemory {
             budget: fetch.budget,
             estimate: fetch.estimate,
             memory: fetch.memory,
             budget_note: fetch.budget_note,
-            limit: fetch.limit,
         });
     }
     Ok(planned)

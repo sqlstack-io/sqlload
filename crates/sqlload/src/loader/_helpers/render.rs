@@ -1294,6 +1294,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
         selected,
         destinations: named,
         phases: plan.phases.clone(),
+        memory: plan.memory.clone(),
         objects: stages
             .iter()
             .map(|stage| stage_item(stage))
@@ -1379,6 +1380,7 @@ pub(crate) fn view_lines(view: &PlanView) -> Vec<String> {
         _ => vec![format!("Plan ready  {}", view.summary)],
     };
     lines.extend(view.destinations.iter().map(|name| format!("to  {name}")));
+    lines.extend(view.memory.iter().map(|memory| format!("memory  {memory}")));
     if !lines.is_empty() {
         lines.push(String::new());
     }

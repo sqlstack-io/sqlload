@@ -7,10 +7,13 @@ use crate::plan_text::_helpers::skipped::skipped_section;
 use crate::plan_text::_helpers::tree::section;
 use crate::plan_text::models::PlanParts;
 
-/// The plan's lines without `-v`: what `apply` creates, one line per object; what `load` loads, grouped by source under the targets, one line per table with its write strategy, key and where its read starts, and child lines only for what that table does unlike the defaults or should have looked at; the skipped tables grouped by reason; the errors and warnings as `-v` shows them; then whether the plan is complete.
+/// The plan's lines without `-v`: the run's memory budget; what `apply` creates, one line per object; what `load` loads, grouped by source under the targets, one line per table with its write strategy, key and where its read starts, and child lines only for what that table does unlike the defaults or should have looked at; the skipped tables grouped by reason; the errors and warnings as `-v` shows them; then whether the plan is complete.
 pub fn plan_lines(parts: &PlanParts<'_>) -> Vec<String> {
     let objects: Vec<PlanItem> = parts.view.objects.iter().map(object_line).collect();
-    let mut lines: Vec<String> = section("Objects", "sqlload apply", &objects);
+    let mut lines: Vec<String> = (parts.view.memory.iter())
+        .map(|memory| format!("Memory  {memory}"))
+        .collect();
+    lines.extend(section("Objects", "sqlload apply", &objects));
     lines.extend(loads_section(&parts.tables));
     lines.extend(skipped_section(&parts.view.skipped));
     lines.extend(parts.problems.iter().cloned());
