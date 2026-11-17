@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.61.0](https://github.com/sqlstack-io/sqlload/compare/v0.60.0...v0.61.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** files-target records of loaded source files use a new format. A plan or load that finds a record written by an earlier release blocks the table and names --reload, which rewrites its files and records.
+
+### Features
+
+* **files:** files-target records group loaded source files by partition, merge once a table has many, and stop a load planned before another committed ([c88fc08](https://github.com/sqlstack-io/sqlload/commit/c88fc08ee4eddcdcdd21cb5b0497b93f2cbc6800))
+
+
+### Bug Fixes
+
+* **files:** a load that lost its lease can no longer have files it stores after repair count as written ([c88fc08](https://github.com/sqlstack-io/sqlload/commit/c88fc08ee4eddcdcdd21cb5b0497b93f2cbc6800))
+
 ## [0.60.0](https://github.com/sqlstack-io/sqlload/compare/v0.59.0...v0.60.0) (2026-11-16)
 
 
