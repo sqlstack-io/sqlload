@@ -8,3 +8,6 @@ pub const FAKE_CATALOG: &str = "main";
 pub const TOKEN_PATH: &str = "/oidc/v1/token";
 /// How every request the fake accepts is authorized; the token's own text follows.
 pub const TOKEN_PREFIX: &str = "Bearer fake-token-";
+/// The disposition and format of a statement whose result a source downloads as Arrow files.
+pub const LINKS_DISPOSITION: &str = "EXTERNAL_LINKS";
+pub const ARROW_FORMAT: &str = "ARROW_STREAM";

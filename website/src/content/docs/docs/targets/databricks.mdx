@@ -32,7 +32,7 @@ loader_schema = "raw"
 | `client_id`, `client_secret` | The service principal's OAuth credentials. |
 | `warehouse_id` | The SQL warehouse statements run on. |
 | `catalog` | The Unity Catalog catalog tables load into. |
-| `volume` | An existing volume load files are staged in, as `catalog.schema.volume`. Anything else fails `plan`. |
+| `volume` | An existing volume load files are staged in, as `catalog.schema.volume`. Anything else fails `plan`. From 0.64.0, only a connection a target loads into needs one; a [source](/docs/sources/databricks/) doesn't. |
 
 The service principal needs `USE CATALOG`, `USE SCHEMA` and `CREATE TABLE` where it loads
 (`CREATE SCHEMA` too when the schema doesn't exist yet), ownership of or `MANAGE` on the tables it

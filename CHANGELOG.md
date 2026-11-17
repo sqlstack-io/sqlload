@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.1](https://github.com/sqlstack-io/sqlload/compare/v0.63.0...v0.63.1) (2026-11-17)
+
+
+### Bug Fixes
+
+* **s3:** an empty AWS_ENDPOINT or AWS_REGION now counts as unset everywhere ([#292](https://github.com/sqlstack-io/sqlload/issues/292)) ([9c2113e](https://github.com/sqlstack-io/sqlload/commit/9c2113e198a720a1289a7ad7463ceb390fba210a))
+
 ## [0.63.0](https://github.com/sqlstack-io/sqlload/compare/v0.62.0...v0.63.0) (2026-11-17)
 
 

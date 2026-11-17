@@ -253,6 +253,13 @@ impl TableSpec {
             .is_some_and(|deletes| deletes.apply == Deletes::Soft)
     }
 
+    /// The query whose rows are the table, for a warehouse source's query table.
+    pub fn query_sql(&self) -> Option<&str> {
+        self.warehouse_source
+            .as_ref()
+            .and_then(|source| source.sql.as_deref())
+    }
+
     /// `filter` narrowed by the table's `where`: `(<where>) AND (<filter>)`, or either alone; the `where` closes on a line of its own, so a trailing `--` comment in it ends first.
     pub fn read_filter(&self, filter: Option<String>) -> Option<String> {
         match (&self.row_filter, filter) {
@@ -1219,6 +1226,8 @@ pub enum SourceReader {
     Snowflake(Box<SnowflakeReader>),
     /// BigQuery tables and queries, read through the Storage Read API.
     BigQuery(Box<crate::bigquery_source::models::BigQueryReader>),
+    /// Databricks tables and queries, read as Arrow through the Statement Execution API.
+    Databricks(Box<crate::databricks_source::models::DatabricksReader>),
     /// A database read through its ODBC driver.
     #[cfg(feature = "odbc")]
     Odbc(Box<crate::odbc_source::models::OdbcReader>),

@@ -9,7 +9,7 @@ use crate::project::models::{
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// Problems with where a warehouse connection stages files: a Databricks `volume` must be `catalog.schema.volume`; a Snowflake `load_method` is required when a target loads into the connection (`targeted`), and an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
+/// Problems with where a warehouse connection stages files: a Databricks `volume`, required when a target loads into the connection (`targeted`), must be `catalog.schema.volume`; a Snowflake `load_method` is required when a target loads into the connection (`targeted`), and an `external_stage` needs an `s3://` URL and exactly one of `storage_integration` (SQLLoad creates the stage) or `name` (an existing one).
 pub(crate) fn stage_problems(
     name: &str,
     connection: &ConnectionConfig,
@@ -18,6 +18,14 @@ pub(crate) fn stage_problems(
     let load_method = match connection {
         ConnectionConfig::Snowflake { load_method, .. } => load_method,
         ConnectionConfig::Databricks { volume, .. } => {
+            let Some(volume) = volume else {
+                return match targeted {
+                    false => Vec::new(),
+                    true => vec![format!(
+                        "[connections.{name}] needs volume = \"CATALOG.SCHEMA.VOLUME\", an existing Unity Catalog volume load files are staged in"
+                    )],
+                };
+            };
             return match volume.split('.').filter(|part| !part.is_empty()).count() {
                 STAGE_NAME_PARTS => Vec::new(),
                 _ => vec![format!(

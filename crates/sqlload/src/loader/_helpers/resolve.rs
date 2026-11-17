@@ -1565,6 +1565,16 @@ async fn failed_count(
                 .err()
                 .map(|error| error.to_string())
         }
+        SourceReader::Databricks(databricks) => {
+            crate::databricks_source::main::count_rows::count_rows(
+                databricks,
+                (table, None),
+                filter,
+            )
+            .await
+            .err()
+            .map(|error| error.to_string())
+        }
         #[cfg(feature = "odbc")]
         SourceReader::Odbc(odbc) => {
             crate::odbc_source::main::count_rows::count_rows(odbc, (table, None), filter)

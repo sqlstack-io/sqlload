@@ -21,6 +21,10 @@ use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::config::models::{DestinationConfig, DestinationKind};
+use crate::databricks_source::main::databricks_reader::databricks_reader;
+use crate::databricks_source::main::read_catalog::read_catalog as read_databricks_catalog;
+use crate::databricks_source::main::read_rows::read_rows as read_databricks_rows;
+use crate::databricks_source::models::DatabricksReadRequest;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::{
@@ -239,6 +243,9 @@ pub(crate) async fn open_source(
         SourceKind::BigQuery => Ok(SourceReader::BigQuery(Box::new(bigquery_source_reader(
             project, source,
         )?))),
+        SourceKind::Databricks => Ok(SourceReader::Databricks(Box::new(databricks_reader(
+            project, source,
+        )?))),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -373,6 +380,15 @@ pub(crate) async fn source_tables(
                     Err(error) => Err(LoaderError::from(error).into()),
                 },
             )
+        }
+        SourceKind::Databricks => {
+            let read = async {
+                read_databricks_catalog(&databricks_reader(project, source)?, source).await
+            };
+            Ok(read
+                .await
+                .map(|tables| (tables, None, Vec::new()))
+                .map_err(|error| LoaderError::from(error).into()))
         }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
@@ -1574,11 +1590,7 @@ async fn read_each(
             let filter = table.spec.read_filter(filter);
             let request = crate::odbc_source::models::OdbcReadRequest {
                 table: &table.spec.source_table,
-                sql: table
-                    .spec
-                    .warehouse_source
-                    .as_ref()
-                    .and_then(|source| source.sql.as_deref()),
+                sql: table.spec.query_sql(),
                 columns: &table.read_columns,
                 filter: filter.as_deref(),
                 parameters,
@@ -1596,16 +1608,24 @@ async fn read_each(
                 .read_filter(part.filter.or_else(|| table.source_filter.clone()));
             let request = BigQueryReadRequest {
                 table: &table.spec.source_table,
-                sql: table
-                    .spec
-                    .warehouse_source
-                    .as_ref()
-                    .and_then(|source| source.sql.as_deref()),
+                sql: table.spec.query_sql(),
                 columns: &table.read_columns,
                 filter: filter.as_deref(),
                 filtered: table.spec.row_filter.is_some(),
             };
             Ok(read_bigquery_rows(reader, &request, on_batch).await?)
+        }
+        (SourceReader::Databricks(reader), _) => {
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
+            let request = DatabricksReadRequest {
+                table: &table.spec.source_table,
+                sql: table.spec.query_sql(),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+            };
+            Ok(read_databricks_rows(reader, &request, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batches =
@@ -1748,11 +1768,7 @@ pub(crate) async fn unload_source<T>(
 fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRequest<'a> {
     UnloadRequest {
         table: &table.spec.source_table,
-        sql: table
-            .spec
-            .warehouse_source
-            .as_ref()
-            .and_then(|source| source.sql.as_deref()),
+        sql: table.spec.query_sql(),
         columns: &table.read_columns,
         filter,
         batch_rows: SOURCE_BATCH_ROWS,

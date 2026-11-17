@@ -34,6 +34,11 @@ impl FakeState {
                 self.chunks.insert((id.clone(), index + 1), chunk);
             }
         }
+        self.held(id, answer)
+    }
+
+    /// `answer`, statement `id`'s, at once, or `PENDING` while it is held back for the configured polls.
+    pub(crate) fn held(&mut self, id: String, answer: Value) -> Value {
         if self.pending_polls == 0 {
             return answer;
         }

@@ -60,6 +60,16 @@ pub struct FakeState {
     pub puts: Vec<String>,
     /// A folder and a file written into it just after the folder is next listed, as a load starting meanwhile would.
     pub write_after_listing: Option<(String, String)>,
+    /// The fake's own address, which result links point at.
+    pub base_url: String,
+    /// Result files of statements read as Arrow, by path under the fake's address.
+    pub result_files: BTreeMap<String, Vec<u8>>,
+    /// Every result file download: its path, and whether it was sent with an `Authorization` header, which a link's download must never carry.
+    pub downloads: Vec<(String, bool)>,
+    /// How many of the next result file downloads are refused with 403, as an expired link is.
+    pub expire_downloads: usize,
+    /// Declared primary keys, by lower-cased `schema.table`.
+    pub primary_keys: BTreeMap<String, Vec<String>>,
 }
 
 impl FakeState {
@@ -117,6 +127,20 @@ impl FakeDatabricks {
             .filter(|path| path.starts_with(&prefix))
             .cloned()
             .collect()
+    }
+
+    /// Make `schema.table` with `columns` (name and Databricks type) holding `rows`, JSON objects by column name.
+    pub fn place_table(&self, table: &str, columns: &[(&str, &str)], rows: Vec<Value>) {
+        self.state.lock().tables.insert(
+            table.to_ascii_lowercase(),
+            FakeTable {
+                columns: columns
+                    .iter()
+                    .map(|(name, sql_type)| ((*name).to_owned(), (*sql_type).to_owned()))
+                    .collect(),
+                rows,
+            },
+        );
     }
 
     /// Make an empty folder, and the folders above it.
