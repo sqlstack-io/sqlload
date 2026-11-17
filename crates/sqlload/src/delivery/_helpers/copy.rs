@@ -86,8 +86,9 @@ impl CopyDelivery {
     /// `<folder>/<stream>_<run>_<digest>.parquet`: the `s3` path template, or the UTC date in the volume.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
         let file = format!(
-            "{}_{}.{}",
+            "{}_{}_{}.{}",
             self.stream.name,
+            self.run,
             rows_digest(&part.rows),
             file_extension(FileFormat::Parquet)
         );

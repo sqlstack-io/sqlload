@@ -303,8 +303,9 @@ impl StageDelivery {
     /// `<folder>/<stream>_<run>_<digest>.<json.gz|parquet>`: the `s3` path template, or the UTC date on an internal stage.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
         let file = format!(
-            "{}_{}.{}",
+            "{}_{}_{}.{}",
             self.stream.name,
+            self.run,
             rows_digest(&part.rows),
             file_extension(self.config.staging.format)
         );
