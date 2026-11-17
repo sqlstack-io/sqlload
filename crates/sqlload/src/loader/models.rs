@@ -213,6 +213,8 @@ pub struct TableSpec {
     pub deletes: Option<DeletesSpec>,
     /// The table (its key under `tables`) whose `deletes_from` this table loads the tombstones of; `None` for other tables.
     pub tombstones_of: Option<String>,
+    /// Columns the settings this table uses name that it doesn't have, which block it when it is planned: see `unknown_setting_columns`.
+    pub setting_problems: Vec<String>,
     /// The bastion a Postgres source is reached through, as `ssh user@host:port`.
     pub tunnel: Option<String>,
     /// The checks its staged rows must pass before they are published (the table's own, else its source's).

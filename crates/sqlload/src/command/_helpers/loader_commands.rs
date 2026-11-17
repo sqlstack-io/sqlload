@@ -639,7 +639,8 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
         },
     );
     close();
-    let (lines, tally) = writer.await.unwrap_or_default();
+    let (lines, mut tally) = writer.await.unwrap_or_default();
+    tally.plan_errors = not_planned(load.plan);
     kept.extend(lines);
     if to_load > 0 {
         kept.push(String::new());
@@ -651,6 +652,24 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
         exit_code: code,
         peak_memory_bytes,
     }
+}
+
+/// How many tables `plan`'s errors keep from loading: those whose plan is blocked, and those a problem names that never got a plan.
+fn not_planned(plan: &ProjectPlan) -> usize {
+    let blocked = plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_some())
+        .map(TablePlan::outcome_name);
+    let named = plan
+        .problem_names
+        .iter()
+        .filter(|(problem, _)| plan.problems.contains(problem))
+        .map(|(_, table)| table.clone());
+    blocked
+        .chain(named)
+        .collect::<std::collections::BTreeSet<String>>()
+        .len()
 }
 
 /// The width of the tally's name column: the widest name of a table the plan loads, or of an object `applied` changed, and two spaces.

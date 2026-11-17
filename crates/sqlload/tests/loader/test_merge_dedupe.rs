@@ -222,7 +222,7 @@ fn given_a_newest_by_column_it_cannot_compare_when_planning_then_plan_refuses_th
                 rule: DedupeRule {
                     description: "a column the source does not have",
                     settings: "newest_by = \"read_at\"",
-                    expected_error: "newest_by column read_at is not written to the table",
+                    expected_error: "newest_by column \"read_at\" is not a column of the table",
                     expected_plan: "",
                 },
                 expected_tables: "0",

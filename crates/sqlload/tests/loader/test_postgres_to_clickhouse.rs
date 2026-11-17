@@ -50,7 +50,7 @@ const PUBLISH_PATH: &str = "SELECT toString(if((toUInt32(splitByChar('.', versio
 /// Whether every finished delta insert into a monthly-partitioned table was ordered by its partition key, and none into an unpartitioned one.
 const SORTED_DELTAS: &str = r"SELECT toString(countIf(partitioned AND NOT sorted) = 0 AND countIf(partitioned AND sorted) > 0 AND countIf(NOT partitioned AND sorted) = 0) FROM (SELECT match(query, '^INSERT INTO `raw`.`app__(accounts|events|visits|views|pings|days|ordered_days|versions)__') AS partitioned, query LIKE '% ORDER BY toYYYYMM(%' AS sorted FROM system.query_log WHERE type = 'QueryFinish' AND query LIKE 'INSERT INTO `raw`.%\_swap` (%')";
 
-/// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one, nothing for the rest.
+/// The tables' settings: monthly partitions for the windowed and merged tables, a sorting key for the merged one and for an append one whose `unique_key` names no column (unused, as it has its own `order_by`), nothing for the rest.
 const TABLES: &str = r#"
 [sources.app.tables."public.accounts"]
 write_strategy = "merge"
@@ -109,6 +109,8 @@ cursor_start = "2026-10-01"
 write_strategy = "append"
 cursor_column = "at"
 append_cursor_inclusive = false
+unique_key = "click_id"
+order_by = "id"
 
 [sources.app.tables."public.kinds"]
 write_strategy = "replace"
@@ -226,6 +228,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_clickhouse_then_each_strat
                 source_change: "INSERT INTO public.clicks VALUES (2, '2026-11-02 00:00:00+00');",
                 check_query: "SELECT toString(count()) || '/' || toString(uniqExact(id)) FROM raw.app__clicks",
                 expected_result: "2/2",
+            },
+            LoadRunTestCase {
+                description: "an append table with its own order_by sorts by it, so its unused unique_key is not checked against its columns",
+                source_change: "",
+                check_query: "SELECT trim(BOTH '()' FROM sorting_key) FROM system.tables WHERE database = 'raw' AND name = 'app__clicks'",
+                expected_result: "id",
             },
             LoadRunTestCase {
                 description: "replace mirrors deletes in the source by exchanging a whole table in, keeps hashed values, and the rows sent unpartitioned are partitioned before the swap",

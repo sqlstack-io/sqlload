@@ -310,6 +310,82 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
+            description: "a unique_key naming no column, in another case, stops the plan with the nearest column in both spellings",
+            setup: "CREATE TABLE public.items (\"RecordId\" int8, \"RecordUpdDate\" timestamptz);
+                    INSERT INTO public.items VALUES (1, '2026-11-01');",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"recordid\"]\n",
+            runs: &[ScenarioRun {
+                expected_error: "unique_key column \"recordid\" is not a column of the table; did you mean RecordId (loads as record_id)?",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a unique_key naming no column at all stops the plan instead of failing the load in the warehouse",
+            setup: "CREATE TABLE public.items (\"RecordId\" int8, \"RecordUpdDate\" timestamptz);
+                    INSERT INTO public.items VALUES (1, '2026-11-01');",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"nosuchcol\"]\n",
+            runs: &[ScenarioRun {
+                expected_error: "unique_key column \"nosuchcol\" is not a column of the table",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a misspelled cursor_column is named as one, not as a column the load drops",
+            setup: "CREATE TABLE public.items (\"RecordId\" int8, \"RecordUpdDate\" timestamptz);
+                    INSERT INTO public.items VALUES (1, '2026-11-01');",
+            settings: "write_strategy = \"append\"\ncursor_column = \"recordupddate\"\n",
+            runs: &[ScenarioRun {
+                expected_error: "cursor_column column \"recordupddate\" is not a column of the table; did you mean RecordUpdDate (loads as record_upd_date)?",
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
+            expected_result: "0",
+        },
+        ScenarioTestCase {
+            description: "a source's replace_key that a table's own strategy doesn't use is not checked against that table",
+            setup: "CREATE TABLE public.customers (id int8 PRIMARY KEY, name text);
+                    INSERT INTO public.customers VALUES (1, 'a');",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"batch_id\"]\n[sources.app.tables.\"public.customers\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n",
+            runs: &[OK],
+            check_query: "SELECT string_agg(id || ':' || name, ',') FROM raw.app__customers",
+            expected_result: "1:a",
+        },
+        ScenarioTestCase {
+            description: "a table naming no column is checked only when it is selected, so loading another table of its source passes",
+            setup: "CREATE TABLE public.orders (id int8);
+                    CREATE TABLE public.audit (id int8);
+                    INSERT INTO public.orders VALUES (1), (2);",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.audit\"]\nwrite_strategy = \"merge\"\nunique_key = [\"nosuchcol\"]\n",
+            runs: &[ScenarioRun {
+                select: &["public.orders"],
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__orders",
+            expected_result: "2",
+        },
+        ScenarioTestCase {
+            description: "new_tables = skip: a loaded table whose setting names no column stops the plan instead of being skipped as new",
+            setup: "CREATE TABLE public.orders (id int8);
+                    CREATE TABLE public.events (id int8, updated_at timestamptz);
+                    INSERT INTO public.orders VALUES (1);
+                    INSERT INTO public.events VALUES (1, '2026-11-01');",
+            settings: "include = [\"public.*\"]\nwrite_strategy = \"replace\"\nnew_tables = \"skip\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    settings: "[sources.app.tables.\"public.events\"]\nwrite_strategy = \"append\"\ncursor_column = \"updatd_at\"\n",
+                    expected_error: "cursor_column column \"updatd_at\" is not a column of the table; did you mean updated_at?",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__events",
+            expected_result: "1",
+        },
+        ScenarioTestCase {
             description: "two tables snake_case loads into one table stop the plan, naming both",
             setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
             settings: "write_strategy = \"replace\"\n",
