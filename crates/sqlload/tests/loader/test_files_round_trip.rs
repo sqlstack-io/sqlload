@@ -154,7 +154,7 @@ fn given_a_files_target_left_in_an_odd_state_when_a_files_source_loads_into_it_a
                     "{\"commits\":{\"crashed.00001\":{\"\":[[\"SOURCEday=2026-11-03/part-00000.parquet\",\"v1\"]]}}}",
                 ),
             ],
-            expected_state: "8|2 records:2 markers:crashed.00001=aborted",
+            expected_state: "8|2 records:2 markers:pending/crashed.00001=writing,decided/crashed.00001=aborted",
             ..PLANTED
         },
         PlantedTestCase {

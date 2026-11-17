@@ -170,10 +170,7 @@ pub(crate) async fn run_planted(
     };
     add(two_days()?).await?;
     run_once(&text, &destinations, &PlanOptions::default()).await?;
-    let (records, markers) = (
-        folder("out/orders/_sqlload/loaded/")?,
-        folder("out/orders/_sqlload/pending/")?,
-    );
+    let records = folder("out/orders/_sqlload/loaded/")?;
     for record in list_files(&records).await.map_err(failed)? {
         let body = read_file(&records, &record.relative_key)
             .await
@@ -209,16 +206,19 @@ pub(crate) async fn run_planted(
     .await
     .err();
     let mut marked: Vec<String> = Vec::new();
-    for marker in list_files(&markers).await.map_err(failed)? {
-        let body = read_file(&markers, &marker.relative_key)
-            .await
-            .map_err(failed)?;
-        let phase = String::from_utf8_lossy(&body)
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        marked.push(format!("{}={phase}", marker.relative_key));
+    for kind in ["pending", "decided"] {
+        let markers = folder(&format!("out/orders/_sqlload/{kind}/"))?;
+        for marker in list_files(&markers).await.map_err(failed)? {
+            let body = read_file(&markers, &marker.relative_key)
+                .await
+                .map_err(failed)?;
+            let phase = String::from_utf8_lossy(&body)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            marked.push(format!("{kind}/{}={phase}", marker.relative_key));
+        }
     }
     let count = list_files(&records).await.map_err(failed)?.len();
     let held = held_rows(&folder("out/")?).await?;

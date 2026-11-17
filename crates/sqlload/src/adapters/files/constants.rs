@@ -43,6 +43,9 @@ pub const LOADED_SUFFIX: &str = ".json";
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
+/// The folder below a table's folder holding how each commit of a load ended: `replacing` once the load committed its files, `aborted` once another load repaired it. Each is created only if absent, so of a load committing late and a load repairing it, exactly one decides.
+pub const DECIDED_FOLDER: &str = "_sqlload/decided/";
+
 /// The most a `single_file` commit holds in memory across its open files (2 GiB); each file is stored in one put at the commit, well under S3's 5 GiB limit for one put.
 pub const SINGLE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
 

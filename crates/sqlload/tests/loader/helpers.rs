@@ -1182,25 +1182,27 @@ fn written_summary(
     format!("{}{}", described.join("; "), notes.concat())
 }
 
-/// The pending markers left in the table folder: of unfinished loads, and `aborted` tombstones of repaired ones.
+/// The loads the table folder's markers name: unfinished ones, and repaired ones whose `aborted` tombstone (in `_sqlload/decided/`, beside the pending marker) holds.
 async fn pending_markers(table: &Location) -> Result<(usize, usize), String> {
-    let markers = Location {
-        store: table.store.clone(),
-        prefix: format!("{}_sqlload/pending/", table.prefix),
-    };
-    let folder = open_folder(&markers).map_err(|error| error.to_string())?;
-    let markers = list_files(&folder)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut aborted = 0;
-    for file in &markers {
-        let text = read_file(&folder, &file.relative_key)
+    let mut aborted_by_load: BTreeMap<String, bool> = BTreeMap::new();
+    for kind in ["pending", "decided"] {
+        let markers = Location {
+            store: table.store.clone(),
+            prefix: format!("{}_sqlload/{kind}/", table.prefix),
+        };
+        let folder = open_folder(&markers).map_err(|error| error.to_string())?;
+        for file in list_files(&folder)
             .await
-            .map_err(|error| error.to_string())?;
-        aborted += usize::from(text.starts_with(b"aborted"));
+            .map_err(|error| error.to_string())?
+        {
+            let text = read_file(&folder, &file.relative_key)
+                .await
+                .map_err(|error| error.to_string())?;
+            aborted_by_load.insert(file.relative_key, text.starts_with(b"aborted"));
+        }
     }
-    let pending = markers.len() - aborted;
-    Ok((pending, aborted))
+    let aborted = aborted_by_load.values().filter(|aborted| **aborted).count();
+    Ok((aborted_by_load.len() - aborted, aborted))
 }
 
 /// Run a files target scenario on fresh `public` and `sales` schemas and a fresh folder: each run's plan and error are checked, `apply` must print nothing, and the written files are read back; returns the summary and the `public.orders` table folder.

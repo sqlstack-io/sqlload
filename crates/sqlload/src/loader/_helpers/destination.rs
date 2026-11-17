@@ -7,8 +7,8 @@ use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
-use crate::adapters::files::main::clear_pending::clear_pending;
 use crate::adapters::files::main::close_writer::close_writer;
+use crate::adapters::files::main::commit_replaced::commit_replaced;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::newest_load_files::newest_load_files;
 use crate::adapters::files::main::open_writer::open_writer;
@@ -24,7 +24,6 @@ use crate::adapters::files::models::{FilesWriter, WriterRequest};
 use crate::adapters::files::models::{PartitionFolder, PendingPhase, PendingRun, ReplacedFiles};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::delete_files::delete_files;
-use crate::file_store::main::write_file::write_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::NANOSECOND_SCALE;
 use crate::files_source::constants::{
@@ -48,14 +47,12 @@ use crate::project::models::WriteStrategy;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn, TableAction};
-use crate::store_paths::models::Location;
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
 use arrow_array::RecordBatch;
-use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
@@ -609,7 +606,7 @@ pub(crate) fn commit_deletes(
     keys
 }
 
-/// Once the load still holds the table's lease in `table_folder` (extending it), record the replaced files (and a logged table's run record) in the marker, which commits the files; write the run record, delete the replaced files, then the marker, so a stop in between is finished by the next plan or load.
+/// Once the load still holds the table's lease in `table_folder` (extending it), commit the files: record what they replace, then replace it.
 pub(crate) async fn replace_files(
     (folder, (table_folder, lease)): (&OpenFolder, (&OpenFolder, &Lease)),
     file_id: &str,
@@ -618,19 +615,7 @@ pub(crate) async fn replace_files(
     keep_lease(table_folder, lease, lease_now())
         .await?
         .map_err(LoaderError::Invalid)?;
-    mark_pending(folder, file_id, PendingPhase::Replacing, (keys, run)).await?;
-    if let Some(run) = run {
-        let records = OpenFolder {
-            store: folder.store.clone(),
-            location: Location {
-                store: folder.location.store.clone(),
-                prefix: run.prefix.clone(),
-            },
-        };
-        write_file(&records, &run.name, Bytes::from(run.json.clone())).await?;
-    }
-    delete_files(folder, keys).await?;
-    Ok(clear_pending(folder, file_id).await?)
+    Ok(commit_replaced(folder, file_id, (keys, run)).await?)
 }
 
 impl Publisher {

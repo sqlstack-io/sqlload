@@ -7,9 +7,7 @@ use futures_util::TryStreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 
-use crate::adapters::files::constants::{
-    LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, PENDING_FOLDER, STAGED_FOLDER_MARK,
-};
+use crate::adapters::files::constants::{LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, STAGED_FOLDER_MARK};
 use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -124,10 +122,10 @@ pub(crate) async fn carry_over(
     Ok(())
 }
 
-/// The key below the table folder of a listed file the swap keeps: not replaced by the load, and not a pending marker.
+/// The key below the table folder of a listed file the swap keeps: one the load doesn't replace. Markers come too: a tombstone is a decided marker and the pending marker beside it.
 fn kept_key(location: &ObjectPath, prefix: &str, replaced: &BTreeSet<String>) -> Option<String> {
     let key = location.as_ref().strip_prefix(prefix)?;
-    (!replaced.contains(key) && !key.starts_with(PENDING_FOLDER)).then(|| key.to_owned())
+    (!replaced.contains(key)).then(|| key.to_owned())
 }
 
 /// Copy one file by hard link, or by its bytes where that fails; one already there is kept.

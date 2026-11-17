@@ -1,6 +1,6 @@
 pub mod check_window;
-pub mod clear_pending;
 pub mod close_writer;
+pub mod commit_replaced;
 pub mod cursor_maximum;
 pub mod fit_live_types;
 pub mod folder_conflict;

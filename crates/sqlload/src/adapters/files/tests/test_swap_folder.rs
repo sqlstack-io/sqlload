@@ -23,18 +23,21 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
 -> Result<(), String> {
     let test_cases = [
         SwapFolderTestCase {
-            description: "the run log and a file beside the data are carried over; pending markers and replaced files are not",
+            description: "the run log, a tombstone's two markers and a file beside the data are carried over; replaced files are not",
             live: &[
                 "part-old-0.csv",
                 "part-old-1.csv",
                 "_sqlload/runs/r1.json",
                 "_sqlload/pending/crashed",
+                "_sqlload/decided/crashed",
                 "README.txt",
             ],
             replaced: &["part-old-0.csv", "part-old-1.csv"],
             staged: &["part-new-0.csv", "_sqlload/runs/r2.json"],
             expected_live: &[
                 "README.txt",
+                "_sqlload/decided/crashed",
+                "_sqlload/pending/crashed",
                 "_sqlload/runs/r1.json",
                 "_sqlload/runs/r2.json",
                 "part-new-0.csv",

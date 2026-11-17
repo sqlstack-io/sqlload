@@ -234,3 +234,20 @@ pub(crate) struct CompactTestCase {
     /// Live record keys after repair, by whether each is a merged one.
     pub(crate) expected_merged: &'static [bool],
 }
+
+/// A load that checked its lease and then stalled before committing its files, while the table may be repaired by another load.
+pub(crate) struct StalledCommitTestCase {
+    pub(crate) description: &'static str,
+    /// How many times another load repairs the table before the stalled load resumes.
+    pub(crate) repairs: usize,
+    /// How many loads list the table before the stalled load resumes and commits, but repair it only after.
+    pub(crate) repairs_listed_before_commit: usize,
+    /// How many `aborted` decisions are created after the commit, as by a repair that stopped while withdrawing it; one more repair follows in every case.
+    pub(crate) aborted_after_commit: usize,
+    /// Whether the resumed commit fails.
+    pub(crate) expected_failed: bool,
+    /// Files below the table folder afterwards.
+    pub(crate) expected_left: &'static [&'static str],
+    /// Decided markers left afterwards (a given-up load's stays until it expires).
+    pub(crate) expected_decided: &'static [&'static str],
+}
