@@ -600,7 +600,7 @@ fn unknown_setting_columns(
     problems
 }
 
-/// The problems of `unknown`, by the setting each is about, for the settings `spec` uses: a `unique_key` when the table merges, its target sorts by the key or it follows changes; its `replace_key`, `newest_by` and cursor once `build_spec` kept them (it drops a source's that the table's strategy doesn't use); and every layout setting.
+/// The problems of `unknown`, by the setting each is about, for the settings `spec` uses: a `unique_key` when the table merges, follows changes, or sorts by the key on a target that does so when no `order_by` is set; its `replace_key`, `newest_by` and cursor once `build_spec` kept them (it drops a source's that the table's strategy doesn't use); and every layout setting.
 fn used_setting_problems(spec: &TableSpec, unknown: Vec<(&'static str, String)>) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     for (setting, problem) in unknown {
@@ -609,7 +609,8 @@ fn used_setting_problems(spec: &TableSpec, unknown: Vec<(&'static str, String)>)
                 !spec.unique_key.is_empty()
                     && (spec.strategy == WriteStrategy::Merge
                         || spec.cdc.is_some()
-                        || sql_adapter(spec.warehouse).sorts_by_unique_key())
+                        || (sql_adapter(spec.warehouse).sorts_by_unique_key()
+                            && spec.layout.order_by.as_ref().is_none_or(Vec::is_empty)))
             }
             "replace_key" => !spec.replace_key.is_empty(),
             "newest_by" => !spec.newest_by.is_empty(),

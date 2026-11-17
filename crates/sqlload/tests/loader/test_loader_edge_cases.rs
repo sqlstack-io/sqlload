@@ -368,6 +368,24 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "2",
         },
         ScenarioTestCase {
+            description: "new_tables = skip: a loaded table whose setting names no column stops the plan instead of being skipped as new",
+            setup: "CREATE TABLE public.orders (id int8);
+                    CREATE TABLE public.events (id int8, updated_at timestamptz);
+                    INSERT INTO public.orders VALUES (1);
+                    INSERT INTO public.events VALUES (1, '2026-11-01');",
+            settings: "include = [\"public.*\"]\nwrite_strategy = \"replace\"\nnew_tables = \"skip\"\n",
+            runs: &[
+                OK,
+                ScenarioRun {
+                    settings: "[sources.app.tables.\"public.events\"]\nwrite_strategy = \"append\"\ncursor_column = \"updatd_at\"\n",
+                    expected_error: "cursor_column column \"updatd_at\" is not a column of the table; did you mean updated_at?",
+                    ..OK
+                },
+            ],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__events",
+            expected_result: "1",
+        },
+        ScenarioTestCase {
             description: "two tables snake_case loads into one table stop the plan, naming both",
             setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
             settings: "write_strategy = \"replace\"\n",
