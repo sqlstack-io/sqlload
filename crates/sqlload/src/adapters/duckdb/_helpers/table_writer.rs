@@ -1,8 +1,9 @@
-//! DuckDB's write session: Arrow appends, in one transaction per batch when the batch goes straight into the table or a build table.
+//! DuckDB's write session: Arrow appends, in one transaction per batch when the batch goes straight into the table or a build table, and checkpoints under the memory budget.
 
 use arrow_array::RecordBatch;
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
+use crate::adapters::duckdb::constants::CHECKPOINT_STATEMENT;
 use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::duckdb::main::_append_batch::append_batch;
@@ -10,6 +11,9 @@ use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::column_types::main::is_variant::is_variant;
 use crate::loader::errors::LoaderError;
+use crate::memory_budget::main::large_values::large_values;
+use crate::memory_budget::models::DuckDbShare;
+use std::sync::atomic::Ordering;
 
 impl TableWriter for DuckDbWriter {
     fn writes_directly(&self) -> bool {
@@ -22,6 +26,18 @@ impl TableWriter for DuckDbWriter {
         batch: RecordBatch,
     ) -> Result<(), LoaderError> {
         let into = target.staging.unwrap_or(target.table);
+        if self.destination.memory.is_some()
+            && let Some(rows) = large_values(&batch)
+        {
+            let copies = match (target.staging, target.builds) {
+                (Some(_), false) => 2,
+                _ => 1,
+            };
+            let large: u64 = rows.iter().sum();
+            self.destination
+                .unflushed
+                .fetch_add(large * copies, Ordering::Relaxed);
+        }
         if (target.direct || target.builds) && !self.open_transaction {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
@@ -69,4 +85,23 @@ impl TableWriter for DuckDbWriter {
     }
 
     async fn remove_batch_files(&mut self, _target: &WriteTarget<'_>) {}
+
+    fn memory_share(&self) -> Option<DuckDbShare> {
+        self.destination.memory
+    }
+
+    async fn checkpoint(&mut self, force: bool) -> Result<(), LoaderError> {
+        let Some(share) = self.destination.memory else {
+            return Ok(());
+        };
+        let unflushed = self.destination.unflushed.load(Ordering::Relaxed);
+        if self.destination.motherduck || !(force || unflushed >= share.checkpoint_bytes) {
+            return Ok(());
+        }
+        execute_statements(&self.destination, vec![CHECKPOINT_STATEMENT.to_owned()]).await?;
+        self.destination
+            .unflushed
+            .fetch_sub(unflushed, Ordering::Relaxed);
+        Ok(())
+    }
 }

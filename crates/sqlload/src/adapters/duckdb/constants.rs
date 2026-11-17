@@ -20,3 +20,9 @@ pub const UNLOADED_FILE_ROWS: i64 = 1 << 32;
 pub const MOTHERDUCK_VERSION_QUERY: &str = "SELECT md_version()";
 /// The first DuckDB major version that shreds a VARIANT column's common fields into columns, so queries on them are fast.
 pub const SHREDDING_DUCKDB_MAJOR: u32 = 2;
+/// Writes what DuckDB holds since its last checkpoint to its file.
+pub const CHECKPOINT_STATEMENT: &str = "CHECKPOINT";
+/// The settings a DuckDB target opens with under a memory budget, before its `memory_limit` and `threads`: no automatic checkpoint, whose running out of memory would make the database unusable; SQLLoad checkpoints after each piece's commit as needed and after each table instead.
+pub const NO_AUTOCHECKPOINT: &str = "SET checkpoint_threshold = '1TB'";
+/// The suffix of a DuckDB file's write-ahead log.
+pub const WAL_SUFFIX: &str = ".wal";

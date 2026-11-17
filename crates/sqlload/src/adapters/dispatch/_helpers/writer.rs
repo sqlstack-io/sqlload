@@ -141,4 +141,20 @@ impl TableWriter for Writer {
             Writer::Files(writer) => writer.remove_batch_files(target).await,
         }
     }
+
+    fn memory_share(&self) -> Option<crate::memory_budget::models::DuckDbShare> {
+        match self {
+            #[cfg(feature = "duckdb")]
+            Writer::DuckDb(writer) => writer.memory_share(),
+            _ => None,
+        }
+    }
+
+    async fn checkpoint(&mut self, force: bool) -> Result<(), LoaderError> {
+        match self {
+            #[cfg(feature = "duckdb")]
+            Writer::DuckDb(writer) => writer.checkpoint(force).await,
+            _ => Ok(()),
+        }
+    }
 }
