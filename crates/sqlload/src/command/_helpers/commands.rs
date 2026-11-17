@@ -37,14 +37,14 @@ pub(crate) async fn check(config: &Config) -> Result<Vec<String>, String> {
 async fn current_plan(config: &Config, clients: &Clients) -> Result<Plan, String> {
     let topics = list_topics(config).await?;
     let streams = resolve_streams(config, &topics).map_err(|problems| problems.join("\n"))?;
-    let existing = read_existing(&clients.sql, config)
+    let existing = read_existing(&clients.warehouse, config)
         .await
         .map_err(|error| error.to_string())?;
     Ok(build_plan(
         config,
         &streams,
         &existing,
-        clients.auth.uses_key_pair(),
+        clients.warehouse.uses_key_pair(),
     ))
 }
 
@@ -121,7 +121,7 @@ fn object_line(object: &PlannedObject) -> String {
 pub(crate) async fn apply(config: &Config) -> Result<Vec<String>, String> {
     let clients = clients(config)?;
     let plan = current_plan(config, &clients).await?;
-    let created = apply_plan(&clients.sql, &plan)
+    let created = apply_plan(&clients.warehouse, &plan)
         .await
         .map_err(|error| error.to_string())?;
     let mut lines: Vec<String> = created

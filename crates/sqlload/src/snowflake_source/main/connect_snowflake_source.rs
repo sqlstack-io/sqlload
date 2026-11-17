@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::auth::models::Authenticator;
-use crate::config::models::DestinationConfig;
+use crate::config::models::SnowflakeConfig;
 use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -14,7 +14,7 @@ use crate::stage_api::models::DriverSession;
 
 /// Clients for the account, database, role and warehouse in `config`, unloading to `stage` (the user stage when `None`); nothing is sent until the first statement. Sessions run in UTC and statements may run as long as Snowflake allows.
 pub fn connect_snowflake_source(
-    config: DestinationConfig,
+    config: SnowflakeConfig,
     stage: Option<UnloadStage>,
 ) -> Result<SnowflakeReader, ApiError> {
     let http = build_http_client(&ConnectionCounter::default())?;

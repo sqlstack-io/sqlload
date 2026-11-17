@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use crate::config::constants::{MAX_NAME_LENGTH, S3_PATH_PLACEHOLDERS, STREAMING_REQUEST_LIMIT};
 use crate::config::errors::ConfigError;
-use crate::config::models::{Config, FileFormat, S3Config, StagingKind};
+use crate::config::models::{
+    Config, DatabricksConfig, Destination, FileFormat, LoadMethod, S3Config, StagingKind,
+};
 
 /// Reject settings that parse but cannot work together.
 pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
@@ -27,17 +29,51 @@ pub(crate) fn validate(config: &Config) -> Result<(), ConfigError> {
 }
 
 fn destination_problems(config: &Config) -> Vec<String> {
-    let destination = &config.destination;
-    [
-        ("destination.database", &destination.database),
-        ("destination.schema", &destination.schema),
-    ]
-    .into_iter()
-    .filter(|(_, name)| !is_identifier(name))
-    .map(|(key, name)| {
-        format!("{key} {name:?} must be an unquoted identifier (letters, digits, _ and $)")
-    })
-    .collect()
+    let names = match &config.destination {
+        Destination::Snowflake(snowflake) => [
+            ("destination.database", &snowflake.database),
+            ("destination.schema", &snowflake.schema),
+        ],
+        Destination::Databricks(databricks) => [
+            ("destination.catalog", &databricks.catalog),
+            ("destination.schema", &databricks.schema),
+        ],
+    };
+    let mut problems: Vec<String> = names
+        .into_iter()
+        .filter(|(_, name)| !is_identifier(name))
+        .map(|(key, name)| {
+            format!("{key} {name:?} must be an unquoted identifier (letters, digits, _ and $)")
+        })
+        .collect();
+    if let Destination::Databricks(databricks) = &config.destination {
+        problems.extend(databricks_problems(config, databricks));
+    }
+    problems
+}
+
+/// Databricks loads Parquet files with COPY INTO, or streams through Zerobus Ingest.
+fn databricks_problems(config: &Config, databricks: &DatabricksConfig) -> Vec<String> {
+    let staging = &config.staging;
+    let mut problems: Vec<String> = Vec::new();
+    if staging.kind == StagingKind::None && databricks.zerobus_endpoint.is_none() {
+        problems.push("staging.kind = \"none\" on Databricks streams through Zerobus Ingest and needs destination.zerobus_endpoint (https://<workspace-id>.zerobus.<region>.cloud.databricks.com)".to_owned());
+    }
+    if staging.kind != StagingKind::None && staging.format == FileFormat::Json {
+        problems.push("Databricks loads Parquet files; remove staging.format or set it to \"parquet\"".to_owned());
+    }
+    if staging.load == LoadMethod::Snowpipe {
+        problems.push("staging.load = \"snowpipe\" is for Snowflake; Databricks loads with COPY INTO".to_owned());
+    }
+    if let Some(s3) = &staging.s3 {
+        if s3.auto_ingest {
+            problems.push("staging.s3.auto_ingest is for Snowflake; Databricks loads with COPY INTO".to_owned());
+        }
+        if !s3.stage.is_empty() {
+            problems.push("staging.s3.stage is for Snowflake; Databricks reads the bucket through a Unity Catalog external location, so remove it".to_owned());
+        }
+    }
+    problems
 }
 
 fn source_problems(config: &Config) -> Vec<String> {
@@ -134,8 +170,9 @@ fn template_problems(config: &Config) -> Vec<String> {
 
 fn staging_problems(config: &Config) -> Vec<String> {
     let is_s3 = config.staging.kind == StagingKind::S3;
+    let snowflake = matches!(config.destination, Destination::Snowflake(_));
     let mut problems: Vec<String> = Vec::new();
-    if config.staging.format == FileFormat::Parquet && !is_s3 {
+    if snowflake && config.staging.format == FileFormat::Parquet && !is_s3 {
         problems.push("staging.format = \"parquet\" needs staging.kind = \"s3\"".to_owned());
     }
     if config.staging.max_in_flight == 0 {
@@ -159,13 +196,13 @@ fn staging_problems(config: &Config) -> Vec<String> {
             .staging
             .s3
             .as_ref()
-            .map(s3_problems)
+            .map(|s3| s3_problems(s3, snowflake))
             .unwrap_or_default(),
     });
     problems
 }
 
-fn s3_problems(s3: &S3Config) -> Vec<String> {
+fn s3_problems(s3: &S3Config, snowflake: bool) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     let path = &s3.path;
     let mut rest = path.as_str();
@@ -196,6 +233,8 @@ fn s3_problems(s3: &S3Config) -> Vec<String> {
     }
     let stage_parts: Vec<&str> = s3.stage.split('.').collect();
     match stage_parts.as_slice() {
+        _ if !snowflake => {}
+        [""] => problems.push("staging.s3.stage must name the external stage".to_owned()),
         [_] | [_, _, _] => {}
         _ => problems.push("staging.s3.stage must be NAME or DATABASE.SCHEMA.NAME".to_owned()),
     }

@@ -24,6 +24,10 @@ pub(crate) fn column_problems(
     columns: &[ColumnConfig],
     existing: &BTreeMap<String, String>,
 ) -> Vec<String> {
+    let existing: BTreeMap<String, &String> = existing
+        .iter()
+        .map(|(name, sql_type)| (name.to_ascii_uppercase(), sql_type))
+        .collect();
     columns
         .iter()
         .filter_map(

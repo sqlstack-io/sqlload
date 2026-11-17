@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::config::models::{Config, StagingKind};
+use crate::delivery::models::Warehouse;
 use crate::exporter::models::Clients;
 use crate::kafka::main::group_lag::group_lag;
 use crate::kafka::main::list_topics::list_topics;
@@ -20,8 +21,10 @@ pub async fn collect_status(
     let mut statuses: Vec<StreamStatus> = Vec::with_capacity(streams.len());
     for stream in streams {
         let lags = group_lag(config, &stream.consumer_group, &stream.topics).await?;
-        let channels = match config.staging.kind {
-            StagingKind::None => stream_channels(clients, &stream, &lags).await,
+        let channels = match (&clients.warehouse, config.staging.kind) {
+            (Warehouse::Snowflake(snowflake), StagingKind::None) => {
+                stream_channels(snowflake, &stream, &lags).await
+            }
             _ => BTreeMap::new(),
         };
         let partitions: Vec<PartitionStatus> = lags

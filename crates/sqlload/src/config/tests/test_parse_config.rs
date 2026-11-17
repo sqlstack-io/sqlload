@@ -118,6 +118,11 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             text: "[staging]\nkind = \"none\"\n[batching]\nmax_bytes = \"3 parsecs\"\n",
             expected_error: "unknown size unit",
         },
+        ParseConfigErrorTestCase {
+            description: "Snowflake s3 staging still needs its external stage",
+            text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"r\"\n",
+            expected_error: "staging.s3.stage must name the external stage",
+        },
     ];
     for test_case in &test_cases {
         let error = parse_config(&format!("{BASE}{}", test_case.text), &lookup)
@@ -153,7 +158,7 @@ fn given_destination_names_when_parsing_then_plain_names_are_upper_cased_and_oth
             )
         );
         let outcome = parse_config(&text, &lookup)
-            .map(|config| config.destination.schema)
+            .map(|config| config.destination.schema().to_owned())
             .unwrap_or_else(|error| error.to_string());
         assert!(
             outcome.contains(test_case.expected_outcome),

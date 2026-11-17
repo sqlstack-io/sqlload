@@ -16,7 +16,7 @@ use crate::config::_helpers::units::{
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub source: SourceConfig,
-    pub destination: DestinationConfig,
+    pub destination: Destination,
     pub staging: StagingConfig,
     #[serde(default)]
     pub batching: BatchingConfig,
@@ -83,11 +83,35 @@ pub enum StartFrom {
     Latest,
 }
 
-/// The warehouse records are written to.
+/// The warehouse records are written to, chosen by `kind`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Destination {
+    Snowflake(SnowflakeConfig),
+    Databricks(DatabricksConfig),
+}
+
+impl Destination {
+    /// The database (Snowflake) or catalog (Databricks) tables are created in.
+    pub fn database(&self) -> &str {
+        match self {
+            Self::Snowflake(snowflake) => &snowflake.database,
+            Self::Databricks(databricks) => &databricks.catalog,
+        }
+    }
+
+    pub fn schema(&self) -> &str {
+        match self {
+            Self::Snowflake(snowflake) => &snowflake.schema,
+            Self::Databricks(databricks) => &databricks.schema,
+        }
+    }
+}
+
+/// A Snowflake account.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DestinationConfig {
-    pub kind: DestinationKind,
+pub struct SnowflakeConfig {
     pub account: String,
     pub user: String,
     pub auth: AuthConfig,
@@ -101,11 +125,21 @@ pub struct DestinationConfig {
     pub base_url: Option<String>,
 }
 
-/// The supported warehouses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DestinationKind {
-    Snowflake,
+/// A Databricks workspace, signed in to with an OAuth machine-to-machine client (a service principal).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DatabricksConfig {
+    /// The workspace URL.
+    pub host: String,
+    pub client_id: String,
+    pub client_secret: Secret,
+    /// The SQL warehouse that runs `plan`, `apply` and `COPY INTO`.
+    pub warehouse_id: String,
+    pub catalog: String,
+    pub schema: String,
+    /// The workspace's Zerobus Ingest endpoint, `https://<workspace-id>.zerobus.<region>.cloud.databricks.com`; `staging.kind = "none"` writes through it.
+    #[serde(default)]
+    pub zerobus_endpoint: Option<String>,
 }
 
 /// How sqlload authenticates to the warehouse.
@@ -220,7 +254,8 @@ pub struct S3Config {
     #[serde(default)]
     pub prefix: String,
     pub region: String,
-    /// The external stage, `NAME` in the destination schema or `DATABASE.SCHEMA.NAME`.
+    /// Snowflake: the external stage, `NAME` in the destination schema or `DATABASE.SCHEMA.NAME`; unused on Databricks, which reads the bucket through a Unity Catalog external location.
+    #[serde(default)]
     pub stage: String,
     /// Folder template under `prefix`; see [`crate::config::constants::DEFAULT_S3_PATH`].
     #[serde(default = "defaults::s3_path")]
@@ -280,7 +315,8 @@ pub enum OversizedPolicy {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvelopeConfig {
-    #[serde(default = "defaults::columns")]
+    /// Empty until `parse_config` fills the destination's default columns.
+    #[serde(default)]
     pub columns: Vec<ColumnConfig>,
     #[serde(default = "defaults::error_logging")]
     pub error_logging: bool,
@@ -292,7 +328,7 @@ pub struct EnvelopeConfig {
 impl Default for EnvelopeConfig {
     fn default() -> Self {
         Self {
-            columns: defaults::columns(),
+            columns: Vec::new(),
             error_logging: defaults::error_logging(),
             time_zone: defaults::time_zone(),
         }

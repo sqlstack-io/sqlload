@@ -16,3 +16,13 @@ pub(crate) struct PipeFormatTestCase {
     /// Text the pipe's create statement must contain.
     pub(crate) expected_sql: &'static str,
 }
+
+pub(crate) struct DatabricksPlanTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) staging: &'static str,
+    /// Columns of an existing `shop__orders` table, as information_schema lists them.
+    pub(crate) existing_columns: &'static [(&'static str, &'static str)],
+    pub(crate) expected_objects: &'static [&'static str],
+    /// The create statements of the objects to create.
+    pub(crate) expected_sql: &'static [&'static str],
+}

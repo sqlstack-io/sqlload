@@ -20,7 +20,7 @@ use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
 use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
-use crate::config::models::{DestinationConfig, DestinationKind};
+use crate::config::models::SnowflakeConfig;
 use crate::databricks_source::main::databricks_reader::databricks_reader;
 use crate::databricks_source::main::read_catalog::read_catalog as read_databricks_catalog;
 use crate::databricks_source::main::read_rows::read_rows as read_databricks_rows;
@@ -942,7 +942,7 @@ fn plain_text_warning(
 fn snowflake_session(
     project: &ProjectConfig,
     source: &SourceConfig,
-) -> Result<DestinationConfig, LoaderError> {
+) -> Result<SnowflakeConfig, LoaderError> {
     let Some(ConnectionConfig::Snowflake {
         account,
         user,
@@ -959,8 +959,7 @@ fn snowflake_session(
             source.connection
         )));
     };
-    Ok(DestinationConfig {
-        kind: DestinationKind::Snowflake,
+    Ok(SnowflakeConfig {
         account: account.clone(),
         user: user.clone(),
         auth: auth.clone(),

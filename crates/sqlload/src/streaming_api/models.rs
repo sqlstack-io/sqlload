@@ -1,6 +1,6 @@
 use crate::auth::main::account_url::account_url;
 use crate::auth::models::Authenticator;
-use crate::config::models::DestinationConfig;
+use crate::config::models::SnowflakeConfig;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -102,7 +102,7 @@ impl StreamingClient {
     pub fn new(
         http: reqwest::Client,
         auth: Arc<Authenticator>,
-        destination: &DestinationConfig,
+        destination: &SnowflakeConfig,
     ) -> Self {
         Self {
             http,

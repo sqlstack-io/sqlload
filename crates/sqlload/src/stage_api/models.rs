@@ -1,7 +1,7 @@
 use crate::auth::main::account_url::account_url;
 use crate::auth::models::Authenticator;
 use crate::auth::models::Secret;
-use crate::config::models::DestinationConfig;
+use crate::config::models::SnowflakeConfig;
 use crate::http::errors::ApiError;
 use crate::stage_api::_helpers::stage_response::{parse_stage_downloads, parse_stage_info};
 use crate::stage_api::constants::{QUERY_IN_PROGRESS, SESSION_EXPIRED};
@@ -156,7 +156,7 @@ pub struct DriverSession {
     http: reqwest::Client,
     base_url: String,
     auth: Arc<Authenticator>,
-    destination: DestinationConfig,
+    destination: SnowflakeConfig,
     tokens: Mutex<Option<Tokens>>,
     /// Numbers the session's requests: Snowflake expects each to have its own.
     sequence: SequenceIds,
@@ -176,7 +176,7 @@ impl DriverSession {
     pub fn new(
         http: reqwest::Client,
         auth: Arc<Authenticator>,
-        destination: &DestinationConfig,
+        destination: &SnowflakeConfig,
     ) -> Self {
         Self {
             http,

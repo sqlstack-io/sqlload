@@ -76,3 +76,19 @@ pub(crate) struct WarnOnceTestCase {
     pub(crate) checks: usize,
     pub(crate) expected_warnings: &'static [&'static str],
 }
+
+pub(crate) struct ZerobusRecordTestCase {
+    pub(crate) description: &'static str,
+    /// Column names and types.
+    pub(crate) columns: &'static [(&'static str, &'static str)],
+    pub(crate) line: &'static str,
+    pub(crate) expected_record: &'static str,
+}
+
+pub(crate) struct ChunkRecordsTestCase {
+    pub(crate) description: &'static str,
+    /// Each record's size and text.
+    pub(crate) records: &'static [(u64, &'static str)],
+    pub(crate) limit: u64,
+    pub(crate) expected_requests: &'static [&'static [&'static str]],
+}

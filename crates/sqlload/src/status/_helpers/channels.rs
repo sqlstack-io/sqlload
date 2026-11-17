@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::exporter::models::Clients;
+use crate::delivery::models::SnowflakeClients;
 use crate::kafka::models::PartitionLag;
 use crate::naming::models::Stream;
 use crate::status::constants::NOT_FOUND;
@@ -10,7 +10,7 @@ use crate::streaming_api::models::ChannelStatus;
 
 /// Channel status for every partition of `stream`; empty before the first row creates the streaming pipe.
 pub(crate) async fn stream_channels(
-    clients: &Clients,
+    clients: &SnowflakeClients,
     stream: &Stream,
     lags: &[PartitionLag],
 ) -> BTreeMap<String, ChannelStatus> {

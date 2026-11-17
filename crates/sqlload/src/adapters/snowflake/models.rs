@@ -1,7 +1,7 @@
 use crate::adapters::contract::models::TableName;
 use crate::auth::models::Authenticator;
 use crate::column_types::models::ColumnType;
-use crate::config::models::{AuthConfig, DestinationConfig};
+use crate::config::models::{AuthConfig, SnowflakeConfig};
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{DataFile, FilesEncoding, SourceFormat, StoredRead};
 use crate::loader::errors::LoaderError;
@@ -31,7 +31,7 @@ pub struct SnowflakeDestination {
     pub stage_checks: Arc<Mutex<BTreeMap<String, Result<bool, StepFailure>>>>,
     /// What a streaming client for this account needs.
     pub auth: Arc<Authenticator>,
-    pub config: DestinationConfig,
+    pub config: SnowflakeConfig,
 }
 
 /// The route a connection's `load_method` sets.

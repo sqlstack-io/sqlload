@@ -1,9 +1,10 @@
 //! Parse configuration text.
 
+use crate::config::_helpers::defaults::destination_defaults;
 use crate::config::_helpers::interpolate::interpolate_value;
 use crate::config::_helpers::validate::validate;
 use crate::config::errors::ConfigError;
-use crate::config::models::Config;
+use crate::config::models::{Config, Destination};
 
 /// Parse and validate TOML text, resolving `${ENV:NAME}` through `lookup`.
 pub fn parse_config(
@@ -13,14 +14,28 @@ pub fn parse_config(
     let mut value: toml::Value =
         toml::from_str(text).map_err(|error| ConfigError::Syntax(error.to_string()))?;
     interpolate_value(&mut value, lookup).map_err(ConfigError::Interpolation)?;
+    destination_defaults(&mut value);
     let mut config: Config = value
         .try_into()
         .map_err(|error: toml::de::Error| ConfigError::Syntax(error.to_string()))?;
     validate(&config)?;
-    config.destination.database = config.destination.database.to_ascii_uppercase();
-    config.destination.schema = config.destination.schema.to_ascii_uppercase();
-    if let Some(s3) = config.staging.s3.as_mut() {
-        s3.stage = s3.stage.to_ascii_uppercase();
+    match &mut config.destination {
+        Destination::Snowflake(snowflake) => {
+            snowflake.database = snowflake.database.to_ascii_uppercase();
+            snowflake.schema = snowflake.schema.to_ascii_uppercase();
+            if let Some(s3) = config.staging.s3.as_mut() {
+                s3.stage = s3.stage.to_ascii_uppercase();
+            }
+        }
+        Destination::Databricks(databricks) => {
+            databricks.catalog = databricks.catalog.to_ascii_lowercase();
+            databricks.schema = databricks.schema.to_ascii_lowercase();
+            let naming = &mut config.naming;
+            naming.table_prefix = naming.table_prefix.to_ascii_uppercase();
+            for table in naming.map.values_mut().chain(naming.fallback.as_mut()) {
+                *table = table.to_ascii_uppercase();
+            }
+        }
     }
     Ok(config)
 }

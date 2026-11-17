@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::adapters::snowflake::constants::{LOADER_STATEMENT_TIMEOUT_SECS, SESSION_SCHEMA};
 use crate::adapters::snowflake::models::{SnowflakeAccount, SnowflakeDestination};
 use crate::auth::models::Authenticator;
-use crate::config::models::{DestinationConfig, DestinationKind};
+use crate::config::models::SnowflakeConfig;
 use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -16,8 +16,7 @@ use crate::stage_api::models::DriverSession;
 pub(in crate::adapters) fn connect_snowflake(
     account: SnowflakeAccount,
 ) -> Result<SnowflakeDestination, ApiError> {
-    let destination = DestinationConfig {
-        kind: DestinationKind::Snowflake,
+    let destination = SnowflakeConfig {
         account: account.account,
         user: account.user,
         auth: account.auth,

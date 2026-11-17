@@ -4,3 +4,5 @@ mod build_plan;
 mod helpers;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_databricks_plan.rs"]
+mod databricks_plan;
