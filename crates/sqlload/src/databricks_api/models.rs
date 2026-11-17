@@ -48,3 +48,20 @@ pub struct DirectoryEntry {
     /// When the file last changed, in milliseconds since the epoch; `None` for directories.
     pub last_modified_ms: Option<i64>,
 }
+
+/// One chunk of a statement's result as a short-lived link to its file: the chunk, the URL, and the headers the download must send (on Azure); never sent with the Databricks token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResultLink {
+    pub chunk_index: usize,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+}
+
+/// A finished statement whose result waits as Arrow stream files behind links: its id, its columns' names and SQL types (`type_text`), how many chunks it has, and the links that came with it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArrowResult {
+    pub statement_id: String,
+    pub columns: Vec<(String, String)>,
+    pub chunk_count: usize,
+    pub links: Vec<ResultLink>,
+}

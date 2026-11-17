@@ -307,3 +307,25 @@ pub(crate) fn camel_items() -> Result<Vec<(String, bytes::Bytes)>, String> {
         ),
     )])
 }
+
+/// A project reading `marts.*` of the fake's catalog into a DuckDB file; the connection has no volume, which only a target needs.
+pub(crate) fn databricks_source_project(
+    fake: &sqlload_testkit::fake_databricks::models::FakeDatabricks,
+    database: &std::path::Path,
+) -> String {
+    format!(
+        "[connections.dbx]\nkind = \"databricks\"\nhost = \"{}\"\nclient_id = \"id\"\nclient_secret = \"secret\"\nwarehouse_id = \"wh\"\ncatalog = \"{}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.marts]\nkind = \"databricks\"\nconnection = \"dbx\"\ninclude = [\"marts.*\"]\n\n[sources.marts.tables.\"marts.orders\"]\ndescription = \"Orders.\"\ncursor_column = \"id\"\nwrite_strategy = \"append\"\n",
+        fake.base_url,
+        sqlload_testkit::fake_databricks::constants::FAKE_CATALOG,
+        database.display(),
+    )
+}
+
+/// The three orders of 1 November and the two of 2 November.
+pub(crate) fn all_orders() -> Vec<serde_json::Value> {
+    [
+        crate::bigquery_helpers::first_orders(),
+        crate::bigquery_helpers::later_orders(),
+    ]
+    .concat()
+}

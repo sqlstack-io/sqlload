@@ -1,12 +1,10 @@
 //! Run one SQL statement on the SQL warehouse.
 
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::databricks_api::_helpers::requests::{json_with_retries, send};
-use crate::databricks_api::_helpers::statements::{
-    StatementState, chunk_rows, column_names, statement_state,
-};
-use crate::databricks_api::constants::{POLL_INTERVAL, STATEMENTS_PATH, WAIT_TIMEOUT};
+use crate::databricks_api::_helpers::requests::json_with_retries;
+use crate::databricks_api::_helpers::statements::{chunk_rows, column_names, run_statement};
+use crate::databricks_api::constants::WAIT_TIMEOUT;
 use crate::databricks_api::models::DatabricksClient;
 use crate::http::errors::ApiError;
 use crate::sql_api::models::SqlRows;
@@ -24,21 +22,7 @@ pub async fn execute_statement(
         "disposition": "INLINE",
         "format": "JSON_ARRAY",
     });
-    let url = format!("{}{STATEMENTS_PATH}", client.host);
-    let mut response: Value = send(client, |http| http.post(&url).json(&body))
-        .await?
-        .json()
-        .await?;
-    while let StatementState::Running(id) = statement_state(&response)? {
-        tokio::time::sleep(POLL_INTERVAL).await;
-        response = match json_with_retries(client, &format!("{url}/{id}")).await {
-            Ok(polled) => polled,
-            Err(error) => {
-                cancel(client, &url, &id).await;
-                return Err(error);
-            }
-        };
-    }
+    let response = run_statement(client, &body).await?;
     let mut rows = SqlRows {
         columns: column_names(&response),
         rows: Vec::new(),
@@ -50,13 +34,5 @@ pub async fn execute_statement(
             return Ok(rows);
         };
         chunk = json_with_retries(client, &format!("{}{next}", client.host)).await?;
-    }
-}
-
-/// Ask the warehouse to cancel a statement this client stopped waiting for, so it does not keep running after the caller has failed; a statement that finished meanwhile is not undone, and a cancel that fails only warns.
-async fn cancel(client: &DatabricksClient, url: &str, id: &str) {
-    let cancel = format!("{url}/{id}/cancel");
-    if let Err(error) = send(client, |http| http.post(&cancel)).await {
-        tracing::warn!(%error, statement_id = id, "cannot cancel a Databricks statement no longer polled");
     }
 }

@@ -105,6 +105,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         SourceKind::Snowflake => (&["snowflake"], "snowflake"),
         SourceKind::Odbc => (&["odbc"], "odbc"),
         SourceKind::BigQuery => (&["bigquery"], "bigquery"),
+        SourceKind::Databricks => (&["databricks"], "databricks"),
         SourceKind::Files => (&["s3", "filesystem", "sftp"], "s3, filesystem or sftp"),
         SourceKind::Python => (&[], "any"),
         SourceKind::GoogleSheets => (&["google_sheets"], "google_sheets"),
@@ -222,11 +223,11 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     let queries = source.tables.values().any(|table| table.sql.is_some());
     if !matches!(
         source.kind,
-        SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery
+        SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery | SourceKind::Databricks
     ) && queries
     {
         problems.push(format!(
-            "{place} sql is for kind = \"snowflake\", \"odbc\" and \"bigquery\""
+            "{place} sql is for kind = \"snowflake\", \"odbc\", \"bigquery\" and \"databricks\""
         ));
     }
     if source.kind != SourceKind::BigQuery && source.project.is_some() {
@@ -268,11 +269,15 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
     }
     let selects = matches!(
         source.kind,
-        SourceKind::Postgres | SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery
+        SourceKind::Postgres
+            | SourceKind::Snowflake
+            | SourceKind::Odbc
+            | SourceKind::BigQuery
+            | SourceKind::Databricks
     );
     if !selects && sheet_settings(source).any(|settings| settings.row_filter.is_some()) {
         problems.push(format!(
-            "{place} where is for kind = \"postgres\", \"snowflake\", \"odbc\" and \"bigquery\", whose tables SQLLoad reads with a SELECT"
+            "{place} where is for kind = \"postgres\", \"snowflake\", \"odbc\", \"bigquery\" and \"databricks\", whose tables SQLLoad reads with a SELECT"
         ));
     }
     problems.extend(
@@ -297,10 +302,14 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
         | SourceKind::PostgresCdc
         | SourceKind::Snowflake
         | SourceKind::Odbc
-        | SourceKind::BigQuery => {
+        | SourceKind::BigQuery
+        | SourceKind::Databricks => {
             if source.include.is_empty() && !queries {
                 let tables = match source.kind {
-                    SourceKind::Snowflake | SourceKind::Odbc | SourceKind::BigQuery => {
+                    SourceKind::Snowflake
+                    | SourceKind::Odbc
+                    | SourceKind::BigQuery
+                    | SourceKind::Databricks => {
                         "; list tables in include, or give a table a sql query"
                     }
                     _ => "",

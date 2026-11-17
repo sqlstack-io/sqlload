@@ -32,6 +32,8 @@ pub enum LoaderError {
     WarehouseSource(#[from] SnowflakeSourceError),
     #[error(transparent)]
     BigQuerySource(#[from] crate::bigquery_source::errors::BigQuerySourceError),
+    #[error(transparent)]
+    DatabricksSource(#[from] crate::databricks_source::errors::DatabricksSourceError),
     #[cfg(feature = "odbc")]
     #[error(transparent)]
     Odbc(#[from] crate::odbc_source::errors::OdbcSourceError),
@@ -65,7 +67,10 @@ impl LoaderError {
             | Self::WarehouseSource(SnowflakeSourceError::Api(error))
             | Self::BigQuerySource(crate::bigquery_source::errors::BigQuerySourceError::Api(
                 error,
-            )) => Self::api_transient(error),
+            ))
+            | Self::DatabricksSource(
+                crate::databricks_source::errors::DatabricksSourceError::Api(error),
+            ) => Self::api_transient(error),
             Self::Store(store)
             | Self::Files(FilesError::Store(store))
             | Self::WarehouseSource(SnowflakeSourceError::Store(store))
