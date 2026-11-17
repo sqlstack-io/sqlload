@@ -1,6 +1,7 @@
 use bytes::Bytes;
 
 use crate::adapters::files::errors::FilesDestinationError;
+use crate::adapters::files::main::commit_replaced::commit_replaced;
 use crate::adapters::files::main::mark_pending::mark_pending;
 use crate::adapters::files::main::read_table_state::read_table_state;
 use crate::adapters::files::main::repair_table::repair_table;
@@ -10,7 +11,7 @@ use crate::adapters::files::tests::helpers::{
 };
 use crate::adapters::files::tests::test_types::{
     AbortedTestCase, CommittedRepairTestCase, CompactTestCase, LoadedRecordsTestCase,
-    RepairTestCase,
+    RepairTestCase, StalledCommitTestCase,
 };
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
@@ -361,6 +362,72 @@ fn given_more_records_than_the_limit_when_repairing_then_one_merged_record_holds
         assert_eq!(
             outcome?,
             (true, test_case.records, test_case.expected_merged.to_vec()),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_load_stalled_after_its_lease_check_when_another_load_repaired_the_table_then_its_commit_fails_without_deleting_anything()
+-> Result<(), String> {
+    let test_cases = [
+        StalledCommitTestCase {
+            description: "with no repair in between, the commit replaces the old file with its own",
+            repairs: 0,
+            expected_failed: false,
+            expected_left: &["day=2026-11-04/part-stalled.00001-0.parquet"],
+        },
+        StalledCommitTestCase {
+            description: "after another load repaired the table (deleting the stalled load's file), the resumed commit fails and the old file stays",
+            repairs: 1,
+            expected_failed: true,
+            expected_left: &["day=2026-11-04/part-old-0.parquet"],
+        },
+    ];
+    for test_case in test_cases {
+        let (folder, root) = scratch_folder()?;
+        let path = orders_path(Some(("day=", PartitionBy::Date)));
+        let outcome = block_on(async {
+            let failed = |error: FilesDestinationError| error.to_string();
+            let wrote = |error: crate::file_store::errors::StoreError| error.to_string();
+            mark_pending(&folder, "stalled.00001", PendingPhase::Writing, (&[], None))
+                .await
+                .map_err(failed)?;
+            for key in [
+                "day=2026-11-04/part-old-0.parquet",
+                "day=2026-11-04/part-stalled.00001-0.parquet",
+            ] {
+                write_file(&folder, key, Bytes::from_static(b"x"))
+                    .await
+                    .map_err(wrote)?;
+            }
+            for _ in 0..test_case.repairs {
+                let state = read_table_state(&folder, &path, None)
+                    .await
+                    .map_err(failed)?;
+                repair_table(&folder, (&state.pending, &state.records))
+                    .await
+                    .map_err(failed)?;
+            }
+            let replaced = ["day=2026-11-04/part-old-0.parquet".to_owned()];
+            let resumed = commit_replaced(&folder, "stalled.00001", (&replaced, None)).await;
+            let files = list_files(&folder).await.map_err(wrote)?;
+            let left: Vec<String> = files.into_iter().map(|file| file.relative_key).collect();
+            Ok::<_, String>((resumed.is_err(), left))
+        });
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(
+            outcome?,
+            (
+                test_case.expected_failed,
+                test_case
+                    .expected_left
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>()
+            ),
             "{}",
             test_case.description
         );

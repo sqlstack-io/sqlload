@@ -234,3 +234,14 @@ pub(crate) struct CompactTestCase {
     /// Live record keys after repair, by whether each is a merged one.
     pub(crate) expected_merged: &'static [bool],
 }
+
+/// A load that checked its lease and then stalled before committing its files, while the table may be repaired by another load.
+pub(crate) struct StalledCommitTestCase {
+    pub(crate) description: &'static str,
+    /// How many times another load repairs the table before the stalled load resumes.
+    pub(crate) repairs: usize,
+    /// Whether the resumed commit fails.
+    pub(crate) expected_failed: bool,
+    /// Files below the table folder afterwards.
+    pub(crate) expected_left: &'static [&'static str],
+}
