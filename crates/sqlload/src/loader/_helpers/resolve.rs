@@ -46,6 +46,7 @@ use crate::project::main::motherduck_path::motherduck_path;
 use crate::project::models::{
     ConfigLines, ConnectionConfig, ConstantColumns, JsonType, NewTables, NullCursor, PathsSetting,
     ProjectConfig, RenameSetting, SendMode, SourceConfig, SourceKind, TableOverride, TableSettings,
+    WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::schema_plan::models::SchemaPlan;
@@ -351,12 +352,12 @@ fn resolve_table(
     let mut problems = unknown_renames(context, overrides, &names);
     let loaded = renamed_table(table, &names);
     let name = |column: &str| setting_name(column, (&names, known), &rules);
-    problems.extend(unknown_setting_columns(
+    let unknown = unknown_setting_columns(
         context,
         (table, &names, compat),
-        overrides,
+        (overrides, &excluded),
         &name,
-    ));
+    );
     let overrides = loaded_overrides(overrides, &name);
     let source = SourceConfig {
         defaults: loaded_settings(&context.source.defaults, &name),
@@ -380,6 +381,7 @@ fn resolve_table(
     };
     match spec {
         Ok(mut spec) if problems.is_empty() => {
+            spec.setting_problems = used_setting_problems(&spec, unknown);
             spec.listed =
                 (context.source.kind != SourceKind::Python).then(|| Box::new(table.clone()));
             spec.names = names;
@@ -504,13 +506,13 @@ fn unknown_renames(
         .collect()
 }
 
-/// A problem for each column a setting of `table` names (its keys, cursor, `newest_by` and a ClickHouse layout's bare names; `checks` match ignoring case and are checked where they apply) that the table has under neither its source name nor its loaded one (`name`), nor as a constant or a column the load adds, with the nearest column in both spellings; a different case is a miss too. A Python table's columns, and those flattening or unnesting adds, are known only from its rows, so such a table is not checked here.
+/// Each setting and its problem for each column a setting of `table` names (its keys, cursor, `newest_by` and a ClickHouse layout's bare names; `checks` match ignoring case and are checked where they apply) that the table has under neither its source name nor its loaded one (`name`), nor as a constant, a column the load adds or an excluded column (which plan names as excluded), with the nearest column in both spellings; a different case is a miss too. A Python table's columns, and those flattening or unnesting adds, are known only from its rows, so such a table is not checked here.
 fn unknown_setting_columns(
     context: &SourceContext<'_>,
     (table, names, compat): (&SourceTable, &LoadedNames, Compat),
-    overrides: &TableOverride,
+    (overrides, excluded): (&TableOverride, &[(String, String)]),
     name: &dyn Fn(&str) -> String,
-) -> Vec<String> {
+) -> Vec<(&'static str, String)> {
     if context.source.kind == SourceKind::Python
         || table.columns.is_empty()
         || overrides.flatten.is_some()
@@ -547,7 +549,7 @@ fn unknown_setting_columns(
             true,
         ),
     ];
-    let mut named: Vec<(&str, &str)> = Vec::new();
+    let mut named: Vec<(&'static str, &str)> = Vec::new();
     for (setting, own, inherited, layout) in lists {
         for column in own.as_ref().or(inherited.as_ref()).into_iter().flatten() {
             if !layout || is_plain_name(column) {
@@ -566,7 +568,7 @@ fn unknown_setting_columns(
         .constant_columns
         .as_ref()
         .or(defaults.constant_columns.as_ref());
-    let mut problems: Vec<String> = Vec::new();
+    let mut problems: Vec<(&'static str, String)> = Vec::new();
     for (setting, column) in named {
         let known = column == PRIMARY_KEY_PLACEHOLDER
             || column.starts_with(SQLLOAD_PREFIX)
@@ -581,12 +583,41 @@ fn unknown_setting_columns(
                     .0
                     .keys()
                     .any(|constant| name(constant) == name(column))
-            });
+            })
+            || excluded
+                .iter()
+                .any(|(source, _)| name(source) == name(column));
         if !known {
-            problems.push(format!(
-                "{setting} column {column:?} is not a column of the table{}",
-                nearest_column_hint(column, names)
+            problems.push((
+                setting,
+                format!(
+                    "{setting} column {column:?} is not a column of the table{}",
+                    nearest_column_hint(column, names)
+                ),
             ));
+        }
+    }
+    problems
+}
+
+/// The problems of `unknown`, by the setting each is about, for the settings `spec` uses: a `unique_key` when the table merges, its target sorts by the key or it follows changes; its `replace_key`, `newest_by` and cursor once `build_spec` kept them (it drops a source's that the table's strategy doesn't use); and every layout setting.
+fn used_setting_problems(spec: &TableSpec, unknown: Vec<(&'static str, String)>) -> Vec<String> {
+    let mut problems: Vec<String> = Vec::new();
+    for (setting, problem) in unknown {
+        let used = match setting {
+            "unique_key" => {
+                !spec.unique_key.is_empty()
+                    && (spec.strategy == WriteStrategy::Merge
+                        || spec.cdc.is_some()
+                        || sql_adapter(spec.warehouse).sorts_by_unique_key())
+            }
+            "replace_key" => !spec.replace_key.is_empty(),
+            "newest_by" => !spec.newest_by.is_empty(),
+            "cursor_column" => spec.cursor.is_some(),
+            _ => true,
+        };
+        if used {
+            problems.push(problem);
         }
     }
     problems

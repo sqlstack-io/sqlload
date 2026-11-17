@@ -417,6 +417,7 @@ pub(crate) fn build_spec(
         ),
     );
     Ok(TableSpec {
+        setting_problems: Vec::new(),
         source_name: context.name.to_owned(),
         source_table: table.clone(),
         target: context.target.name.clone(),
@@ -531,21 +532,17 @@ pub(crate) fn build_spec(
         deletes,
         tombstones_of: overrides.tombstones_of.clone(),
         warehouse_source: match context.source.kind {
-            SourceKind::Odbc => Some(WarehouseSource {
-                system: ODBC_SOURCE,
-                sql: overrides.sql.clone(),
-                route: WarehouseRoute::Query,
-            }),
-            SourceKind::BigQuery => Some(WarehouseSource {
-                system: BIGQUERY_SOURCE,
-                sql: overrides.sql.clone(),
-                route: WarehouseRoute::Query,
-            }),
-            SourceKind::Databricks => Some(WarehouseSource {
-                system: DATABRICKS_SOURCE,
-                sql: overrides.sql.clone(),
-                route: WarehouseRoute::Query,
-            }),
+            kind @ (SourceKind::Odbc | SourceKind::BigQuery | SourceKind::Databricks) => {
+                Some(WarehouseSource {
+                    system: match kind {
+                        SourceKind::Odbc => ODBC_SOURCE,
+                        SourceKind::BigQuery => BIGQUERY_SOURCE,
+                        _ => DATABRICKS_SOURCE,
+                    },
+                    sql: overrides.sql.clone(),
+                    route: WarehouseRoute::Query,
+                })
+            }
             _ => warehouse_source(context.source, overrides),
         },
         row_filter: layered(&settings.row_filter, &defaults.row_filter)

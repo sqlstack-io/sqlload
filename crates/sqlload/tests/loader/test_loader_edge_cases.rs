@@ -346,6 +346,28 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
+            description: "a source's replace_key that a table's own strategy doesn't use is not checked against that table",
+            setup: "CREATE TABLE public.customers (id int8 PRIMARY KEY, name text);
+                    INSERT INTO public.customers VALUES (1, 'a');",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"batch_id\"]\n[sources.app.tables.\"public.customers\"]\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\n",
+            runs: &[OK],
+            check_query: "SELECT string_agg(id || ':' || name, ',') FROM raw.app__customers",
+            expected_result: "1:a",
+        },
+        ScenarioTestCase {
+            description: "a table naming no column is checked only when it is selected, so loading another table of its source passes",
+            setup: "CREATE TABLE public.orders (id int8);
+                    CREATE TABLE public.audit (id int8);
+                    INSERT INTO public.orders VALUES (1), (2);",
+            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.audit\"]\nwrite_strategy = \"merge\"\nunique_key = [\"nosuchcol\"]\n",
+            runs: &[ScenarioRun {
+                select: &["public.orders"],
+                ..OK
+            }],
+            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM raw.app__orders",
+            expected_result: "2",
+        },
+        ScenarioTestCase {
             description: "two tables snake_case loads into one table stop the plan, naming both",
             setup: "CREATE TABLE public.\"order-items\" (id int8); CREATE TABLE public.order_items (id int8);",
             settings: "write_strategy = \"replace\"\n",

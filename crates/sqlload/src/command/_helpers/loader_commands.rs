@@ -661,7 +661,11 @@ fn not_planned(plan: &ProjectPlan) -> usize {
         .iter()
         .filter(|table| table.schema.blocked.is_some())
         .map(TablePlan::outcome_name);
-    let named = plan.problem_names.iter().map(|(_, table)| table.clone());
+    let named = plan
+        .problem_names
+        .iter()
+        .filter(|(problem, _)| plan.problems.contains(problem))
+        .map(|(_, table)| table.clone());
     blocked
         .chain(named)
         .collect::<std::collections::BTreeSet<String>>()

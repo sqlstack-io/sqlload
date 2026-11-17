@@ -244,7 +244,7 @@ pub(crate) async fn plan_table(
     destination: &Destination,
     options: &PlanOptions,
 ) -> Result<TablePlan, LoaderError> {
-    let problems = python_problems(spec);
+    let problems = [python_problems(spec), spec.setting_problems.clone()].concat();
     if !problems.is_empty() {
         return Ok(blocked_table(spec, problems));
     }
