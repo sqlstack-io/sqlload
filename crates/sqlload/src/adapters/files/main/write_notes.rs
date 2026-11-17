@@ -6,7 +6,8 @@ use crate::store_paths::models::Location;
 
 /// What `mode` does to the existing files of the table in `folder`, for `plan`.
 pub fn write_notes(mode: &WriteMode, folder: &Location) -> Vec<String> {
-    let local = local_folder(folder).is_some();
+    let local =
+        local_folder(folder).is_some() && cfg!(any(target_os = "linux", target_os = "macos"));
     match mode {
         WriteMode::Append => vec!["new files are added; existing files are never changed".to_owned()],
         WriteMode::Changes(_) => vec![

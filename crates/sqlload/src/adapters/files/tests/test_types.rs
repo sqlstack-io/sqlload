@@ -230,6 +230,17 @@ pub(crate) struct RenameRaceTestCase {
     pub(crate) expected_parts: &'static [&'static str],
 }
 
+/// A stalled load's swap lands after another load took the table, before that load repairs it.
+pub(crate) struct LateSwapTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the stalled load's swap lands between the other load taking the lease and repairing.
+    pub(crate) swaps_after_take: bool,
+    /// Whether the other load's repair fails, having lost the lease.
+    pub(crate) expected_lost: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
 pub(crate) struct RemoveStagedTestCase {
     pub(crate) description: &'static str,
     /// Files below the table's parent folder before the cleanup.

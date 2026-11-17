@@ -521,7 +521,7 @@ impl Publisher {
                 let lease = take_lease(&live, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Transient)?;
-                let replaced = match files_to_replace(&live, &table, output).await {
+                let replaced = match files_to_replace((&live, &lease), &table, output).await {
                     Ok(replaced) => replaced,
                     Err(error) => {
                         give_back(&live, &lease).await;

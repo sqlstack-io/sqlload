@@ -55,6 +55,9 @@ pub const STAGED_FOLDER_MARK: &str = ".sqlload-";
 /// The length of a load id, a hyphenated UUID, as staging folder names end with it.
 pub const LOAD_ID_LENGTH: usize = 36;
 
+/// Added to a staging folder's name by releases before 0.63.0 for the old table they moved aside; a stopped load could leave one, which loads keep and warn about.
+pub const MOVED_ASIDE_SUFFIX: &str = "-old";
+
 /// The first line of a pending marker while the load writes its files.
 pub const PENDING_WRITING: &str = "writing";
 

@@ -148,18 +148,30 @@ table folder, carry over every file of the table folder that the load doesn't re
 `_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
 reader sees the old files or the new ones, never both. A hidden folder left by a stopped or failed
-load is deleted by the next load. A table at the root of the folder connection has no folder beside
+load is deleted by the next load. One ending in `-old`, which an earlier release left when it stopped
+while moving the old table aside, is kept with a warning, as it may hold the table's only copy. A table at the root of the folder connection has no folder beside
 it to swap, so it is replaced as in S3.
 
 From 0.63.0, a load checks that it still holds the table's lease right before that rename, and
-writes nothing in between. A load that takes the table moves every hidden folder other loads staged
-beside it away, in one rename each, before it reads the table. So a load that checked its lease,
-then paused past it while another load took the table, finds its hidden folder gone and fails at the
+writes nothing in between. A load that takes the table first moves every hidden folder other loads
+staged beside it away, in one rename each, then checks its own lease again before it repairs
+anything. A load that checked its lease, then paused past it while another load took the table,
+either swaps its table in before that move, or finds its hidden folder gone and fails at the
 rename, leaving the table as it was:
 
 ```text
 out/orders/: cannot swap the new table in: No such file or directory (os error 2)
 ```
+
+When its swap lands after the other load took the table, it carries that load's lease away with the
+old folder, so the other load stops before repairing, with an error a rerun clears:
+
+```text
+orders: lost the table's lease to load 3f9c…, as it was not refreshed for 10 minutes; stopped before deleting any files
+```
+
+This needs every process that writes the table on 0.63.0 or later: an earlier release recreates a
+missing hidden folder at the swap, and deletes other loads' hidden folders without moving them first.
 
 On a Linux filesystem that can't swap two folders in one rename, such as NFS, `replace` and
 `--reload` into a local folder fail rather than move the old folder aside in steps another load

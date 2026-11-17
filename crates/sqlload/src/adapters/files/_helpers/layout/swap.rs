@@ -7,7 +7,7 @@ use futures_util::TryStreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 
-use crate::adapters::files::constants::{LOAD_ID_LENGTH, STAGED_FOLDER_MARK};
+use crate::adapters::files::constants::{LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, STAGED_FOLDER_MARK};
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::{Location, StoreKind};
@@ -43,14 +43,23 @@ pub(crate) fn swap_dirs(staged: &Path, live: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`.
-pub(crate) fn staged_entry(entry: &str, stem: &str) -> bool {
-    entry.strip_prefix(stem).is_some_and(|load_id| {
-        load_id.len() == LOAD_ID_LENGTH
-            && load_id
-                .chars()
-                .all(|character| character.is_ascii_hexdigit() || character == '-')
-    })
+/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`, and whether it is one an earlier release moved an old table aside to, `<stem><load id>-old`.
+pub(crate) fn staged_entry(entry: &str, stem: &str) -> Option<bool> {
+    let rest = entry.strip_prefix(stem)?;
+    let (load_id, aside) = match rest.strip_suffix(MOVED_ASIDE_SUFFIX) {
+        Some(load_id) => (load_id, true),
+        None => (rest, false),
+    };
+    let is_load_id = load_id.len() == LOAD_ID_LENGTH
+        && load_id
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-');
+    is_load_id.then_some(aside)
+}
+
+/// A directory entry that is a staging folder of the table named by `stem`, and whether it is an old table moved aside.
+fn staged_dir(entry: &std::fs::DirEntry, stem: &str) -> Option<(PathBuf, bool)> {
+    staged_entry(&entry.file_name().to_string_lossy(), stem).map(|aside| (entry.path(), aside))
 }
 
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
@@ -139,22 +148,25 @@ pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Move every staging folder of table folder `live` (named by `stem`) in its parent away to a fresh name, each in one rename, then delete them: the renames fail the call, a failed delete only warns (the folder keeps a staging name no load owns, so the next load deletes it). Whether any was moved.
-pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<bool> {
+/// Move every staging folder of table folder `live` (named by `stem`) in its parent away to a fresh name, each in one rename, then delete them: the renames fail the call, a failed delete only warns (the folder keeps a staging name no load owns, so the next load deletes it). An old table an earlier release moved aside is kept, with a warning: a stop at the wrong moment left it the table's only copy.
+pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<()> {
     let Some(parent) = live.parent() else {
-        return Ok(false);
+        return Ok(());
     };
-    let entries: Vec<PathBuf> = match std::fs::read_dir(parent) {
+    let entries: Vec<(PathBuf, bool)> = match std::fs::read_dir(parent) {
         Ok(entries) => entries
             .filter_map(Result::ok)
-            .filter(|entry| staged_entry(&entry.file_name().to_string_lossy(), stem))
-            .map(|entry| entry.path())
+            .filter_map(|entry| staged_dir(&entry, stem))
             .collect(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
     let mut moved: Vec<PathBuf> = Vec::new();
-    for entry in entries {
+    for (entry, aside) in entries {
+        if aside {
+            tracing::warn!(folder = %entry.display(), table = %live.display(), "an earlier SQLLoad moved this table's old files aside here and stopped before finishing its swap; it is kept so you can check whether it holds rows the table lacks, then delete it");
+            continue;
+        }
         let away = parent.join(format!("{stem}{}", uuid::Uuid::new_v4()));
         match std::fs::rename(&entry, &away) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -164,19 +176,18 @@ pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<bool> {
             }
         }
     }
-    let any = !moved.is_empty();
     for away in moved {
         if let Err(error) = std::fs::remove_dir_all(&away) {
             tracing::warn!(%error, folder = %away.display(), "cannot delete a staging folder beside the table; the next load deletes it");
         }
     }
-    Ok(any)
+    Ok(())
 }
 
-/// Before a load that holds the table's lease reads it: take away every hidden folder beside table folder `live` that another load staged a new table in, so that load can't swap it in any more. Each goes in one rename, then is deleted. A load whose lease lapsed may still be about to swap: either its swap came first, and what is moved away is the old table it swapped out, or this rename did, and its swap fails. A rename that fails stops this load before it writes anything. Whether any folder was moved: the table may have changed since it was read.
-pub(crate) async fn remove_staged(live: &Location) -> Result<bool, FilesDestinationError> {
+/// Before a load that holds the table's lease reads it: take away every hidden folder beside table folder `live` that another load staged a new table in, so that load can't swap it in any more. Each goes in one rename, then is deleted. A load whose lease lapsed may still be about to swap: either its swap came first, and what is moved away is the old table it swapped out, or this rename did, and its swap fails. A rename that fails stops this load before it writes anything.
+pub(crate) async fn remove_staged(live: &Location) -> Result<(), FilesDestinationError> {
     let Some((path, _, name)) = local_folder(live) else {
-        return Ok(false);
+        return Ok(());
     };
     let stem = staged_stem(name);
     tokio::task::spawn_blocking(move || clear_staged(&path, &stem))
