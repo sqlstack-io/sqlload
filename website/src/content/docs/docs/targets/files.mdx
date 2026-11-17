@@ -136,6 +136,11 @@ repaired the table, fails when it resumes, without deleting any file:
 This uses the same create-only writes as the lease, so it needs no more of the store. A store that
 can't do them fails the load rather than skip the check.
 
+When upgrading to 0.62.0, upgrade every process that writes a files table (scheduled jobs, other
+machines, Python code that calls SQLLoad) before any of them loads it again, and don't go back to an
+earlier release for that table. An earlier release ignores `_sqlload/decided/`, so its load can
+undo a repair that 0.62.0 decided, deleting rows, or repair away a commit that 0.62.0 finished.
+
 ## Replacing a table
 
 From sqlload 0.27.0: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
