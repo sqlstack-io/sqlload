@@ -12,6 +12,7 @@ pub fn window_concurrency(table: &TablePlan) -> usize {
     match &table.commits {
         CommitRule::Windows(windows) if postgres => spec
             .batch_concurrency
+            .map_or(1, std::num::NonZeroUsize::get)
             .min(usize::try_from(windows.count).unwrap_or(usize::MAX))
             .max(1),
         _ => 1,

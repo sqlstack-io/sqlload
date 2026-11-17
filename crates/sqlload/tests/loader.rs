@@ -1,5 +1,7 @@
 //! Docker-backed loader tests against real systems.
 
+#![recursion_limit = "256"]
+
 #[path = "loader/after_load/helpers.rs"]
 mod after_load_helpers;
 #[path = "loader/batched/helpers.rs"]

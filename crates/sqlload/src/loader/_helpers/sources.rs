@@ -12,7 +12,7 @@ use crate::adapters::dispatch::models::Destination;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
 use crate::auth::main::google_token_cache_file::google_token_cache_file;
 use crate::auth::models::GoogleUser;
-use crate::batch_plan::main::window_concurrency::window_concurrency;
+use crate::batch_plan::main::source_readers::source_readers;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
@@ -67,18 +67,17 @@ use crate::loader::_helpers::specs::{path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 use crate::loader::constants::NO_TRANSFORM_HOST;
 use crate::loader::constants::{
-    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PARALLEL_READERS, PRIMARY_KEY_PLACEHOLDER,
-    RELOAD_FIX, SOURCE_BATCH_ROWS,
+    DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX,
+    SOURCE_BATCH_ROWS,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesTransform;
 use crate::loader::models::TransformRun;
 use crate::loader::models::{
-    CommitRule, DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd,
-    SourceProblem, SourceReader, TablePlan, TableSpec,
+    DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd, SourceProblem,
+    SourceReader, TablePlan, TableSpec,
 };
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
-use crate::postgres_source::constants::SPLIT_READ_MIN_PAGES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
 use crate::postgres_source::main::cursor_end::cursor_end;
@@ -190,25 +189,6 @@ pub(crate) fn files_location(
 pub(crate) fn readers_note(table: &TablePlan) -> Option<String> {
     let readers = source_readers(table);
     (readers > 1).then(|| format!("reads over {readers} connections, in one snapshot"))
-}
-
-/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order, and one per window read at once under `batch_concurrency` (other windowed and cursor-ordered reads keep one connection).
-pub(crate) fn source_readers(table: &TablePlan) -> usize {
-    let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
-    let postgres = table.spec.python.is_none()
-        && table.spec.files.is_none()
-        && table.spec.sheet.is_none()
-        && table.spec.warehouse_source.is_none();
-    let large = table
-        .spec
-        .source_table
-        .split_pages
-        .is_some_and(|pages| pages >= SPLIT_READ_MIN_PAGES);
-    match (postgres, whole && large) {
-        (true, true) => PARALLEL_READERS,
-        (true, false) => window_concurrency(table),
-        (false, _) => 1,
-    }
 }
 
 /// A connected reader for `source`, with up to `readers` connections in all for a Postgres table read in parallel (a helper that cannot connect is left out).

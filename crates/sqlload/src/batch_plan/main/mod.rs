@@ -6,6 +6,7 @@ pub mod last_value;
 pub mod outside_text;
 pub mod read_at_once;
 pub mod read_in_order;
+pub mod source_readers;
 pub mod split_windows;
 pub mod window_at;
 pub mod window_concurrency;

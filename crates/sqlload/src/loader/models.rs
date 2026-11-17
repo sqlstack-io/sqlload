@@ -150,8 +150,8 @@ pub struct TableSpec {
     pub cursor: Option<CursorSpec>,
     /// Read and commit the cursor range one window of this size at a time.
     pub batch: Option<BatchStep>,
-    /// `batch_concurrency`: the most windows read at once, still committed in order; 1 reads one at a time.
-    pub batch_concurrency: usize,
+    /// `batch_concurrency`: the most windows read at once, still committed in order; unset reads one at a time.
+    pub batch_concurrency: Option<std::num::NonZeroUsize>,
     /// `constant_columns`: each column's name, type and value as text, the same in every row; added after the source's columns (a files source's reader fills them itself).
     pub constants: Vec<(String, ColumnType, String)>,
     /// Whether another configured table loads into the same destination table, so this one's incremental cursor reads only the rows of its own `constants`.

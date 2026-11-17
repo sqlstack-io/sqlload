@@ -1,8 +1,9 @@
 //! Load one table: read its source (a Python table through the host) and commit its rows batch by batch, then, under `--sync-deletes`, scan its source's keys and mark its rows of the others, and mark its rows its loaded tombstones name (`deletes_from`).
 
 use crate::adapters::dispatch::models::Destination;
+use crate::batch_plan::main::source_readers::source_readers;
 use crate::loader::_helpers::publish::publish_table;
-use crate::loader::_helpers::sources::{open_source, source_readers};
+use crate::loader::_helpers::sources::open_source;
 use crate::loader::constants::NO_PYTHON_HOST;
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
