@@ -34,7 +34,7 @@ every section.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `snowflake`, `databricks` (from 0.66.0) or `bigquery` (from 0.67.0). |
+| `kind` | required | `snowflake`, `databricks` (from 0.66.0) or `bigquery` (from 0.68.0). |
 
 Snowflake:
 
@@ -69,7 +69,7 @@ BigQuery:
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `none` (Snowpipe Streaming, Zerobus Ingest on Databricks, the Storage Write API on BigQuery), `internal` (files on a table stage, in a volume on Databricks, or sent with each load job on BigQuery), `s3` (files in your bucket; not on BigQuery) or `gcs` (BigQuery only, from 0.67.0: files in your Cloud Storage bucket). See [How rows reach the warehouse](/docs/kafka/run/#how-rows-reach-the-warehouse). |
+| `kind` | required | `none` (Snowpipe Streaming, Zerobus Ingest on Databricks, the Storage Write API on BigQuery), `internal` (files on a table stage, in a volume on Databricks, or sent with each load job on BigQuery), `s3` (files in your bucket; not on BigQuery) or `gcs` (BigQuery only, from 0.68.0: files in your Cloud Storage bucket). See [How rows reach the warehouse](/docs/kafka/run/#how-rows-reach-the-warehouse). |
 | `load` | `auto` | Snowflake staged files: `snowpipe`, `copy`, or `auto`, which picks Snowpipe with a key pair and `COPY` otherwise. Databricks always uses `COPY INTO`. |
 | `format` | `json`; `parquet` on Databricks and BigQuery | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). Databricks and BigQuery load Parquet only. |
 | `retain` | `7d` | `internal`: how long dated stage or volume folders are kept. |
