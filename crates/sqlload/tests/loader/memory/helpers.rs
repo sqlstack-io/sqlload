@@ -15,6 +15,13 @@ pub(crate) const LOAD: WideStep = WideStep {
     change: "",
     prepare: "",
     environment: &[],
+    command: "load",
+};
+
+/// The plan before a load, whose output the test case reads.
+pub(crate) const PLAN: WideStep = WideStep {
+    command: "plan",
+    ..LOAD
 };
 
 /// A load after every row's body changed.
@@ -108,12 +115,15 @@ table_name = "{{table}}"
     text
 }
 
-/// Run `sqlload load` on `config` under [`BUDGET`], with `environment` set: whether it succeeded, and its output.
-fn load_wide(config: &Path, environment: &[(&str, &str)]) -> Result<(bool, String), String> {
+/// Run `sqlload` with `command` (`load` or `plan`) on `config` under [`BUDGET`], with `environment` set: whether it succeeded, and its output.
+fn load_wide(
+    config: &Path,
+    (command, environment): (&str, &[(&str, &str)]),
+) -> Result<(bool, String), String> {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
         .arg("--config")
         .arg(config)
-        .args(["--no-color", "load", "--memory-limit", BUDGET])
+        .args(["--no-color", command, "--memory-limit", BUDGET])
         .envs(environment.iter().copied())
         .output()
         .map_err(|error| error.to_string())?;
@@ -180,7 +190,7 @@ pub(crate) async fn run_wide_load(
             .await
             .map_err(|error| error.to_string())?;
         duckdb_execute(&database, &step.prepare.replace("{table}", name))?;
-        let (succeeded, text) = load_wide(&config, step.environment)?;
+        let (succeeded, text) = load_wide(&config, (step.command, step.environment))?;
         results.push((succeeded, wide_result(&database, &names)));
         output = text;
     }

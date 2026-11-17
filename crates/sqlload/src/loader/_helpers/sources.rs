@@ -1449,7 +1449,7 @@ pub(crate) struct ReadPart {
     pub(crate) files: Option<Vec<DataFile>>,
     /// The Parquet footers already read for `files`.
     pub(crate) footers: BatchFooters,
-    /// A smaller byte cap for the source's batches than the usual 64 MiB (the hidden `--batch-bytes`, for tests).
+    /// A smaller byte cap for the source's batches than the usual 64 MiB: a quarter of the table's share of the memory budget (its batches read ahead take two such parts, and the one being written a third), or the hidden `--batch-bytes`, for tests, when less.
     pub(crate) batch_bytes: Option<usize>,
     /// What runs the table's `transform`; `None` without a Python host.
     pub(crate) transform: Option<TransformRun>,

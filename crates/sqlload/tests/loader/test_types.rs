@@ -1659,6 +1659,8 @@ pub(crate) struct WideStep {
     pub(crate) prepare: &'static str,
     /// Variables the load runs with.
     pub(crate) environment: &'static [(&'static str, &'static str)],
+    /// The command run: `load`, or `plan` to read the plan's output.
+    pub(crate) command: &'static str,
 }
 
 /// Loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.

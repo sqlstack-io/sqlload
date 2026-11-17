@@ -117,6 +117,7 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::TransformRun;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
+use crate::memory_budget::constants::TABLE_SHARE_PARTS;
 use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
@@ -1661,7 +1662,13 @@ async fn feed(
     mut publisher: Publisher,
     (run, transform): (&LoadRun<'_>, Option<&TransformRun>),
 ) -> (Publisher, Result<u64, LoaderError>) {
-    let batch_bytes = run.options.batch_bytes;
+    let part = (run.project.memory.budget.as_ref()).map(|budget| {
+        usize::try_from(budget.table_share / TABLE_SHARE_PARTS).unwrap_or(usize::MAX)
+    });
+    let batch_bytes = match (run.options.batch_bytes, part) {
+        (Some(set), Some(part)) => Some(set.min(part)),
+        (set, part) => set.or(part),
+    };
     let fed = async {
         match &table.commits {
             CommitRule::Windows(windows) if window_concurrency(table) > 1 => {

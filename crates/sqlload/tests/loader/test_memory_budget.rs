@@ -2,7 +2,7 @@
 
 use crate::helpers::run_async;
 use crate::memory_helpers::{
-    KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OLDER_MARKER,
+    KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OLDER_MARKER, PLAN,
     expected_loads, missing_phrases, run_wide_load, wide_postgres,
 };
 use crate::test_types::WideLoadTestCase;
@@ -12,21 +12,22 @@ fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_ever
 -> Result<(), String> {
     let test_cases = [
         WideLoadTestCase {
-            description: "replace builds the table in pieces, the first load and the next, under the memory line plan prints first",
+            description: "replace builds the table in pieces, the first load and the next, under the budget the plan's memory line shows",
             table: "wide_replace",
             settings: "write_strategy = \"replace\"",
             rows: 300,
             key_rows: 1,
             beside: &["small"],
-            steps: &[LOAD, NEW_BODY],
+            steps: &[LOAD, NEW_BODY, PLAN],
             expected_results: &[
                 (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:300|2:2:0|none"),
                 (true, "300:300:300|2:2:0|none"),
             ],
             expected_output: &[
                 "Memory  1.1 GiB budget (--memory-limit); ",
                 "; DuckDB 488 MiB (memory_limit 244 MiB, 2 threads); ",
-                " at once\n\n✓ Plan complete",
+                " at once\n\nLoads (2)",
             ],
         },
         WideLoadTestCase {
