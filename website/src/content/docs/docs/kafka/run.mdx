@@ -40,9 +40,9 @@ those rows, so a table can hold a record twice. Every row carries its topic, par
 (see [Envelope columns](/docs/kafka/configuration/#envelope)), so dedupe on those three columns.
 
 Snowflake and Databricks skip a staged file they have loaded before, so each run of the exporter
-names its files with an id of its own (`<stream>_<run>_<digest>`). A file replayed after a restart,
-or after the table is dropped and created again, therefore always loads instead of being skipped
-as already loaded. A retry within a run reuses the batch's files, which load once.
+names its files with an id of its own (`<stream>_<run>_<digest>`). Rows replayed after the
+exporter restarts therefore always load, even into a table dropped and created again, instead of
+being skipped as already loaded. A retry within a run reuses the batch's files, which load once.
 
 Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes` (default
 32 MiB), whichever comes first, so one write never holds more than that.

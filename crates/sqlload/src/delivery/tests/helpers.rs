@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::batching::models::{Batch, Partition};
 use crate::config::models::LoadErrorPolicy;
 use crate::delivery::_helpers::stage::split_parts;
-use crate::delivery::models::{CheckTiming, Delivery, PendingLoads};
+use crate::delivery::models::{CheckTiming, Delivery, PendingLoads, StagedBatch};
 use crate::stage_api::models::{FileLoad, LoadStatus};
 
 pub(crate) const SENT_MS: i64 = 1_710_072_000_000;
@@ -74,20 +74,31 @@ pub(crate) fn value_columns(columns: &[(&str, &str)]) -> Vec<crate::config::mode
         .collect()
 }
 
-/// The keys a Snowflake stage delivery stages `batch` under.
-pub(crate) fn stage_keys(delivery: &Delivery, batch: &Batch) -> Result<Vec<String>, String> {
+/// The file names a Snowflake stage delivery stages `batch` under, kept for a retry as a failed upload keeps them.
+pub(crate) fn stage_keys(delivery: &mut Delivery, batch: &Batch) -> Result<Vec<String>, String> {
     let Delivery::Stage(stage) = delivery else {
         return Err(format!("not a stage delivery: {delivery:?}"));
     };
     let staged = stage.staged_batch(batch, &split_parts(batch, false));
-    Ok(staged.files.into_iter().map(|file| file.key).collect())
+    stage.staged = Some(staged.clone());
+    Ok(file_names(&staged))
 }
 
-/// The keys a Databricks `COPY INTO` delivery stages `batch` under.
-pub(crate) fn copy_keys(delivery: &Delivery, batch: &Batch) -> Result<Vec<String>, String> {
+/// The file names a Databricks `COPY INTO` delivery stages `batch` under, kept for a retry as a failed upload keeps them.
+pub(crate) fn copy_keys(delivery: &mut Delivery, batch: &Batch) -> Result<Vec<String>, String> {
     let Delivery::Copy(copy) = delivery else {
         return Err(format!("not a COPY INTO delivery: {delivery:?}"));
     };
     let staged = copy.staged_batch(batch, &split_parts(batch, false));
-    Ok(staged.files.into_iter().map(|file| file.key).collect())
+    copy.staged = Some(staged.clone());
+    Ok(file_names(&staged))
+}
+
+/// Each staged file's name, without its dated folder.
+fn file_names(staged: &StagedBatch) -> Vec<String> {
+    staged
+        .files
+        .iter()
+        .map(|file| file.key.rsplit('/').next().unwrap_or_default().to_owned())
+        .collect()
 }

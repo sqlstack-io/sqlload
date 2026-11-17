@@ -171,7 +171,7 @@ impl StageDelivery {
 
     fn halt_message(&self, reason: &str) -> String {
         format!(
-            "Snowpipe did not load {reason}. Offsets from this file on are not committed. Fix the cause and restart; replays usually get new file names that load normally. Only if the same file is reported failed again, load it with COPY INTO {} FROM {} FILES = (...) and restart once with on_load_error = \"skip\"",
+            "Snowpipe did not load {reason}. Offsets from this file on are not committed. Fix the cause and restart; the restart stages the rows again under new file names. Only if they fail again, load the failed file with COPY INTO {} FROM {} FILES = (...) and restart once with on_load_error = \"skip\"",
             self.qualified(&self.stream.table),
             self.pipe_location()
         )
@@ -198,7 +198,7 @@ impl StageDelivery {
         let unreported = self.pending.overdue(now);
         self.pending.checked(&unreported, now);
         for key in self.pending.take_unwarned_received_before(&unreported) {
-            tracing::warn!(stream = %self.stream.name, file = %key, "the pipe received this file name before but its load history has no record of it; it keeps waiting. Include {{date}} in the path template so replays get new file names");
+            tracing::warn!(stream = %self.stream.name, file = %key, "the pipe received this file name before but its load history has no record of it; it keeps waiting");
         }
         let mut resend: Vec<String> = Vec::new();
         for key in unreported {
@@ -303,9 +303,8 @@ impl StageDelivery {
     /// `<folder>/<stream>_<run>_<digest>.<json.gz|parquet>`: the `s3` path template, or the UTC date on an internal stage.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
         let file = format!(
-            "{}_{}_{}.{}",
+            "{}_{}.{}",
             self.stream.name,
-            self.run,
             rows_digest(&part.rows),
             file_extension(self.config.staging.format)
         );

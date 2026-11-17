@@ -115,6 +115,6 @@ pub(crate) struct StagedNamesTestCase {
 
 /// How a test reads the keys a delivery stages a batch under.
 pub(crate) type StagedKeys = fn(
-    &crate::delivery::models::Delivery,
+    &mut crate::delivery::models::Delivery,
     &crate::batching::models::Batch,
 ) -> Result<Vec<String>, String>;

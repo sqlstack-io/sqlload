@@ -82,11 +82,12 @@ fn given_the_same_offsets_when_a_new_delivery_stages_them_then_its_files_never_t
             path: load_path(&config, false),
             oversized: OversizedPolicy::Fail,
         };
-        let first = build_delivery(&inputs, &stream).map_err(|error| error.to_string())?;
-        let restarted = build_delivery(&inputs, &stream).map_err(|error| error.to_string())?;
-        let second = [&first, &restarted][usize::from(test_case.restarted)];
-        let named = (test_case.keys)(&first, &batch)?;
-        let renamed = (test_case.keys)(second, &batch)?;
+        let mut deliveries = [
+            build_delivery(&inputs, &stream).map_err(|error| error.to_string())?,
+            build_delivery(&inputs, &stream).map_err(|error| error.to_string())?,
+        ];
+        let named = (test_case.keys)(&mut deliveries[0], &batch)?;
+        let renamed = (test_case.keys)(&mut deliveries[usize::from(test_case.restarted)], &batch)?;
         assert!(!named.is_empty(), "{}", test_case.description);
         assert_eq!(
             named == renamed,
