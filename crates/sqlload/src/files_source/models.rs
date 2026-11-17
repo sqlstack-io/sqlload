@@ -160,7 +160,7 @@ pub struct TextChecks {
 }
 
 /// A source file already in the destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LoadedFile {
     pub name: String,
     /// The version it was loaded at; empty for rows loaded before versions were recorded.

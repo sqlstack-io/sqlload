@@ -113,7 +113,7 @@ fn given_a_batch_finer_than_the_partition_when_a_window_fails_then_the_partition
             expected_files: "day=2026-11-03 run1 1:a,2:b pending:1",
         },
         FilesTargetScenarioTestCase {
-            description: "the next run replaces the whole day in one commit",
+            description: "the next run replaces the whole day in one commit, leaving the failed load's marker as a tombstone",
             store: local_store,
             setup: ORDERS_BY_HOUR,
             target_settings: "",
@@ -127,7 +127,7 @@ fn given_a_batch_finer_than_the_partition_when_a_window_fails_then_the_partition
                 },
             ],
             check_column: "name",
-            expected_files: "day=2026-11-03 run3 1:a2,2:b",
+            expected_files: "day=2026-11-03 run3 1:a2,2:b aborted:1",
         },
     ];
     run_async(|| async move {
@@ -340,7 +340,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
             expected_files: "",
         },
         FilesTargetScenarioTestCase {
-            description: "a load that stopped while writing leaves a marker; the next plan reports it and the load deletes its files",
+            description: "a load that stopped while writing leaves a marker; the next plan reports it and the load deletes its files, keeping the marker as a tombstone",
             store: local_store,
             setup: ORDERS,
             target_settings: "",
@@ -358,10 +358,10 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
                 },
             ],
             check_column: "name",
-            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c",
+            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run2 2:b,3:c aborted:1",
         },
         FilesTargetScenarioTestCase {
-            description: "a load holding a live lease is running, not dead: the table is refused and its files kept; once its lease expires, the next load repairs it and loads",
+            description: "a load holding a live lease is running, not dead: the table is refused and its files kept; once its lease expires, the next load repairs it and loads, leaving a tombstone",
             store: local_store,
             setup: ORDERS,
             target_settings: "",
@@ -393,10 +393,10 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
                 },
             ],
             check_column: "name",
-            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run3 2:b,3:c",
+            expected_files: "day=2026-11-03 run1 1:a; day=2026-11-04 run1+run3 2:b,3:c aborted:1",
         },
         FilesTargetScenarioTestCase {
-            description: "a failed write keeps its marker, and the next load repairs it by load id",
+            description: "a failed write keeps its marker, and the next load repairs it by load id, keeping the marker as a tombstone",
             store: local_store,
             setup: "CREATE TABLE public.orders (id int8 PRIMARY KEY, name text, placed_at timestamptz);
                     INSERT INTO public.orders VALUES (1, 'a', '2026-11-03 10:00:00+00'), (2, 'b', NULL);",
@@ -414,7 +414,7 @@ fn given_postgres_tables_when_loading_into_files_then_each_strategy_writes_the_r
                 },
             ],
             check_column: "name",
-            expected_files: "day=2026-11-03 run2 1:a; day=2026-11-04 run2 2:b",
+            expected_files: "day=2026-11-03 run2 1:a; day=2026-11-04 run2 2:b aborted:1",
         },
         FilesTargetScenarioTestCase {
             description: "a load that stopped while deleting what it replaced is finished by the next load",

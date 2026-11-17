@@ -8,6 +8,7 @@ use parquet::arrow::ArrowWriter;
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::_helpers::layout::swap::{local_folder, staged_stem};
+use crate::adapters::files::types::CommitFiles;
 use crate::column_types::models::ColumnType;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::project::models::{OutputEncoding, WriteStrategy};
@@ -233,6 +234,8 @@ pub struct FilesWriter {
     pub written: Vec<String>,
     /// Partition values this load wrote rows to.
     pub partitions: BTreeSet<String>,
+    /// By folder (as [`CommitFiles`]), the source files (name and version) whose rows this commit wrote there, from the rows' source file columns.
+    pub sources: BTreeMap<String, BTreeSet<(String, String)>>,
     pub rows: u64,
 }
 
@@ -253,6 +256,8 @@ pub enum PendingPhase {
     Writing,
     /// Deleting the files it replaces: its new files are complete, so the deletes are finished.
     Replacing,
+    /// Found writing and repaired: any file it still stores is deleted, until the marker expires.
+    Aborted,
 }
 
 /// A load that left its pending marker behind, and the files repairing it deletes.
@@ -264,6 +269,8 @@ pub struct PendingLoad {
     pub deletes: Vec<String>,
     /// The run record a logged table's load writes once its files are complete; repair writes it if the load stopped first.
     pub run: Option<PendingRun>,
+    /// An `aborted` marker old enough for repair to delete.
+    pub expired: bool,
 }
 
 /// What a pending marker records.
@@ -283,16 +290,35 @@ pub struct PendingRun {
 }
 
 /// A files table as listed: its trusted files by partition, loads to repair, and whether any data file exists.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableState {
     /// Data files, without those an unfinished load leaves for repair to delete.
     pub listed: TableFiles,
     pub pending: Vec<PendingLoad>,
     pub exists: bool,
-    /// Source files loads from a files source loaded, whose commits' files the table still holds.
+    /// The commits (load id and commit number) whose files the table holds.
+    pub commits: BTreeSet<String>,
+    /// Source files loads from a files source loaded, whose rows the table still holds.
     pub loaded: Vec<crate::files_source::models::LoadedFile>,
-    /// Keys of load records none of whose commits' files the table holds any more.
+    /// Why the table's records cannot be read: one is in an older SQLLoad's format.
+    pub old_records: Option<String>,
+    /// The records still holding a loaded file, and what they hold.
+    pub records: LiveRecords,
+    /// Keys of load records none of whose files the table holds any more.
     pub stale_loaded: Vec<String>,
+}
+
+/// A table's records that still hold loaded files: their keys below the table folder, and the groups the table still holds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveRecords {
+    pub keys: Vec<String>,
+    pub groups: CommitFiles,
+}
+
+/// A record of loaded source files, as stored: `{"commits": {commit: {folder: [[file, version], ...]}}}`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LoadedRecord {
+    pub commits: CommitFiles,
 }
 
 /// The files a write replaces, worked out before anything is written.

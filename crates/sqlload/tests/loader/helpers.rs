@@ -1135,8 +1135,12 @@ async fn written_rows(table: &Location, column: &str) -> Result<Vec<WrittenRow>,
     Ok(rows)
 }
 
-/// Per partition folder: the runs whose loads wrote it, then `id:value` for each row in id order; then the column's types if files differ, and leftover pending markers.
-fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending: usize) -> String {
+/// Per partition folder: the runs whose loads wrote it, then `id:value` for each row in id order; then the column's types if files differ, leftover pending markers, and tombstones of repaired loads.
+fn written_summary(
+    rows: Vec<WrittenRow>,
+    runs: &HashMap<String, usize>,
+    (pending, aborted): (usize, usize),
+) -> String {
     let types: std::collections::BTreeSet<String> = rows
         .iter()
         .map(|row| row.data_type.clone())
@@ -1170,6 +1174,7 @@ fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending
     let notes: Vec<String> = [
         (types.len() > 1).then(|| format!(" types:{}", types.join(","))),
         (pending > 0).then(|| format!(" pending:{pending}")),
+        (aborted > 0).then(|| format!(" aborted:{aborted}")),
     ]
     .into_iter()
     .flatten()
@@ -1177,17 +1182,25 @@ fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending
     format!("{}{}", described.join("; "), notes.concat())
 }
 
-/// The pending markers left in the table folder.
-async fn pending_markers(table: &Location) -> Result<usize, String> {
+/// The pending markers left in the table folder: of unfinished loads, and `aborted` tombstones of repaired ones.
+async fn pending_markers(table: &Location) -> Result<(usize, usize), String> {
     let markers = Location {
         store: table.store.clone(),
         prefix: format!("{}_sqlload/pending/", table.prefix),
     };
     let folder = open_folder(&markers).map_err(|error| error.to_string())?;
-    list_files(&folder)
+    let markers = list_files(&folder)
         .await
-        .map(|files| files.len())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let mut aborted = 0;
+    for file in &markers {
+        let text = read_file(&folder, &file.relative_key)
+            .await
+            .map_err(|error| error.to_string())?;
+        aborted += usize::from(text.starts_with(b"aborted"));
+    }
+    let pending = markers.len() - aborted;
+    Ok((pending, aborted))
 }
 
 /// Run a files target scenario on fresh `public` and `sales` schemas and a fresh folder: each run's plan and error are checked, `apply` must print nothing, and the written files are read back; returns the summary and the `public.orders` table folder.

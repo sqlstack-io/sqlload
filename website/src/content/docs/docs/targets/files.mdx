@@ -73,6 +73,18 @@ rewritten in place fails the table until you reload the table with `--reload`, o
 commit's files: the files of a load that failed and was repaired load again, and the next load
 deletes records whose files are gone.
 
+From 0.61.0, a record groups the source files by the partition folder their rows went to, and a
+group counts only while the commit still has files in that folder. A `delete_insert` that replaces
+one partition of an earlier multi-partition commit drops that partition's files from the record,
+and keeps the rest. Once a table has more than 64 records, a load merges them into one,
+`_sqlload/loaded/compacted.<id>.json`, so planning reads a few records rather than one per commit.
+Records written before 0.61.0 are a list of files without their folders, which this release can't
+read. A plan or load that finds one blocks the table rather than treat its files as never loaded:
+
+```text
+…/_sqlload/loaded/<commit>.json is a record of loaded source files in the format of an older SQLLoad, which this one cannot read. Fix: load the table with --reload, which rewrites its files and records
+```
+
 The target folder can't be the source folder, or inside it or around it: a load would delete or
 read back its own source files, so `plan` blocks the table. A files source also can't load into a
 `single_file` target, as its one file carries no load id to record the source files against.
@@ -93,6 +105,21 @@ the table is being loaded by load 3f9c… (started 2026-11-08 09:00:00 UTC, leas
 A lease lasts 10 minutes, so a load that crashed holds the table until then. The next load
 then repairs what it left. Before deleting older files, a load checks that it still holds the
 lease. If its lease lapsed, or another load took the table, it stops without deleting them.
+
+From 0.61.0, a load also checks, once it holds the lease, that no other load committed to the
+table or replaced its files since the table was planned. Under `append` and `delete_insert`,
+what a load reads was chosen from the files at plan time, so a load planned before
+another one finished would load the same source files or rows again. It stops before writing
+instead, with an error a rerun clears:
+
+```text
+orders: another load changed the table's files in out/orders/ after this load was planned, so what it would read may already be loaded; stopped before writing. Run the load again
+```
+
+From 0.61.0, repairing a load found writing leaves its marker in `_sqlload/pending/` as an
+`aborted` tombstone for 7 days. That load may only have lost its lease and still be running: any
+file it stores later is deleted by the next load, rather than counting as written. After 7 days the
+next load deletes the tombstone.
 
 ## Replacing a table
 
@@ -165,3 +192,5 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
   instead.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.
+- A load that lost its lease and keeps writing for more than 7 days after another load repaired it
+  isn't covered: once the `aborted` tombstone is gone, files it stores count as written.

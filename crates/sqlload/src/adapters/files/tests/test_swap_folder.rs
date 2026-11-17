@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::main::repair_table::repair_table;
 use crate::adapters::files::main::swap_folder::swap_folder;
-use crate::adapters::files::models::TablePath;
+use crate::adapters::files::models::{LiveRecords, TablePath};
 use crate::adapters::files::tests::helpers::{
     MID_SWAP, NO_FOLDER, block_on, local_files, watch_folder, write_all,
 };
@@ -90,7 +90,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
         swapped?;
         let folder = open_folder(&live).map_err(|error| error.to_string())?;
         block_on(async {
-            repair_table(&folder, &[])
+            repair_table(&folder, (&[], &LiveRecords::default()))
                 .await
                 .map_err(|error| error.to_string())
         })?;
@@ -172,7 +172,7 @@ fn given_folders_left_beside_a_table_when_repairing_then_staged_ones_go_and_a_mo
         };
         let folder = open_folder(&live).map_err(|error| error.to_string())?;
         block_on(async {
-            repair_table(&folder, &[])
+            repair_table(&folder, (&[], &LiveRecords::default()))
                 .await
                 .map_err(|error| error.to_string())
         })?;

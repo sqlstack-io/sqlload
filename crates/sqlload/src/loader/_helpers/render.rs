@@ -919,6 +919,7 @@ fn pending_line(load: &PendingLoad) -> PlanDetail {
     let (stopped, repair) = match load.phase {
         PendingPhase::Writing => ("while writing", "deletes its"),
         PendingPhase::Replacing => ("while deleting the files it replaced", "finishes deleting"),
+        PendingPhase::Aborted => ("and was repaired, then wrote late", "deletes its"),
     };
     detail(
         "cleanup",

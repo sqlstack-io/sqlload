@@ -4,7 +4,7 @@ use crate::column_parse::models::ColumnParse;
 use crate::load_events::models::PhaseTiming;
 use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
 use crate::row_batches::models::{Flatten, Unnest};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::adapters::contract::models::{TableName, WriteMode};
@@ -616,6 +616,8 @@ pub struct FilesOutput {
     pub notes: Vec<String>,
     /// Loads that did not finish; `load` repairs them first.
     pub pending: Vec<PendingLoad>,
+    /// The commits whose files the table held when it was planned: a load stops if another load changed them since.
+    pub commits: BTreeSet<String>,
 }
 
 /// The plan for a whole project.

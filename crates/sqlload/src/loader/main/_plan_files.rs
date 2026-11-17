@@ -116,6 +116,7 @@ pub(in crate::loader) async fn plan_files_table(
             max_footer_reads: destination.max_footer_reads,
             notes,
             pending: state.pending,
+            commits: state.commits,
         }),
     })
 }
@@ -170,7 +171,7 @@ async fn planned_read(
     })
 }
 
-/// The table's context, or its blocked plan (marked existing when its folder holds data files), blocked too while another load holds its lease.
+/// The table's context, or its blocked plan (marked existing when its folder holds data files), blocked too while another load holds its lease, and (but for `--reload`, which rewrites them) while it holds records an older SQLLoad wrote.
 async fn files_context(
     spec: &TableSpec,
     destination: &FilesDestination,
@@ -191,6 +192,7 @@ async fn files_context(
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());
+    problems.extend(state.old_records.clone().filter(|_| !options.reload));
     problems.extend(lease_holder(&folder, lease_now()).await?);
     if !problems.is_empty() {
         return Ok(Err(TablePlan {
