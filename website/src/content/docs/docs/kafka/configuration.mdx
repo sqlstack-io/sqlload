@@ -34,21 +34,36 @@ every section.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `snowflake`. |
+| `kind` | required | `snowflake` or, from 0.66.0, `databricks`. |
+
+Snowflake:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
 | `account`, `user` | required | The Snowflake account and user. |
 | `auth` | required | `{ method = "pat", token = "..." }` or `{ method = "key_pair", private_key_file = "..." }`. From 0.28.0, browser sign-in (`oauth_authorization_code`) works too, but it needs a person at a terminal, so it doesn't suit a long-running exporter. |
 | `role` | none | The role to use. |
 | `warehouse` | none | Needed for `COPY` loads, `plan` and `apply`; streaming doesn't use it. |
 | `database`, `schema` | required | Where the tables, stages and pipes go. |
 
+Databricks:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `host` | required | The workspace URL. |
+| `client_id`, `client_secret` | required | An OAuth machine-to-machine client (a service principal). |
+| `warehouse_id` | required | The SQL warehouse for `plan`, `apply` and `COPY INTO`. |
+| `catalog`, `schema` | required | Where the tables and volumes go; stored in lower case. |
+| `zerobus_endpoint` | none | `https://<workspace-id>.zerobus.<region>.cloud.databricks.com`; needed for `staging.kind = "none"`. |
+
 ## `[staging]`
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `none` (Snowpipe Streaming), `internal` (files on a table stage) or `s3` (files in your bucket). |
-| `load` | `auto` | For staged files: `snowpipe`, `copy`, or `auto`, which picks Snowpipe with a key pair and `COPY` otherwise. |
-| `format` | `json` | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). |
-| `retain` | `7d` | `internal`: how long dated stage folders are kept. |
+| `kind` | required | `none` (Snowpipe Streaming, or Zerobus Ingest on Databricks), `internal` (files on a table stage, or in a volume on Databricks) or `s3` (files in your bucket). See [How rows reach the warehouse](/docs/kafka/run/#how-rows-reach-the-warehouse). |
+| `load` | `auto` | Snowflake staged files: `snowpipe`, `copy`, or `auto`, which picks Snowpipe with a key pair and `COPY` otherwise. Databricks always uses `COPY INTO`. |
+| `format` | `json`; `parquet` on Databricks | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). Databricks loads Parquet only. |
+| `retain` | `7d` | `internal`: how long dated stage or volume folders are kept. |
 | `max_in_flight` | `32` | Uploads, and separately loads, in flight at once across all streams. |
 | `max_pending_files` | `32` | Snowpipe loads: files per stream sent but not committed yet. A full stream pauses its partitions. |
 | `on_load_error` | `halt` | A file Snowpipe reports as failed or partly loaded: `halt` stops the stream without committing it; `skip` logs and counts it, then commits past it. |
@@ -64,10 +79,10 @@ reports. Pipes that `sqlload apply` creates are owned by it.
 |-----|---------|---------|
 | `bucket`, `region` | required | The bucket and its region. |
 | `prefix` | `""` | The folder under the bucket. |
-| `stage` | required | The external stage on it: a name in the destination schema, or `DATABASE.SCHEMA.NAME`. |
+| `stage` | required on Snowflake | The external stage on it: a name in the destination schema, or `DATABASE.SCHEMA.NAME`. Databricks reads the bucket through a Unity Catalog external location instead and refuses this key. |
 | `path` | `{topic}/date={date}/` | Each file's folder under `prefix`, with `{topic}`, `{table}`, `{stream}`, `{date}` (UTC `YYYY-MM-DD`) and `{hour}` (UTC `HH`). |
 | `endpoint`, `path_style` | none, `false` | For S3-compatible stores. |
-| `auto_ingest` | `false` | Load with an auto-ingest pipe on bucket notifications. |
+| `auto_ingest` | `false` | Snowflake: load with an auto-ingest pipe on bucket notifications. |
 
 ## `[batching]`
 
@@ -79,7 +94,7 @@ A stream's records become one batch when any limit is reached.
 | `max_rows` | `100000` | Rows per batch. |
 | `max_age` | `60s` | Age of the oldest record in the batch. |
 | `max_total_bytes` | 2 GiB | Across every stream; any stream flushes early when it's reached. |
-| `max_request_bytes` | 3,500,000 bytes | Streaming: compressed bytes per append request, below the service's 4 MiB limit. |
+| `max_request_bytes` | 3,500,000 bytes | Streaming: bytes per request; compressed for Snowpipe Streaming, below its 4 MiB limit, and JSON for Zerobus Ingest. |
 | `oversized` | `fail` | Streaming: a record larger than one request, `fail` or `skip`. |
 
 ## `[[topics]]`
@@ -101,7 +116,7 @@ How topics map to tables, stages and pipes. See [Naming topics](/docs/kafka/nami
 
 ## `[envelope]`
 
-Every table has the same columns, filled from each record:
+Every table has the same columns, filled from each record. On Snowflake:
 
 | Column | Field | Type |
 |--------|-------|------|
@@ -115,11 +130,20 @@ Every table has the same columns, filled from each record:
 | `EXPORTED_AT` | `exported_at` | `TIMESTAMP_TZ` |
 | `DATE` | `date` | `DATE`, the record's UTC date (its timestamp, else the export time) |
 
+On Databricks the names are lower case and the types are `STRING` for `topic`, `key` and `value`,
+`BIGINT` for `kafka_timestamp` and `kafka_offset`, `INT` for `kafka_timestamp_type` and
+`kafka_partition`, `TIMESTAMP` for `exported_at` and `DATE` for `date`. A `VARIANT` column holds the
+parsed JSON value; `MAP`, `STRUCT` and `ARRAY` columns are read from the JSON text. The Kafka
+timestamp is milliseconds since the epoch, so its column must stay `BIGINT`. With Zerobus Ingest, a
+`TIMESTAMP` column taken from the record (`key`, `value` or an unwrapped member) needs RFC 3339 text
+or a date and time without a zone, read as UTC; any other value stops the stream with its topic,
+partition and offset.
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `columns` | the table above | A list of `{ name, field, type }`. `field` is one of the fields above, `headers` or `null`. |
 | `time_zone` | `UTC` | The IANA zone whose UTC offset `exported_at` values carry, such as `America/Los_Angeles`. |
-| `error_logging` | `true` | Streaming: create tables with Snowflake's `ERROR_LOGGING`. |
+| `error_logging` | `true` | Snowflake streaming: create tables with Snowflake's `ERROR_LOGGING`. |
 
 ## `[metrics]`
 

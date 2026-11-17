@@ -60,3 +60,15 @@ pub(crate) fn pending(batches: &[BatchSpec<'_>], policy: LoadErrorPolicy) -> Pen
     }
     loads
 }
+
+/// Envelope value columns with these names and types.
+pub(crate) fn value_columns(columns: &[(&str, &str)]) -> Vec<crate::config::models::ColumnConfig> {
+    columns
+        .iter()
+        .map(|(name, sql_type)| crate::config::models::ColumnConfig {
+            name: (*name).to_owned(),
+            field: crate::config::models::EnvelopeField::Value,
+            sql_type: (*sql_type).to_owned(),
+        })
+        .collect()
+}

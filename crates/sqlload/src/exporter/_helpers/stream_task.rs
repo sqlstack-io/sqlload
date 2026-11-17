@@ -274,22 +274,21 @@ impl StreamTask {
                     self.record_backlog();
                     return Ok(());
                 }
-                Err(DeliveryError::Fatal(message)) => return Err(message),
-                Err(error @ DeliveryError::Reset(_)) => {
-                    self.count_error(&error);
-                    return self.reset().await;
-                }
-                Err(error) if started.elapsed() > GIVE_UP_AFTER => {
-                    return Err(format!(
-                        "gave up delivering a batch after {GIVE_UP_AFTER:?}: {error}"
-                    ));
-                }
-                Err(error @ DeliveryError::Retry(_)) => {
+                Err(error) => {
                     attempt += 1;
-                    self.count_error(&error);
-                    tokio::select! {
-                        () = cancel.cancelled() => return Ok(()),
-                        () = sleep(self.retry.delay(attempt)) => {}
+                    match after_failure(&error, started.elapsed(), attempt, &self.retry) {
+                        AfterFailure::Stop(message) => return Err(message),
+                        AfterFailure::Reset => {
+                            self.count_error(&error);
+                            return self.reset().await;
+                        }
+                        AfterFailure::Wait(delay) => {
+                            self.count_error(&error);
+                            tokio::select! {
+                                () = cancel.cancelled() => return Ok(()),
+                                () = sleep(delay) => {}
+                            }
+                        }
                     }
                 }
             }
@@ -582,6 +581,34 @@ fn committed_offset(found: &TopicPartitionList) -> Result<Option<Offset>, String
     };
     element.error().map_err(|error| error.to_string())?;
     Ok(Some(element.offset()))
+}
+
+/// What `flush` does after a failed delivery.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AfterFailure {
+    /// Stop the stream with this message; the batch's offsets stay uncommitted.
+    Stop(String),
+    /// Reopen the channels and resume from the committed offsets.
+    Reset,
+    /// Wait this long, then deliver the same batch again.
+    Wait(Duration),
+}
+
+/// What `flush` does after delivery attempt `attempt` (from 1) failed, `elapsed` after the batch's first attempt: a retryable error waits on the backoff until `GIVE_UP_AFTER`, then stops the stream, so a lasting refusal never retries for ever.
+pub(crate) fn after_failure(
+    error: &DeliveryError,
+    elapsed: Duration,
+    attempt: u32,
+    retry: &RetryPolicy,
+) -> AfterFailure {
+    match error {
+        DeliveryError::Fatal(message) => AfterFailure::Stop(message.clone()),
+        DeliveryError::Reset(_) => AfterFailure::Reset,
+        DeliveryError::Retry(_) if elapsed > GIVE_UP_AFTER => AfterFailure::Stop(format!(
+            "gave up delivering a batch after {GIVE_UP_AFTER:?}: {error}"
+        )),
+        DeliveryError::Retry(_) => AfterFailure::Wait(retry.delay(attempt)),
+    }
 }
 
 /// Where a partition resumes from the committed offset Kafka `found` for the group: after it, or `start_from` when the group has none; a failed read stays an error, to retry, never `start_from`.

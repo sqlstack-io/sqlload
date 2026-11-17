@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::config::models::Config;
+use crate::config::models::{Config, Destination};
 use crate::naming::_helpers::patterns::fill_template;
 use crate::naming::models::Stream;
 
@@ -40,6 +40,11 @@ pub(crate) fn build_stream(
         .strip_prefix(config.naming.table_prefix.as_str())
         .unwrap_or(&table)
         .to_ascii_lowercase();
+    let databricks = matches!(config.destination, Destination::Databricks(_));
+    let table = match databricks {
+        true => table.to_ascii_lowercase(),
+        false => table,
+    };
     let values = BTreeMap::from([
         ("table".to_owned(), table.clone()),
         ("table_flat".to_owned(), table.replace("__", "_")),
@@ -47,7 +52,10 @@ pub(crate) fn build_stream(
     ]);
     Ok(Stream {
         consumer_group: fill_template(&config.source.consumer_group, &values)?,
-        stage: fill_template(&config.naming.stage, &values)?,
+        stage: match databricks {
+            true => fill_template(&config.naming.stage, &values)?.to_ascii_lowercase(),
+            false => fill_template(&config.naming.stage, &values)?,
+        },
         pipe: fill_template(&config.naming.pipe, &values)?,
         streaming_pipe: fill_template(&config.naming.streaming_pipe, &values)?,
         table,

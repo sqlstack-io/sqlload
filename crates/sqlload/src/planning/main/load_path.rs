@@ -1,10 +1,17 @@
 //! Choose the delivery path.
 
-use crate::config::models::{Config, LoadMethod, StagingKind};
+use crate::config::models::{Config, Destination, LoadMethod, StagingKind};
 use crate::planning::models::LoadPath;
 
 /// How rows reach tables for this configuration.
 pub fn load_path(config: &Config, uses_key_pair: bool) -> LoadPath {
+    if let Destination::Databricks(_) = config.destination {
+        return match config.staging.kind {
+            StagingKind::None => LoadPath::Zerobus,
+            StagingKind::Internal => LoadPath::VolumeCopy,
+            StagingKind::S3 => LoadPath::S3Copy,
+        };
+    }
     match (config.staging.kind, config.staging.load) {
         (StagingKind::None, _) => LoadPath::Streaming,
         (StagingKind::Internal, LoadMethod::Copy) => LoadPath::StageCopy,

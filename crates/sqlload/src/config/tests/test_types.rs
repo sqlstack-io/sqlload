@@ -45,3 +45,23 @@ pub(crate) struct LoadErrorPolicyTestCase {
     pub(crate) expected_max_pending_files: usize,
     pub(crate) expected_check_after: Duration,
 }
+
+pub(crate) struct DatabricksConfigTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added after the Databricks `[destination]`.
+    pub(crate) text: &'static str,
+    pub(crate) expected_path: crate::planning::models::LoadPath,
+    pub(crate) expected_format: crate::config::models::FileFormat,
+}
+
+pub(crate) struct ExampleConfigTestCase {
+    pub(crate) description: &'static str,
+    /// Relative to the crate's directory.
+    pub(crate) path: &'static str,
+    pub(crate) expected_database: &'static str,
+    pub(crate) expected_schema: &'static str,
+    pub(crate) expected_path: crate::planning::models::LoadPath,
+    pub(crate) expected_format: crate::config::models::FileFormat,
+    pub(crate) expected_first_column: Option<&'static str>,
+    pub(crate) expected_column_count: usize,
+}

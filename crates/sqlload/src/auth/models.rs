@@ -10,7 +10,7 @@ use crate::auth::constants::{
     PROGRAMMATIC_ACCESS_TOKEN, TOKEN_CACHE_FILE,
 };
 use crate::auth::main::account_url::account_url;
-use crate::config::models::{AuthConfig, DestinationConfig};
+use crate::config::models::{AuthConfig, SnowflakeConfig};
 use crate::http::errors::ApiError;
 use crate::http::main::http_client::build_http_client;
 use crate::http::models::ConnectionCounter;
@@ -125,7 +125,7 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
-    pub fn from_config(destination: &DestinationConfig) -> Result<Self, ApiError> {
+    pub fn from_config(destination: &SnowflakeConfig) -> Result<Self, ApiError> {
         let account = destination
             .account
             .split('.')

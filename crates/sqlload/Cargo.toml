@@ -65,6 +65,7 @@ chrono.workspace = true
 chrono-tz.workspace = true
 clap = { workspace = true, optional = true }
 console = { workspace = true, optional = true }
+databricks-zerobus-ingest-sdk.workspace = true
 indicatif = { workspace = true, optional = true }
 csv-core.workspace = true
 duckdb = { workspace = true, optional = true }

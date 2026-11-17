@@ -1,12 +1,17 @@
-use crate::auth::models::Authenticator;
+use crate::auth::models::{Authenticator, Secret};
 use crate::batching::models::{Batch, Partition};
-use crate::config::models::{Config, LoadErrorPolicy, OversizedPolicy};
+use crate::config::models::{ColumnConfig, Config, LoadErrorPolicy, OversizedPolicy};
+use crate::databricks_api::main::execute_statement::execute_statement;
+use crate::databricks_api::models::DatabricksClient;
+use crate::delivery::_helpers::stage_paths::s3_target;
 use crate::delivery::constants::{STAGE_CONFIRM_POLL, STREAMING_CONFIRM_POLL};
 use crate::delivery::errors::DeliveryError;
+use crate::http::errors::ApiError;
 use crate::http::models::InFlight;
 use crate::naming::models::Stream;
 use crate::planning::models::LoadPath;
-use crate::sql_api::models::SqlClient;
+use crate::sql_api::main::execute_sql::execute_sql;
+use crate::sql_api::models::{SqlClient, SqlRows};
 use crate::stage_api::models::{DriverSession, ObjectTarget, StageInfo};
 use crate::streaming_api::models::StreamingClient;
 use std::collections::{BTreeMap, VecDeque};
@@ -42,6 +47,57 @@ pub struct StageClients {
     pub driver: Arc<DriverSession>,
     pub account_url: String,
     pub in_flight: InFlight,
+}
+
+/// The destination's clients.
+#[derive(Debug, Clone)]
+pub enum Warehouse {
+    Snowflake(SnowflakeClients),
+    Databricks(DatabricksClients),
+}
+
+/// The Snowflake clients, on one authenticator.
+#[derive(Debug, Clone)]
+pub struct SnowflakeClients {
+    pub auth: Arc<Authenticator>,
+    pub sql: SqlClient,
+    pub streaming: Arc<StreamingClient>,
+    pub driver: Arc<DriverSession>,
+    pub account_url: String,
+}
+
+/// The Databricks statement and Files API client, and the settings Zerobus Ingest streams are opened with.
+#[derive(Debug, Clone)]
+pub struct DatabricksClients {
+    pub api: DatabricksClient,
+    pub zerobus: Option<ZerobusSettings>,
+}
+
+/// Where and as whom Zerobus Ingest streams are opened.
+#[derive(Debug, Clone)]
+pub struct ZerobusSettings {
+    pub endpoint: String,
+    pub workspace_url: String,
+    pub client_id: String,
+    pub client_secret: Secret,
+}
+
+impl Warehouse {
+    /// Run one SQL statement on the destination.
+    pub async fn execute(&self, statement: &str) -> Result<SqlRows, ApiError> {
+        match self {
+            Self::Snowflake(snowflake) => execute_sql(&snowflake.sql, statement).await,
+            Self::Databricks(databricks) => execute_statement(&databricks.api, statement).await,
+        }
+    }
+
+    /// True when Snowflake signs in with a key pair, which Snowpipe's REST API needs.
+    pub fn uses_key_pair(&self) -> bool {
+        match self {
+            Self::Snowflake(snowflake) => snowflake.auth.uses_key_pair(),
+            Self::Databricks(_) => false,
+        }
+    }
 }
 
 /// Channel state for one stream; the committed offset token in Snowflake is the source of truth.
@@ -149,11 +205,54 @@ pub struct StagedFile {
     pub uploaded: bool,
 }
 
+/// Rows streamed to one Databricks table through Zerobus Ingest; a batch counts as delivered once the stream's flush returns.
+#[derive(Debug)]
+pub struct ZerobusDelivery {
+    pub(crate) settings: ZerobusSettings,
+    /// `catalog.schema.table`.
+    pub(crate) table: String,
+    pub(crate) columns: Vec<ColumnConfig>,
+    pub(crate) max_request_bytes: u64,
+    pub(crate) oversized: OversizedPolicy,
+    pub(crate) link: ZerobusLink,
+}
+
+/// The open Zerobus Ingest SDK and stream, if any; dropped after a failure so the next batch opens a new stream.
+#[derive(Default)]
+pub struct ZerobusLink {
+    pub(crate) sdk: Option<databricks_zerobus_ingest_sdk::ZerobusSdk>,
+    pub(crate) stream: Option<databricks_zerobus_ingest_sdk::ZerobusStream>,
+}
+
+impl std::fmt::Debug for ZerobusLink {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ZerobusLink")
+            .field("open", &self.stream.is_some())
+            .finish()
+    }
+}
+
+/// Parquet files uploaded to a Unity Catalog volume or an S3 bucket and loaded into one Databricks table with `COPY INTO`, which skips files it loaded before.
+#[derive(Debug)]
+pub struct CopyDelivery {
+    pub(crate) api: DatabricksClient,
+    pub(crate) http: reqwest::Client,
+    pub(crate) in_flight: InFlight,
+    pub(crate) config: Arc<Config>,
+    pub(crate) stream: Stream,
+    /// The bucket, for `staging.kind = "s3"`; otherwise files go to the stream's volume.
+    pub(crate) s3: Option<ObjectTarget>,
+    pub(crate) staged: Option<StagedBatch>,
+}
+
 /// The configured delivery mode for one stream.
 #[derive(Debug)]
 pub enum Delivery {
     Streaming(Box<StreamingDelivery>),
     Stage(Box<StageDelivery>),
+    Zerobus(Box<ZerobusDelivery>),
+    Copy(Box<CopyDelivery>),
 }
 
 impl Delivery {
@@ -182,6 +281,49 @@ impl Delivery {
         StageDelivery::new(clients, config, stream, path).map(|stage| Self::Stage(Box::new(stage)))
     }
 
+    /// Zerobus Ingest delivery for one Databricks table.
+    pub fn zerobus(
+        settings: ZerobusSettings,
+        config: &Config,
+        stream: &Stream,
+        oversized: OversizedPolicy,
+    ) -> Self {
+        Self::Zerobus(Box::new(ZerobusDelivery {
+            settings,
+            table: format!(
+                "{}.{}.{}",
+                config.destination.database(),
+                config.destination.schema(),
+                stream.table
+            ),
+            columns: config.envelope.columns.clone(),
+            max_request_bytes: config.batching.max_request_bytes.0,
+            oversized,
+            link: ZerobusLink::default(),
+        }))
+    }
+
+    /// `COPY INTO` delivery for one Databricks table, from its volume or the `s3` bucket.
+    pub fn copy(
+        inputs: &DeliveryInputs,
+        api: &DatabricksClient,
+        stream: &Stream,
+    ) -> Result<Self, DeliveryError> {
+        let s3 = match inputs.path {
+            LoadPath::S3Copy => Some(s3_target(&inputs.config).map_err(DeliveryError::Fatal)?),
+            _ => None,
+        };
+        Ok(Self::Copy(Box::new(CopyDelivery {
+            api: api.clone(),
+            http: inputs.http.clone(),
+            in_flight: inputs.in_flight.clone(),
+            config: inputs.config.clone(),
+            stream: stream.clone(),
+            s3,
+            staged: None,
+        })))
+    }
+
     /// True when Snowflake, not Kafka, holds the resume position.
     pub fn resumes_from_warehouse(&self) -> bool {
         matches!(self, Self::Streaming(_))
@@ -191,14 +333,14 @@ impl Delivery {
     pub async fn open(&mut self, partition: &Partition) -> Result<Option<i64>, DeliveryError> {
         match self {
             Self::Streaming(streaming) => streaming.open(partition).await,
-            Self::Stage(_) => Ok(None),
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => Ok(None),
         }
     }
 
     pub fn is_open(&self, partition: &Partition) -> bool {
         match self {
             Self::Streaming(streaming) => streaming.is_open(partition),
-            Self::Stage(_) => true,
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => true,
         }
     }
 
@@ -206,6 +348,8 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.deliver(batch).await,
             Self::Stage(stage) => stage.deliver(batch).await,
+            Self::Zerobus(zerobus) => zerobus.deliver(batch).await,
+            Self::Copy(copy) => copy.deliver(batch).await,
         }
     }
 
@@ -213,6 +357,7 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.has_pending(),
             Self::Stage(stage) => !stage.pending.is_empty(),
+            Self::Zerobus(_) | Self::Copy(_) => false,
         }
     }
 
@@ -220,14 +365,14 @@ impl Delivery {
     pub fn confirm_interval(&self) -> std::time::Duration {
         match self {
             Self::Streaming(_) => STREAMING_CONFIRM_POLL,
-            Self::Stage(_) => STAGE_CONFIRM_POLL,
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => STAGE_CONFIRM_POLL,
         }
     }
 
     /// True when the stream's files sent but not committed fill `staging.max_pending_files`.
     pub fn is_full(&self) -> bool {
         match self {
-            Self::Streaming(_) => false,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => false,
             Self::Stage(stage) => stage.is_full(),
         }
     }
@@ -235,7 +380,7 @@ impl Delivery {
     /// Files sent to Snowpipe whose offsets are not committed yet.
     pub fn pending_files(&self) -> usize {
         match self {
-            Self::Streaming(_) => 0,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => 0,
             Self::Stage(stage) => stage.pending.file_count(),
         }
     }
@@ -243,7 +388,7 @@ impl Delivery {
     /// When the oldest uncommitted file was first sent, in Unix milliseconds.
     pub fn oldest_pending_ms(&self) -> Option<i64> {
         match self {
-            Self::Streaming(_) => None,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => None,
             Self::Stage(stage) => stage.pending.oldest_sent_ms(),
         }
     }
@@ -252,6 +397,7 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.poll().await,
             Self::Stage(stage) => stage.poll().await,
+            Self::Zerobus(_) | Self::Copy(_) => Ok(Confirmation::default()),
         }
     }
 
@@ -259,6 +405,8 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.reset(),
             Self::Stage(stage) => stage.pending.clear(),
+            Self::Zerobus(zerobus) => zerobus.link = ZerobusLink::default(),
+            Self::Copy(copy) => copy.staged = None,
         }
     }
 
@@ -266,14 +414,16 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.forget(partitions),
             Self::Stage(stage) => stage.pending.forget(partitions),
+            Self::Zerobus(_) | Self::Copy(_) => {}
         }
     }
 
     /// Remove expired staged files; returns how many were removed.
     pub async fn prune(&self) -> Result<u64, DeliveryError> {
         match self {
-            Self::Streaming(_) => Ok(0),
+            Self::Streaming(_) | Self::Zerobus(_) => Ok(0),
             Self::Stage(stage) => stage.prune().await,
+            Self::Copy(copy) => copy.prune().await,
         }
     }
 }
@@ -281,8 +431,9 @@ impl Delivery {
 /// The clients and settings a stream's delivery needs.
 #[derive(Debug, Clone)]
 pub struct DeliveryInputs {
-    pub streaming: Arc<StreamingClient>,
-    pub stage: StageClients,
+    pub http: reqwest::Client,
+    pub in_flight: InFlight,
+    pub warehouse: Warehouse,
     pub config: Arc<Config>,
     pub path: LoadPath,
     pub oversized: OversizedPolicy,

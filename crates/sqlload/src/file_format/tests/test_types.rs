@@ -15,3 +15,11 @@ pub(crate) struct LoadSelectTestCase {
     pub(crate) sql_type: &'static str,
     pub(crate) expected_expression: &'static str,
 }
+
+pub(crate) struct DatabricksCopyTestCase {
+    pub(crate) description: &'static str,
+    /// Column names and types.
+    pub(crate) columns: &'static [(&'static str, &'static str)],
+    pub(crate) files: &'static [&'static str],
+    pub(crate) expected_statement: &'static str,
+}

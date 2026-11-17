@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::config::constants::{DATABRICKS_COLUMNS, SNOWFLAKE_COLUMNS};
 use crate::config::constants::{
     DEFAULT_CONSUMER_GROUP, DEFAULT_DISCOVERY_INTERVAL_SECS, DEFAULT_MAX_AGE_SECS,
     DEFAULT_MAX_BYTES, DEFAULT_MAX_IN_FLIGHT, DEFAULT_MAX_PENDING_FILES, DEFAULT_MAX_REQUEST_BYTES,
@@ -8,7 +9,7 @@ use crate::config::constants::{
     DEFAULT_RETAIN_SECS, DEFAULT_S3_PATH, DEFAULT_STAGE_TEMPLATE, DEFAULT_STARTUP_BATCH,
     DEFAULT_STARTUP_INTERVAL_MS, DEFAULT_STREAMING_PIPE_TEMPLATE,
 };
-use crate::config::models::{ByteSize, ColumnConfig, EnvelopeField};
+use crate::config::models::ByteSize;
 
 pub(crate) fn consumer_group() -> String {
     DEFAULT_CONSUMER_GROUP.to_owned()
@@ -102,27 +103,40 @@ pub(crate) fn streaming_pipe_template() -> String {
     DEFAULT_STREAMING_PIPE_TEMPLATE.to_owned()
 }
 
-pub(crate) fn columns() -> Vec<ColumnConfig> {
-    [
-        ("TOPIC", EnvelopeField::Topic, "VARCHAR"),
-        ("KAFKA_TIMESTAMP", EnvelopeField::Timestamp, "NUMBER(38,0)"),
-        (
-            "KAFKA_TIMESTAMP_TYPE",
-            EnvelopeField::TimestampType,
-            "NUMBER(38,0)",
-        ),
-        ("KAFKA_OFFSET", EnvelopeField::Offset, "NUMBER(38,0)"),
-        ("KAFKA_PARTITION", EnvelopeField::Partition, "NUMBER(38,0)"),
-        ("KEY", EnvelopeField::Key, "VARCHAR"),
-        ("VALUE", EnvelopeField::Value, "VARCHAR"),
-        ("EXPORTED_AT", EnvelopeField::ExportedAt, "TIMESTAMP_TZ"),
-        ("DATE", EnvelopeField::Date, "DATE"),
-    ]
-    .into_iter()
-    .map(|(name, field, sql_type)| ColumnConfig {
-        name: name.to_owned(),
-        field,
-        sql_type: sql_type.to_owned(),
-    })
-    .collect()
+/// Fill what defaults by destination before the TOML becomes a [`crate::config::models::Config`]: the envelope columns, and Parquet files on Databricks.
+pub(crate) fn destination_defaults(value: &mut toml::Value) {
+    let databricks = value
+        .get("destination")
+        .and_then(|destination| destination.get("kind"))
+        .and_then(toml::Value::as_str)
+        == Some("databricks");
+    let Some(root) = value.as_table_mut() else {
+        return;
+    };
+    if databricks && let Some(staging) = root.get_mut("staging").and_then(toml::Value::as_table_mut)
+    {
+        staging
+            .entry("format")
+            .or_insert_with(|| toml::Value::from("parquet"));
+    }
+    let envelope = root
+        .entry("envelope")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    if let Some(envelope) = envelope.as_table_mut() {
+        envelope.entry("columns").or_insert_with(|| {
+            let columns = match databricks {
+                true => DATABRICKS_COLUMNS,
+                false => SNOWFLAKE_COLUMNS,
+            };
+            toml::Value::Array(columns.iter().map(column_value).collect())
+        });
+    }
+}
+
+fn column_value((name, field, sql_type): &(&str, &str, &str)) -> toml::Value {
+    toml::Value::Table(toml::Table::from_iter([
+        ("name".to_owned(), toml::Value::from(*name)),
+        ("field".to_owned(), toml::Value::from(*field)),
+        ("type".to_owned(), toml::Value::from(*sql_type)),
+    ]))
 }

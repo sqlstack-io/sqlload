@@ -1,9 +1,10 @@
-use crate::config::models::{Config, FileFormat};
+use crate::config::models::{Config, Destination, FileFormat};
 use crate::naming::main::qualify_stage::qualify_stage;
 use crate::naming::models::Stream;
 use crate::planning::_helpers::compatibility::column_problems;
 use crate::planning::_helpers::ddl::{
-    create_stage, create_stage_pipe, create_streaming_pipe, create_table, qualified,
+    create_databricks_table, create_stage, create_stage_pipe, create_streaming_pipe, create_table,
+    create_volume, qualified,
 };
 use crate::planning::constants::DEFAULT_STREAMING_PIPE_SUFFIX;
 use crate::planning::models::{
@@ -20,6 +21,9 @@ pub(crate) fn stream_objects(
     existing: &ExistingObjects,
     path: LoadPath,
 ) -> Vec<PlannedObject> {
+    if let Destination::Databricks(_) = config.destination {
+        return databricks_objects(config, stream, existing, path);
+    }
     let error_logging = path == LoadPath::Streaming && config.envelope.error_logging;
     let mut objects = vec![table_object(config, stream, existing, error_logging)];
     match path {
@@ -53,6 +57,7 @@ pub(crate) fn stream_objects(
                 Some(config.staging.format),
             ));
         }
+        LoadPath::Zerobus | LoadPath::VolumeCopy => {}
         LoadPath::S3AutoIngest | LoadPath::S3InsertFiles => {
             let auto_ingest = path == LoadPath::S3AutoIngest;
             let sql = create_stage_pipe(
@@ -75,14 +80,38 @@ pub(crate) fn stream_objects(
     objects
 }
 
+/// A Databricks stream's table, and its volume when files are staged there.
+fn databricks_objects(
+    config: &Config,
+    stream: &Stream,
+    existing: &ExistingObjects,
+    path: LoadPath,
+) -> Vec<PlannedObject> {
+    let mut table = table_object(config, stream, existing, false);
+    table.create_sql = create_databricks_table(config, &stream.table);
+    let mut objects = vec![table];
+    if path == LoadPath::VolumeCopy {
+        objects.push(PlannedObject {
+            kind: ObjectKind::Volume,
+            name: stream.stage.clone(),
+            state: match existing.stages.contains(&stream.stage) {
+                true => ObjectState::Exists,
+                false => ObjectState::Missing,
+            },
+            create_sql: create_volume(config, &stream.stage),
+        });
+    }
+    objects
+}
+
 /// The pipe's stage location: the bucket prefix, narrowed to the table's folder for auto-ingest.
 fn s3_source(config: &Config, stream: &Stream, auto_ingest: bool) -> String {
     let Some(s3) = config.staging.s3.as_ref() else {
         return String::new();
     };
     let stage = qualify_stage(
-        &config.destination.database,
-        &config.destination.schema,
+        config.destination.database(),
+        config.destination.schema(),
         &s3.stage,
     );
     let mut location = format!("@{stage}/");
@@ -106,7 +135,11 @@ fn table_object(
 ) -> PlannedObject {
     let state = match existing.tables.get(&stream.table) {
         None => ObjectState::Missing,
-        Some(columns) => match column_problems(&config.envelope.columns, columns) {
+        Some(columns) => match column_problems(
+            &config.envelope.columns,
+            columns,
+            !config.destination.is_snowflake(),
+        ) {
             problems if problems.is_empty() => ObjectState::Exists,
             problems => ObjectState::Incompatible(problems),
         },

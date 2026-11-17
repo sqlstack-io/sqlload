@@ -44,3 +44,28 @@ pub const S3_PATH_PLACEHOLDERS: &[&str] = &["topic", "table", "stream", "date", 
 
 /// What starts an environment variable reference: `${ENV:NAME}`.
 pub const ENVIRONMENT_PREFIX: &str = "ENV:";
+
+/// Snowflake's envelope columns: name, record field, type.
+pub const SNOWFLAKE_COLUMNS: &[(&str, &str, &str)] = &[
+    ("TOPIC", "topic", "VARCHAR"),
+    ("KAFKA_TIMESTAMP", "timestamp", "NUMBER(38,0)"),
+    ("KAFKA_TIMESTAMP_TYPE", "timestamp_type", "NUMBER(38,0)"),
+    ("KAFKA_OFFSET", "offset", "NUMBER(38,0)"),
+    ("KAFKA_PARTITION", "partition", "NUMBER(38,0)"),
+    ("KEY", "key", "VARCHAR"),
+    ("VALUE", "value", "VARCHAR"),
+    ("EXPORTED_AT", "exported_at", "TIMESTAMP_TZ"),
+    ("DATE", "date", "DATE"),
+];
+/// Databricks' envelope columns: name, record field, type.
+pub const DATABRICKS_COLUMNS: &[(&str, &str, &str)] = &[
+    ("topic", "topic", "STRING"),
+    ("kafka_timestamp", "timestamp", "BIGINT"),
+    ("kafka_timestamp_type", "timestamp_type", "INT"),
+    ("kafka_offset", "offset", "BIGINT"),
+    ("kafka_partition", "partition", "INT"),
+    ("key", "key", "STRING"),
+    ("value", "value", "STRING"),
+    ("exported_at", "exported_at", "TIMESTAMP"),
+    ("date", "date", "DATE"),
+];

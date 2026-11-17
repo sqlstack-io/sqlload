@@ -21,7 +21,7 @@ SQLLoad loads data into your warehouse, and shows you how before it changes anyt
 | Files | ✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through `pattern` (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
 | Google Sheets | ✓ | |
 | HTTP APIs and Python | ✓ | |
-| Kafka | ✓ into Snowflake, through the Kafka exporter | |
+| Kafka | ✓ into Snowflake or Databricks, through the Kafka exporter | |
 
 ¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
 distributed tables. ClickHouse Cloud is untested.
@@ -33,7 +33,7 @@ Connector/ODBC and OpenEdge are checked by hand. Another driver works when it de
 statements and lists tables: `sqlload plan` shows what it reports.
 
 See the [connector matrix](/docs/supported-systems/) for every combination and write strategy.
-To stream Kafka topics into Snowflake continuously, use the separate
+To stream Kafka topics into Snowflake or Databricks continuously, use the separate
 [Kafka exporter](/docs/kafka/).
 
 `sqlload plan` shows each table's columns, write strategy and route before `apply` and `load` run.

@@ -1,6 +1,6 @@
 ---
 title: "tables"
-description: "Print how each Kafka topic maps to a Snowflake table, stream and consumer group, without connecting to Snowflake."
+description: "Print how each Kafka topic maps to a table, stream and consumer group, without connecting to the warehouse."
 ---
 
 ```bash
@@ -8,7 +8,7 @@ sqlload tables [--topics-file FILE]
 ```
 
 `sqlload tables` shows how the [Kafka exporter](/docs/kafka/) names each topic's table,
-stream and consumer group, before anything connects to Snowflake. It prints one line per topic:
+stream and consumer group, before anything connects to the warehouse. It prints one line per topic:
 
 ```text
 <topic>	<table>	<stream>	<consumer group>

@@ -11,6 +11,10 @@ pub enum LoadPath {
     S3AutoIngest,
     S3InsertFiles,
     S3Copy,
+    /// Databricks: Zerobus Ingest.
+    Zerobus,
+    /// Databricks: a Unity Catalog volume, then `COPY INTO`.
+    VolumeCopy,
 }
 
 /// The warehouse object types sqlload creates.
@@ -19,6 +23,7 @@ pub enum ObjectKind {
     Table,
     Stage,
     Pipe,
+    Volume,
 }
 
 impl std::fmt::Display for ObjectKind {
@@ -27,6 +32,7 @@ impl std::fmt::Display for ObjectKind {
             Self::Table => "table",
             Self::Stage => "stage",
             Self::Pipe => "pipe",
+            Self::Volume => "volume",
         })
     }
 }

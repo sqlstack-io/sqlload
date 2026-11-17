@@ -9,7 +9,7 @@ use crate::batching::models::BufferGauge;
 use crate::config::main::stream_settings::stream_settings;
 use crate::config::models::{Config, OversizedPolicy};
 use crate::delivery::main::build_delivery::build_delivery;
-use crate::delivery::models::{Delivery, DeliveryInputs, StageClients};
+use crate::delivery::models::{Delivery, DeliveryInputs};
 use crate::exporter::_helpers::stream_task::{StreamInputs, run_stream};
 use crate::exporter::models::Clients;
 use crate::kafka::main::list_topics::list_topics;
@@ -162,14 +162,14 @@ impl Supervisor {
 
     /// Create missing objects; streams whose existing objects do not fit are left out and logged, so they cannot stop the rest.
     async fn apply(&mut self, streams: Vec<Stream>) -> Result<Vec<Stream>, String> {
-        let existing = read_existing(&self.clients.sql, &self.config)
+        let existing = read_existing(&self.clients.warehouse, &self.config)
             .await
             .map_err(|error| format!("cannot read existing objects: {error}"))?;
         let mut plan = build_plan(
             &self.config,
             &streams,
             &existing,
-            self.clients.auth.uses_key_pair(),
+            self.clients.warehouse.uses_key_pair(),
         );
         let incompatible = &mut self.incompatible;
         plan.streams.retain(|stream_plan| {
@@ -190,7 +190,7 @@ impl Supervisor {
             }
             problems.is_empty()
         });
-        let created = apply_plan(&self.clients.sql, &plan)
+        let created = apply_plan(&self.clients.warehouse, &plan)
             .await
             .map_err(|error| error.to_string())?;
         for object in created {
@@ -253,17 +253,11 @@ impl Supervisor {
 
     fn delivery(&self, stream: &Stream, oversized: OversizedPolicy) -> Result<Delivery, String> {
         let inputs = DeliveryInputs {
-            streaming: self.clients.streaming.clone(),
-            stage: StageClients {
-                http: self.clients.http.clone(),
-                auth: self.clients.auth.clone(),
-                sql: self.clients.sql.clone(),
-                driver: self.clients.driver.clone(),
-                account_url: self.clients.account_url.clone(),
-                in_flight: self.clients.in_flight.clone(),
-            },
+            http: self.clients.http.clone(),
+            in_flight: self.clients.in_flight.clone(),
+            warehouse: self.clients.warehouse.clone(),
             config: self.config.clone(),
-            path: load_path(&self.config, self.clients.auth.uses_key_pair()),
+            path: load_path(&self.config, self.clients.warehouse.uses_key_pair()),
             oversized,
         };
         build_delivery(&inputs, stream).map_err(|error| error.to_string())

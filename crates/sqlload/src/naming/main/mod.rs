@@ -1,3 +1,4 @@
+pub mod databricks_table;
 pub mod qualify_stage;
 pub mod quote_name;
 pub mod resolve_streams;

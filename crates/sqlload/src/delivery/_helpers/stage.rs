@@ -296,31 +296,7 @@ impl StageDelivery {
 
     /// One part per topic when the `s3` folder names the topic, otherwise the whole batch.
     fn parts<'a>(&self, batch: &'a Batch) -> Vec<Part<'a>> {
-        let by_topic = self.s3.is_some()
-            && self
-                .config
-                .staging
-                .s3
-                .as_ref()
-                .is_some_and(|s3| s3.path.contains("{topic}"));
-        let mut parts: BTreeMap<&str, Vec<&BatchRow>> = BTreeMap::new();
-        for row in &batch.rows {
-            let topic = match by_topic {
-                true => row.topic.as_str(),
-                false => "",
-            };
-            parts.entry(topic).or_default().push(row);
-        }
-        parts
-            .into_iter()
-            .map(|(topic, rows)| Part {
-                topic: match topic.is_empty() {
-                    true => batch.rows.first().map_or("", |row| row.topic.as_str()),
-                    false => topic,
-                },
-                rows,
-            })
-            .collect()
+        split_parts(batch, self.s3.is_some() && by_topic(&self.config))
     }
 
     /// `<folder>/<stream>_<digest>.<json.gz|parquet>`: the `s3` path template, or the UTC date on an internal stage.
@@ -443,10 +419,11 @@ impl StageDelivery {
                 let prefix = self.s3.as_ref().map_or("", |target| target.prefix.as_str());
                 format!("@{}/{prefix}", self.external_stage())
             }
-            LoadPath::Streaming => {
-                return Err(DeliveryError::Fatal(
-                    "streaming is not a stage load".to_owned(),
-                ));
+            LoadPath::Streaming | LoadPath::Zerobus | LoadPath::VolumeCopy => {
+                return Err(DeliveryError::Fatal(format!(
+                    "{:?} is not a Snowflake stage load",
+                    self.path
+                )));
             }
         };
         let mut folders: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -482,8 +459,8 @@ impl StageDelivery {
             .map(|s3| s3.stage.as_str())
             .unwrap_or_default();
         qualify_stage(
-            &self.config.destination.database,
-            &self.config.destination.schema,
+            self.config.destination.database(),
+            self.config.destination.schema(),
             stage,
         )
     }
@@ -507,21 +484,52 @@ impl StageDelivery {
     fn qualified(&self, name: &str) -> String {
         format!(
             "{}.{}.{}",
-            quote_name(&self.config.destination.database),
-            quote_name(&self.config.destination.schema),
+            quote_name(self.config.destination.database()),
+            quote_name(self.config.destination.schema()),
             quote_name(name)
         )
     }
 }
 
 /// One file's rows.
-struct Part<'a> {
-    topic: &'a str,
-    rows: Vec<&'a BatchRow>,
+pub(crate) struct Part<'a> {
+    pub(crate) topic: &'a str,
+    pub(crate) rows: Vec<&'a BatchRow>,
+}
+
+/// True when the `s3` path template names the topic, so each topic gets its own file.
+pub(crate) fn by_topic(config: &Config) -> bool {
+    config
+        .staging
+        .s3
+        .as_ref()
+        .is_some_and(|s3| s3.path.contains("{topic}"))
+}
+
+/// The batch's rows as one part, or one part per topic when `by_topic`.
+pub(crate) fn split_parts(batch: &Batch, by_topic: bool) -> Vec<Part<'_>> {
+    let mut parts: BTreeMap<&str, Vec<&BatchRow>> = BTreeMap::new();
+    for row in &batch.rows {
+        let topic = match by_topic {
+            true => row.topic.as_str(),
+            false => "",
+        };
+        parts.entry(topic).or_default().push(row);
+    }
+    parts
+        .into_iter()
+        .map(|(topic, rows)| Part {
+            topic: match topic.is_empty() {
+                true => batch.rows.first().map_or("", |row| row.topic.as_str()),
+                false => topic,
+            },
+            rows,
+        })
+        .collect()
 }
 
 /// A stable name for rows' content, so a retried upload and load of the same rows is deduplicated by Snowflake's load history.
-fn rows_digest(rows: &[&BatchRow]) -> String {
+pub(crate) fn rows_digest(rows: &[&BatchRow]) -> String {
     let mut ranges: BTreeMap<(&str, i32), (i64, i64)> = BTreeMap::new();
     for row in rows {
         let range = ranges
@@ -547,7 +555,7 @@ fn report_error(action: &str, pipe: &str, error: &ApiError) -> DeliveryError {
     }
 }
 
-fn retry(action: &str, error: &ApiError) -> DeliveryError {
+pub(crate) fn retry(action: &str, error: &ApiError) -> DeliveryError {
     match error.is_retryable() {
         true => DeliveryError::Retry(format!("{action} failed: {error}")),
         false => DeliveryError::Fatal(format!("{action} failed: {error}")),
