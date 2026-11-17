@@ -1,4 +1,4 @@
-//! The most memory the process has held at once: over a whole run on every OS, and per table on Linux (`load --memory-per-table`).
+//! The memory the process holds now, and the most it has held at once: over a whole run on every OS, and per table on Linux (`load --memory-per-table`).
 
 pub(crate) mod _helpers;
 pub mod constants;

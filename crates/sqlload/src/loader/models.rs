@@ -560,8 +560,6 @@ pub struct FetchMemory {
     pub memory: String,
     /// The fetch buffer and why, `plan`'s `buffer` line.
     pub budget_note: String,
-    /// The machine's memory limit the budget was worked out from, in bytes; `None` when it can't be read.
-    pub limit: Option<u64>,
 }
 
 /// A logged table's run log and what it means for this run.
@@ -663,6 +661,10 @@ pub struct ProjectPlan {
     pub unread_sharing: Vec<UnreadSharing>,
     /// How long each target's and source's connection and each source's discovery took, when the command line timed them.
     pub phases: Vec<PhaseTiming>,
+    /// The run's memory budget and how it is shared, `plan`'s `memory` line; `None` when the command line didn't work it out.
+    pub memory: Option<String>,
+    /// The `memory` line asks for something, so `plan` shows it without `-v` too (see [`RunMemory::asks`](crate::memory_budget::models::RunMemory)).
+    pub memory_asks: bool,
 }
 
 /// The tables a source that could not be read would load, as far as its settings name them.
@@ -785,6 +787,8 @@ pub struct PlanOptions {
     pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
+    /// `--memory-limit`: the run's memory budget, overriding the project's `memory_limit`.
+    pub memory_limit: Option<u64>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
@@ -1158,6 +1162,61 @@ pub struct Publisher {
     pub transform: Option<(TransformRun, usize)>,
     /// Under `send = "at_commit"`, the batches held locally until their commit sends them; `None` when each batch is sent as it is read.
     pub spool: Option<crate::commit_spool::models::Spool>,
+    /// The commit being cut into pieces under DuckDB's memory share.
+    pub pieces: Pieces,
+}
+
+/// Where a table's commit may be cut into pieces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cuts {
+    /// Between any two rows.
+    Anywhere,
+    /// Only where these columns' value changes: a `delete_insert` replaces each value's rows together.
+    Between(Vec<String>),
+    /// Nowhere, and why.
+    Never(&'static str),
+}
+
+/// A table's commits cut into pieces, each holding no more large values (those DuckDB keeps in memory until a checkpoint) than DuckDB's share commits at once.
+#[derive(Debug, Default)]
+pub struct Pieces {
+    /// The large values written since the last commit, counted as many times as DuckDB holds them (see [`STAGED_COPIES`](crate::memory_budget::constants::STAGED_COPIES)).
+    pub held: u64,
+    /// The large values of the rows in a row since the last change of the value pieces may only be cut between, which must commit together.
+    pub run: u64,
+    /// That value as text, at the last row written.
+    pub last_key: Option<String>,
+    /// Pieces committed since the last whole commit, which spares this load's rows when it deletes (see [`WriteStatementsRequest::spared_load`](crate::adapters::contract::models::WriteStatementsRequest)).
+    pub committed: u64,
+    /// The recovery marker is written: the table holds this load's rows before its last commit.
+    pub unfinished: bool,
+    /// The commit running is a piece: it records no run and leaves the load's position as it was.
+    pub piece: bool,
+    /// What the load's row group checks saw (see `Publisher::check_row_group`); `None` before the first.
+    pub group: Option<RowGroupSeen>,
+    /// The rows of this load, and their large values, which give its rows' width.
+    pub rows: u64,
+    pub large: u64,
+    /// How many times DuckDB holds the large values of a piece: three through a staging table, else once.
+    pub copies: u64,
+    /// The rows of `run` outgrew what DuckDB commits at once: the rest of them are counted, not written, and the table stops.
+    pub overflow: bool,
+    /// A marker statement for rows held under `send = "at_commit"`: it runs in the transaction that sends them, before they load.
+    pub statement: Option<String>,
+}
+
+/// What a load's row group checks saw of the table's open row group.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RowGroupSeen {
+    /// At the first check: the table's committed rows, the rows of its full row groups, and the bytes of the strings in the rest.
+    pub before: u64,
+    pub full: u64,
+    pub earlier: u64,
+    /// The row groups the load has filled since, and its large values when the last of them filled, which belong to the row groups before.
+    pub filled: u64,
+    pub large_at: u64,
+    /// The load's large values at the last check.
+    pub last_large: u64,
 }
 
 /// The child tables of one table's load, each planned from its rows as they arrive.
@@ -1335,6 +1394,11 @@ pub struct PlanView {
     pub warnings: Vec<PlanItem>,
     /// How long each connection and discovery took before the plan.
     pub phases: Vec<PhaseTiming>,
+    /// The run's memory budget and how it is shared.
+    pub memory: Option<String>,
+    /// Whether `plan` shows `memory` without `-v`: it asks for something.
+    #[serde(skip)]
+    pub memory_asks: bool,
 }
 
 /// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.

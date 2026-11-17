@@ -64,6 +64,7 @@ impl PythonHost for ExtensionHost {
                     arrays: request.arrays.clone(),
                     naming: request.naming,
                     zone: request.zone,
+                    source_part: request.source_part,
                 },
             ))
         })

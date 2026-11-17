@@ -696,4 +696,14 @@ pub trait TableWriter {
 
     /// Remove the staged files of a batch that did not load, unless the stage keeps them; best effort.
     fn remove_batch_files(&mut self, target: &WriteTarget<'_>) -> impl Future<Output = ()> + Send;
+
+    /// The destination's part of the run's memory budget, which cuts commits of large values into pieces; `None` where commits are not cut.
+    fn memory_share(&self) -> Option<crate::memory_budget::models::DuckDbShare> {
+        None
+    }
+
+    /// After a commit: write what the destination holds in memory since its last checkpoint to its file, when that passed its share's checkpoint bytes, or always when `force` (the load of a table with large values is done).
+    fn checkpoint(&mut self, _force: bool) -> impl Future<Output = Result<(), LoaderError>> + Send {
+        async { Ok(()) }
+    }
 }

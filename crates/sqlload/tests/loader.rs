@@ -20,6 +20,8 @@ mod files_helpers;
 mod files_target_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
+#[path = "loader/memory/helpers.rs"]
+mod memory_helpers;
 #[path = "loader/merge/helpers.rs"]
 mod merge_helpers;
 #[cfg(feature = "odbc")]
@@ -57,6 +59,8 @@ mod test_files_to_clickhouse;
 mod test_files_to_duckdb;
 #[path = "loader/test_loader_edge_cases.rs"]
 mod test_loader_edge_cases;
+#[path = "loader/test_memory_budget.rs"]
+mod test_memory_budget;
 #[path = "loader/test_merge_dedupe.rs"]
 mod test_merge_dedupe;
 #[path = "loader/test_mixed_cursors.rs"]

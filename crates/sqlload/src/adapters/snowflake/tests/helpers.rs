@@ -319,6 +319,7 @@ pub(crate) fn snowflake_hash_sql() -> String {
             mode: &WriteMode::Append,
             hashed: &["name".to_owned()],
             built: None,
+            spared_load: None,
         },
         &staging,
         (None, true),

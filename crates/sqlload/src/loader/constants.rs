@@ -199,3 +199,9 @@ pub const RANGE_PUBLISHED_ONCE: &str = "published in one commit replacing the wh
 
 /// How `plan` words a merge published in one commit, up to [`MERGE_RUN_ROWS`] rows.
 pub const MERGE_PUBLISHED_ONCE: &str = "published in one commit, or one every 10 million rows";
+
+/// Part of the error DuckDB refuses a `CREATE TABLE IF NOT EXISTS` with while another connection's create of the same table has not committed yet.
+pub const CATALOG_CONFLICT: &str = "Catalog write-write conflict";
+
+/// How often a table's create refused for [`CATALOG_CONFLICT`] is tried, 20 ms apart: the other connection's create commits within moments.
+pub const CATALOG_CONFLICT_TRIES: u32 = 10;

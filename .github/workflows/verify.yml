@@ -242,8 +242,9 @@ jobs:
           docker system df
 
   # The unit tests on Windows, then the executable end to end: drive paths, a UNC share, the
-  # psqlODBC driver against the runner's own Postgres, and a postgres_cdc load streaming through
-  # the loopback relay Windows uses instead of a socket file.
+  # psqlODBC driver against the runner's own Postgres, a postgres_cdc load streaming through
+  # the loopback relay Windows uses instead of a socket file, and a plan and load inside a job
+  # object's memory limit.
   windows:
     name: Windows
     needs: changes
@@ -316,7 +317,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --quiet duckdb pyodbc
-          python .github/scripts/windows_e2e.py target\debug\sqlload.exe $env:E2E_DIR \\localhost\sqlload-e2e --odbc-driver "PostgreSQL Unicode(x64)" --cursor-drivers --cdc
+          python .github/scripts/windows_e2e.py target\debug\sqlload.exe $env:E2E_DIR \\localhost\sqlload-e2e --odbc-driver "PostgreSQL Unicode(x64)" --cursor-drivers --cdc --job-object
 
   # Postgres to DuckDB, 1M narrow rows, sqlload alone with a release build: a wall-time figure
   # in the job summary, not a gate (shared runners are too noisy to gate on time), so Verify

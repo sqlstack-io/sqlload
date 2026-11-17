@@ -8,6 +8,8 @@ SQLLoad starts it as `python -c <this file>` and sends one JSON request per line
         -> {"id": 2, "ok": true, "rows": [["id", "BIGINT"], ...]}
     {"op": "close", "cursor": 3}
         -> no reply
+    {"op": "interrupt", "cursor": 3}
+        -> no reply; the cursor's running statement fails, and its reply says so
 
 A failure replies {"id": n, "ok": false, "error": "...", "type": "CatalogException"}. Each cursor is a connection of its own to
 the opened database (DuckDB's `cursor()`), created on its first request and run on its own thread in request order, so one
@@ -58,8 +60,9 @@ def main():
 
 	database = None
 	cursors = {}
+	opened = {}
 
-	def serve(work):
+	def serve(work, number):
 		cursor = None
 		while True:
 			request = work.get()
@@ -67,12 +70,13 @@ def main():
 				break
 			try:
 				if cursor is None:
-					cursor = database.cursor()
+					cursor = opened[number] = database.cursor()
 				cursor.execute(request["sql"], request.get("params") or None)
 				rows = cursor.fetchall() if cursor.description else []
 				reply({"id": request["id"], "ok": True, "rows": [[plain(value) for value in row] for row in rows]})
 			except BaseException as error:  # noqa: BLE001 - every failure goes back to SQLLoad as its reply, or it would wait forever
 				failed(request, error)
+		opened.pop(number, None)
 		if cursor is not None:
 			cursor.close()
 
@@ -91,8 +95,13 @@ def main():
 			work = cursors.get(request["cursor"])
 			if work is None:
 				work = cursors[request["cursor"]] = queue.Queue()
-				threading.Thread(target=serve, args=(work,), daemon=True).start()
+				threading.Thread(target=serve, args=(work, request["cursor"]), daemon=True).start()
 			work.put(request)
+		elif op == "interrupt":
+			# DuckDB's interrupt is safe from another thread: the cursor's running statement stops and rolls back.
+			running = opened.get(request["cursor"])
+			if running is not None:
+				running.interrupt()
 		elif op == "close":
 			work = cursors.pop(request["cursor"], None)
 			if work is not None:

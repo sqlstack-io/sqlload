@@ -165,6 +165,8 @@ pub struct WriteStatementsRequest<'a> {
     pub hashed: &'a [String],
     /// The batches went straight into `staging`, built in the table's shape: the write only swaps it in, so no row is written twice, then re-creates these indexes.
     pub built: Option<&'a [String]>,
+    /// The load id column and this load's id, whose rows a `delete_insert`'s deletes keep: the load committed some in pieces before.
+    pub spared_load: Option<(&'a str, &'a str)>,
 }
 
 /// What a table rebuilt beside itself must keep, where the warehouse cannot copy it (DuckDB).

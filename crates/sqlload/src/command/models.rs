@@ -254,6 +254,9 @@ pub struct LoaderArgs {
     /// The most tables loading at once (default: the project's `concurrency`, else 4); one table's batches always commit one at a time.
     #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
     pub concurrency: Option<u16>,
+    /// The memory the run stays under, such as `4GiB`, overriding the project's `memory_limit` (default: 80% of a container's or job object's limit, else 50% of the machine's memory).
+    #[arg(long, value_name = "SIZE", value_parser = crate::config::_helpers::units::parse_byte_size)]
+    pub memory_limit: Option<u64>,
     /// Print one JSON document on stdout: the plan for `plan`; for `apply` and `load`, the plan and what was created, altered and loaded.
     #[arg(long)]
     pub json: bool,
