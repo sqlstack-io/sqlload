@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.65.0](https://github.com/sqlstack-io/sqlload/compare/v0.64.0...v0.65.0) (2026-11-17)
+
+
+### Features
+
+* **load:** batch_concurrency reads several batch_size windows of a Postgres table at once, over connections sharing one snapshot, and commits them in window order ([53514f7](https://github.com/sqlstack-io/sqlload/commit/53514f7b8f155b5f64dc848257d1aa0ad5fecebb))
+
+
+### Bug Fixes
+
+* **files:** cursor_start reaches a files target's cursor windows as cursor text, so batch_size windows on a timestamp cursor plan with a {cursor:date} path ([53514f7](https://github.com/sqlstack-io/sqlload/commit/53514f7b8f155b5f64dc848257d1aa0ad5fecebb))
+
 ## [0.64.0](https://github.com/sqlstack-io/sqlload/compare/v0.63.1...v0.64.0) (2026-11-17)
 
 
