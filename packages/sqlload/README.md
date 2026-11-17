@@ -42,8 +42,9 @@ sqlload apply    # create the tables
 sqlload load     # load them
 ```
 
-A `sqlload.toml` names your sources and targets; the
-[quickstart](https://sqlload.io/docs/quickstart/) builds one. To load one table once with no
+A `sqlload.toml` names your sources and targets. `sqlload playground` writes one that loads
+sample CSV files into DuckDB, with no database or credentials; the
+[quickstart](https://sqlload.io/docs/quickstart/) runs it. To load one table once with no
 configuration file:
 
 ```bash

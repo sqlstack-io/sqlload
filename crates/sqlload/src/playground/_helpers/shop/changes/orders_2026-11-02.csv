@@ -1,0 +1,3 @@
+order_id,customer_id,status,total,updated_at
+42,43,cancelled,67.54,2026-11-02 09:00:00
+1001,7,placed,99.90,2026-11-02 09:05:00

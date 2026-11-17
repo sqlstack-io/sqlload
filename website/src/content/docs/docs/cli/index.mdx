@@ -20,6 +20,7 @@ Commands:
   logged-state  Inspect or change the run log of `state = "logged"` tables
   contract      Compare each table's declared columns with its live table, or adopt the live columns into the declarations; exits 1 when they differ
   copy          Copy one table once, between connections named in sqlload.toml or URIs (sqlload.toml is optional)
+  playground    Create a self-contained project that loads CSV files into DuckDB, or with --change add the next change to its data
   help          Print this message or the help of the given subcommand(s)
 ```
 
@@ -35,6 +36,7 @@ starts `sqlload.exe` and waits for it: Ctrl-C and Ctrl-Break reach `sqlload` as 
 | `apply` | [apply](/docs/cli/apply/) |
 | `load` | [load](/docs/cli/load/) |
 | `copy` | [copy](/docs/cli/copy/) |
+| `playground` | [playground](/docs/cli/playground/) |
 | `contract diff`, `contract generate` | [contract](/docs/cli/contract/) |
 | `debug` | [debug](/docs/cli/debug/) |
 | `logged-state` | [logged-state](/docs/cli/logged-state/), only for Python tables with `state="logged"` |

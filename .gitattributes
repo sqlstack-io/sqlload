@@ -1,0 +1,3 @@
+# Files the sqlload binary embeds and writes out as they are: keep their bytes on every platform,
+# so a Windows checkout (core.autocrlf) doesn't build a binary that writes CRLF files.
+crates/sqlload/src/playground/_helpers/shop/** -text

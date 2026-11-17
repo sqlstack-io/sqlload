@@ -42,6 +42,7 @@ pub mod parquet_parts;
 pub mod peak_memory;
 pub mod plan_text;
 pub mod planning;
+pub mod playground;
 pub mod postgres_source;
 pub mod project;
 pub mod publish_checks;

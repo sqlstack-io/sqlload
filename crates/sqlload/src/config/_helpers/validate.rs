@@ -98,8 +98,9 @@ fn databricks_problems(config: &Config, databricks: &DatabricksConfig) -> Vec<St
         .columns
         .iter()
         .filter(|column| {
+            let upper = column.sql_type.trim().to_ascii_uppercase();
             column.field == EnvelopeField::Timestamp
-                && column.sql_type.trim().to_ascii_uppercase().starts_with("TIMESTAMP")
+                && (upper.starts_with("TIMESTAMP") || upper.starts_with("DATE"))
         })
         .map(|column| format!("envelope column {} holds the Kafka timestamp, milliseconds since the epoch, which Databricks would read as another unit; type it BIGINT", column.name))
         .collect();

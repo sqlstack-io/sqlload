@@ -190,7 +190,8 @@ fn oversized_message(row: &BatchRow, bytes: usize, limit: u64) -> String {
 pub(crate) fn open_error(table: &str, client_id: &str, error: &ZerobusError) -> DeliveryError {
     let refused = match error {
         ZerobusError::InvalidUCTokenError(message) => {
-            message.starts_with("Client error (401)") || message.starts_with("Client error (403)")
+            (message.starts_with("Client error (401)") || message.starts_with("Client error (403)"))
+                && !message.contains("invalid_client")
         }
         ZerobusError::CreateStreamError(status) => {
             matches!(
