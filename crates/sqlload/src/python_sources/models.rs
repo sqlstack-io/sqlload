@@ -46,6 +46,9 @@ pub struct TableRead {
     /// The table's `timezone`, which an `sl.field` parse without its own `tz` reads times without an offset in; `None` is UTC.
     #[serde(skip)]
     pub zone: Option<chrono_tz::Tz>,
+    /// The most the table's `sl.http` jobs hold in pages requested ahead: a quarter of its share of the run's memory budget; `None` without a budget. Not sent to the table function.
+    #[serde(skip)]
+    pub source_part: Option<u64>,
 }
 
 /// The cursor window a table function may use to read only new data.

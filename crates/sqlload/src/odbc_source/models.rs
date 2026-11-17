@@ -64,23 +64,13 @@ pub struct FetchSize {
     pub bytes: usize,
 }
 
-/// The memory a machine gives SQLLoad: a container's cgroup limit, or else its physical memory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MemoryLimit {
-    pub bytes: u64,
-    /// The limit is a cgroup's `memory.max` (or v1's `memory.limit_in_bytes`) below the machine's memory.
-    pub container: bool,
-}
-
 /// The memory one fetch of a table may hold, why, and what it was worked out from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MemoryBudget {
     pub bytes: usize,
     pub reason: BudgetReason,
-    /// The machine's memory limit; `None` when it can't be read (Windows).
-    pub limit: Option<MemoryLimit>,
-    /// The most tables loading at once.
-    pub concurrency: usize,
+    /// Each table's share of the run's memory budget; `None` without a budget.
+    pub share: Option<u64>,
 }
 
 /// Why a fetch's budget is what it is.
@@ -88,9 +78,9 @@ pub struct MemoryBudget {
 pub enum BudgetReason {
     /// The source's `max_batch_memory`.
     Set,
-    /// 512 MiB, which half the limit shared between the tables loading at once doesn't lower.
+    /// 512 MiB, which a quarter of the table's share doesn't lower.
     Default,
-    /// Half the limit, shared between the tables loading at once, below 512 MiB.
+    /// A quarter of the table's share of the memory budget, below 512 MiB.
     Capped,
 }
 
@@ -105,8 +95,6 @@ pub struct PlannedFetch {
     pub memory: String,
     /// `plan`'s budget line: the budget and why.
     pub budget_note: String,
-    /// The machine's memory limit the budget was worked out from, in bytes.
-    pub limit: Option<u64>,
 }
 
 /// What one read selects: a table or a query, its columns, and the rows' filter.

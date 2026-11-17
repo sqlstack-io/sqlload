@@ -58,16 +58,27 @@ with `--allow-type-change-rebuild`. The column keeps its values.
 
 ## Memory
 
-DuckDB writes a full row group, 122,880 rows, to the database file as rows arrive. Until a commit,
-it holds the rows short of a full row group in memory, and at commit it copies them into its
-write-ahead log in memory as well. Most tables don't notice: rows of a few hundred bytes fill row
-groups quickly. A table of few rows with large values does. Loading 300 rows of 1 MB each
-(286 MB) in one commit peaks at about 1.2 GB, whatever the source's fetch budget, as measured with
-DuckDB 2.0. The same 286 MB as three million short rows peaks at about 300 MB.
+From 0.68.0, a DuckDB target opens with its part of the run's
+[memory budget](/docs/cli/load/#memory-budget): a `memory_limit` of half that part, at least 256MB,
+and one thread per 128 MiB of it, between two and the machine's cores. `plan` shows both on its
+`Memory` line.
 
-So for such a table, peak memory is about four times the bytes of the largest commit, plus the
-blocks DuckDB keeps cached, up to its memory limit (80% of the machine's memory by default). It
-doesn't follow the source's `max_batch_memory`, and smaller commits alone don't lower it: DuckDB's
-cache fills to its limit either way. `plan` notes this on each DuckDB table. A Postgres target stays
-bounded: the same 286 MB loads in about 225 MB with `send = "at_commit"` and 410 MB with
-`send = "per_batch"`.
+DuckDB keeps values of about 85 KiB and more in memory from their insert until a checkpoint writes
+them to the file, and a checkpoint rewrites the table's last, unfinished row group (up to 122,880
+rows) whole. So a table of few, wide rows needs memory that its commits' bytes set, not its fetch
+budget. SQLLoad handles this for you:
+
+- Its commits are cut into pieces, each holding large values of at most a quarter of the
+  `memory_limit`. See [Large rows in DuckDB](/docs/cli/load/#large-rows-in-duckdb).
+- DuckDB's automatic checkpoint is off during a load, since one that runs out of memory makes the
+  database unusable until it's opened with more memory. SQLLoad checkpoints after a piece when the
+  large values waiting for one reach 40% of the `memory_limit`, and after the load of each table
+  that held large values.
+- A database left with a write-ahead log, as after a crash, is checkpointed when the target
+  opens, before any table loads.
+- A table whose last row group would hold more large values than a checkpoint can rewrite within
+  the `memory_limit` fails before it commits, naming the run's `memory_limit` that would fit it.
+
+Loading 300 rows of 1 MiB each with a 256MB `memory_limit` succeeds for every write strategy, in
+pieces. A Postgres target stays bounded without pieces: the same 286 MB loads in about 225 MB with
+`send = "at_commit"` and 410 MB with `send = "per_batch"`.

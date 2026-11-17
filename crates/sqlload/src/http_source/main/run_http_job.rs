@@ -7,10 +7,10 @@ use crate::http_source::models::{HttpJob, HttpPage};
 use crate::python_sources::errors::ReadError;
 use crate::row_batches::models::ProjectionRules;
 
-/// Run the job `definition` (JSON from `sl.http`) with the table's `connections`, handing each page to `deliver` in arrival order; `deliver` returning `false` (the consumer has gone) cancels the requests in flight. The definition is checked whole before any request, including that projected rows meet the table's `rules`; the error says whether running the job again may succeed.
+/// Run the job `definition` (JSON from `sl.http`) with the table's `connections` and its source's part of the memory budget (`source_part`, see [`Calls`](crate::http_source::models::Calls)), handing each page to `deliver` in arrival order; `deliver` returning `false` (the consumer has gone) cancels the requests in flight. The definition is checked whole before any request, including that projected rows meet the table's `rules`; the error says whether running the job again may succeed.
 pub fn run_http_job(
     definition: &str,
-    connections: &Map<String, Value>,
+    (connections, source_part): (&Map<String, Value>, Option<u64>),
     rules: ProjectionRules<'_>,
     deliver: impl FnMut(HttpPage) -> bool,
 ) -> Result<(), ReadError> {
@@ -18,7 +18,7 @@ pub fn run_http_job(
         .map_err(|error| format!("cannot read the sl.http job: {error}"))?;
     let problems = job_problems(&job, rules);
     match problems.is_empty() {
-        true => drive_job(job, connections, deliver),
+        true => drive_job(job, (connections, source_part), deliver),
         false => Err(problems.join("; ").into()),
     }
 }

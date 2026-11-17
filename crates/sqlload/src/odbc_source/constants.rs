@@ -26,11 +26,8 @@ pub const BATCHES_AHEAD: usize = 2;
 /// The buffer per value over which a text or binary column is read value by value, unless the source sets `long_column_threshold`: 4 KiB.
 pub const DEFAULT_LONG_COLUMN_THRESHOLD: usize = 4 * 1024;
 
-/// The most memory one fetch of a table holds, unless the source sets `max_batch_memory` or the machine has too little: 512 MiB.
+/// The most memory one fetch of a table holds, unless the source sets `max_batch_memory` or the table's share of the memory budget is too small: 512 MiB.
 pub const DEFAULT_BATCH_MEMORY: usize = 512 * 1024 * 1024;
-
-/// The share of the memory limit every table's fetches together may take: half, leaving the rest for the Arrow batches made from them and the destination's writes.
-pub const FETCH_SHARE_OF_LIMIT: usize = 2;
 
 /// The text buffer arrow-odbc binds for a time in milliseconds, microseconds and nanoseconds (`HH:MM:SS.fff` and longer).
 pub const TIME_TEXT_LENGTHS: [usize; 3] = [12, 15, 18];
@@ -43,35 +40,6 @@ pub const VALUE_OVERHEAD: usize = 4;
 
 /// How many of a table's long columns `plan` names.
 pub const NAMED_LONG_COLUMNS: usize = 3;
-
-/// What a cgroup's limit file holds when it sets none.
-pub const UNLIMITED: &str = "max";
-
-/// The cgroup v1 controller that limits memory, as `/proc/self/cgroup` names it.
-pub const MEMORY_CONTROLLER: &str = "memory";
-
-/// The cgroup v2 line of `/proc/self/cgroup`, before the group's path.
-pub const CGROUP_V2_PREFIX: &str = "0::";
-
-/// Each cgroup v2 and v1 group's memory limit file.
-pub const CGROUP_V2_LIMIT: &str = "memory.max";
-pub const CGROUP_V1_LIMIT: &str = "memory.limit_in_bytes";
-
-/// The `/proc/meminfo` line of the machine's memory, and its unit.
-pub const MEMINFO_TOTAL: &str = "MemTotal:";
-pub const MEMINFO_UNIT: &str = "kB";
-
-/// Where Linux lists the process's cgroups: `0::/path` under cgroup v2, `N:memory:/path` under v1.
-pub const PROC_CGROUP: &str = "/proc/self/cgroup";
-
-/// Where cgroup v2 is mounted; each group's limit is `memory.max` in its folder.
-pub const CGROUP_V2_ROOT: &str = "/sys/fs/cgroup";
-
-/// Where cgroup v1's memory controller is mounted; each group's limit is `memory.limit_in_bytes` in its folder.
-pub const CGROUP_V1_ROOT: &str = "/sys/fs/cgroup/memory";
-
-/// Where Linux reports the machine's memory (`MemTotal:  16314228 kB`).
-pub const PROC_MEMINFO: &str = "/proc/meminfo";
 
 /// What the driver manager's error says when a value is longer than its buffer.
 pub const TOO_LARGE_VALUE: &str = "too large to be written into the allocated buffer";

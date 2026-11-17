@@ -30,6 +30,8 @@ impl Drop for BridgeCursor {
 pub struct BridgeProcess {
     /// The Python it runs on, as messages name it.
     pub python: String,
+    /// Its process id, whose memory the watchdog counts with SQLLoad's.
+    pub pid: u32,
     pub lines: Sender<String>,
     pub replies: Arc<Mutex<Replies>>,
     pub next_request: AtomicU64,

@@ -480,6 +480,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             mode: &test_case.mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         };
         assert_eq!(
             sql_adapter(test_case.warehouse).render_write(&request, &staging),

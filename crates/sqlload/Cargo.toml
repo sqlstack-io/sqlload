@@ -120,6 +120,9 @@ zstd.workspace = true
 nix.workspace = true
 rustix.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+
 # librdkafka's default build runs its mklove `configure` script and `make`, which MSVC has
 # neither of; on Windows it is built with CMake instead.
 [target.'cfg(windows)'.dependencies]

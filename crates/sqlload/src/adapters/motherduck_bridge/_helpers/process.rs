@@ -32,6 +32,7 @@ pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProce
             "{python} started without its pipes"
         )));
     };
+    let pid = child.id();
     let (lines, outgoing) = channel::<String>();
     let replies = Arc::new(Mutex::new(Replies::default()));
     let tail = Arc::new(Mutex::new(String::new()));
@@ -64,6 +65,7 @@ pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProce
     });
     Ok(Arc::new(BridgeProcess {
         python: python.to_owned(),
+        pid,
         lines,
         replies,
         next_request: AtomicU64::new(1),

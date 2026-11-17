@@ -6,25 +6,21 @@ use arrow_odbc::odbc_api::Connection;
 use crate::odbc_source::_helpers::batches::fetch_schema;
 use crate::odbc_source::_helpers::columns::{fetch_shape, fetch_size};
 use crate::odbc_source::_helpers::connect::connect;
-use crate::odbc_source::_helpers::memory::{budget_note, fetch_budget, memory_limit, memory_line};
+use crate::odbc_source::_helpers::memory::{budget_note, fetch_budget, memory_line};
 use crate::odbc_source::_helpers::query::select_query;
 use crate::odbc_source::errors::OdbcSourceError;
 use crate::odbc_source::models::{
     FetchShape, OdbcReadRequest, OdbcReader, PlannedFetch, ValueLimits,
 };
 
-/// For each of `requests`, in order, how its rows would be fetched: under the budget of `set` (the source's `max_batch_memory`), else 512 MiB lowered to half this machine's memory limit (a container's cgroup limit, else its physical memory) shared between `concurrency` tables; in bulk or value by value, as the driver describes the prepared `SELECT` (without its filter). Nothing is run. All are described over one connection; when it can't be made, or the driver can't describe a read, its `fetch` line says why.
+/// For each of `requests`, in order, how its rows would be fetched: under the budget of `set` (the source's `max_batch_memory`), else 512 MiB lowered to a quarter of each table's `share` of the run's memory budget; in bulk or value by value, as the driver describes the prepared `SELECT` (without its filter). Nothing is run. All are described over one connection; when it can't be made, or the driver can't describe a read, its `fetch` line says why.
 pub async fn plan_fetches(
     reader: &OdbcReader,
     requests: &[OdbcReadRequest<'_>],
-    (set, concurrency): (Option<usize>, usize),
+    (set, share): (Option<usize>, Option<u64>),
 ) -> Vec<PlannedFetch> {
-    let (limit, unreadable) = match memory_limit() {
-        Ok(limit) => (limit, None),
-        Err(reason) => (None, Some(reason)),
-    };
-    let budget = fetch_budget(set, limit, concurrency);
-    let note = budget_note(&budget, unreadable.as_deref());
+    let budget = fetch_budget(set, share);
+    let note = budget_note(&budget);
     let queries: Vec<String> = requests
         .iter()
         .map(|request| {
@@ -59,7 +55,6 @@ pub async fn plan_fetches(
             estimate,
             memory,
             budget_note: note.clone(),
-            limit: budget.limit.map(|limit| limit.bytes),
         });
     }
     planned

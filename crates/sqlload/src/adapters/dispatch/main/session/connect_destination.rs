@@ -29,7 +29,11 @@ pub async fn connect_destination(
         #[cfg(feature = "duckdb")]
         Some(
             connection @ (ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }),
-        ) => Destination::DuckDb(open_destination(connection, target.database.as_deref())?),
+        ) => Destination::DuckDb(open_destination(
+            connection,
+            target.database.as_deref(),
+            project.memory.budget,
+        )?),
         #[cfg(not(feature = "duckdb"))]
         Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
             return Err(LoaderError::Invalid(format!(

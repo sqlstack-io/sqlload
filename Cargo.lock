@@ -6043,6 +6043,7 @@ dependencies = [
  "humantime",
  "indicatif",
  "jsonwebtoken",
+ "libc",
  "nix",
  "object_store",
  "parquet",
