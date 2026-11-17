@@ -233,7 +233,7 @@ fn given_a_motherduck_connection_when_opening_then_the_targets_database_wins_and
             database: test_case.connection_database.map(str::to_owned),
             token: Some(Secret(String::new())),
         };
-        let error = open_motherduck(&connection, test_case.target_database, None)
+        let error = open_motherduck(&connection, test_case.target_database, (None, None))
             .err()
             .map(|error| error.to_string());
         assert_eq!(
@@ -333,7 +333,7 @@ fn given_a_duckdb_connection_when_its_database_is_a_motherduck_path_then_it_is_r
         },
     ];
     for test_case in test_cases {
-        let error = open_duckdb(test_case.path)
+        let error = open_duckdb(test_case.path, None)
             .err()
             .map(|error| error.to_string());
         assert_eq!(
@@ -361,7 +361,7 @@ fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches(
         },
     ];
     for test_case in test_cases {
-        let mut destination = open_duckdb(":memory:").map_err(|error| error.to_string())?;
+        let mut destination = open_duckdb(":memory:", None).map_err(|error| error.to_string())?;
         destination.motherduck = test_case.motherduck;
         let accepts = writer_accepts(&Destination::DuckDb(destination), None);
         assert!(accepts.arrow, "{}", test_case.description);
@@ -394,7 +394,7 @@ fn given_other_attached_databases_when_reading_the_schema_and_staging_then_only_
     }];
     let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
     for test_case in test_cases {
-        let destination = open_duckdb(":memory:").map_err(|error| error.to_string())?;
+        let destination = open_duckdb(":memory:", None).map_err(|error| error.to_string())?;
         let table = TableName {
             database: Some("memory".to_owned()),
             schema: "raw".to_owned(),
@@ -462,7 +462,7 @@ fn given_indexes_and_a_database_named_like_the_schema_when_a_rebuild_recreates_t
     }];
     let runtime = tokio::runtime::Runtime::new().map_err(|error| error.to_string())?;
     for test_case in test_cases {
-        let destination = open_duckdb(":memory:").map_err(|error| error.to_string())?;
+        let destination = open_duckdb(":memory:", None).map_err(|error| error.to_string())?;
         let table = TableName {
             database: Some("memory".to_owned()),
             schema: "raw".to_owned(),

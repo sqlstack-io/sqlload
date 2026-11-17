@@ -116,3 +116,11 @@ pub struct RunsSetup {
     pub create: String,
     pub fallback: Option<String>,
 }
+
+/// The statements of one load's recovery marker on its table: creating the markers' table, marking the load (in the transaction of its first piece) and removing the mark (in that of its last commit).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnfinishedMarker {
+    pub create: String,
+    pub mark: String,
+    pub unmark: String,
+}

@@ -1,10 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::adapters::contract::constants::{COMMIT_STATEMENT, ROLLBACK_STATEMENT};
+use crate::adapters::contract::main::escape_literal::escape_literal;
+use crate::adapters::contract::models::BoundParameter;
+use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::types::TableWriter;
 use crate::adapters::dispatch::main::dialect::files_destination::files_destination;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::session::clean_stage::clean_stage;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
+use crate::adapters::dispatch::main::session::execute::execute;
+use crate::adapters::dispatch::main::session::execute_ddl::execute_ddl;
+use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::constants::PARQUET_SUFFIX;
 use crate::adapters::files::main::close_writer::close_writer;
@@ -39,17 +47,32 @@ use crate::files_source::main::read_footers::read_footers;
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::files_source::models::{FileColumn, SourceFormat, StoredRead};
+use crate::load_naming::main::metadata_name::metadata_name;
+use crate::load_naming::models::MetadataRole;
 use crate::loader::_helpers::publish::window_filter;
+use crate::loader::_helpers::publish::{staged_columns, write_target};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{ReadPart, read_source};
 use crate::loader::_helpers::table_plan::blocked_plan;
+use crate::loader::constants::{CATALOG_CONFLICT, CATALOG_CONFLICT_TRIES};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
 use crate::loader::models::{CommitRange, Publisher};
+use crate::loader::models::{Cuts, Pieces, RowGroupSeen};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
 use crate::masking::main::mask_batch::mask_batch;
+use crate::memory_budget::constants::{
+    DUCKDB_COMMIT_PERCENT, DUCKDB_ROW_GROUP_PERCENT, DUCKDB_ROW_GROUP_ROWS, HOLDING_DIVISOR,
+    LARGE_VALUE_BYTES, STAGED_COPIES,
+};
+use crate::memory_budget::main::large_values::large_values;
+use crate::memory_budget::main::needed_budget::needed_budget;
+use crate::memory_budget::main::table_memory::table_memory;
+use crate::memory_budget::models::DuckDbShare;
+use crate::number_text::main::memory_text::memory_text;
+use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::main::end_snapshot::end_snapshot;
 use crate::postgres_source::main::share_snapshot::share_snapshot;
 use crate::postgres_source::models::ReadColumn;
@@ -57,6 +80,9 @@ use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
 use crate::run_log::main::record_object_name::record_object_name;
 use crate::run_log::main::runs_location::runs_location;
+use crate::run_log::main::unfinished_marker::unfinished_marker;
+use crate::run_log::main::unfinished_recovery::unfinished_recovery;
+use crate::run_log::models::UnfinishedMarker;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn, TableAction};
 use crate::table_lease::constants::LEASE_REFRESH;
 use crate::table_lease::main::keep_lease::keep_lease;
@@ -64,7 +90,9 @@ use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
 use arrow_array::RecordBatch;
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tokio_postgres::Client;
 use tokio_util::sync::CancellationToken;
@@ -999,4 +1027,640 @@ async fn read_window(
         spool,
         read_for: started.elapsed(),
     })
+}
+
+/// Stop the process at `point` when a crash test asks for it there (`SQLLOAD_TEST_CRASH_AT`); compiled into test builds only.
+fn crash_point(point: &str) {
+    #[cfg(feature = "container-tests")]
+    if std::env::var("SQLLOAD_TEST_CRASH_AT").is_ok_and(|wanted| wanted == point) {
+        std::process::abort();
+    }
+    #[cfg(not(feature = "container-tests"))]
+    let _ = point;
+}
+
+/// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions (its `replace_key` kept).
+pub(in crate::loader) fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
+    let narrowed = match range {
+        Some(CommitRange::Window { from, to }) => (from, to, Vec::new()),
+        Some(CommitRange::Values(values)) if !values.is_empty() => (None, None, values),
+        _ => return planned.clone(),
+    };
+    match planned {
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            not_null_keys,
+            ..
+        } => WriteMode::DeleteInsert {
+            cursor_column: cursor_column.clone(),
+            from: narrowed.0,
+            to: narrowed.1,
+            values: narrowed.2,
+            replace_key: replace_key.clone(),
+            not_null_keys: not_null_keys.clone(),
+        },
+        planned => planned.clone(),
+    }
+}
+
+/// The write mode of a piece: a `delete_insert` replaces only the rows of the `replace_key` values, or cursor values, its rows hold; its commit's range goes when the commit ends.
+pub(in crate::loader) fn piece_mode(planned: &WriteMode) -> WriteMode {
+    match planned {
+        WriteMode::DeleteInsert {
+            cursor_column,
+            replace_key,
+            not_null_keys,
+            ..
+        } => WriteMode::DeleteInsert {
+            cursor_column: None,
+            from: None,
+            to: None,
+            values: Vec::new(),
+            replace_key: match replace_key.is_empty() {
+                true => cursor_column.iter().cloned().collect(),
+                false => replace_key.clone(),
+            },
+            not_null_keys: match replace_key.is_empty() {
+                true => Vec::new(),
+                false => not_null_keys.clone(),
+            },
+        },
+        planned => planned.clone(),
+    }
+}
+
+/// Whether the table's commits delete a cursor range (`delete_insert` with a cursor), so its last range commits even without rows: rows deleted upstream go too.
+pub(in crate::loader) fn deletes_range(mode: &WriteMode) -> bool {
+    matches!(
+        mode,
+        WriteMode::DeleteInsert {
+            cursor_column: Some(_),
+            ..
+        }
+    )
+}
+
+/// Each row's value of `columns` in `batch`, as one text.
+fn row_keys(batch: &RecordBatch, columns: &[String]) -> Result<Vec<String>, LoaderError> {
+    let options = FormatOptions::default().with_null("\u{0}");
+    let mut formatters: Vec<ArrayFormatter<'_>> = Vec::new();
+    for name in columns {
+        let column = batch.column_by_name(name).ok_or_else(|| {
+            LoaderError::Invalid(format!("the rows have no column {name} to cut pieces by"))
+        })?;
+        let formatter = ArrayFormatter::try_new(column.as_ref(), &options)
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        formatters.push(formatter);
+    }
+    Ok((0..batch.num_rows())
+        .map(|row| row_key(&formatters, row))
+        .collect())
+}
+
+/// Row `row`'s value of the columns `formatters` show, as one text.
+fn row_key(formatters: &[ArrayFormatter<'_>], row: usize) -> String {
+    let values: Vec<String> = formatters
+        .iter()
+        .map(|formatter| formatter.value(row).to_string())
+        .collect();
+    values.join("\u{1f}")
+}
+
+impl Publisher {
+    /// Write `batch` where the table's batches go. Under a DuckDB memory share, a batch with large values (see [`large_values`]) is written a piece at a time, each piece committed once the next row would take the commit past the share's commit bytes (a quarter of that while the watchdog holds the load), cut only where the table's commit may be cut (see [`Cuts`]); rows that must commit together past DuckDB's `memory_limit`, or a commit that can't be cut past it, stop the table, naming the fix.
+    pub(in crate::loader) async fn write_rows(
+        &mut self,
+        batch: RecordBatch,
+    ) -> Result<(), LoaderError> {
+        let share = self.writer.memory_share();
+        if self.pieces.overflow {
+            return self.count_overflow(&batch);
+        }
+        let large = share.and_then(|_| large_values(&batch));
+        let (Some(share), Some(large)) = (share, large) else {
+            return self.write_part(batch).await;
+        };
+        self.pieces.rows += batch.num_rows() as u64;
+        self.pieces.large += large.iter().sum::<u64>();
+        self.pieces.copies = match self.staging.is_some() && !self.builds {
+            true => STAGED_COPIES,
+            false => 1,
+        };
+        let copies = self.pieces.copies;
+        let cuts = self.cuts();
+        let keys = match &cuts {
+            Cuts::Between(columns) => Some(row_keys(&batch, columns)?),
+            _ => None,
+        };
+        let mut start = 0;
+        let mut boundary: Option<usize> = None;
+        let mut carried = self.pieces.held;
+        let mut written = 0;
+        for (row, bytes) in large.iter().enumerate() {
+            let changed = match (&cuts, &keys) {
+                (Cuts::Anywhere, _) => true,
+                (Cuts::Between(_), Some(keys)) => self.pieces.last_key.as_ref() != Some(&keys[row]),
+                _ => false,
+            };
+            if let Some(keys) = &keys {
+                self.pieces.last_key = Some(keys[row].clone());
+            }
+            if changed {
+                self.pieces.run = 0;
+                if row > start || carried > 0 {
+                    boundary = Some(row);
+                }
+            }
+            self.pieces.run += bytes;
+            if self.pieces.run * copies > share.commit_bytes {
+                self.pieces.overflow = true;
+                return match cuts {
+                    Cuts::Anywhere => Err(self.too_large()),
+                    _ => self.count_overflow(&batch.slice(row + 1, batch.num_rows() - row - 1)),
+                };
+            }
+            written += bytes * copies;
+            let held = carried + written;
+            if held <= self.commit_bytes(share) {
+                continue;
+            }
+            let Some(at) = boundary.take() else {
+                continue;
+            };
+            if at > start {
+                self.write_part(batch.slice(start, at - start)).await?;
+            }
+            let rest = (batch.num_rows() - at) as u64;
+            self.batch_rows -= rest;
+            self.commit_piece().await?;
+            self.batch_rows = rest;
+            carried = 0;
+            written = large[at..=row].iter().sum::<u64>() * copies;
+            start = at;
+        }
+        self.pieces.held = carried + written;
+        self.report_held();
+        match start {
+            0 => self.write_part(batch).await,
+            start if start < batch.num_rows() => {
+                let rest = batch.num_rows() - start;
+                self.write_part(batch.slice(start, rest)).await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The most one piece holds: the share's commit bytes, or a quarter of them while the watchdog holds the load near its budget.
+    fn commit_bytes(&self, share: DuckDbShare) -> u64 {
+        let holding =
+            table_memory().is_some_and(|watched| watched.guard.holding.load(Ordering::Relaxed));
+        match holding {
+            true => share.commit_bytes / HOLDING_DIVISOR,
+            false => share.commit_bytes,
+        }
+    }
+
+    /// Tell the watchdog what the table holds: its open piece's large values.
+    fn report_held(&self) {
+        if let Some(watched) = table_memory() {
+            watched
+                .table
+                .held
+                .store(self.pieces.held, Ordering::Relaxed);
+        }
+    }
+
+    /// Where the table's commits may be cut: anywhere into a table this load builds or creates, or straight into the table; a `delete_insert` into a table with rows only between its values, so no value is half replaced.
+    fn cuts(&self) -> Cuts {
+        if self.children.is_some() {
+            return Cuts::Never("a table with unnest's child tables commits whole");
+        }
+        match &self.table.mode {
+            _ if self.builds || self.direct || !self.table.exists => Cuts::Anywhere,
+            WriteMode::Append | WriteMode::Merge { .. } => Cuts::Anywhere,
+            WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
+                Cuts::Between(replace_key.clone())
+            }
+            WriteMode::DeleteInsert {
+                cursor_column: Some(cursor),
+                ..
+            } => Cuts::Between(vec![cursor.clone()]),
+            WriteMode::Changes(_) => Cuts::Never("captured changes commit whole"),
+            WriteMode::MarkMissing(_) => Cuts::Never("a key scan commits whole"),
+            _ => Cuts::Never("this write commits whole"),
+        }
+    }
+
+    /// Why the table stops: rows that must commit together hold more large values than DuckDB's `memory_limit`.
+    fn too_large(&self) -> LoaderError {
+        let Some(share) = self.writer.memory_share() else {
+            return LoaderError::Invalid(
+                "a commit outgrew a memory share it has none of".to_owned(),
+            );
+        };
+        let run = memory_text(self.pieces.run);
+        let large = memory_text(LARGE_VALUE_BYTES as u64);
+        let what = match self.cuts() {
+            Cuts::Between(columns) => format!(
+                "the rows of one {} value hold {run} of values over {large}, which a delete_insert replaces in one commit",
+                columns.join(", ")
+            ),
+            Cuts::Never(why) => format!("one commit holds {run} of values over {large}, and {why}"),
+            Cuts::Anywhere => format!("one row holds {run} of values over {large}"),
+        };
+        let staged = match self.pieces.copies {
+            1 => String::new(),
+            _ => " (through a staging table, they count three times)".to_owned(),
+        };
+        let needed =
+            (self.pieces.run * self.pieces.copies).saturating_mul(100) / DUCKDB_COMMIT_PERCENT;
+        LoaderError::Invalid(format!(
+            "{}: {what}, past the {} of them DuckDB's {} memory_limit commits at once{staged}; {}",
+            self.table.spec.destination.table,
+            memory_text(share.commit_bytes),
+            memory_text(share.memory_limit),
+            needed_budget(needed)
+        ))
+    }
+
+    /// After rows that must commit together outgrew DuckDB's share (see [`Pieces::overflow`]): count the rest of them in `batch`, writing nothing, so the stop names their whole size; the table stops at the first row of another value.
+    fn count_overflow(&mut self, batch: &RecordBatch) -> Result<(), LoaderError> {
+        let keys = match self.cuts() {
+            Cuts::Between(columns) => Some(row_keys(batch, &columns)?),
+            _ => None,
+        };
+        let large = large_values(batch).unwrap_or_else(|| vec![0; batch.num_rows()]);
+        for (row, bytes) in large.iter().enumerate() {
+            let other = keys
+                .as_ref()
+                .is_some_and(|keys| self.pieces.last_key.as_ref() != Some(&keys[row]));
+            if other {
+                return Err(self.too_large());
+            }
+            self.pieces.run += bytes;
+        }
+        Ok(())
+    }
+
+    /// The table's stop: rows that must commit together outgrew DuckDB's share, or the watchdog stopped it (an interrupt only reaches a statement running, so the table checks before each write and commit too).
+    pub(in crate::loader) fn stopped(&self) -> Result<(), LoaderError> {
+        if self.pieces.overflow {
+            return Err(self.too_large());
+        }
+        let Some(watched) = table_memory() else {
+            return Ok(());
+        };
+        let tripped = watched
+            .table
+            .tripped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        tripped.map_or(Ok(()), |why| Err(LoaderError::Invalid(why)))
+    }
+
+    /// Write `batch` where the table's batches go.
+    async fn write_part(&mut self, batch: RecordBatch) -> Result<(), LoaderError> {
+        self.stopped()?;
+        if let Some(spool) = self.spool.as_mut() {
+            return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
+        }
+        let columns = staged_columns(&self.table);
+        let target = write_target(
+            &self.table,
+            self.staging.as_ref(),
+            &columns,
+            ((&self.load_id, self.batch), (self.direct, self.builds)),
+        );
+        self.writer.write_batch(&target, batch).await
+    }
+
+    /// Commit the rows written so far as a piece: a build table's or a direct append's transaction commits; staged rows commit into the table as a commit does, recording no run and keeping the load's position. An append's first piece marks the load unfinished, in the same transaction. Then DuckDB checkpoints once enough waits for it.
+    async fn commit_piece(&mut self) -> Result<(), LoaderError> {
+        self.stopped()?;
+        let marker = self.marker();
+        match self.direct || self.builds {
+            true => {
+                if let Some(marker) = &marker {
+                    self.in_last_transaction(marker.mark.clone()).await?;
+                }
+                self.flush_batch().await?;
+                Box::pin(self.send_held()).await?;
+            }
+            false => {
+                self.flush_batch().await?;
+                self.pieces.piece = true;
+                let committed = Box::pin(self.commit(false)).await;
+                self.pieces.piece = false;
+                committed?;
+            }
+        }
+        self.pieces.unfinished |= marker.is_some();
+        self.pieces.held = 0;
+        self.pieces.committed += 1;
+        self.report_held();
+        self.writer.checkpoint(false).await?;
+        crash_point("after-first-piece");
+        Ok(())
+    }
+
+    /// The recovery marker the next piece writes: an append's first piece, whose rows a rerun would not replace. A child table's rows go with their parent's commits, under the parent's load id, so it marks nothing.
+    fn marker(&self) -> Option<UnfinishedMarker> {
+        (!self.pieces.unfinished && self.marks()).then(|| self.unfinished())
+    }
+
+    /// The table's appends may mark themselves unfinished: an append under a DuckDB memory share, whose commits are cut into pieces.
+    fn marks(&self) -> bool {
+        self.writer.memory_share().is_some()
+            && self.table.mode == WriteMode::Append
+            && !self.builds
+            && !self.child
+    }
+
+    /// Before the first batch of a table whose appends may mark themselves unfinished: create the marker table, in a transaction of its own rather than a piece's.
+    pub(in crate::loader) async fn create_marker_table(&self) -> Result<(), LoaderError> {
+        if !self.marks() {
+            return Ok(());
+        }
+        let mut tries = 1;
+        loop {
+            match execute_ddl(&self.destination, vec![self.unfinished().create]).await {
+                Err(error)
+                    if tries < CATALOG_CONFLICT_TRIES
+                        && error.to_string().contains(CATALOG_CONFLICT) =>
+                {
+                    tries += 1;
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                created => return created,
+            }
+        }
+    }
+
+    /// This load's recovery marker statements.
+    fn unfinished(&self) -> UnfinishedMarker {
+        let spec = &self.table.spec;
+        let column = metadata_name(spec.compat, MetadataRole::LoadId);
+        unfinished_marker(
+            &spec.destination,
+            (column, &self.load_id, &self.loaded_at),
+            spec.warehouse,
+        )
+    }
+
+    /// The statement a staged commit adds to its transaction for the marker: marking the load at its first piece, removing the mark at its last commit; `None` otherwise.
+    pub(in crate::loader) fn marker_statement(&self, last: bool) -> Option<String> {
+        match (self.pieces.piece, self.pieces.unfinished && last) {
+            (true, _) => self.marker().map(|marker| marker.mark),
+            (false, true) => Some(self.unfinished().unmark),
+            (false, false) => None,
+        }
+    }
+
+    /// Before the end of a direct append or a build: remove the marker inside the last transaction, so the table's last rows and the mark's removal commit together.
+    pub(in crate::loader) async fn finish_pieces(&mut self) -> Result<(), LoaderError> {
+        if self.pieces.unfinished && (self.direct || self.builds) {
+            self.in_last_transaction(self.unfinished().unmark).await?;
+            self.pieces.unfinished = false;
+        }
+        Ok(())
+    }
+
+    /// Run a marker statement in the transaction the batch's rows commit in: the open one, or under `send = "at_commit"`, whose rows open it only as they are sent, the one that sends them.
+    async fn in_last_transaction(&mut self, statement: String) -> Result<(), LoaderError> {
+        match self.spool.is_some() && self.batch_rows > 0 {
+            true => self.pieces.statement = Some(statement),
+            false => execute(&self.destination, vec![statement]).await?,
+        }
+        Ok(())
+    }
+
+    /// After a failed load that marked itself unfinished: remove the rows its pieces committed, its run records and its mark, as the next load would.
+    pub(in crate::loader) async fn abandon_pieces(&mut self) {
+        if !self.pieces.unfinished {
+            return;
+        }
+        self.writer.rollback_batch().await;
+        let spec = &self.table.spec;
+        let statements = unfinished_recovery(
+            &spec.destination,
+            (
+                metadata_name(spec.compat, MetadataRole::LoadId),
+                &self.load_id,
+            ),
+            (true, self.run.is_some(), spec.warehouse),
+        );
+        if let Err(error) = execute(&self.destination, statements).await {
+            tracing::warn!(%error, table = %spec.destination.table, "cannot remove the rows of the failed load; the next load removes them");
+        }
+        self.pieces.unfinished = false;
+    }
+
+    /// Before a commit's transaction ends: under a DuckDB memory share, once the load wrote large values, check the table's open row group (past its last full one), which the next checkpoint rewrites whole, still fits DuckDB's `memory_limit` (see [`DUCKDB_ROW_GROUP_PERCENT`]). It holds the strings committed to it before this load (from the storage statistics, read at the load's first check, which see no open transaction's rows) and the large values the load wrote since it opened, at most its rows added at this load's width; at least this load's rows at that width, which a merge's updates rewrite in place. Each row group the load fills starts the count afresh. Past it the commit rolls back and the table stops, naming the `memory_limit` it needs. Returns what the check saw, for [`Pieces::group`].
+    pub(in crate::loader) async fn check_row_group(
+        &self,
+        into: &TableName,
+    ) -> Result<Option<RowGroupSeen>, LoaderError> {
+        let Some(share) = self.writer.memory_share() else {
+            return Ok(None);
+        };
+        if self.pieces.large == 0 || self.pieces.rows == 0 || share.row_group_bytes == u64::MAX {
+            return Ok(None);
+        }
+        let adapter = crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(
+            self.table.spec.warehouse,
+        );
+        let qualified = adapter.render_qualified_name(into);
+        let number = |text: Option<String>| -> Result<u64, LoaderError> {
+            (text.map(|text| text.parse::<u64>()).transpose())
+                .map_err(|error| LoaderError::Invalid(format!("the table's row groups: {error}")))
+                .map(Option::unwrap_or_default)
+        };
+        let mut seen = match self.pieces.group {
+            Some(seen) => seen,
+            None => {
+                let name = escape_literal(&BoundParameter::Text(qualified.clone()));
+                let query = format!(
+                    "SELECT coalesce(sum(rows), 0) || ',' || coalesce(sum(rows) FILTER (WHERE rows >= {DUCKDB_ROW_GROUP_ROWS}), 0) || ',' || coalesce(sum(bytes) FILTER (WHERE rows < {DUCKDB_ROW_GROUP_ROWS}), 0) FROM (SELECT row_group_id, sum(count) FILTER (WHERE column_id = 0 AND segment_type <> 'VALIDITY') AS rows, sum(TRY_CAST(stats.total_string_length AS UBIGINT)) AS bytes FROM pragma_storage_info({name}) GROUP BY row_group_id)"
+                );
+                let text = single_text(&self.destination, query)
+                    .await?
+                    .unwrap_or_default();
+                let mut values = text.split(',').map(|value| number(Some(value.to_owned())));
+                let mut next = || values.next().unwrap_or(Ok(0));
+                RowGroupSeen {
+                    before: next()?,
+                    full: next()?,
+                    earlier: next()?,
+                    ..RowGroupSeen::default()
+                }
+            }
+        };
+        let count = format!("SELECT CAST(count(*) AS VARCHAR) FROM {qualified}");
+        let rows = number(single_text(&self.destination, count).await?)?;
+        let width = self.pieces.large / self.pieces.rows;
+        let open = rows.saturating_sub(seen.full);
+        let filled = open / DUCKDB_ROW_GROUP_ROWS;
+        if filled > seen.filled {
+            (seen.filled, seen.earlier, seen.large_at) = (filled, 0, seen.last_large);
+        }
+        seen.last_large = self.pieces.large;
+        let open = open % DUCKDB_ROW_GROUP_ROWS;
+        let added = match seen.filled {
+            0 => rows.saturating_sub(seen.before).min(open),
+            _ => open,
+        };
+        let large = (self.pieces.large - seen.large_at).min(added.saturating_mul(width));
+        let group = seen
+            .earlier
+            .saturating_add(large)
+            .max(open.min(self.pieces.rows).saturating_mul(width));
+        if group <= share.row_group_bytes {
+            return Ok(Some(seen));
+        }
+        let needed = group.saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
+        let whole = (DUCKDB_ROW_GROUP_ROWS * width).saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
+        Err(LoaderError::Invalid(format!(
+            "{}: its last row group would hold {} of strings, {} of them values over {} from this load (rows of about {} each), more than DuckDB rewrites at a checkpoint within its {} memory_limit; {} (a row group fills at {} rows, and rows this wide need a memory_limit of {} by then)",
+            self.table.spec.destination.table,
+            memory_text(group),
+            memory_text(group.saturating_sub(seen.earlier)),
+            memory_text(LARGE_VALUE_BYTES as u64),
+            memory_text(width),
+            memory_text(share.memory_limit),
+            needed_budget(needed),
+            thousands(DUCKDB_ROW_GROUP_ROWS),
+            needed_budget(whole).replace("raise memory_limit to ", "")
+        )))
+    }
+
+    /// Run a staged commit's `statements`, with the recovery marker's statement in its transaction (see [`Self::marker_statement`]), checking the table's last row group (see [`Self::check_row_group`]) before the transaction ends.
+    pub(in crate::loader) async fn execute_checked(
+        &mut self,
+        statements: Vec<String>,
+        (into, last): (&TableName, bool),
+    ) -> Result<(), LoaderError> {
+        let adapter = crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(
+            self.table.spec.warehouse,
+        );
+        let mut statements = match self.marker_statement(last) {
+            Some(marker) => adapter.render_logged(statements, marker),
+            None => statements,
+        };
+        let checks = self.writer.memory_share().is_some()
+            && self.pieces.large > 0
+            && statements
+                .last()
+                .is_some_and(|last| last == COMMIT_STATEMENT);
+        if !checks {
+            return execute(&self.destination, statements).await;
+        }
+        let commit = statements.pop();
+        execute(&self.destination, statements).await?;
+        match self.check_row_group(into).await {
+            Ok(group) => self.pieces.group = group.or(self.pieces.group),
+            Err(error) => {
+                let _ = execute(&self.destination, vec![ROLLBACK_STATEMENT.to_owned()]).await;
+                return Err(error);
+            }
+        }
+        execute(&self.destination, commit.into_iter().collect()).await
+    }
+
+    /// Send what `send = "at_commit"` held, in one burst: each held batch written and loaded where it would have gone as it was read, its files removed as they go.
+    pub(crate) async fn send_held(&mut self) -> Result<(), LoaderError> {
+        let held = match self.spool.as_mut() {
+            Some(spool) => spool.take(),
+            None => return Ok(()),
+        };
+        for held in held {
+            Box::pin(self.send_files((held.batch, &held.files), true)).await?;
+        }
+        Ok(())
+    }
+
+    /// Write the rows held in `files` to batch `batch`, removing each file once written, and when `loads` load the batch and start the next; a batch that fails has its staged files removed.
+    pub(in crate::loader) async fn send_files(
+        &mut self,
+        (batch, files): (u64, &[std::path::PathBuf]),
+        loads: bool,
+    ) -> Result<(), LoaderError> {
+        let columns = staged_columns(&self.table);
+        let target = write_target(
+            &self.table,
+            self.staging.as_ref(),
+            &columns,
+            ((&self.load_id, batch), (self.direct, self.builds)),
+        );
+        let sent = 'send: {
+            for file in files {
+                let reader = match held_rows(file) {
+                    Ok(reader) => reader,
+                    Err(error) => break 'send Err(LoaderError::Invalid(error)),
+                };
+                for rows in reader {
+                    let rows = match rows {
+                        Ok(rows) => rows,
+                        Err(error) => break 'send Err(LoaderError::Invalid(error.to_string())),
+                    };
+                    if let Err(error) = self.writer.write_batch(&target, rows).await {
+                        break 'send Err(error);
+                    }
+                }
+                let _ = std::fs::remove_file(file);
+            }
+            if !loads {
+                break 'send Ok(());
+            }
+            if let Some(statement) = self.pieces.statement.take()
+                && let Err(error) = execute(&self.destination, vec![statement]).await
+            {
+                break 'send Err(error);
+            }
+            if self.direct || self.builds {
+                match self
+                    .check_row_group(target.staging.unwrap_or(target.table))
+                    .await
+                {
+                    Ok(group) => self.pieces.group = group.or(self.pieces.group),
+                    Err(error) => break 'send Err(error),
+                }
+            }
+            if let Err(error) = self.writer.finish_files(&target).await {
+                break 'send Err(error);
+            }
+            if let Err(error) = self.writer.settle_rows().await {
+                break 'send Err(error);
+            }
+            self.writer.load_batch(&target).await
+        };
+        match sent {
+            Ok(()) => {
+                if loads {
+                    self.writer.next_batch();
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.writer.remove_batch_files(&target).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// After a commit: a whole one moves the load's position on and starts the next commit's pieces afresh (the marker stays until the last); a piece leaves both.
+    pub(in crate::loader) fn end_commit(&mut self, last: bool) {
+        if self.pieces.piece {
+            return;
+        }
+        self.committed_state = self.state.clone();
+        self.pieces = Pieces {
+            unfinished: self.pieces.unfinished && !last,
+            rows: self.pieces.rows,
+            large: self.pieces.large,
+            group: self.pieces.group,
+            ..Pieces::default()
+        };
+    }
 }

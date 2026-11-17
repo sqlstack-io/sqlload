@@ -1,4 +1,4 @@
-use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize, MemoryLimit};
+use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize};
 use crate::postgres_source::models::SourceTable;
 
 pub(crate) struct SelectQueryTestCase {
@@ -46,8 +46,8 @@ pub(crate) struct FetchBudgetTestCase {
     pub(crate) description: &'static str,
     /// The source's `max_batch_memory`.
     pub(crate) set: Option<usize>,
-    pub(crate) limit: Option<MemoryLimit>,
-    pub(crate) concurrency: usize,
+    /// Each table's share of the run's memory budget.
+    pub(crate) share: Option<u64>,
     pub(crate) expected_bytes: usize,
     pub(crate) expected_reason: BudgetReason,
 }
@@ -59,22 +59,10 @@ pub(crate) struct FetchSizeTestCase {
     pub(crate) expected_size: FetchSize,
 }
 
-pub(crate) struct CgroupLimitTestCase {
-    pub(crate) description: &'static str,
-    /// `/proc/self/cgroup` as read.
-    pub(crate) groups: &'static str,
-    /// Each folder under the cgroup root with its `memory.max`.
-    pub(crate) limits: &'static [(&'static str, &'static str)],
-    pub(crate) expected_limit: Option<u64>,
-}
-
 pub(crate) struct BudgetNoteTestCase {
     pub(crate) description: &'static str,
     pub(crate) set: Option<usize>,
-    pub(crate) limit: Option<MemoryLimit>,
-    /// Why the machine's memory couldn't be read.
-    pub(crate) unreadable: Option<&'static str>,
-    pub(crate) concurrency: usize,
+    pub(crate) share: Option<u64>,
     pub(crate) expected_note: &'static str,
 }
 
@@ -89,8 +77,7 @@ pub(crate) struct MemoryWarningTestCase {
     pub(crate) description: &'static str,
     /// Each table's bytes per fetch and its source.
     pub(crate) fetches: &'static [(usize, &'static str)],
-    pub(crate) limit: Option<u64>,
-    pub(crate) concurrency: usize,
+    pub(crate) share: Option<u64>,
     pub(crate) expected_warning: Option<&'static str>,
 }
 

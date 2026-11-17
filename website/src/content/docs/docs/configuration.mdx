@@ -19,6 +19,7 @@ The [Kafka exporter](/docs/kafka/) uses a different file format.
 | `python_paths` | none | Folders, relative to the file, scanned for Python sources. |
 | `default_target` | none | The target for sources that name no `destination`. Not needed with one target. |
 | `concurrency` | 4 | The most tables loading at once. `--concurrency` overrides it. |
+| `memory_limit` | 80% of a container's or Windows job object's limit, else 50% of the machine's memory | From 0.68.0. The memory a run stays under, such as `"4GiB"`. `--memory-limit` overrides it. See [Memory budget](/docs/cli/load/#memory-budget). |
 | `microbatch_concurrency` | `false` | From 0.65.0. Lets tables read several `batch_size` windows at once with `batch_concurrency`; `plan` refuses `batch_concurrency` above 1 without it. |
 | `[connections.NAME]` | | How to reach a system. |
 | `[targets.NAME]` | | Where loaded tables go. |
@@ -224,7 +225,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `warehouse` | snowflake | From 0.26.0. The warehouse unloads run on; the connection's when omitted. |
 | `stage` | snowflake | From 0.26.0. Where unloads go: `{ url, storage_integration, region }` or `{ name }`; the user stage when omitted. See [Snowflake](/docs/sources/snowflake/#where-the-files-go). |
 | `max_text_size`, `max_binary_size` | odbc | From 0.27.0. The longest text and binary value a read holds, in bytes; caps every text and binary column. See [ODBC](/docs/sources/odbc/#value-sizes). |
-| `max_batch_memory` | odbc | From 0.52.0. The fetch buffer of each table: the most the rows of one fetch hold, such as `"2GB"`; 512 MiB, or less on a small machine, when omitted. It doesn't bound the load's whole memory. See [ODBC](/docs/sources/odbc/#memory). |
+| `max_batch_memory` | odbc | From 0.52.0. The fetch buffer of each table: the most the rows of one fetch hold, such as `"2GB"`; 512 MiB, or a quarter of each table's share of the [memory budget](/docs/cli/load/#memory-budget) when less, when omitted. It doesn't bound the load's whole memory. See [ODBC](/docs/sources/odbc/#memory). |
 | `long_column_threshold` | odbc | From 0.52.0. The buffer per value over which a text or binary column is read value by value; `"4KiB"` when omitted. See [ODBC](/docs/sources/odbc/#value-sizes). |
 | `project` | bigquery | From 0.30.0. The project the tables live in; the connection's when omitted. |
 | `path` | files | The folder holding the files, relative to the connection. |

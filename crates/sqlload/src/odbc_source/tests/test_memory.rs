@@ -1,10 +1,10 @@
 use crate::odbc_source::_helpers::columns::fetch_size;
-use crate::odbc_source::_helpers::memory::{budget_note, cgroup_limit, fetch_budget, memory_line};
+use crate::odbc_source::_helpers::memory::{budget_note, fetch_budget, memory_line};
 use crate::odbc_source::main::memory_warning::memory_warning;
-use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize, MemoryLimit};
+use crate::odbc_source::models::{BudgetReason, FetchShape, FetchSize};
 use crate::odbc_source::tests::test_types::{
-    BudgetNoteTestCase, CgroupLimitTestCase, FetchBudgetTestCase, FetchSizeTestCase,
-    MemoryLineTestCase, MemoryWarningTestCase,
+    BudgetNoteTestCase, FetchBudgetTestCase, FetchSizeTestCase, MemoryLineTestCase,
+    MemoryWarningTestCase,
 };
 
 const MIB: usize = 1024 * 1024;
@@ -12,75 +12,47 @@ const MIB: usize = 1024 * 1024;
 const GIB: u64 = 1024 * 1024 * 1024;
 
 #[test]
-fn given_a_memory_limit_and_concurrency_when_choosing_a_fetch_budget_then_half_the_limit_is_shared_and_512_mib_never_raised()
+fn given_a_tables_share_of_the_memory_budget_when_choosing_a_fetch_budget_then_a_quarter_of_it_caps_512_mib_and_never_raises_it()
  {
     let test_cases = [
         FetchBudgetTestCase {
-            description: "a 2 GiB container with concurrency 4: half of it shared by 4 tables, 256 MiB each",
+            description: "a 1 GiB share: a quarter of it, 256 MiB",
             set: None,
-            limit: Some(MemoryLimit {
-                bytes: 2 * GIB,
-                container: true,
-            }),
-            concurrency: 4,
+            share: Some(GIB),
             expected_bytes: 256 * MIB,
             expected_reason: BudgetReason::Capped,
         },
         FetchBudgetTestCase {
-            description: "a 64 GiB machine: its share is more than 512 MiB, which stays",
+            description: "an 8 GiB share: its quarter is more than 512 MiB, which stays",
             set: None,
-            limit: Some(MemoryLimit {
-                bytes: 64 * GIB,
-                container: false,
-            }),
-            concurrency: 4,
+            share: Some(8 * GIB),
             expected_bytes: 512 * MIB,
             expected_reason: BudgetReason::Default,
         },
         FetchBudgetTestCase {
-            description: "exactly 512 MiB each is the default, not a cap",
+            description: "exactly 512 MiB is the default, not a cap",
             set: None,
-            limit: Some(MemoryLimit {
-                bytes: 4 * GIB,
-                container: false,
-            }),
-            concurrency: 4,
+            share: Some(2 * GIB),
             expected_bytes: 512 * MIB,
             expected_reason: BudgetReason::Default,
         },
         FetchBudgetTestCase {
-            description: "an unknown limit keeps 512 MiB",
+            description: "no budget keeps 512 MiB",
             set: None,
-            limit: None,
-            concurrency: 16,
+            share: None,
             expected_bytes: 512 * MIB,
             expected_reason: BudgetReason::Default,
         },
         FetchBudgetTestCase {
-            description: "max_batch_memory wins over the limit, even above 512 MiB",
+            description: "max_batch_memory wins over the share, even above 512 MiB",
             set: Some(2_000_000_000),
-            limit: Some(MemoryLimit {
-                bytes: 2 * GIB,
-                container: true,
-            }),
-            concurrency: 4,
+            share: Some(GIB),
             expected_bytes: 2_000_000_000,
             expected_reason: BudgetReason::Set,
         },
-        FetchBudgetTestCase {
-            description: "concurrency 0 counts as 1",
-            set: None,
-            limit: Some(MemoryLimit {
-                bytes: GIB,
-                container: true,
-            }),
-            concurrency: 0,
-            expected_bytes: 512 * MIB,
-            expected_reason: BudgetReason::Default,
-        },
     ];
     for test_case in test_cases {
-        let budget = fetch_budget(test_case.set, test_case.limit, test_case.concurrency);
+        let budget = fetch_budget(test_case.set, test_case.share);
         assert_eq!(
             (budget.bytes, budget.reason),
             (test_case.expected_bytes, test_case.expected_reason),
@@ -158,117 +130,37 @@ fn given_a_read_shape_when_sizing_one_fetch_then_bound_rows_fit_the_budget_and_a
 }
 
 #[test]
-fn given_cgroup_v2_folders_when_reading_the_memory_limit_then_the_lowest_memory_max_from_the_process_group_up_is_taken()
--> Result<(), String> {
-    let test_cases = [
-        CgroupLimitTestCase {
-            description: "a container's own group sets memory.max",
-            groups: "0::/\n",
-            limits: &[("", "2147483648\n")],
-            expected_limit: Some(2_147_483_648),
-        },
-        CgroupLimitTestCase {
-            description: "the process's group is unlimited, a parent slice is not",
-            groups: "0::/app.slice/run.scope\n",
-            limits: &[
-                ("app.slice/run.scope", "max\n"),
-                ("app.slice", "6442450944\n"),
-            ],
-            expected_limit: Some(6_442_450_944),
-        },
-        CgroupLimitTestCase {
-            description: "the lowest of several limits",
-            groups: "0::/a/b\n",
-            limits: &[("a/b", "8589934592\n"), ("a", "1073741824\n")],
-            expected_limit: Some(1_073_741_824),
-        },
-        CgroupLimitTestCase {
-            description: "no limit anywhere",
-            groups: "0::/a\n",
-            limits: &[("a", "max\n")],
-            expected_limit: None,
-        },
-        CgroupLimitTestCase {
-            description: "cgroup v1 only: no v2 line",
-            groups: "4:memory:/docker/abc\n",
-            limits: &[],
-            expected_limit: None,
-        },
-    ];
-    for test_case in test_cases {
-        let root = tempfile::tempdir().map_err(|error| error.to_string())?;
-        for (folder, limit) in test_case.limits {
-            let folder = root.path().join(folder);
-            std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-            std::fs::write(folder.join("memory.max"), limit).map_err(|error| error.to_string())?;
-        }
-        assert_eq!(
-            cgroup_limit(test_case.groups, root.path()),
-            Ok(test_case.expected_limit),
-            "{}",
-            test_case.description
-        );
-    }
-    Ok(())
-}
-
-#[test]
-fn given_a_memory_limit_when_planning_an_odbc_table_then_the_budget_line_says_what_set_it() {
+fn given_a_tables_share_when_planning_an_odbc_table_then_the_buffer_line_says_what_set_it() {
     let test_cases = [
         BudgetNoteTestCase {
-            description: "a 2 GiB container with concurrency 4 caps it at 256 MiB, and says so",
+            description: "a 1 GiB share caps it at 256 MiB, and says so",
             set: None,
-            limit: Some(MemoryLimit {
-                bytes: 2 * GIB,
-                container: true,
-            }),
-            unreadable: None,
-            concurrency: 4,
-            expected_note: "256 MiB fetch buffer per table (capped: 2 GiB container limit, concurrency 4)",
+            share: Some(GIB),
+            expected_note: "256 MiB fetch buffer per table (capped: a quarter of each table's 1 GiB share of the memory budget)",
         },
         BudgetNoteTestCase {
-            description: "a large machine keeps the default",
+            description: "a large share keeps the default",
             set: None,
-            limit: Some(MemoryLimit {
-                bytes: 64 * GIB,
-                container: false,
-            }),
-            unreadable: None,
-            concurrency: 4,
-            expected_note: "512 MiB fetch buffer per table (default; 64 GiB of memory, concurrency 4)",
+            share: Some(8 * GIB),
+            expected_note: "512 MiB fetch buffer per table (default; each table's share of the memory budget is 8 GiB)",
         },
         BudgetNoteTestCase {
             description: "the source's setting, in binary units to a tenth",
             set: Some(2_000_000_000),
-            limit: Some(MemoryLimit {
-                bytes: 2 * GIB,
-                container: true,
-            }),
-            unreadable: None,
-            concurrency: 4,
+            share: Some(GIB),
             expected_note: "1.9 GiB fetch buffer per table (max_batch_memory)",
         },
         BudgetNoteTestCase {
-            description: "a machine whose memory isn't known (Windows)",
+            description: "a run without a budget",
             set: None,
-            limit: None,
-            unreadable: None,
-            concurrency: 4,
-            expected_note: "512 MiB fetch buffer per table (default; this machine's memory is unknown)",
-        },
-        BudgetNoteTestCase {
-            description: "a limit file that can't be read says why",
-            set: None,
-            limit: None,
-            unreadable: Some("/sys/fs/cgroup/memory.max: \"lots\": invalid digit found in string"),
-            concurrency: 4,
-            expected_note: "512 MiB fetch buffer per table (default; this machine's memory can't be read: /sys/fs/cgroup/memory.max: \"lots\": invalid digit found in string)",
+            share: None,
+            expected_note: "512 MiB fetch buffer per table (default; the run has no memory budget)",
         },
     ];
     for test_case in test_cases {
-        let budget = fetch_budget(test_case.set, test_case.limit, test_case.concurrency);
+        let budget = fetch_budget(test_case.set, test_case.share);
         assert_eq!(
-            budget_note(&budget, test_case.unreadable),
+            budget_note(&budget),
             test_case.expected_note,
             "{}",
             test_case.description
@@ -322,50 +214,41 @@ fn given_a_read_shape_when_planning_an_odbc_table_then_the_memory_line_shows_one
 }
 
 #[test]
-fn given_the_tables_loading_at_once_when_their_fetches_pass_half_the_memory_limit_then_plan_warns_naming_the_fix()
+fn given_planned_fetches_when_one_holds_more_than_its_part_of_the_tables_share_then_plan_warns_naming_the_fix()
  {
     let test_cases = [
         MemoryWarningTestCase {
-            description: "two 600 MiB fetches at once in a 2 GiB container pass its half; exactly half, as a capped budget gives, would not",
-            fetches: &[(600 * MIB, "erp"), (600 * MIB, "erp"), (MIB, "crm")],
-            limit: Some(2 * GIB),
-            concurrency: 2,
+            description: "a 600 MiB fetch set by max_batch_memory against a 1 GiB share, whose part is 256 MiB",
+            fetches: &[(600 * MIB, "erp"), (100 * MIB, "erp"), (MIB, "crm")],
+            share: Some(GIB),
             expected_warning: Some(
-                "the ODBC fetch buffers of 2 tables loading at once may hold 1.2 GiB together, more than half of this machine's 2 GiB memory limit; this counts only those buffers, not the memory the batches, the destination and the commits take besides; lower max_batch_memory on source erp, or lower concurrency (now 2)",
+                "an ODBC fetch may hold 600 MiB, more than the 256 MiB a fetch gets of each table's 1 GiB share of the memory budget; lower max_batch_memory on source erp, or raise memory_limit",
             ),
         },
         MemoryWarningTestCase {
-            description: "only the largest `concurrency` count: three tables, two at once, within half",
-            fetches: &[(400 * MIB, "erp"), (400 * MIB, "crm"), (400 * MIB, "erp")],
-            limit: Some(2 * GIB),
-            concurrency: 2,
+            description: "exactly the part is within it",
+            fetches: &[(256 * MIB, "erp")],
+            share: Some(GIB),
             expected_warning: None,
         },
         MemoryWarningTestCase {
-            description: "sources named in order, once each",
-            fetches: &[(3 * GIB as usize, "erp"), (MIB, "crm")],
-            limit: Some(4 * GIB),
-            concurrency: 4,
+            description: "sources named in order, once each, with the largest fetch",
+            fetches: &[(300 * MIB, "erp"), (900 * MIB, "crm"), (400 * MIB, "erp")],
+            share: Some(GIB),
             expected_warning: Some(
-                "the ODBC fetch buffers of 2 tables loading at once may hold 3 GiB together, more than half of this machine's 4 GiB memory limit; this counts only those buffers, not the memory the batches, the destination and the commits take besides; lower max_batch_memory on sources crm, erp, or lower concurrency (now 4)",
+                "an ODBC fetch may hold 900 MiB, more than the 256 MiB a fetch gets of each table's 1 GiB share of the memory budget; lower max_batch_memory on sources crm, erp, or raise memory_limit",
             ),
         },
         MemoryWarningTestCase {
-            description: "no warning without a known limit",
+            description: "no warning without a budget",
             fetches: &[(64 * GIB as usize, "erp")],
-            limit: None,
-            concurrency: 4,
+            share: None,
             expected_warning: None,
         },
     ];
     for test_case in test_cases {
-        let fetches: Vec<(usize, &str, Option<u64>)> = test_case
-            .fetches
-            .iter()
-            .map(|(bytes, source)| (*bytes, *source, test_case.limit))
-            .collect();
         assert_eq!(
-            memory_warning(&fetches, test_case.concurrency).as_deref(),
+            memory_warning(test_case.fetches, test_case.share).as_deref(),
             test_case.expected_warning,
             "{}",
             test_case.description

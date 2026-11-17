@@ -1650,3 +1650,33 @@ pub(crate) struct PlantedTestCase {
     /// Then the target's `rows|loads`, its record count and its markers.
     pub(crate) expected_state: &'static str,
 }
+
+/// One load of a [`WideLoadTestCase`]: what changes before it, and how it runs.
+pub(crate) struct WideStep {
+    /// Postgres statements before the load (`{table}` is the table's name).
+    pub(crate) change: &'static str,
+    /// DuckDB statements on the target's file before the load.
+    pub(crate) prepare: &'static str,
+    /// Variables the load runs with.
+    pub(crate) environment: &'static [(&'static str, &'static str)],
+    /// The command run, with its flags: `load`, or `plan -v` to read the plan's output.
+    pub(crate) command: &'static str,
+}
+
+/// Loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.
+pub(crate) struct WideLoadTestCase {
+    pub(crate) description: &'static str,
+    /// The Postgres and DuckDB table's name, and its settings in the project.
+    pub(crate) table: &'static str,
+    pub(crate) settings: &'static str,
+    /// The rows of the source table, and how many share each `k`.
+    pub(crate) rows: u32,
+    pub(crate) key_rows: u32,
+    /// Tables of two narrow rows loaded beside it, each replaced.
+    pub(crate) beside: &'static [&'static str],
+    pub(crate) steps: &'static [WideStep],
+    /// For each load: whether it succeeded, then each table's `rows:distinct ids:rows holding the changed body` and the recovery markers left, `|`-separated (`none` for a missing table).
+    pub(crate) expected_results: &'static [(bool, &'static str)],
+    /// Phrases the last load's output holds (`{table}` is the table's name).
+    pub(crate) expected_output: &'static [&'static str],
+}

@@ -32,6 +32,7 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
         mode,
         hashed: &[],
         built: None,
+        spared_load: None,
     };
     let merge = WriteMode::Merge {
         unique_key: vec!["id".to_owned()],
@@ -93,6 +94,7 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
                     mode: &merge,
                     hashed: &[],
                     built: None,
+                    spared_load: None,
                 },
                 &["id".to_owned()],
                 "s",

@@ -229,6 +229,6 @@ def things(ctx):
     )
     result = sqlload(root, "load")
     assert result.returncode == 1, result.stdout
-    assert tables(root) in ([], ["api__things"])
+    assert [name for name in tables(root) if name != "_sqlload_unfinished"] in ([], ["api__things"])
     if tables(root):
         assert query(root, "SELECT count(*) FROM raw.api__things") == [(0,)]

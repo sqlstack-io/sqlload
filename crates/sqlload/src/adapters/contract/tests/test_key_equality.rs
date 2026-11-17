@@ -83,6 +83,7 @@ fn given_merge_keys_that_may_be_null_when_rendering_the_write_then_each_warehous
             mode: &test_case.mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         };
         let written = adapter.render_write(&request, &staging).join("\n");
         let rekeyed = adapter
