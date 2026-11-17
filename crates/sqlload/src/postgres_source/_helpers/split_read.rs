@@ -2,8 +2,9 @@
 
 use tokio_postgres::Client;
 
-use crate::postgres_source::constants::{SPLIT_BEGIN, SPLIT_PAGES_SQL, SPLIT_READ_MIN_PAGES};
+use crate::postgres_source::constants::{SPLIT_PAGES_SQL, SPLIT_READ_MIN_PAGES};
 use crate::postgres_source::errors::PostgresError;
+use crate::postgres_source::main::share_snapshot::share_snapshot;
 use crate::postgres_source::models::CopyRequest;
 
 /// The `ctid` ranges splitting the read over `request.helpers` and the client, the last one open-ended; `None` to read in one pass (no helpers, an ordered read, not a plain table, Postgres before 14, or too small to gain).
@@ -40,26 +41,6 @@ async fn page_ranges(
             })
             .collect(),
     ))
-}
-
-/// Open a read-only snapshot transaction on the first reader and the same snapshot on the others.
-async fn share_snapshot(readers: &[&Client]) -> Result<(), PostgresError> {
-    let Some((first, others)) = readers.split_first() else {
-        return Ok(());
-    };
-    first.batch_execute(SPLIT_BEGIN).await?;
-    let snapshot: String = first
-        .query_one("SELECT pg_export_snapshot()", &[])
-        .await?
-        .get(0);
-    for other in others {
-        other
-            .batch_execute(&format!(
-                "{SPLIT_BEGIN}; SET TRANSACTION SNAPSHOT '{snapshot}'"
-            ))
-            .await?;
-    }
-    Ok(())
 }
 
 /// `request.filter` narrowed to each range, or the filter alone when the read is not split.
@@ -104,22 +85,4 @@ pub(crate) async fn split_readers<'a>(
         .take(ranges.as_ref().map_or(1, Vec::len))
         .collect();
     Ok((readers, range_filters(request, ranges.as_ref())))
-}
-
-/// Commit a split read's shared snapshot on every reader; the first error wins.
-pub(crate) async fn end_snapshot(readers: &[&Client]) -> Result<(), PostgresError> {
-    end_all(readers, "COMMIT").await
-}
-
-/// Run `ending` on every reader, each one even after a failure; the first error wins.
-async fn end_all(readers: &[&Client], ending: &str) -> Result<(), PostgresError> {
-    let mut ended: Result<(), PostgresError> = Ok(());
-    for reader in readers {
-        let result = reader
-            .batch_execute(ending)
-            .await
-            .map_err(PostgresError::from);
-        ended = ended.and(result);
-    }
-    ended
 }

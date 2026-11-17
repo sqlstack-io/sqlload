@@ -12,6 +12,7 @@ use crate::adapters::dispatch::models::Destination;
 use crate::auth::constants::{GOOGLE_AUTHORIZE_URL, GOOGLE_TOKEN_URL};
 use crate::auth::main::google_token_cache_file::google_token_cache_file;
 use crate::auth::models::GoogleUser;
+use crate::batch_plan::main::window_concurrency::window_concurrency;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
@@ -181,7 +182,13 @@ pub(crate) fn files_location(
         .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order (windows and cursor-ordered reads keep one connection).
+/// The plan's note on a read over several Postgres connections (see [`source_readers`]); `None` for a read over one.
+pub(crate) fn readers_note(table: &TablePlan) -> Option<String> {
+    let readers = source_readers(table);
+    (readers > 1).then(|| format!("reads over {readers} connections, in one snapshot"))
+}
+
+/// The Postgres connections a table's read uses: several for a plain table of `SPLIT_READ_MIN_PAGES` or more on Postgres 14+, read whole and in no order, and one per window read at once under `batch_concurrency` (other windowed and cursor-ordered reads keep one connection).
 pub(crate) fn source_readers(table: &TablePlan) -> usize {
     let whole = matches!(table.commits, CommitRule::Size | CommitRule::Whole(_));
     let postgres = table.spec.python.is_none()
@@ -193,9 +200,10 @@ pub(crate) fn source_readers(table: &TablePlan) -> usize {
         .source_table
         .split_pages
         .is_some_and(|pages| pages >= SPLIT_READ_MIN_PAGES);
-    match whole && postgres && large {
-        true => PARALLEL_READERS,
-        false => 1,
+    match (postgres, whole && large) {
+        (true, true) => PARALLEL_READERS,
+        (true, false) => window_concurrency(table),
+        (false, _) => 1,
     }
 }
 
@@ -1457,6 +1465,8 @@ pub(crate) struct ReadPart {
     pub(crate) batch_bytes: Option<usize>,
     /// What runs the table's `transform`; `None` without a Python host.
     pub(crate) transform: Option<TransformRun>,
+    /// The Postgres connection that reads it: 0 for the client, `n` for its `n`th helper.
+    pub(crate) connection: usize,
 }
 
 /// Read `part` of `table`'s rows from `reader`, handing each batch to `on_batch` with its `parse` columns parsed; when `on_batch` fails, the read fails with the reader's text, and stays retryable when `on_batch`'s error was.
@@ -1497,6 +1507,10 @@ async fn read_each(
     match (reader, &table.files) {
         (SourceReader::Postgres(client, helpers), _) => {
             let whole = part.filter.is_none() && part.order_by.is_none();
+            let client = match part.connection {
+                0 => client,
+                helper => helpers.get(helper - 1).unwrap_or(client),
+            };
             let request = CopyRequest {
                 table: &table.spec.source_table,
                 columns: table.read_columns.clone(),

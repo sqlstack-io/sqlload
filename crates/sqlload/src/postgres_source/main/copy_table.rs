@@ -4,9 +4,10 @@ use arrow_array::RecordBatch;
 use tokio_postgres::Client;
 
 use crate::postgres_source::_helpers::copy_stream::{join_reads, start_reads};
-use crate::postgres_source::_helpers::split_read::{end_snapshot, split_readers};
+use crate::postgres_source::_helpers::split_read::split_readers;
 use crate::postgres_source::constants::COPY_QUEUE_BATCHES;
 use crate::postgres_source::errors::PostgresError;
+use crate::postgres_source::main::end_snapshot::end_snapshot;
 use crate::postgres_source::models::CopyRequest;
 
 /// Read `request.table` with binary `COPY`, passing each batch (at most `batch_rows` rows, about `batch_bytes` bytes) to `on_batch`; returns the row count. With `request.helpers`, a large plain table (Postgres 14+) is read in page ranges, one per connection, all in one exported snapshot, so the rows are those of one moment; batches then arrive in no particular order, and after a failure the connections are left mid-transaction, to be dropped.

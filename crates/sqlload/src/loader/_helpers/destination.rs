@@ -22,7 +22,12 @@ use crate::adapters::files::models::{
 };
 use crate::adapters::files::models::{FilesWriter, WriterRequest};
 use crate::adapters::files::models::{PartitionFolder, PendingPhase, PendingRun, ReplacedFiles};
+use crate::batch_plan::main::read_in_order::read_in_order;
+use crate::batch_plan::main::window_at::window_at;
+use crate::batch_plan::models::{CursorWindow, WindowPlan};
 use crate::column_types::models::ColumnType;
+use crate::commit_spool::main::held_rows::held_rows;
+use crate::commit_spool::models::Spool;
 use crate::file_store::main::delete_files::delete_files;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::NANOSECOND_SCALE;
@@ -34,13 +39,18 @@ use crate::files_source::main::read_footers::read_footers;
 use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{DataFile, LoadedFile};
 use crate::files_source::models::{FileColumn, SourceFormat, StoredRead};
+use crate::loader::_helpers::publish::window_filter;
 use crate::loader::_helpers::resolve::display_name;
+use crate::loader::_helpers::sources::{ReadPart, read_source};
 use crate::loader::_helpers::table_plan::blocked_plan;
 use crate::loader::errors::LoaderError;
+use crate::loader::models::SourceReader;
 use crate::loader::models::{CommitRange, Publisher};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
+use crate::postgres_source::main::end_snapshot::end_snapshot;
+use crate::postgres_source::main::share_snapshot::share_snapshot;
 use crate::postgres_source::models::ReadColumn;
 use crate::project::constants::DEFAULT_DESTINATION_PATH;
 use crate::project::models::WriteStrategy;
@@ -53,6 +63,9 @@ use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
 use arrow_array::RecordBatch;
+use std::path::Path;
+use std::time::{Duration, Instant};
+use tokio_postgres::Client;
 use tokio_util::sync::CancellationToken;
 
 /// Before a load: drop the staging tables crashed loads left in the schemas it writes to. A failure only warns.
@@ -876,5 +889,109 @@ pub(crate) fn checked_encoding(spec: &TableSpec) -> Option<String> {
             "csv.encoding_check reads the bytes of each {} file, which no destination's own read checks; csv.encoding_check = false lets it read them",
             csv.encoding
         )
+    })
+}
+
+impl Publisher {
+    /// Read the table's cursor `windows` up to `limit` at once, each over its own Postgres connection in one shared snapshot and held in a local spool, and stage and commit each in window order as soon as it and every window before it are read; a failed window ends the load with only the windows before it committed, as a sequential read would leave it.
+    pub(crate) async fn feed_windows(
+        &mut self,
+        reader: &SourceReader,
+        (windows, limit, batch_bytes): (&WindowPlan, usize, Option<usize>),
+    ) -> Result<(), LoaderError> {
+        let SourceReader::Postgres(client, helpers) = reader else {
+            return Err(LoaderError::Invalid(
+                "batch_concurrency reads windows at once only from Postgres".to_owned(),
+            ));
+        };
+        let connections: Vec<&Client> =
+            std::iter::once(client).chain(helpers).take(limit).collect();
+        share_snapshot(&connections).await?;
+        let table = self.table.clone();
+        let parent = table
+            .spec
+            .staging_dir
+            .clone()
+            .unwrap_or_else(std::env::temp_dir);
+        let read = |index| {
+            let window = (windows, index, connections.len());
+            read_window(reader, &table, window, (&parent, batch_bytes))
+        };
+        let commit = async |held: HeldWindow| self.commit_window(held).await;
+        read_in_order((windows.count, connections.len()), read, commit).await?;
+        Ok(end_snapshot(&connections).await?)
+    }
+
+    /// Stage a window's held rows and commit them.
+    async fn commit_window(&mut self, held: HeldWindow) -> Result<(), LoaderError> {
+        let started = Instant::now();
+        let HeldWindow {
+            index,
+            window,
+            mut spool,
+            read_for,
+        } = held;
+        for held in spool.take() {
+            for file in &held.files {
+                for batch in held_rows(file).map_err(LoaderError::Invalid)? {
+                    let batch = batch.map_err(|error| {
+                        LoaderError::Invalid(format!("cannot read held rows: {error}"))
+                    })?;
+                    self.stage(batch, None).await?;
+                }
+            }
+        }
+        let range = CommitRange::Window {
+            from: window.from,
+            to: window.to,
+        };
+        self.cut(range).await?;
+        tracing::debug!(
+            table = %self.table.spec.destination.table,
+            window = index,
+            read_ms = read_for.as_millis(),
+            commit_ms = started.elapsed().as_millis(),
+            "window committed"
+        );
+        Ok(())
+    }
+}
+
+/// One cursor window read ahead of its commit: its rows held in a spool, and how long reading them took.
+struct HeldWindow {
+    index: u64,
+    window: CursorWindow,
+    spool: Spool,
+    read_for: Duration,
+}
+
+/// Read window `index` of `windows` over connection `index` modulo `connections` (the client, then its helpers), holding its rows in a spool made in `parent`.
+async fn read_window(
+    reader: &SourceReader,
+    table: &TablePlan,
+    (windows, index, connections): (&WindowPlan, u64, usize),
+    (parent, batch_bytes): (&Path, Option<usize>),
+) -> Result<HeldWindow, LoaderError> {
+    let started = Instant::now();
+    let window = window_at(windows, index).map_err(LoaderError::Invalid)?;
+    let (filter, parameters) = window_filter(table, &window, index == 0);
+    let connection = usize::try_from(index % connections.max(1) as u64).unwrap_or(0);
+    let part = ReadPart {
+        filter,
+        parameters,
+        batch_bytes,
+        connection,
+        ..ReadPart::default()
+    };
+    let mut spool = Spool::new(parent).map_err(LoaderError::Invalid)?;
+    read_source(reader, table, part, async |batch| {
+        spool.hold(0, &batch).map_err(LoaderError::Invalid)
+    })
+    .await?;
+    Ok(HeldWindow {
+        index,
+        window,
+        spool,
+        read_for: started.elapsed(),
     })
 }

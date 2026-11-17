@@ -54,6 +54,7 @@ use crate::load_events::models::EventKind;
 use crate::number_text::main::memory_text::memory_text;
 use crate::project::models::SendMode;
 
+use crate::batch_plan::main::window_concurrency::window_concurrency;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
@@ -1679,6 +1680,12 @@ async fn feed(
     let batch_bytes = run.options.batch_bytes;
     let fed = async {
         match &table.commits {
+            CommitRule::Windows(windows) if window_concurrency(table) > 1 => {
+                let limit = window_concurrency(table);
+                publisher
+                    .feed_windows(reader, (windows, limit, batch_bytes))
+                    .await?;
+            }
             CommitRule::Windows(windows) => {
                 snapshot(reader, SNAPSHOT_BEGIN).await?;
                 for index in 0..windows.count {
@@ -1859,7 +1866,7 @@ async fn stage(publisher: &mut Publisher, batch: RecordBatch) -> Result<(), Load
 }
 
 /// The source filter reading one cursor window, in the source's dialect, and the values bound to its placeholders: an ODBC source's date and timestamp bounds (`split_windows` cuts only number and time cursors, never a text one). Under `null_cursor = "include"` the `first` window reads the rows whose cursor is NULL too, once per run.
-fn window_filter(
+pub(crate) fn window_filter(
     table: &TablePlan,
     window: &CursorWindow,
     first: bool,

@@ -165,6 +165,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     problems.extend(kind_problems(&place, source));
     problems.extend(transform_problems(project, &place, source));
     problems.extend(rename_problems(project, &place, source));
+    problems.extend(concurrency_problems(project, &place, source));
     if source.kind == SourceKind::PostgresCdc {
         problems.extend(cdc_name_problems(&place, name, source));
     }
@@ -461,6 +462,25 @@ fn rename_problems(project: &ProjectConfig, place: &str, source: &SourceConfig) 
         ));
     }
     problems
+}
+
+/// A `batch_concurrency` above 1 in a project that has not opted in with `microbatch_concurrency = true`.
+fn concurrency_problems(
+    project: &ProjectConfig,
+    place: &str,
+    source: &SourceConfig,
+) -> Vec<String> {
+    let concurrent = sheet_settings(source).any(|settings| {
+        settings
+            .batch_concurrency
+            .is_some_and(|limit| limit.get() > 1)
+    });
+    match concurrent && !project.microbatch_concurrency {
+        true => vec![format!(
+            "{place} batch_concurrency reads several windows at once, which needs microbatch_concurrency = true at the top of the project"
+        )],
+        false => Vec::new(),
+    }
 }
 
 /// A source's settings and each of its tables'.

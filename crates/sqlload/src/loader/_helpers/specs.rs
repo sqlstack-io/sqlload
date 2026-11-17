@@ -448,6 +448,8 @@ pub(crate) fn build_spec(
         newest_by,
         cursor,
         batch,
+        batch_concurrency: layered(&settings.batch_concurrency, &defaults.batch_concurrency)
+            .map_or(1, |(limit, _)| limit.get()),
         constants,
         shared_destination: false,
         #[cfg(feature = "container-tests")]

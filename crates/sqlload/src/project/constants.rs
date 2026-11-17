@@ -18,6 +18,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_nonfinite",
     "type_change_rebuild",
     "batch_size",
+    "batch_concurrency",
     "checks",
     "engine",
     "order_by",

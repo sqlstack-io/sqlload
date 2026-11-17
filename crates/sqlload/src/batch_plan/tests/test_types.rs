@@ -68,3 +68,15 @@ pub(crate) struct WindowRowsTestCase {
     /// What the load says of the rows outside (empty when there are none).
     pub(crate) expected_text: &'static str,
 }
+
+pub(crate) struct ReadInOrderTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) count: u64,
+    pub(crate) limit: usize,
+    /// The read that fails, if any; each read takes longer the earlier its index, so later reads finish first.
+    pub(crate) failing_read: Option<u64>,
+    /// The result whose consumption fails, if any.
+    pub(crate) failing_consume: Option<u64>,
+    /// The results consumed, in order; the most reads running at once; the first read to finish; and the error.
+    pub(crate) expected_outcome: (&'static [u64], usize, u64, Option<&'static str>),
+}
