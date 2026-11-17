@@ -390,12 +390,27 @@ pub(crate) struct BatchedScenarioTestCase {
     pub(crate) setup: &'static str,
     /// Project TOML appended after `[sources.app]`.
     pub(crate) settings: &'static str,
+    /// Top-level project TOML, before every table.
+    pub(crate) project: &'static str,
     /// The hidden `--batch-bytes`, so a few rows make several commits.
     pub(crate) batch_bytes: Option<usize>,
     pub(crate) concurrency: Option<usize>,
     pub(crate) runs: &'static [BatchedRun],
     /// Each run's `<load error, or ok> => <check query result>`.
     pub(crate) expected_outcomes: &'static [&'static str],
+}
+
+/// A load whose first cursor window waits on an advisory lock the test holds, so the other windows finish reading first, and the test changes the source while it waits.
+pub(crate) struct GatedWindowsTestCase {
+    pub(crate) description: &'static str,
+    /// Project TOML appended after `[sources.app]`; the project allows `batch_concurrency`.
+    pub(crate) settings: &'static str,
+    /// SQL run in Postgres while the first window waits, after every read began on its snapshot.
+    pub(crate) mid_load_change: &'static str,
+    /// A query on DuckDB after the load, giving one text result.
+    pub(crate) check_query: &'static str,
+    /// `<load error, or ok> => <check query result>`.
+    pub(crate) expected_outcome: &'static str,
 }
 
 /// A `delete_insert` files source with one partition of many files, which alone have an `extra` column.

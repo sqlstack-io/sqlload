@@ -275,6 +275,16 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "but connection \"wh\" is a duckdb connection",
         },
         ParseProjectErrorTestCase {
+            description: "reading windows at once needs the project to opt in",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nbatch_concurrency = 4\n",
+            expected_message: "batch_concurrency reads several windows at once, which needs microbatch_concurrency = true at the top of the project",
+        },
+        ParseProjectErrorTestCase {
+            description: "batch_concurrency reads at least one window",
+            text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nbatch_concurrency = 0\n",
+            expected_message: "nonzero",
+        },
+        ParseProjectErrorTestCase {
             description: "a destination must be a target",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ndestination = \"prod\"\ninclude = [\"*\"]\n",
             expected_message: "destination \"prod\" is not a [targets] entry",

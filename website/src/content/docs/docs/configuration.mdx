@@ -19,6 +19,7 @@ The [Kafka exporter](/docs/kafka/) uses a different file format.
 | `python_paths` | none | Folders, relative to the file, scanned for Python sources. |
 | `default_target` | none | The target for sources that name no `destination`. Not needed with one target. |
 | `concurrency` | 4 | The most tables loading at once. `--concurrency` overrides it. |
+| `microbatch_concurrency` | `false` | From 0.65.0. Lets tables read several `batch_size` windows at once with `batch_concurrency`; `plan` refuses `batch_concurrency` above 1 without it. |
 | `[connections.NAME]` | | How to reach a system. |
 | `[targets.NAME]` | | Where loaded tables go. |
 | `[sources.NAME]` | | Where data comes from. |
@@ -287,6 +288,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `on_cursor_out_of_range` | `fail` | From 0.53.0, Python tables with a cursor only. What a load does with rows the function returns outside the window it was asked for: `fail` fails the table, naming them and their likely cause; `skip` drops them; `warn` loads them. The load report counts them under `skip` and `warn`. See [Rows outside the window](/docs/concepts/cursors/#rows-outside-the-window). |
 | `null_cursor` | `fail` | From 0.51.0. What an incremental read does with source rows whose cursor is NULL: `fail` fails the load when there are any, `include` reads them on every run (`merge` only), `ignore` skips them. See [NULL cursor values](/docs/concepts/cursors/#null-cursor-values). |
 | `batch_size` | none | Commit one cursor window at a time: a duration (`"1d"`) or an integer step, or `"none"`. |
+| `batch_concurrency` | 1 | From 0.65.0, Postgres tables with `batch_size` windows; needs `microbatch_concurrency = true`. The most windows read at once, each over its own connection in one shared snapshot, still committed one at a time in window order. See [Reading windows at once](/docs/concepts/cursors/#reading-windows-at-once). |
 | `contract` | `none` | `none` or `enforced`. See [Contracts](/docs/concepts/contracts/). |
 | `on_schema_change` | `append_new_columns` | `append_new_columns`, `ignore` or `fail`. |
 | `auto_widen` | `false` | Widen inferred columns along `bool` → `int` → `decimal`, `timestamp_ntz` → `timestamp_tz`. |
