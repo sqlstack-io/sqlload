@@ -18,11 +18,13 @@ const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, email text, balance numeric(12,2), updated_at timestamptz NOT NULL);
 CREATE TABLE public.events (event_id int8, kind text, at timestamptz NOT NULL);
 CREATE TABLE public.stores (code text, city text);
+CREATE TABLE public.prices (id int8, \"Unit Price\" numeric(10,2), unit_price numeric(10,2));
 INSERT INTO public.accounts VALUES
   (1, 'Acme Ltd', 'a@example.com', 10.50, '2026-11-01 10:00:00+00'),
   (2, 'Beta Co', 'b@example.com', 20.00, '2026-11-02 10:00:00+00');
 INSERT INTO public.events VALUES (1, 'open', '2026-11-01 09:00:00+00'), (2, 'close', '2026-11-02 09:00:00+00');
 INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');
+INSERT INTO public.prices VALUES (1, 1.50, 1.25);
 ";
 
 const TABLES: &str = r#"
@@ -39,6 +41,9 @@ cursor_column = "at"
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
 mask = { city = "hash" }
+
+[sources.app.tables."public.prices"]
+write_strategy = "replace"
 "#;
 
 const PINNED_SETUP: &str = "
@@ -297,6 +302,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
                 source_change: "ALTER TABLE public.stores ADD COLUMN opened date; UPDATE public.stores SET opened = '2020-01-02';",
                 check_query: "SELECT string_agg(code || '@' || CAST(opened AS VARCHAR), ',') FROM raw.app__stores",
                 expected_result: "L1@2020-01-02",
+            },
+            LoadRunTestCase {
+                description: "a table whose names were numbered loads again beside the other tables' overrides, keeping its numbers",
+                source_change: "UPDATE public.prices SET unit_price = 2.25;",
+                check_query: "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'app__prices') || '|' || (SELECT string_agg(unit_price || ':' || unit_price_1, ',') FROM raw.app__prices)",
+                expected_result: "id,unit_price,unit_price_1,_sqlload_load_id,_sqlload_loaded_at|1.50:2.25",
             },
             LoadRunTestCase {
                 description: "every row carries the metadata of the load that wrote it",

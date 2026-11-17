@@ -53,16 +53,36 @@ use crate::similar_names::main::nearest_name::nearest_name;
 use crate::ssh_tunnel::models::SshTunnel;
 use std::collections::BTreeMap;
 
-/// The specs for `discovered` tables of source `source_name`, with problems and skipped tables.
+/// The specs for `discovered` tables of source `source_name`, with problems and skipped tables, including each table listed under `[sources.NAME.tables]` that discovery didn't find.
 pub(crate) fn resolve_tables(
     project: &ProjectConfig,
     source_name: &str,
     discovered: &[SourceTable],
 ) -> ResolvedTables {
-    resolve_known(project, source_name, discovered, &KnownNames::default())
+    let mut resolved = resolve_known(project, source_name, discovered, &KnownNames::default());
+    let Some(source) = project.sources.get(source_name) else {
+        return resolved;
+    };
+    for (listed, table) in &source.tables {
+        if discovered
+            .iter()
+            .any(|found| found.qualified_name() == *listed)
+        {
+            continue;
+        }
+        resolved.problems.push(match &table.tombstones_of {
+            Some(main) => format!(
+                "{main}: deletes_from table {listed:?} not found in the source (or excluded by exclude)"
+            ),
+            None => format!(
+                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
+            ),
+        });
+    }
+    resolved
 }
 
-/// [`resolve_tables`] for tables planned before, whose names `known` keeps.
+/// [`resolve_tables`] for tables planned before, whose names `known` keeps. It resolves only the tables given, so it doesn't check the source's other listed tables, which discovery already did.
 pub(crate) fn resolve_known(
     project: &ProjectConfig,
     source_name: &str,
@@ -176,22 +196,6 @@ pub(crate) fn resolve_known(
     resolved
         .problems
         .extend(merged_names(source_name, source, &resolved.specs));
-    for (listed, table) in &source.tables {
-        if discovered
-            .iter()
-            .any(|found| found.qualified_name() == *listed)
-        {
-            continue;
-        }
-        resolved.problems.push(match &table.tombstones_of {
-            Some(main) => format!(
-                "{main}: deletes_from table {listed:?} not found in the source (or excluded by exclude)"
-            ),
-            None => format!(
-                "{listed}: listed under [sources.{source_name}.tables] but not found in the source (or not selected by include/exclude)"
-            ),
-        });
-    }
     resolved
 }
 
