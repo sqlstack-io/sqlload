@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use sqlload_testkit::doc_pages::main::run_sections::run_sections;
+#[cfg(feature = "container-tests")]
 use sqlload_testkit::doc_pages::models::PageServer;
 
 use crate::test_types::QuickstartPageTestCase;
