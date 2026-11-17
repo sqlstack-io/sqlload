@@ -40,7 +40,11 @@ fn given_a_snowflake_config_from_before_databricks_when_parsing_then_it_parses_u
         let text = std::fs::read_to_string(&path).map_err(|error| error.to_string())?;
         let config =
             parse_config(&text, &|_| Some("x".to_owned())).map_err(|error| error.to_string())?;
-        let first_column = config.envelope.columns.first().map(|column| column.name.as_str());
+        let first_column = config
+            .envelope
+            .columns
+            .first()
+            .map(|column| column.name.as_str());
         assert_eq!(
             (
                 config.destination.database(),
@@ -90,7 +94,11 @@ fn given_databricks_staging_kinds_when_parsing_then_each_maps_to_its_route() -> 
     for test_case in &test_cases {
         let config = parse_config(&format!("{DATABRICKS}{}", test_case.text), &|_| None)
             .map_err(|error| error.to_string())?;
-        let first_column = config.envelope.columns.first().map(|column| column.name.as_str());
+        let first_column = config
+            .envelope
+            .columns
+            .first()
+            .map(|column| column.name.as_str());
         assert_eq!(
             (
                 load_path(&config, false),

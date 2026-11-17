@@ -1,4 +1,6 @@
-use databricks_zerobus_ingest_sdk::{JsonString, ZerobusError, ZerobusSdk, ZerobusStream};
+use databricks_zerobus_ingest_sdk::{
+    GrpcCode, JsonString, ZerobusError, ZerobusSdk, ZerobusStream,
+};
 use serde_json::{Map, Value};
 
 use crate::batching::models::{Batch, BatchRow};
@@ -32,7 +34,13 @@ impl ZerobusDelivery {
                     tracing::warn!(topic = %row.topic, partition = row.partition, offset = row.offset, bytes = record.len(), "skipping a row too large for one Zerobus Ingest request");
                     skipped_rows += 1;
                 }
-                true => return Err(DeliveryError::Fatal(oversized_message(row, record.len(), self.max_request_bytes))),
+                true => {
+                    return Err(DeliveryError::Fatal(oversized_message(
+                        row,
+                        record.len(),
+                        self.max_request_bytes,
+                    )));
+                }
             }
         }
         let sent_bytes: u64 = records.iter().map(|(bytes, _)| bytes).sum();
@@ -90,7 +98,7 @@ impl ZerobusDelivery {
                 .json()
                 .build()
                 .await
-                .map_err(|error| zerobus_error("open stream", &error))?;
+                .map_err(|error| open_error(&self.table, &self.settings.client_id, &error))?;
             self.link.stream = Some(stream);
         }
         self.link
@@ -126,10 +134,12 @@ pub(crate) fn zerobus_record(
             continue;
         }
         *value = match (kind, value.as_str()) {
-            (ZerobusKind::Timestamp, Some(text)) => match chrono::DateTime::parse_from_rfc3339(text) {
-                Ok(instant) => Value::from(instant.timestamp_micros()),
-                Err(error) => return Err(unexpected(&column.name, text, &error)),
-            },
+            (ZerobusKind::Timestamp, Some(text)) => {
+                match chrono::DateTime::parse_from_rfc3339(text) {
+                    Ok(instant) => Value::from(instant.timestamp_micros()),
+                    Err(error) => return Err(unexpected(&column.name, text, &error)),
+                }
+            }
             (ZerobusKind::Date, Some(text)) => {
                 match chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
                     Ok(date) => Value::from((date - chrono::NaiveDate::default()).num_days()),
@@ -172,6 +182,26 @@ fn oversized_message(row: &BatchRow, bytes: usize, limit: u64) -> String {
         "row {}/{}@{} is {bytes} bytes, over the {limit}-byte request limit; set oversized = \"skip\" to drop such rows",
         row.topic, row.partition, row.offset
     )
+}
+
+/// Opening a stream retries what the SDK calls transient, and also an authorisation refusal: Zerobus Ingest refuses some first token requests for a table it grants seconds later. The exporter's batch retry gives up after its usual limit, naming the grants a lasting refusal needs; every other open failure stops the exporter.
+pub(crate) fn open_error(table: &str, client_id: &str, error: &ZerobusError) -> DeliveryError {
+    let refused = match error {
+        ZerobusError::InvalidUCTokenError(_) => true,
+        ZerobusError::CreateStreamError(status) => {
+            matches!(
+                status.code(),
+                GrpcCode::Unauthenticated | GrpcCode::PermissionDenied
+            )
+        }
+        _ => false,
+    };
+    match refused {
+        true => DeliveryError::Retry(format!(
+            "Zerobus Ingest open stream for {table} was refused: {error}; if this lasts, the service principal {client_id} needs USE CATALOG, USE SCHEMA, and MODIFY and SELECT on the table, granted explicitly"
+        )),
+        false => zerobus_error("open stream", error),
+    }
 }
 
 fn zerobus_error(action: &str, error: &ZerobusError) -> DeliveryError {

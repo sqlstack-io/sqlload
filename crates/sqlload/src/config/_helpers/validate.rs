@@ -60,14 +60,23 @@ fn databricks_problems(config: &Config, databricks: &DatabricksConfig) -> Vec<St
         problems.push("staging.kind = \"none\" on Databricks streams through Zerobus Ingest and needs destination.zerobus_endpoint (https://<workspace-id>.zerobus.<region>.cloud.databricks.com)".to_owned());
     }
     if staging.kind != StagingKind::None && staging.format == FileFormat::Json {
-        problems.push("Databricks loads Parquet files; remove staging.format or set it to \"parquet\"".to_owned());
+        problems.push(
+            "Databricks loads Parquet files; remove staging.format or set it to \"parquet\""
+                .to_owned(),
+        );
     }
     if staging.load == LoadMethod::Snowpipe {
-        problems.push("staging.load = \"snowpipe\" is for Snowflake; Databricks loads with COPY INTO".to_owned());
+        problems.push(
+            "staging.load = \"snowpipe\" is for Snowflake; Databricks loads with COPY INTO"
+                .to_owned(),
+        );
     }
     if let Some(s3) = &staging.s3 {
         if s3.auto_ingest {
-            problems.push("staging.s3.auto_ingest is for Snowflake; Databricks loads with COPY INTO".to_owned());
+            problems.push(
+                "staging.s3.auto_ingest is for Snowflake; Databricks loads with COPY INTO"
+                    .to_owned(),
+            );
         }
         if !s3.stage.is_empty() {
             problems.push("staging.s3.stage is for Snowflake; Databricks reads the bucket through a Unity Catalog external location, so remove it".to_owned());

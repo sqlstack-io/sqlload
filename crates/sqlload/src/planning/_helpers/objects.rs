@@ -3,8 +3,8 @@ use crate::naming::main::qualify_stage::qualify_stage;
 use crate::naming::models::Stream;
 use crate::planning::_helpers::compatibility::column_problems;
 use crate::planning::_helpers::ddl::{
-    create_databricks_table, create_stage, create_stage_pipe, create_streaming_pipe,
-    create_table, create_volume, qualified,
+    create_databricks_table, create_stage, create_stage_pipe, create_streaming_pipe, create_table,
+    create_volume, qualified,
 };
 use crate::planning::constants::DEFAULT_STREAMING_PIPE_SUFFIX;
 use crate::planning::models::{

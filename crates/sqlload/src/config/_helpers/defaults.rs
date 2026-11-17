@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::config::constants::{DATABRICKS_COLUMNS, SNOWFLAKE_COLUMNS};
 use crate::config::constants::{
     DEFAULT_CONSUMER_GROUP, DEFAULT_DISCOVERY_INTERVAL_SECS, DEFAULT_MAX_AGE_SECS,
     DEFAULT_MAX_BYTES, DEFAULT_MAX_IN_FLIGHT, DEFAULT_MAX_PENDING_FILES, DEFAULT_MAX_REQUEST_BYTES,
@@ -8,7 +9,6 @@ use crate::config::constants::{
     DEFAULT_RETAIN_SECS, DEFAULT_S3_PATH, DEFAULT_STAGE_TEMPLATE, DEFAULT_STARTUP_BATCH,
     DEFAULT_STARTUP_INTERVAL_MS, DEFAULT_STREAMING_PIPE_TEMPLATE,
 };
-use crate::config::constants::{DATABRICKS_COLUMNS, SNOWFLAKE_COLUMNS};
 use crate::config::models::ByteSize;
 
 pub(crate) fn consumer_group() -> String {
@@ -113,8 +113,7 @@ pub(crate) fn destination_defaults(value: &mut toml::Value) {
     let Some(root) = value.as_table_mut() else {
         return;
     };
-    if databricks
-        && let Some(staging) = root.get_mut("staging").and_then(toml::Value::as_table_mut)
+    if databricks && let Some(staging) = root.get_mut("staging").and_then(toml::Value::as_table_mut)
     {
         staging
             .entry("format")

@@ -1,3 +1,5 @@
+#[path = "tests/test_destinations.rs"]
+mod destinations;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_parse_config.rs"]
@@ -6,5 +8,3 @@ mod parse_config;
 mod stream_settings;
 #[path = "tests/test_types.rs"]
 mod test_types;
-#[path = "tests/test_destinations.rs"]
-mod destinations;

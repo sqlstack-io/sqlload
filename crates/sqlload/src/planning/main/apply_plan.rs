@@ -1,11 +1,14 @@
 //! Create missing objects; never alter or drop.
 
+use crate::delivery::models::Warehouse;
 use crate::planning::errors::ApplyError;
 use crate::planning::models::{Plan, PlannedObject};
-use crate::delivery::models::Warehouse;
 
 /// Create every missing object, failing before any change when an existing object is incompatible.
-pub async fn apply_plan(warehouse: &Warehouse, plan: &Plan) -> Result<Vec<PlannedObject>, ApplyError> {
+pub async fn apply_plan(
+    warehouse: &Warehouse,
+    plan: &Plan,
+) -> Result<Vec<PlannedObject>, ApplyError> {
     let problems = plan.problems();
     if !problems.is_empty() {
         return Err(ApplyError::Incompatible(problems));

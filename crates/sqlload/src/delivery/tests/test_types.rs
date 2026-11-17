@@ -1,4 +1,7 @@
+use databricks_zerobus_ingest_sdk::ZerobusError;
+
 use crate::config::models::LoadErrorPolicy;
+use crate::delivery::errors::DeliveryError;
 use crate::stage_api::models::LoadStatus;
 
 pub(crate) struct ExpiredDatesTestCase {
@@ -91,4 +94,10 @@ pub(crate) struct ChunkRecordsTestCase {
     pub(crate) records: &'static [(u64, &'static str)],
     pub(crate) limit: u64,
     pub(crate) expected_requests: &'static [&'static [&'static str]],
+}
+
+pub(crate) struct OpenErrorTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) error: ZerobusError,
+    pub(crate) expected_error: DeliveryError,
 }

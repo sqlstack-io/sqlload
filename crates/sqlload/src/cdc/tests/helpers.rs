@@ -212,7 +212,7 @@ pub(crate) fn insert_message(values: &[&str]) -> Vec<u8> {
 
 /// A pgoutput Update of table 7 to text `values`, without old values.
 pub(crate) fn update_message(values: &[&str]) -> Vec<u8> {
-    [&[b'U'][..], &insert_message(values)[1..]].concat()
+    [&b"U"[..], &insert_message(values)[1..]].concat()
 }
 
 /// Buffer `transactions`, each a list of messages committed at LSN 100, 101, ..., keeping at most `spill_bytes` in memory.

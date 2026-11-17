@@ -1,6 +1,11 @@
-use crate::delivery::_helpers::zerobus::{chunk_records, zerobus_kind, zerobus_record};
+use databricks_zerobus_ingest_sdk::{GrpcCode, GrpcStatus, ZerobusError};
+
+use crate::delivery::_helpers::zerobus::{chunk_records, open_error, zerobus_kind, zerobus_record};
+use crate::delivery::errors::DeliveryError;
 use crate::delivery::tests::helpers::value_columns;
-use crate::delivery::tests::test_types::{ChunkRecordsTestCase, ZerobusRecordTestCase};
+use crate::delivery::tests::test_types::{
+    ChunkRecordsTestCase, OpenErrorTestCase, ZerobusRecordTestCase,
+};
 
 #[test]
 fn given_an_encoded_row_when_streaming_to_zerobus_then_typed_columns_take_its_json_forms()
@@ -34,8 +39,8 @@ fn given_an_encoded_row_when_streaming_to_zerobus_then_typed_columns_take_its_js
     for test_case in &test_cases {
         let columns = value_columns(test_case.columns);
         let kinds: Vec<_> = columns.iter().map(zerobus_kind).collect();
-        let record = zerobus_record(&columns, &kinds, test_case.line)
-            .map_err(|error| error.to_string())?;
+        let record =
+            zerobus_record(&columns, &kinds, test_case.line).map_err(|error| error.to_string())?;
         let parsed: serde_json::Value =
             serde_json::from_str(&record).map_err(|error| error.to_string())?;
         assert_eq!(
@@ -74,6 +79,66 @@ fn given_records_when_chunking_for_zerobus_then_requests_stay_under_the_limit_in
         assert_eq!(
             chunk_records(records, test_case.limit),
             test_case.expected_requests,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_stream_that_would_not_open_when_classifying_it_then_only_transient_failures_and_authorisation_refusals_retry()
+ {
+    let hint = "; if this lasts, the service principal sp-1 needs USE CATALOG, USE SCHEMA, and MODIFY and SELECT on the table, granted explicitly";
+    let test_cases = [
+        OpenErrorTestCase {
+            description: "a refused token request retries, naming the grants",
+            error: ZerobusError::InvalidUCTokenError("Client error (401)".to_owned()),
+            expected_error: DeliveryError::Retry(format!(
+                "Zerobus Ingest open stream for c.s.t was refused: Specified UC token is in invalid format: Client error (401).{hint}"
+            )),
+        },
+        OpenErrorTestCase {
+            description: "a stream refused for permissions retries, naming the grants",
+            error: ZerobusError::CreateStreamError(GrpcStatus::new(
+                GrpcCode::PermissionDenied,
+                "no MODIFY",
+            )),
+            expected_error: DeliveryError::Retry(format!(
+                "Zerobus Ingest open stream for c.s.t was refused: {}{hint}",
+                ZerobusError::CreateStreamError(GrpcStatus::new(
+                    GrpcCode::PermissionDenied,
+                    "no MODIFY"
+                ))
+            )),
+        },
+        OpenErrorTestCase {
+            description: "a timeout retries as the SDK classes it",
+            error: ZerobusError::ConnectionTimeout("10s".to_owned()),
+            expected_error: DeliveryError::Retry(
+                "Zerobus Ingest open stream failed: Connection timeout: 10s".to_owned(),
+            ),
+        },
+        OpenErrorTestCase {
+            description: "a missing table stops the exporter",
+            error: ZerobusError::CreateStreamError(GrpcStatus::new(GrpcCode::NotFound, "no table")),
+            expected_error: DeliveryError::Fatal(format!(
+                "Zerobus Ingest open stream failed: {}",
+                ZerobusError::CreateStreamError(GrpcStatus::new(GrpcCode::NotFound, "no table"))
+            )),
+        },
+        OpenErrorTestCase {
+            description: "an invalid table name stops the exporter",
+            error: ZerobusError::InvalidTableName("c.s".to_owned()),
+            expected_error: DeliveryError::Fatal(
+                "Zerobus Ingest open stream failed: Specified UC table name is invalid: c.s."
+                    .to_owned(),
+            ),
+        },
+    ];
+    for test_case in &test_cases {
+        assert_eq!(
+            open_error("c.s.t", "sp-1", &test_case.error),
+            test_case.expected_error,
             "{}",
             test_case.description
         );

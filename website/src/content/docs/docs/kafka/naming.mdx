@@ -1,6 +1,6 @@
 ---
 title: "Kafka topic naming"
-description: "How Kafka topics map to Snowflake tables, stages, pipes and consumer groups."
+description: "How Kafka topics map to Snowflake or Databricks tables, stages, volumes, pipes and consumer groups."
 ---
 
 Each topic exports to a table. `[naming]` decides which, in this order:
@@ -8,6 +8,9 @@ Each topic exports to a table. `[naming]` decides which, in this order:
 1. An exact entry in `[naming.map]`.
 2. The first `[[naming.rules]]` entry whose `match` fits the topic.
 3. The default rule: strip `strip_prefix`, upper-case, `.` becomes `__`, other symbols `_`.
+
+On Databricks the table and volume names are then lower-cased: `shop.orders` exports to
+`shop__orders`.
 
 Several topics can share a table through rules or map entries. If any of them reaches the table
 through the default rule, the configuration fails, so grouping is always on purpose. Topics whose
@@ -48,9 +51,9 @@ shop.payments_v1.events	PAYMENTS__EVENTS	payments__events	sqlload-payments__even
 | `map` | none | Exact topic names to table names. These win over rules. |
 | `unmatched` | `default` | A topic no rule or map entry names: `default` applies the default rule, `fail` stops. |
 | `fallback` | none | The table for topics whose derived name isn't a valid identifier, instead of failing. |
-| `stage` | `{table}_SQLLOAD_STAGE` | The stage name, for staged files. |
-| `pipe` | `{table}_SQLLOAD_PIPE` | The pipe name, for Snowpipe loads. |
-| `streaming_pipe` | `{table}-STREAMING` | The pipe Snowpipe Streaming writes through. |
+| `stage` | `{table}_SQLLOAD_STAGE` | The stage name, for staged files; on Databricks, the volume for `internal`. |
+| `pipe` | `{table}_SQLLOAD_PIPE` | Snowflake: the pipe name, for Snowpipe loads. |
+| `streaming_pipe` | `{table}-STREAMING` | Snowflake: the pipe Snowpipe Streaming writes through. |
 
 Name templates, and `source.consumer_group` (default `sqlload-{stream}`), can use `{table}`, the
 table name; `{table_flat}`, the table name with `__` as `_`; and `{stream}`, the table name in lower

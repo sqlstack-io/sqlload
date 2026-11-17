@@ -1,10 +1,10 @@
 ---
 title: "Run the Kafka exporter"
-description: "Stream Kafka topics into Snowflake tables continuously, with Snowpipe Streaming or staged files."
+description: "Stream Kafka topics into Snowflake or Databricks tables continuously, with a streaming route or staged files."
 ---
 
 The [Kafka exporter](/docs/kafka/) reads Kafka topics continuously and writes each one into a
-Snowflake table, through Snowpipe Streaming or staged files. Its `sqlload.toml` is described in
+Snowflake or Databricks table, through a streaming route or staged files. Its `sqlload.toml` is described in
 [Kafka exporter configuration](/docs/kafka/configuration/); the repository's
 [`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
 is a complete example.
@@ -14,28 +14,53 @@ is a complete example.
 | Step | Command |
 |------|---------|
 | Check the configuration and the connections. | [`sqlload debug`](/docs/cli/debug/) |
-| See how topics map to tables, without connecting to Snowflake. | [`sqlload tables [--topics-file FILE]`](/docs/cli/tables/) |
+| See how topics map to tables, without connecting to the warehouse. | [`sqlload tables [--topics-file FILE]`](/docs/cli/tables/) |
 | Show each topic's table and the objects it needs. | [`sqlload plan`](/docs/cli/plan/) |
-| Create missing tables, stages and pipes. | [`sqlload apply`](/docs/cli/apply/) |
+| Create missing tables, and the stages, pipes or volumes the route needs. | [`sqlload apply`](/docs/cli/apply/) |
 | Export until stopped, or for `--max-duration`. | [`sqlload run [--max-duration D] [--shard N]`](/docs/cli/run/) |
 | Show per-partition lag and committed offsets. | [`sqlload status`](/docs/cli/status/) |
 
 `load`, `copy`, `contract` and `logged-state` are for loader projects, and refuse an exporter
 configuration.
 
-## How rows reach Snowflake
+## How rows reach the warehouse
 
 `[staging] kind` chooses the route:
 
-| `kind` | Route |
-|--------|-------|
-| `none` | Snowpipe Streaming. |
-| `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. |
-| `s3` | Files in your bucket, loaded with Snowpipe or `COPY`. |
+| `kind` | Snowflake | Databricks (from 0.66.0) |
+|--------|-----------|--------------------------|
+| `none` | Snowpipe Streaming. | Zerobus Ingest: rows sent as JSON records; a batch counts as written once the stream's flush says it's durable. |
+| `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. | Parquet files uploaded to the stream's Unity Catalog volume (`naming.stage`), then one `COPY INTO` per batch. `apply` creates the volume; `retain` prunes its dated folders. |
+| `s3` | Files in your bucket, loaded with Snowpipe or `COPY`. | Parquet files in your bucket, then `COPY INTO` from `s3://...`. Unity Catalog reads the bucket through an external location you create on it. |
 
-With Snowpipe loads, Kafka offsets are committed only once Snowpipe reports the files loaded.
-Each topic's rows carry the record's envelope (topic, partition, offset, key, value, timestamps);
-see [Envelope columns](/docs/kafka/configuration/#envelope).
+Kafka offsets are committed only once the warehouse has the rows: when Snowpipe reports the files
+loaded, when `COPY INTO` returns, or when the streaming route confirms them, oldest batch first.
+Delivery is at least once: a crash or restart between the write and the Kafka commit replays
+those rows, so a table can hold a record twice. Every row carries its topic, partition and offset
+(see [Envelope columns](/docs/kafka/configuration/#envelope)), so dedupe on those three columns.
+
+Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes` (default
+32 MiB), whichever comes first, so one write never holds more than that.
+
+### Databricks
+
+- Sign in with an OAuth machine-to-machine client (a service principal): `client_id` and
+  `client_secret`. Zerobus Ingest doesn't take personal access tokens.
+- The SQL warehouse in `warehouse_id` runs `plan`, `apply` and `COPY INTO`. Zerobus Ingest writes
+  without it, so a streaming exporter keeps it busy only for `plan` and `apply`.
+- For `none`, set `zerobus_endpoint`. The service principal needs the workspace access
+  entitlement, `USE CATALOG`, `USE SCHEMA`, and `MODIFY` and `SELECT` on each table, granted
+  explicitly. Zerobus Ingest sometimes refuses the first token for a new table for a few seconds;
+  the exporter retries, and stops after 4 minutes with the grants it needs.
+- Each Zerobus request holds at most `max_request_bytes`, and a record larger than that follows
+  `oversized`. Zerobus Ingest limits a record to 10 MB.
+- For `s3`, create a Unity Catalog storage credential and an external location covering the bucket
+  and `prefix`, and grant the service principal `READ FILES` on it. The exporter writes with the
+  AWS credentials in its environment or shared credentials file.
+- Files are Parquet; `staging.format = "json"`, `load = "snowpipe"`, `s3.stage` and
+  `s3.auto_ingest` are Snowflake's and are refused.
+- Names are lower case: catalog, schema, tables and volumes. Envelope columns default to
+  Databricks types; see [Envelope columns](/docs/kafka/configuration/#envelope).
 
 ## Naming topics
 

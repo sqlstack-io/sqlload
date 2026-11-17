@@ -1,11 +1,11 @@
 ---
 title: "Kafka exporter"
-description: "The Kafka exporter: a separate SQLLoad mode that runs continuously and streams Kafka topics into Snowflake tables."
+description: "The Kafka exporter: a separate SQLLoad mode that runs continuously and streams Kafka topics into Snowflake or Databricks tables."
 ---
 
 The Kafka exporter is a separate mode of SQLLoad. It runs continuously, reads Kafka topics and
-writes each topic into a table. Its only destination is Snowflake, through Snowpipe Streaming or
-staged files.
+writes each topic into a table. Its destinations are Snowflake and, from 0.66.0, Databricks, each
+through a streaming route or staged files.
 
 ## How it differs from a load project
 
@@ -13,7 +13,7 @@ staged files.
 |---|---|---|
 | `sqlload.toml` | `[connections]`, `[targets]` and `[sources]` | `[source]` with `kind = "kafka"`, `[destination]` and `[staging]`, plus the optional sections in [Configuration](/docs/kafka/configuration/) |
 | Runs | Once per `sqlload load` | Continuously: `sqlload run` exports until stopped, or for `--max-duration` |
-| Destinations | Every [target](/docs/targets/) | Snowflake: Snowpipe Streaming, or files staged on a table stage or in S3 |
+| Destinations | Every [target](/docs/targets/) | Snowflake: Snowpipe Streaming, or files staged on a table stage or in S3. Databricks: Zerobus Ingest, or Parquet staged in a Unity Catalog volume or in S3, then `COPY INTO` |
 | Commands | `debug`, `plan`, `apply`, `load`, `copy`, `contract`, `logged-state` | `debug`, `tables`, `plan`, `apply`, `run`, `status` |
 
 `load`, `copy`, `contract` and `logged-state` refuse an exporter configuration. The repository's
@@ -38,10 +38,24 @@ schema = "KAFKA"
 kind = "none"
 ```
 
+The same file for Databricks changes only `[destination]`:
+
+```toml
+[destination]
+kind = "databricks"
+host = "dbc-1234.cloud.databricks.com"
+client_id = "${ENV:DATABRICKS_CLIENT_ID}"
+client_secret = "${ENV:DATABRICKS_CLIENT_SECRET}"
+warehouse_id = "${ENV:DATABRICKS_WAREHOUSE_ID}"
+catalog = "main"
+schema = "kafka"
+zerobus_endpoint = "https://1234567890.zerobus.us-west-2.cloud.databricks.com"
+```
+
 ## Pages
 
 | Page | Covers |
 |------|--------|
-| [Run it](/docs/kafka/run/) | The commands in order, how rows reach Snowflake, and running several instances. |
+| [Run it](/docs/kafka/run/) | The commands in order, how rows reach each destination, and running several instances. |
 | [Configuration](/docs/kafka/configuration/) | Every section and key of the exporter's `sqlload.toml`, with defaults. |
 | [Topic naming](/docs/kafka/naming/) | How topics map to tables, stages, pipes and consumer groups. |

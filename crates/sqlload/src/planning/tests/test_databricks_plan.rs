@@ -30,7 +30,9 @@ fn given_databricks_routes_when_planning_then_tables_and_volumes_are_lower_case(
             staging: "[staging]\nkind = \"none\"\n",
             existing_columns: &[],
             expected_objects: &["+table shop__orders"],
-            expected_sql: &["CREATE TABLE IF NOT EXISTS `main`.`raw`.`shop__orders` (`topic` STRING, `kafka_timestamp` BIGINT, `kafka_timestamp_type` INT, `kafka_offset` BIGINT, `kafka_partition` INT, `key` STRING, `value` STRING, `exported_at` TIMESTAMP, `date` DATE)"],
+            expected_sql: &[
+                "CREATE TABLE IF NOT EXISTS `main`.`raw`.`shop__orders` (`topic` STRING, `kafka_timestamp` BIGINT, `kafka_timestamp_type` INT, `kafka_offset` BIGINT, `kafka_partition` INT, `key` STRING, `value` STRING, `exported_at` TIMESTAMP, `date` DATE)",
+            ],
         },
         DatabricksPlanTestCase {
             description: "a volume route also needs the stream's volume",
@@ -93,4 +95,3 @@ fn given_databricks_routes_when_planning_then_tables_and_volumes_are_lower_case(
     }
     Ok(())
 }
-
