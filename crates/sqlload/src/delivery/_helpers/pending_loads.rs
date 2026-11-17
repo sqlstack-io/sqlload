@@ -139,6 +139,33 @@ impl PendingLoads {
             .any(|file| keys.contains(&file.key) && is_unsettled(file))
     }
 
+    /// Check none of `keys` before `not_before`.
+    pub(crate) fn defer(&mut self, keys: &[String], not_before: i64) {
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            file.next_check_ms = file.next_check_ms.max(not_before);
+        }
+    }
+
+    /// Every file still waiting or loading.
+    pub(crate) fn waiting(&self) -> Vec<String> {
+        self.files()
+            .filter(|file| is_unsettled(file))
+            .map(|file| file.key.clone())
+            .collect()
+    }
+
+    /// Files among `keys` not warned about yet, marked as warned.
+    pub(crate) fn take_unwarned(&mut self, keys: &[String]) -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for file in self.files_mut().filter(|file| keys.contains(&file.key)) {
+            if !file.warned_no_history {
+                file.warned_no_history = true;
+                found.push(file.key.clone());
+            }
+        }
+        found
+    }
+
     /// Received-before files among `keys` not warned about yet, marked as warned.
     pub(crate) fn take_unwarned_received_before(&mut self, keys: &[String]) -> Vec<String> {
         let mut found: Vec<String> = Vec::new();

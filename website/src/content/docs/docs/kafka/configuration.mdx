@@ -43,7 +43,7 @@ Snowflake:
 | `account`, `user` | required | The Snowflake account and user. |
 | `auth` | required | `{ method = "pat", token = "..." }` or `{ method = "key_pair", private_key_file = "..." }`. From 0.28.0, browser sign-in (`oauth_authorization_code`) works too, but it needs a person at a terminal, so it doesn't suit a long-running exporter. |
 | `role` | none | The role to use. |
-| `warehouse` | none | Needed for `COPY` loads, `plan` and `apply`; streaming doesn't use it. |
+| `warehouse` | none | Needed for `COPY` loads, `plan` and `apply`, and required with `s3.auto_ingest`, whose loads are confirmed from `COPY_HISTORY`; streaming doesn't use it. |
 | `database`, `schema` | required | Where the tables, stages and pipes go. |
 
 Databricks:
@@ -76,7 +76,7 @@ BigQuery:
 | `max_in_flight` | `32` | Uploads, and separately loads, in flight at once across all streams. |
 | `max_pending_files` | `32` | Snowpipe loads: files per stream sent but not committed yet. A full stream pauses its partitions. |
 | `on_load_error` | `halt` | A file Snowpipe reports as failed or partly loaded: `halt` stops the stream without committing it; `skip` logs and counts it, then commits past it. |
-| `pending_check_after` | `5m` | Snowpipe loads: when a file with no report is first checked, in load history and then the stage. |
+| `pending_check_after` | `5m` | Snowpipe loads: when a file with no report is first checked, in load history and then the stage. With `auto_ingest`, also the shortest time between two `COPY_HISTORY` queries. |
 | `pending_recheck_every` | `10m` | How often it's checked again. Slow loads are never failed. |
 
 With Snowpipe loads, the loading role needs `OPERATE` on each pipe and `MONITOR` to read its load
@@ -91,7 +91,7 @@ reports. Pipes that `sqlload apply` creates are owned by it.
 | `stage` | required on Snowflake | The external stage on it: a name in the destination schema, or `DATABASE.SCHEMA.NAME`. Databricks reads the bucket through a Unity Catalog external location instead and refuses this key. |
 | `path` | `{topic}/date={date}/` | Each file's folder under `prefix`, with `{topic}`, `{table}`, `{stream}`, `{date}` (UTC `YYYY-MM-DD`) and `{hour}` (UTC `HH`). |
 | `endpoint`, `path_style` | none, `false` | For S3-compatible stores. |
-| `auto_ingest` | `false` | Snowflake: load with an auto-ingest pipe on bucket notifications. |
+| `auto_ingest` | `false` | Snowflake: load with an auto-ingest pipe on bucket notifications. Needs `destination.warehouse`; see [Auto-ingest](/docs/kafka/run/#auto-ingest). |
 
 `[staging.gcs]`, for `kind = "gcs"` (BigQuery):
 

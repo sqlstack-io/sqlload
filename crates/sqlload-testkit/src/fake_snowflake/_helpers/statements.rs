@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use crate::fake_snowflake::_helpers::objects::{copy_files, parse_stage_pipe};
+use crate::fake_snowflake::_helpers::objects::{copy_files, copy_history_table, parse_stage_pipe};
 use crate::fake_snowflake::constants::NUMBER_TYPE;
 use crate::fake_snowflake::models::{FakeTable, SharedState};
 
@@ -139,6 +139,38 @@ fn run_one(state: &SharedState, body: &[u8]) -> Outcome {
             ]);
         }
         return Ok(result(&["file", "status", "rows_loaded"], loaded));
+    }
+    if let Some(table) = copy_history_table(&statement) {
+        if guard.notifications {
+            guard.notify_auto_ingest();
+        }
+        let rows: Vec<Vec<Value>> = guard
+            .copy_history
+            .get(&table)
+            .into_iter()
+            .flatten()
+            .map(|row| {
+                vec![
+                    json!(row.stage_location),
+                    json!(row.file_name),
+                    json!(row.status),
+                    json!(row.rows.to_string()),
+                    json!(row.rows.to_string()),
+                    json!(null),
+                ]
+            })
+            .collect();
+        return Ok(result(
+            &[
+                "STAGE_LOCATION",
+                "FILE_NAME",
+                "STATUS",
+                "ROW_COUNT",
+                "ROW_PARSED",
+                "FIRST_ERROR_MESSAGE",
+            ],
+            rows,
+        ));
     }
     if let Some((name, url, integration)) = parse_create_stage(&statement) {
         guard.stages.entry(name).or_insert((url, integration));

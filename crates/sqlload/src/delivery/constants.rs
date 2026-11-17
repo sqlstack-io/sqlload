@@ -11,6 +11,8 @@ pub const STAGE_CONFIRM_POLL: Duration = Duration::from_secs(10);
 pub const STREAMING_CONFIRM_POLL: Duration = Duration::from_secs(1);
 /// The HTTP status Snowpipe answers when the role lacks a privilege on the pipe.
 pub const FORBIDDEN: u16 = 403;
+/// The HTTP status for credentials Snowflake rejects.
+pub const UNAUTHORIZED: u16 = 401;
 /// How far before a file was sent a history scan looks for its load.
 pub const HISTORY_MARGIN: Duration = Duration::from_secs(60);
 /// How far back a history scan looks for a file the pipe had received before this run sent it: Snowpipe's 14-day load metadata.

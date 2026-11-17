@@ -12,7 +12,9 @@ use crate::naming::main::shard_of::shard_of;
 use crate::naming::models::{NameSource, TopicTable};
 use crate::planning::main::apply_plan::apply_plan;
 use crate::planning::main::build_plan::build_plan;
+use crate::planning::main::load_note::load_note;
 use crate::planning::main::load_pacing::load_pacing;
+use crate::planning::main::load_path::load_path;
 use crate::planning::main::read_existing::read_existing;
 use crate::planning::models::{ObjectState, Plan, PlannedObject, StreamPlan};
 use crate::status::main::check_connections::check_connections;
@@ -65,6 +67,10 @@ pub(crate) async fn plan(config: &Config) -> Result<Vec<String>, String> {
             .into_iter()
             .chain(load_pacing(config, stream))
     }));
+    if let Some(note) = load_note(config, load_path(config, clients.warehouse.uses_key_pair())) {
+        lines.push(String::new());
+        lines.push(note);
+    }
     let problems = plan.problems();
     lines.push(String::new());
     lines.push(format!(
