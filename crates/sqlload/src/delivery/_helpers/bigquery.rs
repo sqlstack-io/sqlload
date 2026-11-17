@@ -115,7 +115,7 @@ impl BigQueryDelivery {
         }
     }
 
-    /// Load the batch with one load job, after the table's previous job by [`LOAD_JOB_INTERVAL`]; the job is named after the batch's offsets, so a job that already ran for them is read instead of run again.
+    /// Load the batch with one load job, after the table's previous job by [`LOAD_JOB_INTERVAL`]; the job is named after this delivery and the batch's offsets, so a retry reads a job that already ran for them instead of running it again.
     async fn load(&mut self, batch: &Batch) -> Result<(u64, u64), DeliveryError> {
         let digest = rows_digest(&batch.rows.iter().collect::<Vec<_>>());
         let mut staged = match self.staged.take() {
@@ -216,7 +216,12 @@ impl BigQueryDelivery {
         staged: &StagedLoad,
         upload: Option<bytes::Bytes>,
     ) -> Result<JobEnd, DeliveryError> {
-        let job_id = load_job_id(&self.stream.name, &staged.digest, staged.attempt);
+        let job_id = load_job_id(
+            &self.stream.table,
+            &self.run,
+            &staged.digest,
+            staged.attempt,
+        );
         if let Some(last) = self.last_load {
             tokio::time::sleep_until(last + LOAD_JOB_INTERVAL).await;
         }
@@ -270,16 +275,20 @@ enum JobEnd {
     Failed(DeliveryError),
 }
 
-/// `sqlload_<stream>_<digest>_<attempt>`, with characters a job id cannot hold replaced by `_`.
-pub(crate) fn load_job_id(stream: &str, digest: &str, attempt: u32) -> String {
-    let stream: String = stream
+/// The most characters of the table name a load job's name holds, well inside BigQuery's 1,024 for a job id.
+const MAX_JOB_TABLE_CHARS: usize = 200;
+
+/// `sqlload_<table>_<run>_<digest>_<attempt>`, with characters a job id cannot hold replaced by `_`.
+pub(crate) fn load_job_id(table: &str, run: &str, digest: &str, attempt: u32) -> String {
+    let table: String = table
         .chars()
+        .take(MAX_JOB_TABLE_CHARS)
         .map(|c| match c.is_ascii_alphanumeric() || c == '-' {
             true => c,
             false => '_',
         })
         .collect();
-    format!("sqlload_{stream}_{digest}_{attempt}")
+    format!("sqlload_{table}_{run}_{digest}_{attempt}")
 }
 
 /// `rows` with timestamps in microseconds, as the Storage Write API reads them.

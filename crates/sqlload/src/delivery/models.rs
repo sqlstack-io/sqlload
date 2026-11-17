@@ -257,6 +257,8 @@ pub struct BigQueryDelivery {
     pub(crate) config: Arc<Config>,
     pub(crate) stream: Stream,
     pub(crate) path: LoadPath,
+    /// A random id for this delivery, in every load job's name: job names are unique across the project for months, so offsets alone would match another table's or another run's job.
+    pub(crate) run: String,
     /// The load of a batch whose job failed or never answered, kept so its retry reuses the job's name and the uploaded files.
     pub(crate) staged: Option<StagedLoad>,
     /// When the table's last load job was started.
@@ -357,6 +359,7 @@ impl Delivery {
             config: inputs.config.clone(),
             stream: stream.clone(),
             path: inputs.path,
+            run: uuid::Uuid::new_v4().simple().to_string(),
             staged: None,
             last_load: None,
         }))

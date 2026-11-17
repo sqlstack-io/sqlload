@@ -113,7 +113,8 @@ pub(crate) struct BigQueryRowsTestCase {
 
 pub(crate) struct LoadJobIdTestCase {
     pub(crate) description: &'static str,
-    pub(crate) stream: &'static str,
+    pub(crate) table: &'static str,
+    pub(crate) run: &'static str,
     pub(crate) attempt: u32,
     pub(crate) expected_id: &'static str,
 }

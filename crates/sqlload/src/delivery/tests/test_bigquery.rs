@@ -66,30 +66,47 @@ fn given_encoded_rows_when_typing_them_for_bigquery_then_each_column_takes_its_t
 }
 
 #[test]
-fn given_a_stream_and_batch_when_naming_its_load_job_then_the_name_is_stable_and_valid() {
+fn given_a_table_run_and_batch_when_naming_its_load_job_then_only_a_retry_of_that_run_shares_it() {
     let test_cases = [
         LoadJobIdTestCase {
-            description: "the same batch and attempt give the same job, so a retry finds it",
-            stream: "shop__orders",
+            description: "the same run, batch and attempt give the same job, so a retry finds it",
+            table: "gcs_shop__orders",
+            run: "r1",
             attempt: 0,
-            expected_id: "sqlload_shop__orders_0a1b_0",
+            expected_id: "sqlload_gcs_shop__orders_r1_0a1b_0",
         },
         LoadJobIdTestCase {
             description: "a later attempt after a failed job is another job",
-            stream: "shop__orders",
+            table: "gcs_shop__orders",
+            run: "r1",
             attempt: 2,
-            expected_id: "sqlload_shop__orders_0a1b_2",
+            expected_id: "sqlload_gcs_shop__orders_r1_0a1b_2",
+        },
+        LoadJobIdTestCase {
+            description: "another table with the same offsets is another job, not the first table's",
+            table: "upload_shop__orders",
+            run: "r1",
+            attempt: 0,
+            expected_id: "sqlload_upload_shop__orders_r1_0a1b_0",
+        },
+        LoadJobIdTestCase {
+            description: "another run of the same table and offsets is another job, so a re-created table is loaded",
+            table: "gcs_shop__orders",
+            run: "r2",
+            attempt: 0,
+            expected_id: "sqlload_gcs_shop__orders_r2_0a1b_0",
         },
         LoadJobIdTestCase {
             description: "characters a job id cannot hold become underscores",
-            stream: "shop.orders$v2",
+            table: "shop.orders$v2",
+            run: "r1",
             attempt: 0,
-            expected_id: "sqlload_shop_orders_v2_0a1b_0",
+            expected_id: "sqlload_shop_orders_v2_r1_0a1b_0",
         },
     ];
     for test_case in &test_cases {
         assert_eq!(
-            load_job_id(test_case.stream, "0a1b", test_case.attempt),
+            load_job_id(test_case.table, test_case.run, "0a1b", test_case.attempt),
             test_case.expected_id,
             "{}",
             test_case.description

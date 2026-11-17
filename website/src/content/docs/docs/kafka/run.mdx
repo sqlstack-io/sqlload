@@ -75,9 +75,10 @@ Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes`
   exporter stays under that quota whatever `max_age` says; `plan` notes the streams where this
   pacing, not `max_age`, sets how often they load. Use `max_age = "5m"` or more, which leaves
   room for retries. The Storage Write API (`none`) has no such limit.
-- Each load job is named after its batch's offsets. When the exporter retries a batch whose job
-  may already have run, it reads that job instead of running another, so a retry doesn't load the
-  rows twice. A crash before the Kafka commit can still replay them, as on every route.
+- Each load job is named after its table, the exporter's run and its batch's offsets. When the
+  exporter retries a batch whose job may already have run, it reads that job instead of running
+  another, so a retry doesn't load the rows twice. A crash before the Kafka commit can still replay
+  them, as on every route.
 - Each Storage Write API request holds at most `max_request_bytes` of Arrow rows; BigQuery refuses
   a request over 10 MB.
 - Files are Parquet; `staging.format = "json"` and `load = "snowpipe"` are refused.
