@@ -17,6 +17,25 @@ pub(crate) struct ReservedNameTestCase {
     pub(crate) expected_refused: bool,
 }
 
+pub(crate) struct AwsVariablesTestCase {
+    pub(crate) description: &'static str,
+    /// The environment's `AWS_*` variables.
+    pub(crate) variables: &'static [(&'static str, &'static str)],
+    /// Whether DuckDB leaves a connection without its own endpoint to SQLLoad's reader.
+    pub(crate) expected_custom_endpoint: bool,
+    pub(crate) expected_region: &'static str,
+}
+
+pub(crate) struct S3SecretTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) bucket: &'static str,
+    /// Key id, secret and session token, as SQLLoad's own S3 reads use them.
+    pub(crate) keys: Option<[&'static str; 3]>,
+    /// The secret's statement after `CREATE OR REPLACE TEMPORARY SECRET `.
+    pub(crate) expected_sql: &'static str,
+    pub(crate) expected_parameters: &'static [&'static str],
+}
+
 pub(crate) struct UnloadedInsertTestCase {
     pub(crate) description: &'static str,
     /// The timestamp, the timestamp with time zone and the time, as whole microseconds.

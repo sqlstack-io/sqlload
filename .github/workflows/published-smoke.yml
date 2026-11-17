@@ -36,20 +36,31 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      # Publish builds the wheels after the release is created, which takes up to about 90 minutes.
-      - name: Wait until PyPI serves both packages
+      # Publish builds the wheels after the release is created, which takes up to about 90 minutes,
+      # then uploads them one by one. Wait until pip's index (which lags the JSON API by minutes)
+      # lists every platform's wheel and the sdist of both packages: 180 attempts a minute apart.
+      - name: Wait until PyPI's index lists every wheel
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          expected="macosx_11_0_arm64.whl macosx_11_0_x86_64.whl manylinux_2_28_aarch64.whl manylinux_2_28_x86_64.whl win_amd64.whl"
           for package in sqlload sqlload-cli; do
+            prefix="${package//-/_}-${VERSION}-"
             for attempt in $(seq 1 180); do
-              if curl -fsS -o /dev/null "https://pypi.org/pypi/${package}/${VERSION}/json"; then
-                echo "PyPI serves ${package} ${VERSION}"
+              listed=$(curl -fsS -H "Accept: application/vnd.pypi.simple.v1+json" "https://pypi.org/simple/${package}/" | jq -r '.files[].filename' || true)
+              missing=""
+              for suffix in $expected; do
+                grep -q "^${prefix}.*${suffix}$" <<< "$listed" || missing="$missing $suffix"
+              done
+              grep -qx "${package//-/_}-${VERSION}.tar.gz" <<< "$listed" || missing="$missing sdist"
+              if [ -z "$missing" ]; then
+                echo "PyPI's index lists every file of ${package} ${VERSION} (attempt ${attempt})"
                 continue 2
               fi
+              echo "attempt ${attempt}: ${package} ${VERSION} still lacks:${missing}"
               sleep 60
             done
-            echo "PyPI still does not serve ${package} ${VERSION} after 3 hours"
+            echo "PyPI's index still lacks files of ${package} ${VERSION} after 180 attempts"
             exit 1
           done
 
@@ -110,8 +121,13 @@ jobs:
           case "${RUNNER_OS}" in
             Linux)
               docker run --rm -e VERSION -v "$PWD:/w" -w /w python:3.12-slim bash -c '
-                python -m venv /v && /v/bin/pip install --quiet --no-cache-dir --only-binary :all: "sqlload==${VERSION}" &&
-                python -m venv /c && /c/bin/pip install --quiet --no-cache-dir --only-binary :all: "sqlload-cli==${VERSION}" &&
+                python -m venv /v && python -m venv /c &&
+                for attempt in $(seq 1 10); do
+                  /v/bin/pip install --quiet --no-cache-dir --only-binary :all: "sqlload==${VERSION}" &&
+                    /c/bin/pip install --quiet --no-cache-dir --only-binary :all: "sqlload-cli==${VERSION}" && break
+                  if [ "$attempt" = 10 ]; then exit 1; fi
+                  sleep 30
+                done &&
                 /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini --driver-folder "/usr/lib/$(uname -m)-linux-gnu/odbc"'
               ;;
             macOS)
