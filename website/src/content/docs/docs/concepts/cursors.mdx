@@ -306,8 +306,10 @@ batch_concurrency = 4
 
 Each window is read over its own connection, and every connection shares one snapshot, so the
 windows see the source as it was when the load began and no row is read twice or missed while the
-source changes. A window read ahead of its turn is held in a local folder (the target's
-`staging_dir`, or the system's temporary folder) until every window before it has committed. A
+source changes. A window read ahead of its turn is held, masked, in a local folder (the target's
+`staging_dir`, or the system's temporary folder) until every window before it has committed; at
+most `batch_concurrency` windows are held at once, counting the one committing, so a read starts
+only once the window that many places before it has committed. `batch_concurrency` is at most 16. A
 window that fails stops the load with only the windows before it committed, as a read of one
 window at a time would, and the next run carries on from there.
 
