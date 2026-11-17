@@ -1226,6 +1226,15 @@ pub enum SourceReader {
     Sheets(crate::sheets_source::models::SheetsClient, String),
 }
 
+/// Where a files table's window can start and end: `--start-cursor`, `--end-cursor` and `cursor_start` as cursor text, and the value of the target's newest partition (none under `--reload`).
+#[derive(Debug)]
+pub struct FilesWindowStarts<'a> {
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub cursor_start: Option<String>,
+    pub newest: Option<&'a str>,
+}
+
 /// What decides one files table's cursor window.
 #[derive(Debug, Clone, Copy)]
 pub struct FilesWindowRequest<'a> {
