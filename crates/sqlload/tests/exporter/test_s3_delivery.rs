@@ -11,20 +11,23 @@ use sqlload_testkit::harness::main::start_stack::start_stack;
 use sqlload_testkit::harness::main::stop_exporter::stop_exporter;
 use sqlload_testkit::harness::main::wait_for_commits::wait_for_commits;
 use sqlload_testkit::harness::main::wait_for_rows::wait_for_rows;
+use sqlload_testkit::harness::main::wait_for_statements::wait_for_statements;
 use sqlload_testkit::records::main::distinct_positions::distinct_positions;
 use sqlload_testkit::records::main::order_values::order_values;
 use sqlload_testkit::redpanda::main::produce_records::produce_records;
 
 use crate::helpers::{ORDERS_GROUP, PARTITIONS, committed, run_async, s3_test_config};
 use crate::test_types::{
-    S3LayoutTestCase, S3LoadFailureTestCase, S3LoadReportTestCase, S3PauseTestCase,
-    S3RetryTestCase, S3ScanFailureTestCase, S3ShutdownTestCase, S3SkipTestCase, S3SlowLoadTestCase,
+    S3AutoIngestTestCase, S3LayoutTestCase, S3LoadFailureTestCase, S3LoadReportTestCase,
+    S3PauseTestCase, S3RetryTestCase, S3ScanFailureTestCase, S3ShutdownTestCase, S3SkipTestCase,
+    S3SlowLoadTestCase,
 };
 
 const SHARED_TABLE: &str = "[batching]\nmax_age = \"1s\"\nmax_rows = 100\n[[naming.rules]]\nmatch = \"orders.{kind}\"\ntable = \"ORDERS\"\n";
 const TOPICS: [&str; 2] = ["orders.created", "orders.cancelled"];
 const WAIT: Duration = Duration::from_secs(90);
 const LOAD_ERROR: &str = "Numeric value 'abc' is not recognized";
+const COPY_HISTORY: &str = "INFORMATION_SCHEMA.COPY_HISTORY(";
 
 #[test]
 fn given_two_topics_sharing_a_table_when_exporting_to_s3_then_files_follow_the_path_template()
@@ -580,6 +583,72 @@ fn given_max_pending_files_reached_when_exporting_to_s3_then_the_stream_pauses_a
                 test_case.description
             );
             assert_eq!(after?, expected, "{}", test_case.description);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_auto_ingest_when_files_are_uploaded_then_offsets_wait_for_copy_history_to_show_them_loaded()
+-> Result<(), String> {
+    run_async(async {
+        let test_cases = [S3AutoIngestTestCase {
+            description: "uploaded files the pipe has not loaded stay uncommitted across COPY_HISTORY checks, then commit once loaded",
+            records: 200,
+            checks_before_notifying: 3,
+            expected_committed_before: 0,
+            expected_committed: 200,
+        }];
+        for test_case in &test_cases {
+            let stack = start_stack().await?;
+            produce_records(
+                &stack.redpanda.brokers,
+                TOPICS[0],
+                PARTITIONS,
+                &order_values(0, test_case.records),
+            )
+            .await?;
+            let settings = S3Settings {
+                staging: "pending_check_after = \"1s\"\npending_recheck_every = \"1s\"",
+                s3: "path = \"{table}/{date}/\"\nauto_ingest = true",
+                extra: SHARED_TABLE,
+            };
+            let running = start_exporter(s3_test_config(&stack, "orders.*", settings)?);
+            let checks =
+                wait_for_statements(&stack.fake, COPY_HISTORY, test_case.checks_before_notifying)
+                    .await;
+            let before = committed(&stack, TOPICS[0]).await?;
+            stack.fake.deliver_notifications(true);
+            let after = wait_for_commits(
+                &stack,
+                ORDERS_GROUP,
+                TOPICS[0],
+                test_case.expected_committed,
+            )
+            .await;
+            stop_exporter(running).await?;
+            let rows = stack.fake.rows("ORDERS");
+            assert!(
+                checks? >= test_case.checks_before_notifying,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                before, test_case.expected_committed_before,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                after?, test_case.expected_committed,
+                "{}",
+                test_case.description
+            );
+            assert_eq!(
+                distinct_positions(&rows),
+                test_case.records,
+                "{}",
+                test_case.description
+            );
         }
         Ok(())
     })

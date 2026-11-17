@@ -72,6 +72,11 @@ reason = "The Kafka exporter (sqlload run) predates the adapter contract: its de
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
+path = "crates/sqlload/src/planning/main/load_note.rs"
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+
+[[targets.rust.rule_exceptions]]
+rule = "XSL001"
 path = "crates/sqlload/src/planning/main/load_path.rs"
 reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
 
@@ -120,6 +125,11 @@ reason = "The keys INFORMATION_SCHEMA lists only explain plan's error for a tabl
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/parity/main/comparison_sql.rs"
+reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-testkit/src/harness/main/wait_for_statements.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
 [[targets.rust.rule_exceptions]]

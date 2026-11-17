@@ -47,6 +47,25 @@ being skipped as already loaded. A retry within a run reuses the batch's files, 
 Batches are bounded by `[batching]` `max_rows` (default 100,000) and `max_bytes` (default
 32 MiB), whichever comes first, so one write never holds more than that.
 
+### Auto-ingest
+
+With `[staging.s3] auto_ingest = true`, Snowflake loads each file when the bucket's event
+notification reaches the pipe. Snowpipe's load reports don't cover these loads, so the exporter
+reads the table's `COPY_HISTORY` and commits a batch's offsets only once every one of its files
+shows as loaded. That query needs a warehouse, so `destination.warehouse` is required.
+
+- Each check is one query for every file waiting on the stream, from the oldest one's upload. It
+  runs only while files wait, and at most once every `pending_check_after` (default `5m`).
+  `sqlload plan` says so.
+- Every time the query resumes the warehouse, Snowflake bills at least 60 seconds. Use a
+  dedicated X-Small warehouse with a short `AUTO_SUSPEND`, such as 60 seconds.
+- Commits trail the loads by up to `pending_check_after`. A busy stream may fill
+  `max_pending_files` in that time and pause; raise it, or lower `pending_check_after` at the cost
+  of more queries.
+- A file that never shows up, for example because notifications don't reach the pipe, keeps
+  its batch and every later one uncommitted, with a warning naming the file. Check
+  `SYSTEM$PIPE_STATUS`. A file gone from the bucket follows `on_load_error`.
+
 ### Databricks
 
 - Sign in with an OAuth machine-to-machine client (a service principal): `client_id` and

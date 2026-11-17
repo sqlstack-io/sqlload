@@ -118,3 +118,12 @@ pub(crate) type StagedKeys = fn(
     &mut crate::delivery::models::Delivery,
     &crate::batching::models::Batch,
 ) -> Result<Vec<String>, String>;
+
+pub(crate) struct CopyHistoryTestCase {
+    pub(crate) description: &'static str,
+    /// FILE_NAME, STATUS and FIRST_ERROR_MESSAGE of each history row of the pipe's folder `s3://bucket/exports/ORDERS/`.
+    pub(crate) rows: &'static [(&'static str, &'static str, Option<&'static str>)],
+    /// Partition and offset pairs.
+    pub(crate) expected_confirmed: &'static [(i32, i64)],
+    pub(crate) expected_halted: Option<&'static str>,
+}

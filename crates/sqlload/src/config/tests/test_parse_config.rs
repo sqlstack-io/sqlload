@@ -22,6 +22,11 @@ fn given_valid_config_text_when_parsing_then_defaults_fill_the_envelope() -> Res
             expected_columns: 1,
         },
         ParseConfigTestCase {
+            description: "auto_ingest with COPY loads needs no warehouse setting, as COPY_HISTORY is never read",
+            text: "[staging]\nkind = \"s3\"\nload = \"copy\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\npath = \"{table}/{date}/\"\nauto_ingest = true\n",
+            expected_columns: 9,
+        },
+        ParseConfigTestCase {
             description: "sizes accept units",
             text: "[staging]\nkind = \"none\"\n[batching]\nmax_bytes = \"3.5MiB\"\nmax_request_bytes = 1000000\n",
             expected_columns: 9,
@@ -87,6 +92,11 @@ fn given_invalid_config_text_when_parsing_then_the_error_names_the_problem() {
             description: "auto-ingest needs one folder per table",
             text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\nauto_ingest = true\n",
             expected_error: "starting with {table}/",
+        },
+        ParseConfigErrorTestCase {
+            description: "auto-ingest needs a warehouse to read COPY_HISTORY before committing",
+            text: "[staging]\nkind = \"s3\"\n[staging.s3]\nbucket = \"b\"\nregion = \"eu-west-2\"\nstage = \"S\"\npath = \"{table}/{date}/\"\nauto_ingest = true\n",
+            expected_error: "staging.s3.auto_ingest needs destination.warehouse",
         },
         ParseConfigErrorTestCase {
             description: "parquet files need s3 staging",

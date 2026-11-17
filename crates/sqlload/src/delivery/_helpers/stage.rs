@@ -1,5 +1,6 @@
 use crate::batching::models::{Batch, BatchRow};
 use crate::config::models::Config;
+use crate::delivery::_helpers::copy_history::{copy_history_sql, history_loads};
 use crate::delivery::_helpers::pending_loads::same_path;
 use crate::delivery::_helpers::stage_paths::{
     FolderValues, expired_dates, render_folder, s3_target,
@@ -66,7 +67,7 @@ impl StageDelivery {
         })
     }
 
-    /// Upload the batch as one file per folder and load them; COPY loads confirm the offsets at once, `insertFiles` loads after [`Self::poll`] sees them loaded.
+    /// Upload the batch as one file per folder and load them; COPY loads confirm the offsets at once, Snowpipe loads after [`Self::poll`] sees them loaded.
     pub(crate) async fn deliver(&mut self, batch: &Batch) -> Result<DeliveryReport, DeliveryError> {
         let parts = self.parts(batch);
         let mut staged = self.staged_batch(batch, &parts);
@@ -118,7 +119,7 @@ impl StageDelivery {
     fn confirms_later(&self) -> bool {
         matches!(
             self.path,
-            LoadPath::StageInsertFiles | LoadPath::S3InsertFiles
+            LoadPath::StageInsertFiles | LoadPath::S3InsertFiles | LoadPath::S3AutoIngest
         )
     }
 
@@ -131,24 +132,11 @@ impl StageDelivery {
         if self.pending.is_empty() {
             return Ok(Confirmation::default());
         }
-        let pipe = self.qualified(&self.stream.pipe);
         let now = now_ms();
-        let mut problem: Option<DeliveryError> = None;
-        match insert_report(&self.pipe_target(&pipe), self.begin_mark.as_deref()).await {
-            Ok(report) => {
-                if report.next_begin_mark.is_some() {
-                    self.begin_mark = report.next_begin_mark;
-                }
-                self.pending.apply(&report.files);
-                if !report.complete {
-                    self.pending.mark_all_due(now);
-                }
-            }
-            Err(error) => problem = Some(report_error("insertReport", &pipe, &error)),
-        }
-        if let Err(error) = self.check_overdue(&pipe, now).await {
-            problem.get_or_insert(error);
-        }
+        let problem = match self.path {
+            LoadPath::S3AutoIngest => self.check_copy_history(now).await.err(),
+            _ => self.check_reports(now).await,
+        };
         let settled = self.pending.settle();
         for (key, reason) in &settled.skipped {
             tracing::warn!(stream = %self.stream.name, file = %key, %reason, "Snowpipe did not load a file; skipping it as on_load_error = \"skip\"");
@@ -167,6 +155,71 @@ impl StageDelivery {
             skipped_files: settled.skipped.len() as u64,
             deferred_error: problem,
         })
+    }
+
+    /// The `insertFiles` route: read the pipe's load report, then look up overdue files.
+    async fn check_reports(&mut self, now: i64) -> Option<DeliveryError> {
+        let pipe = self.qualified(&self.stream.pipe);
+        let mut problem: Option<DeliveryError> = None;
+        match insert_report(&self.pipe_target(&pipe), self.begin_mark.as_deref()).await {
+            Ok(report) => {
+                if report.next_begin_mark.is_some() {
+                    self.begin_mark = report.next_begin_mark;
+                }
+                self.pending.apply(&report.files);
+                if !report.complete {
+                    self.pending.mark_all_due(now);
+                }
+            }
+            Err(error) => problem = Some(report_error("insertReport", &pipe, &error)),
+        }
+        if let Err(error) = self.check_overdue(&pipe, now).await {
+            problem.get_or_insert(error);
+        }
+        problem
+    }
+
+    /// The auto-ingest route: once any file is due, one COPY_HISTORY query on the warehouse covers every waiting file from the oldest one's send. All of them are then checked again after `pending_recheck_every`, so the warehouse resumes at most once per `pending_check_after`; overdue files gone from the bucket fail.
+    async fn check_copy_history(&mut self, now: i64) -> Result<(), DeliveryError> {
+        let overdue = self.pending.overdue(now);
+        if overdue.is_empty() {
+            return Ok(());
+        }
+        let waiting = self.pending.waiting();
+        let Some(start_ms) = self.pending.history_start(&waiting) else {
+            return Ok(());
+        };
+        let statement = copy_history_sql(
+            &quote_name(self.config.destination.database()),
+            &self.qualified(&self.stream.table),
+            start_ms,
+        );
+        let rows = match execute_sql(&self.clients.sql, &statement).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                self.pending.check_failed(&waiting, now);
+                return Err(retry("COPY_HISTORY", &error));
+            }
+        };
+        let root = self.s3.as_ref().map_or(String::new(), |target| {
+            format!("s3://{}/{}", target.bucket, target.prefix)
+        });
+        self.pending.apply(&history_loads(&rows, &root));
+        let still_waiting = self.pending.waiting();
+        self.pending.checked(&still_waiting, now);
+        let unreported: Vec<String> = overdue
+            .into_iter()
+            .filter(|key| still_waiting.contains(key))
+            .collect();
+        for key in self.pending.take_unwarned(&unreported) {
+            tracing::warn!(stream = %self.stream.name, file = %key, "COPY_HISTORY shows no load of this file yet; it keeps waiting. If it never loads, check with SYSTEM$PIPE_STATUS that the bucket's event notifications reach the pipe");
+        }
+        for key in unreported {
+            if !self.exists(&key).await {
+                self.pending.fail(&key, "no longer in the bucket");
+            }
+        }
+        Ok(())
     }
 
     fn halt_message(&self, reason: &str) -> String {

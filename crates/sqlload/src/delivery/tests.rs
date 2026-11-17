@@ -1,3 +1,5 @@
+#[path = "tests/test_copy_history.rs"]
+mod copy_history;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_pending_loads.rs"]

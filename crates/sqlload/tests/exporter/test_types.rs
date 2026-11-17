@@ -124,3 +124,12 @@ pub(crate) struct ShardingTestCase {
     pub(crate) shards: u32,
     pub(crate) expected_streams: usize,
 }
+
+pub(crate) struct S3AutoIngestTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// COPY_HISTORY checks to wait for before the bucket notifications arrive.
+    pub(crate) checks_before_notifying: usize,
+    pub(crate) expected_committed_before: i64,
+    pub(crate) expected_committed: i64,
+}
