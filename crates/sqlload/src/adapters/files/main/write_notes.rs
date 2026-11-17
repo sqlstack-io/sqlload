@@ -13,7 +13,7 @@ pub fn write_notes(mode: &WriteMode, folder: &Location) -> Vec<String> {
             "each batch of changes adds new files; a snapshot copy (the first load, a table joining the source, or --resnapshot) writes its files, then deletes every older file in the folder".to_owned(),
         ],
         WriteMode::Replace | WriteMode::Recreate if local => vec![
-            "the new table is written into a hidden folder beside the table folder, then the two folders are swapped in one rename and the old one is deleted; a reader sees the old files or the new ones, never both".to_owned(),
+            "the new table is written into a hidden folder beside the table folder, then the two folders are swapped in one rename and the old one is deleted; a reader sees the old files or the new ones, never both. Where the filesystem can't swap two folders in one rename (NFS, Windows), the new files are written into the table folder first, then the older ones deleted, so a reader in between sees both".to_owned(),
         ],
         WriteMode::Replace | WriteMode::Recreate => vec![
             "the new files are written first, then every older file in the folder is deleted; not atomic, so a reader in between sees both".to_owned(),

@@ -1615,3 +1615,21 @@ pub(crate) struct DatabricksSourceTestCase {
     /// The end of the statement that read the table.
     pub(crate) expected_read: &'static str,
 }
+
+/// A files source loaded into a local files target, whose folder is tampered with before a second load.
+pub(crate) struct PlantedTestCase {
+    pub(crate) description: &'static str,
+    /// The table's `write_strategy`.
+    pub(crate) strategy: &'static str,
+    /// Files put in the target's table folder after the first load (key below it, text; `SOURCE` is the source folder).
+    pub(crate) planted: &'static [(&'static str, &'static str)],
+    /// Rewrites each of the first load's records, such as into an older SQLLoad's format.
+    pub(crate) rewrite: fn(&[u8]) -> Result<Vec<u8>, String>,
+    pub(crate) reload: bool,
+    /// Loads that commit between the second load's plan and its run.
+    pub(crate) interleaved: usize,
+    /// A phrase of the second load's error, if it fails.
+    pub(crate) expected_error: Option<&'static str>,
+    /// Then the target's `rows|loads`, its record count and its markers.
+    pub(crate) expected_state: &'static str,
+}

@@ -72,10 +72,7 @@ pub(crate) fn open_bytes(file: &OpenFile) -> usize {
 
 /// The key of the writer's next file in partition `value`: `<partition folder>/part-<load id>-<n><suffix>`, or with `single_file` the table folder's own name, `<partition folder>/<table><suffix>`.
 pub(crate) fn next_key(writer: &FilesWriter, value: &str) -> String {
-    let folder = match &writer.partition {
-        Some(partition) => format!("{}/", partition.name(value)),
-        None => String::new(),
-    };
+    let folder = value_folder(writer, value);
     let suffix = file_suffix(&writer.encoding);
     match writer.encoding.single_file {
         true => format!("{folder}{}{suffix}", writer.single_name),
@@ -84,6 +81,14 @@ pub(crate) fn next_key(writer: &FilesWriter, value: &str) -> String {
             writer.file_id,
             writer.written.len()
         ),
+    }
+}
+
+/// The folder, below the table folder, holding partition `value`'s files: its name and `/`, or empty for a table without partitions.
+pub(crate) fn value_folder(writer: &FilesWriter, value: &str) -> String {
+    match &writer.partition {
+        Some(partition) => format!("{}/", partition.name(value)),
+        None => String::new(),
     }
 }
 

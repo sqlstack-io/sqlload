@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.62.0](https://github.com/sqlstack-io/sqlload/compare/v0.61.0...v0.62.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** files targets record how each commit ended in _sqlload/decided/, which earlier releases ignore: their loads can undo a repair this release decided, deleting rows. Upgrade every process that writes a files table to 0.62.0 or later before any of them loads it again, and don't load it with an earlier release afterwards.
+
+### Bug Fixes
+
+* **files:** a load that stalled after its lease check can no longer commit over another load's repair and delete a partition's files ([dba6e21](https://github.com/sqlstack-io/sqlload/commit/dba6e211e65dcc4ace6a890392e8af56659f3966))
+
+## [0.61.0](https://github.com/sqlstack-io/sqlload/compare/v0.60.0...v0.61.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **files:** files-target records of loaded source files use a new format. A plan or load that finds a record written by an earlier release blocks the table and names --reload, which rewrites its files and records.
+
+### Features
+
+* **files:** files-target records group loaded source files by partition, merge once a table has many, and stop a load planned before another committed ([c88fc08](https://github.com/sqlstack-io/sqlload/commit/c88fc08ee4eddcdcdd21cb5b0497b93f2cbc6800))
+
+
+### Bug Fixes
+
+* **files:** a load that lost its lease can no longer have files it stores after repair count as written ([c88fc08](https://github.com/sqlstack-io/sqlload/commit/c88fc08ee4eddcdcdd21cb5b0497b93f2cbc6800))
+
 ## [0.60.0](https://github.com/sqlstack-io/sqlload/compare/v0.59.0...v0.60.0) (2026-11-16)
 
 

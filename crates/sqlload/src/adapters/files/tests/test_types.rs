@@ -5,6 +5,7 @@ use arrow_schema::Field;
 
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::files::models::{FolderClaim, PartitionBy, PendingPhase};
+use crate::adapters::files::types::Exchange;
 use crate::column_types::models::ColumnType;
 use crate::project::models::{CsvOutput, OutputCompression, WriteStrategy};
 use crate::store_paths::models::StoreKind;
@@ -170,6 +171,8 @@ pub(crate) struct LoadedRecordsTestCase {
     pub(crate) records: &'static [(&'static str, &'static str)],
     /// The source files that count as loaded, by name.
     pub(crate) expected_loaded: &'static [&'static str],
+    /// Whether the records cannot be read, as one is in an older SQLLoad's format (a problem naming `--reload`).
+    pub(crate) expected_old: bool,
     /// The records repair deletes.
     pub(crate) expected_stale: &'static [&'static str],
 }
@@ -206,10 +209,119 @@ pub(crate) struct SwapFolderTestCase {
     pub(crate) expected_live: &'static [&'static str],
 }
 
+/// A load that staged a table stalls before swapping it in, while another load may take the table.
+pub(crate) struct StalledSwapTestCase {
+    pub(crate) description: &'static str,
+    /// How many minutes before the swap the stalled load took its lease.
+    pub(crate) lease_age_minutes: u64,
+    /// How many other loads take the table (taking the lease and moving staged tables away) while it stalls.
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// A load that checked its lease renames its staged table in, while another load may take the table first.
+pub(crate) struct RenameRaceTestCase {
+    pub(crate) description: &'static str,
+    /// How many other loads move staged tables away before the rename.
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// A stalled load's swap lands after another load took the table, before that load repairs it.
+pub(crate) struct LateSwapTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the stalled load's swap lands between the other load taking the lease and repairing.
+    pub(crate) swaps_after_take: bool,
+    /// Whether the other load's repair fails, having lost the lease.
+    pub(crate) expected_lost: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// Whether a load stages its table, given its mode and what the filesystem's one-rename swap does.
+pub(crate) struct StagingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) mode: WriteMode,
+    /// Stands in for the filesystem's one-rename swap of two folders.
+    pub(crate) exchange: Exchange,
+    /// Whether the load stages; `None` when the check fails the load.
+    pub(crate) expected_staged: Option<bool>,
+}
+
+/// A replace on a filesystem that can't swap folders in one rename, stalled before its commit while other loads may take the table.
+pub(crate) struct MarkerPathStallTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) takeovers: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// A load stages its table while a load whose lease lapsed may move the staged folder away, after which this load writes more files.
+pub(crate) struct HeldFolderTestCase {
+    pub(crate) description: &'static str,
+    /// How many times the lapsed load moves the staged folder away between this load's two writes.
+    pub(crate) moved_away: usize,
+    pub(crate) expected_failed: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
+/// A load swaps its staged folder in while something may replace that folder between the identity check and the exchange.
+pub(crate) struct ExchangeRaceTestCase {
+    pub(crate) description: &'static str,
+    /// Runs between the check and the exchange, given the staged folder's path.
+    pub(crate) between: fn(&std::path::Path),
+    /// Whether the swap reports that another load moved its folder.
+    pub(crate) expected_raced: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
 pub(crate) struct RemoveStagedTestCase {
     pub(crate) description: &'static str,
     /// Files below the table's parent folder before the cleanup.
     pub(crate) before: &'static [&'static str],
     /// Files below the parent folder after it.
     pub(crate) expected_after: &'static [&'static str],
+}
+
+/// A load found writing, repaired, that stores a file later.
+pub(crate) struct AbortedTestCase {
+    pub(crate) description: &'static str,
+    /// How long ago the `aborted` marker was written, in days.
+    pub(crate) marker_age_days: u64,
+    /// Files below the table folder after the second repair.
+    pub(crate) expected_left: &'static [&'static str],
+    /// Whether the `aborted` marker is still there after it.
+    pub(crate) expected_marker: bool,
+}
+
+/// A table with more live records than a load keeps before merging them.
+pub(crate) struct CompactTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) records: usize,
+    /// Live record keys after repair, by whether each is a merged one.
+    pub(crate) expected_merged: &'static [bool],
+}
+
+/// A load that checked its lease and then stalled before committing its files, while the table may be repaired by another load.
+pub(crate) struct StalledCommitTestCase {
+    pub(crate) description: &'static str,
+    /// How many times another load repairs the table before the stalled load resumes.
+    pub(crate) repairs: usize,
+    /// How many loads list the table before the stalled load resumes and commits, but repair it only after.
+    pub(crate) repairs_listed_before_commit: usize,
+    /// How many `aborted` decisions are created after the commit, as by a repair that stopped while withdrawing it; one more repair follows in every case.
+    pub(crate) aborted_after_commit: usize,
+    /// Whether the resumed commit fails.
+    pub(crate) expected_failed: bool,
+    /// Files below the table folder afterwards.
+    pub(crate) expected_left: &'static [&'static str],
+    /// Decided markers left afterwards (a given-up load's stays until it expires).
+    pub(crate) expected_decided: &'static [&'static str],
 }

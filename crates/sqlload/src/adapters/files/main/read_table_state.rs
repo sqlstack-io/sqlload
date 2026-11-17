@@ -2,45 +2,23 @@
 
 use std::collections::BTreeSet;
 
-use crate::adapters::files::_helpers::layout::loaded::loaded_records;
-use crate::adapters::files::_helpers::layout::loads::load_id_of;
-use crate::adapters::files::_helpers::layout::markers::{parse_marker, pending_folder};
+use crate::adapters::files::_helpers::layout::loaded::table_records;
+use crate::adapters::files::_helpers::layout::markers::pending_loads;
 use crate::adapters::files::_helpers::layout::partitions::{group_partitions, is_data_file};
 use crate::adapters::files::errors::FilesDestinationError;
-use crate::adapters::files::models::{PendingLoad, PendingPhase, TablePath, TableState};
+use crate::adapters::files::models::{TablePath, TableState};
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
-use crate::file_store::main::read_file::read_file;
 use crate::file_store::models::{OpenFolder, StoredFile};
 
-/// The table's files grouped by partition (oldest first), without the files repairing an unfinished load deletes, and those loads.
+/// The table's files grouped by partition (oldest first), without the files repairing an unfinished load deletes, and those loads; an `aborted` marker counts as one only while a file of its load is left, or once it expired.
 pub async fn read_table_state(
     folder: &OpenFolder,
     path: &TablePath,
     cursor_type: Option<&ColumnType>,
 ) -> Result<TableState, FilesDestinationError> {
     let files = list_files(folder).await?;
-    let markers = pending_folder(folder);
-    let mut pending: Vec<PendingLoad> = Vec::new();
-    for marker in list_files(&markers).await? {
-        let text = read_file(&markers, &marker.relative_key).await?;
-        let marker_read = parse_marker(&String::from_utf8_lossy(&text)).map_err(|reason| {
-            FilesDestinationError::Write {
-                key: format!("{}{}", markers.location, marker.relative_key),
-                reason,
-            }
-        })?;
-        let deletes = match marker_read.phase {
-            PendingPhase::Writing => files_of(&files, &marker.relative_key),
-            PendingPhase::Replacing => marker_read.keys,
-        };
-        pending.push(PendingLoad {
-            load_id: marker.relative_key,
-            phase: marker_read.phase,
-            deletes,
-            run: marker_read.run,
-        });
-    }
+    let pending = pending_loads(folder, &files).await?;
     let dropped: BTreeSet<&str> = pending
         .iter()
         .flat_map(|load| load.deletes.iter())
@@ -52,25 +30,15 @@ pub async fn read_table_state(
         .filter(|file| !dropped.contains(file.relative_key.as_str()))
         .cloned()
         .collect();
-    let commits: BTreeSet<String> = kept
-        .iter()
-        .filter_map(|file| load_id_of(&file.relative_key).map(str::to_owned))
-        .collect();
-    let (loaded, stale_loaded) = loaded_records(folder, &commits).await?;
+    let table = table_records(folder, &kept).await?;
     Ok(TableState {
         listed: group_partitions(kept, path, cursor_type),
         pending,
         exists,
-        loaded,
-        stale_loaded,
+        commits: table.commits,
+        loaded: table.loaded,
+        old_records: table.old_records,
+        records: table.records,
+        stale_loaded: table.stale,
     })
-}
-
-/// The keys of `load_id`'s files anywhere below the table folder.
-fn files_of(files: &[StoredFile], load_id: &str) -> Vec<String> {
-    files
-        .iter()
-        .filter(|file| load_id_of(&file.relative_key) == Some(load_id))
-        .map(|file| file.relative_key.clone())
-        .collect()
 }

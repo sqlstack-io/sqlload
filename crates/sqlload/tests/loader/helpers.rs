@@ -1135,8 +1135,12 @@ async fn written_rows(table: &Location, column: &str) -> Result<Vec<WrittenRow>,
     Ok(rows)
 }
 
-/// Per partition folder: the runs whose loads wrote it, then `id:value` for each row in id order; then the column's types if files differ, and leftover pending markers.
-fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending: usize) -> String {
+/// Per partition folder: the runs whose loads wrote it, then `id:value` for each row in id order; then the column's types if files differ, leftover pending markers, and tombstones of repaired loads.
+fn written_summary(
+    rows: Vec<WrittenRow>,
+    runs: &HashMap<String, usize>,
+    (pending, aborted): (usize, usize),
+) -> String {
     let types: std::collections::BTreeSet<String> = rows
         .iter()
         .map(|row| row.data_type.clone())
@@ -1170,6 +1174,7 @@ fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending
     let notes: Vec<String> = [
         (types.len() > 1).then(|| format!(" types:{}", types.join(","))),
         (pending > 0).then(|| format!(" pending:{pending}")),
+        (aborted > 0).then(|| format!(" aborted:{aborted}")),
     ]
     .into_iter()
     .flatten()
@@ -1177,17 +1182,27 @@ fn written_summary(rows: Vec<WrittenRow>, runs: &HashMap<String, usize>, pending
     format!("{}{}", described.join("; "), notes.concat())
 }
 
-/// The pending markers left in the table folder.
-async fn pending_markers(table: &Location) -> Result<usize, String> {
-    let markers = Location {
-        store: table.store.clone(),
-        prefix: format!("{}_sqlload/pending/", table.prefix),
-    };
-    let folder = open_folder(&markers).map_err(|error| error.to_string())?;
-    list_files(&folder)
-        .await
-        .map(|files| files.len())
-        .map_err(|error| error.to_string())
+/// The loads the table folder's markers name: unfinished ones, and repaired ones whose `aborted` tombstone (in `_sqlload/decided/`, beside the pending marker) holds.
+async fn pending_markers(table: &Location) -> Result<(usize, usize), String> {
+    let mut aborted_by_load: BTreeMap<String, bool> = BTreeMap::new();
+    for kind in ["pending", "decided"] {
+        let markers = Location {
+            store: table.store.clone(),
+            prefix: format!("{}_sqlload/{kind}/", table.prefix),
+        };
+        let folder = open_folder(&markers).map_err(|error| error.to_string())?;
+        for file in list_files(&folder)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            let text = read_file(&folder, &file.relative_key)
+                .await
+                .map_err(|error| error.to_string())?;
+            aborted_by_load.insert(file.relative_key, text.starts_with(b"aborted"));
+        }
+    }
+    let aborted = aborted_by_load.values().filter(|aborted| **aborted).count();
+    Ok((aborted_by_load.len() - aborted, aborted))
 }
 
 /// Run a files target scenario on fresh `public` and `sales` schemas and a fresh folder: each run's plan and error are checked, `apply` must print nothing, and the written files are read back; returns the summary and the `public.orders` table folder.

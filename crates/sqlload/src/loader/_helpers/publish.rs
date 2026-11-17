@@ -513,29 +513,26 @@ impl Publisher {
         let files = match (runs_sql, &table.output) {
             (false, Some(output)) => {
                 let live = open_folder(&output.path.folder)?;
-                let staged = output
-                    .path
-                    .staged_folder(&table.mode, &load_id)
-                    .map(|staged| open_folder(&staged))
-                    .transpose()?;
                 let lease = take_lease(&live, &load_id, lease_now())
                     .await?
                     .map_err(LoaderError::Transient)?;
-                let replaced = match files_to_replace(&live, &table, output).await {
-                    Ok(replaced) => replaced,
-                    Err(error) => {
-                        give_back(&live, &lease).await;
-                        return Err(error);
-                    }
-                };
+                let (replaced, staged) =
+                    match files_to_replace((&live, &lease), &table, output).await {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            give_back(&live, &lease).await;
+                            return Err(error);
+                        }
+                    };
                 let keeper = keep_in_background(&live, &lease);
                 let (folder, replaced, swap) = match staged {
-                    Some(staged) => (
+                    Some((staged, held)) => (
                         staged,
                         ReplacedFiles::default(),
                         Some(FolderSwap {
                             live,
                             replaced: replaced.keys(&BTreeSet::new()).into_iter().collect(),
+                            held,
                         }),
                     ),
                     None => (live, replaced, None),

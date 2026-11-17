@@ -7,9 +7,9 @@ use futures_util::TryStreamExt;
 use object_store::ObjectStoreExt;
 use object_store::path::Path as ObjectPath;
 
-use crate::adapters::files::constants::{
-    LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, PENDING_FOLDER, STAGED_FOLDER_MARK,
-};
+use crate::adapters::files::constants::{LOAD_ID_LENGTH, MOVED_ASIDE_SUFFIX, STAGED_FOLDER_MARK};
+use crate::adapters::files::errors::FilesDestinationError;
+use crate::adapters::files::types::Exchange;
 use crate::file_store::models::OpenFolder;
 use crate::store_paths::models::{Location, StoreKind};
 
@@ -31,34 +31,20 @@ pub(crate) fn staged_stem(name: &str) -> String {
     format!(".{name}{STAGED_FOLDER_MARK}")
 }
 
-/// Put `staged` at `live` and `live`'s old contents at `staged`. With an existing `live` this is one `renameat2(RENAME_EXCHANGE)` (`renameatx_np(RENAME_SWAP)` on macOS), so a reader sees one folder or the other; where the system or filesystem has no swap, `live` is moved aside first, leaving a moment with no folder.
+/// Put `staged` at `live` and `live`'s old contents at `staged`, in one `renameat2(RENAME_EXCHANGE)` (`renameatx_np(RENAME_SWAP)` on macOS), so a reader sees one folder or the other. Neither is created: when `staged` is gone because a load that took the table after this load's lease lapsed moved it away, this fails and changes nothing. A missing `live` is renamed into place. Where the system or filesystem has no such rename this fails too, rather than move `live` aside in steps another load could interleave with.
 pub(crate) fn swap_dirs(staged: &Path, live: &Path) -> std::io::Result<()> {
     match live.try_exists()? {
         false => std::fs::rename(staged, live),
-        true => exchange(staged, live).or_else(|error| match error.kind() == std::io::ErrorKind::Unsupported {
-            true => {
-                tracing::warn!(%error, folder = %live.display(), "this filesystem cannot swap folders in one rename; moving the old folder aside first");
-                move_aside(staged, live)
-            }
-            false => Err(error),
+        true => exchange(staged, live).map_err(|error| match error.kind() == std::io::ErrorKind::Unsupported {
+            true => std::io::Error::other(format!(
+                "this filesystem swapped two folders in one rename when the load started, but no longer can ({error}); stopped before changing the table"
+            )),
+            false => error,
         }),
     }
 }
 
-/// Swap two existing directories with three renames, through `staged` with `-old` added; when the new folder cannot be put in place, the old one is put back. A stop between the first two renames leaves the old folder at the `-old` name, which the next load puts back (see `remove_staged`).
-fn move_aside(staged: &Path, live: &Path) -> std::io::Result<()> {
-    let mut aside = staged.as_os_str().to_owned();
-    aside.push(MOVED_ASIDE_SUFFIX);
-    let aside = PathBuf::from(aside);
-    std::fs::rename(live, &aside)?;
-    if let Err(error) = std::fs::rename(staged, live) {
-        std::fs::rename(&aside, live)?;
-        return Err(error);
-    }
-    std::fs::rename(&aside, staged)
-}
-
-/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`, and whether it is the old table moved aside, `<stem><load id>-old`.
+/// Whether `entry` is a folder a load of the table named by `stem` staged in, `<stem><load id>`, and whether it is one an earlier release moved an old table aside to, `<stem><load id>-old`.
 pub(crate) fn staged_entry(entry: &str, stem: &str) -> Option<bool> {
     let rest = entry.strip_prefix(stem)?;
     let (load_id, aside) = match rest.strip_suffix(MOVED_ASIDE_SUFFIX) {
@@ -72,9 +58,14 @@ pub(crate) fn staged_entry(entry: &str, stem: &str) -> Option<bool> {
     is_load_id.then_some(aside)
 }
 
+/// A directory entry that is a staging folder of the table named by `stem`, and whether it is an old table moved aside.
+fn staged_dir(entry: &std::fs::DirEntry, stem: &str) -> Option<(PathBuf, bool)> {
+    staged_entry(&entry.file_name().to_string_lossy(), stem).map(|aside| (entry.path(), aside))
+}
+
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
+pub(crate) fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
     use rustix::io::Errno;
     renameat_with(CWD, staged, CWD, live, RenameFlags::EXCHANGE).map_err(|errno| {
@@ -87,11 +78,11 @@ fn exchange(staged: &Path, live: &Path) -> std::io::Result<()> {
 
 /// Swap two existing directories in one rename; `Unsupported` where the system or filesystem has no such rename.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn exchange(_staged: &Path, _live: &Path) -> std::io::Result<()> {
+pub(crate) fn exchange(_staged: &Path, _live: &Path) -> std::io::Result<()> {
     Err(std::io::ErrorKind::Unsupported.into())
 }
 
-/// Copy into `staged` every file of `live` the load does not replace and that is not a pending marker: by hard link, or by copying the bytes where the filesystem has no hard links. Returns the key that failed and why.
+/// Copy into `staged` every file of `live` the load does not replace: by hard link, or by copying the bytes where the filesystem has no hard links. Returns the key that failed and why.
 pub(crate) async fn carry_over(
     live: &OpenFolder,
     staged: &OpenFolder,
@@ -124,10 +115,10 @@ pub(crate) async fn carry_over(
     Ok(())
 }
 
-/// The key below the table folder of a listed file the swap keeps: not replaced by the load, and not a pending marker.
+/// The key below the table folder of a listed file the swap keeps: one the load doesn't replace. Markers come too: a tombstone is a decided marker and the pending marker beside it.
 fn kept_key(location: &ObjectPath, prefix: &str, replaced: &BTreeSet<String>) -> Option<String> {
     let key = location.as_ref().strip_prefix(prefix)?;
-    (!replaced.contains(key) && !key.starts_with(PENDING_FOLDER)).then(|| key.to_owned())
+    (!replaced.contains(key)).then(|| key.to_owned())
 }
 
 /// Copy one file by hard link, or by its bytes where that fails; one already there is kept.
@@ -145,10 +136,30 @@ async fn copy_file(
     }
 }
 
-/// Swap the staged folder in, then delete the old table now at `staged`; a missing staged folder (nothing written) is created first, and a failed delete only warns.
-pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(staged)?;
+/// Swap the folder `held` is open on, at `staged`, in for `live`, then delete the old table now at `staged` (a failed delete only warns). The folder at `staged` is checked to be `held`'s before the exchange, and the one at `live` after it, as another load whose lease lapsed may move `staged` away, and something else may be put there, at any moment (`between` runs between the first check and the exchange; tests use it to do that). When the second check fails the exchange is undone at once, with the same one-rename swap. `Ok(Err(why))` when another load moved the folder: the table is left as it was, and a rerun may pass.
+pub(crate) fn swap_in(
+    (staged, live): (&Path, &Path),
+    held: &std::fs::File,
+    between: fn(&Path),
+) -> std::io::Result<Result<(), String>> {
+    if let Err(moved) = check_held(held, staged)? {
+        return Ok(Err(moved));
+    }
+    between(staged);
+    let existed = live.try_exists()?;
     swap_dirs(staged, live)?;
+    if let Err(moved) = check_held(held, live)? {
+        match existed {
+            true => exchange(staged, live),
+            false => std::fs::rename(live, staged),
+        }
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "another load moved away the folder this load staged its table in, and the folder swapped in instead could not be swapped back out ({error}); check the table folder"
+            ))
+        })?;
+        return Ok(Err(moved));
+    }
     let removed = match std::fs::remove_dir_all(staged) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         removed => removed,
@@ -156,10 +167,10 @@ pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
     if let Err(error) = removed {
         tracing::warn!(%error, folder = %live.display(), "the new table is in place, but the old one beside it could not be deleted; the next load deletes it");
     }
-    Ok(())
+    Ok(Ok(()))
 }
 
-/// Delete the staging folders of table folder `live` (named by `stem`) in its parent; when `live` is missing because a stop came while its old table was moved aside, put that table back first.
+/// Move every staging folder of table folder `live` (named by `stem`) in its parent away to a fresh name, each in one rename, then delete them: the renames fail the call, a failed delete only warns (the folder keeps a staging name no load owns, so the next load deletes it). An old table an earlier release moved aside is kept, with a warning: a stop at the wrong moment left it the table's only copy.
 pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<()> {
     let Some(parent) = live.parent() else {
         return Ok(());
@@ -172,35 +183,92 @@ pub(crate) fn clear_staged(live: &Path, stem: &str) -> std::io::Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
-    let mut missing = !live.try_exists()?;
+    let mut moved: Vec<PathBuf> = Vec::new();
     for (entry, aside) in entries {
-        match aside && missing {
-            true => {
-                std::fs::rename(&entry, live)?;
-                missing = false;
+        if aside {
+            tracing::warn!(folder = %entry.display(), table = %live.display(), "an earlier SQLLoad moved this table's old files aside here and stopped before finishing its swap; it is kept so you can check whether it holds rows the table lacks, then delete it");
+            continue;
+        }
+        let away = parent.join(format!("{stem}{}", uuid::Uuid::new_v4()));
+        match std::fs::rename(&entry, &away) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            renamed => {
+                renamed?;
+                moved.push(away);
             }
-            false => std::fs::remove_dir_all(&entry)?,
+        }
+    }
+    for away in moved {
+        if let Err(error) = std::fs::remove_dir_all(&away) {
+            tracing::warn!(%error, folder = %away.display(), "cannot delete a staging folder beside the table; the next load deletes it");
         }
     }
     Ok(())
 }
 
-/// A directory entry that is a staging folder of the table named by `stem`, and whether it is a moved-aside old table.
-fn staged_dir(entry: &std::fs::DirEntry, stem: &str) -> Option<(PathBuf, bool)> {
-    staged_entry(&entry.file_name().to_string_lossy(), stem).map(|aside| (entry.path(), aside))
-}
-
-/// Delete every hidden folder beside table folder `live` that a load of it staged in: one a stopped load left, or the old table a load swapped out but could not delete. When the table folder is missing because a load stopped while moving the old table aside, that old table is put back first. Best effort: a failure only warns, and the next load tries again.
-pub(crate) async fn remove_staged(live: &Location) {
+/// Before a load that holds the table's lease reads it: take away every hidden folder beside table folder `live` that another load staged a new table in, so that load can't swap it in any more. Each goes in one rename, then is deleted. A load whose lease lapsed may still be about to swap: either its swap came first, and what is moved away is the old table it swapped out, or this rename did, and its swap fails. A rename that fails stops this load before it writes anything.
+pub(crate) async fn remove_staged(live: &Location) -> Result<(), FilesDestinationError> {
     let Some((path, _, name)) = local_folder(live) else {
-        return;
+        return Ok(());
     };
     let stem = staged_stem(name);
-    let removed = tokio::task::spawn_blocking(move || clear_staged(&path, &stem)).await;
-    if let Err(error) = removed
+    tokio::task::spawn_blocking(move || clear_staged(&path, &stem))
+        .await
         .map_err(|error| error.to_string())
         .and_then(|removed| removed.map_err(|error| error.to_string()))
-    {
-        tracing::warn!(%error, folder = %live, "cannot delete a staging folder an earlier load left beside the table; the next load tries again");
+        .map_err(|reason| FilesDestinationError::Write {
+            key: live.to_string(),
+            reason: format!(
+                "cannot move away a staging folder an earlier load left beside the table: {reason}"
+            ),
+        })
+}
+
+/// Whether `exchange` swaps two folders in one rename (its support) beside table folder `live` (named by `stem`): tried on two empty folders created there, named like staging folders so the next load deletes any a stop leaves; `false` only where it fails with `Unsupported`.
+pub(crate) fn exchange_support(
+    live: &Path,
+    stem: &str,
+    exchange: Exchange,
+) -> std::io::Result<bool> {
+    let Some(parent) = live.parent() else {
+        return Ok(false);
+    };
+    std::fs::create_dir_all(parent)?;
+    let probes = [
+        parent.join(format!("{stem}{}", uuid::Uuid::new_v4())),
+        parent.join(format!("{stem}{}", uuid::Uuid::new_v4())),
+    ];
+    probes.iter().try_for_each(std::fs::create_dir)?;
+    let swapped = exchange(&probes[0], &probes[1]);
+    for probe in &probes {
+        if let Err(error) = std::fs::remove_dir(probe) {
+            tracing::warn!(%error, folder = %probe.display(), "cannot delete an empty folder made to check the filesystem; the next load deletes it");
+        }
     }
+    match swapped {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::Unsupported => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether `path` is still the folder `held` was opened on (same device and inode), or why not. While the handle is open its folder can't be reused, so a folder another load moved away, and anything made again at `path` since (by this load's later writes, missing the files written before), never matches.
+#[cfg(unix)]
+fn check_held(held: &std::fs::File, path: &Path) -> std::io::Result<Result<(), String>> {
+    use std::os::unix::fs::MetadataExt;
+    let was = held.metadata()?;
+    let same = match std::fs::symlink_metadata(path) {
+        Ok(now) => (was.dev(), was.ino()) == (now.dev(), now.ino()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    Ok(same.then_some(()).ok_or_else(|| {
+        "another load moved away the folder this load staged its table in, so it lacks files this load wrote; the table is left as it was".to_owned()
+    }))
+}
+
+/// Whether `path` is still the folder `held` was opened on; no system without `check_held` stages a table.
+#[cfg(not(unix))]
+fn check_held(_held: &std::fs::File, _path: &Path) -> std::io::Result<Result<(), String>> {
+    Err(std::io::ErrorKind::Unsupported.into())
 }

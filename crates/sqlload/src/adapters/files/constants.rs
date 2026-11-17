@@ -43,6 +43,9 @@ pub const LOADED_SUFFIX: &str = ".json";
 /// The folder below a table's folder holding one marker per load that has not finished.
 pub const PENDING_FOLDER: &str = "_sqlload/pending/";
 
+/// The folder below a table's folder holding how each commit of a load ended: `replacing` once the load committed its files, `aborted` once another load repaired it. Each is created only if absent, so of a load committing late and a load repairing it, exactly one decides.
+pub const DECIDED_FOLDER: &str = "_sqlload/decided/";
+
 /// The most a `single_file` commit holds in memory across its open files (2 GiB); each file is stored in one put at the commit, well under S3's 5 GiB limit for one put.
 pub const SINGLE_FILE_MAX_BYTES: usize = 2 * 1024 * 1024 * 1024;
 
@@ -52,7 +55,7 @@ pub const STAGED_FOLDER_MARK: &str = ".sqlload-";
 /// The length of a load id, a hyphenated UUID, as staging folder names end with it.
 pub const LOAD_ID_LENGTH: usize = 36;
 
-/// Added to a staging folder's name for the old table while a filesystem without a one-rename swap moves it aside.
+/// Added to a staging folder's name by releases before 0.63.0 for the old table they moved aside; a stopped load could leave one, which loads keep and warn about.
 pub const MOVED_ASIDE_SUFFIX: &str = "-old";
 
 /// The first line of a pending marker while the load writes its files.
@@ -60,6 +63,12 @@ pub const PENDING_WRITING: &str = "writing";
 
 /// The first line of a pending marker while the load deletes the files it replaces.
 pub const PENDING_REPLACING: &str = "replacing";
+
+/// The first line of the marker repair leaves for a load it found writing: the load may only have lost its lease and still be writing, so any file it stores later is deleted too.
+pub const PENDING_ABORTED: &str = "aborted";
+
+/// How long repair keeps an `aborted` marker (7 days), well past any lease a load still writing could have held.
+pub const ABORTED_KEPT_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// At most this many partitions have a file open at once; beyond it the largest is written out.
 pub const OPEN_FILES_MAX: usize = 256;
@@ -72,6 +81,12 @@ pub const PENDING_RUN_PREFIX: &str = "@run\t";
 
 /// Records of loaded source files read at once while planning.
 pub const RECORD_READS: usize = 16;
+
+/// The start of a record's name that merges the records of several commits, which no commit's own record starts with (load ids are UUIDs).
+pub const COMPACTED_PREFIX: &str = "compacted.";
+
+/// A load merges a table's live records into one once there are more than this many.
+pub const RECORDS_COMPACTED_ABOVE: usize = 64;
 
 /// The file name suffix of the CSV files written, before any compression suffix.
 pub const CSV_SUFFIX: &str = ".csv";

@@ -21,6 +21,7 @@ use crate::loader::models::{
     CommitRule, FilesContext, FilesOutput, FilesWindowRequest, LiveFiles, PlanOptions, TablePlan,
     TableSpec, WholeReason,
 };
+use crate::project::models::WriteStrategy;
 use crate::schema_plan::models::{LiveColumn, SchemaPlan};
 use crate::table_lease::main::lease_holder::lease_holder;
 use crate::table_lease::main::lease_now::lease_now;
@@ -116,6 +117,7 @@ pub(in crate::loader) async fn plan_files_table(
             max_footer_reads: destination.max_footer_reads,
             notes,
             pending: state.pending,
+            commits: state.commits,
         }),
     })
 }
@@ -170,7 +172,7 @@ async fn planned_read(
     })
 }
 
-/// The table's context, or its blocked plan (marked existing when its folder holds data files), blocked too while another load holds its lease.
+/// The table's context, or its blocked plan (marked existing when its folder holds data files), blocked too while another load holds its lease, and while it holds records an older SQLLoad wrote that this load would read (`append`, or `delete_insert` checking files below its window; never `--reload`, which rewrites them).
 async fn files_context(
     spec: &TableSpec,
     destination: &FilesDestination,
@@ -191,6 +193,17 @@ async fn files_context(
     let folder = open_folder(&path.folder)?;
     let state = read_table_state(&folder, &path, cursor_type.as_ref()).await?;
     problems.extend(state.listed.problems.clone());
+    let reads_records = match spec.strategy {
+        WriteStrategy::Append => true,
+        WriteStrategy::DeleteInsert => spec.cursor.is_some() && options.start_cursor.is_none(),
+        _ => false,
+    };
+    problems.extend(
+        state
+            .old_records
+            .clone()
+            .filter(|_| reads_records && !options.reload),
+    );
     problems.extend(lease_holder(&folder, lease_now()).await?);
     if !problems.is_empty() {
         return Ok(Err(TablePlan {

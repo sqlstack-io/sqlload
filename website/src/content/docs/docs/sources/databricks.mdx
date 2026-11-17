@@ -3,7 +3,7 @@ title: "Databricks"
 description: "Load Databricks tables, views and query results as Arrow through the Statement Execution API: connections, choosing tables, query tables, cursors, types, cost and permissions."
 ---
 
-From sqlload 0.61.0, a `databricks` source loads tables, views and query results from a Databricks
+From sqlload 0.64.0, a `databricks` source loads tables, views and query results from a Databricks
 SQL warehouse with Unity Catalog. SQLLoad runs one `SELECT` per read on the warehouse and downloads
 its result as Arrow files, several at once, through the short-lived links the
 [Statement Execution API](https://docs.databricks.com/api/workspace/statementexecution) gives.

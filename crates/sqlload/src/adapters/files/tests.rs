@@ -30,6 +30,7 @@ mod replaced_files;
 mod spill_order;
 #[path = "tests/test_split_batch.rs"]
 mod split_batch;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[path = "tests/test_swap_folder.rs"]
 mod swap_folder;
 #[path = "tests/test_table_path.rs"]

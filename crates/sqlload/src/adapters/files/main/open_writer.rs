@@ -54,6 +54,7 @@ pub fn open_writer(request: WriterRequest<'_>) -> Result<FilesWriter, String> {
         open: BTreeMap::new(),
         written: Vec::new(),
         partitions: BTreeSet::new(),
+        sources: BTreeMap::new(),
         rows: 0,
     })
 }
