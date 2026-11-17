@@ -154,7 +154,8 @@ pub(crate) async fn run_planted(
     };
     let (source, table) = (folder("src/")?, folder("out/orders/")?);
     let text = format!(
-        "[connections.files]\n{connection}\n\n[targets.lake]\nconnection = \"files\"\npath = \"out/{{table}}/\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\nwrite_strategy = \"append\"\n"
+        "[connections.files]\n{connection}\n\n[targets.lake]\nconnection = \"files\"\npath = \"out/{{table}}/\"\n\n[sources.orders]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"src/\"\npartition_columns = {{ day = \"date\" }}\nwrite_strategy = \"{}\"\n",
+        test_case.strategy
     );
     let failed = |error: sqlload::file_store::errors::StoreError| error.to_string();
     let project = described_project(&text).await?;

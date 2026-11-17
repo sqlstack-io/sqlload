@@ -620,6 +620,15 @@ pub struct FilesOutput {
     pub commits: BTreeSet<String>,
 }
 
+impl FilesOutput {
+    /// The unfinished loads repair has work for: all but expired `aborted` tombstones with no file left, which it only deletes.
+    pub fn unfinished(&self) -> impl Iterator<Item = &PendingLoad> {
+        self.pending
+            .iter()
+            .filter(|load| !(load.expired && load.deletes.is_empty()))
+    }
+}
+
 /// The plan for a whole project.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProjectPlan {

@@ -28,7 +28,7 @@ pub(in crate::loader) async fn files_to_replace(
     let state = repaired_state(folder, &output.path, cursor_type.as_ref()).await?;
     let follows_plan = matches!(
         table.mode,
-        WriteMode::Append | WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. }
+        WriteMode::Append | WriteMode::DeleteInsert { .. }
     );
     if follows_plan && state.commits != output.commits {
         return Err(LoaderError::Transient(format!(

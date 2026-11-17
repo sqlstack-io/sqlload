@@ -779,7 +779,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         table
             .output
             .iter()
-            .flat_map(|output| output.pending.iter())
+            .flat_map(FilesOutput::unfinished)
             .map(pending_line),
     );
     details.extend(
@@ -1181,7 +1181,7 @@ pub(crate) fn up_to_date(table: &TablePlan, ranged: bool) -> Option<String> {
         && table
             .output
             .as_ref()
-            .is_none_or(|output| output.pending.is_empty());
+            .is_none_or(|output| output.unfinished().next().is_none());
     let transform_changed = table
         .spec
         .transform

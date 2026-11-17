@@ -1,7 +1,10 @@
+use bytes::Bytes;
+use futures_util::{StreamExt, TryStreamExt, stream};
+
 use crate::adapters::files::_helpers::layout::loads::load_id_of;
 use crate::adapters::files::constants::{
     ABORTED_KEPT_MS, PENDING_ABORTED, PENDING_FOLDER, PENDING_REPLACING, PENDING_RUN_PREFIX,
-    PENDING_WRITING,
+    PENDING_WRITING, RECORD_READS,
 };
 use crate::adapters::files::errors::FilesDestinationError;
 use crate::adapters::files::models::{Marker, PendingLoad, PendingPhase, PendingRun};
@@ -90,9 +93,17 @@ pub(crate) async fn pending_loads(
 ) -> Result<Vec<PendingLoad>, FilesDestinationError> {
     let markers = pending_folder(folder);
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let listed = list_files(&markers).await?;
+    let texts: Vec<(StoredFile, Bytes)> = stream::iter(listed)
+        .map(|marker| async {
+            let text = read_file(&markers, &marker.relative_key).await?;
+            Ok::<_, FilesDestinationError>((marker, text))
+        })
+        .buffered(RECORD_READS)
+        .try_collect()
+        .await?;
     let mut pending: Vec<PendingLoad> = Vec::new();
-    for marker in list_files(&markers).await? {
-        let text = read_file(&markers, &marker.relative_key).await?;
+    for (marker, text) in texts {
         let marker_read = parse_marker(&String::from_utf8_lossy(&text)).map_err(|reason| {
             FilesDestinationError::Write {
                 key: format!("{}{}", markers.location, marker.relative_key),

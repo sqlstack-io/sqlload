@@ -25,6 +25,7 @@ const APPEND: FilesToFilesTestCase = FilesToFilesTestCase {
 
 const PLANTED: PlantedTestCase = PlantedTestCase {
     description: "",
+    strategy: "append",
     planted: &[],
     rewrite: same_record,
     reload: false,
@@ -167,6 +168,13 @@ fn given_a_files_target_left_in_an_odd_state_when_a_files_source_loads_into_it_a
             description: "--reload rewrites the table and records it in this format; the old record names a commit the table no longer holds, so it is never read again and the next load deletes it",
             rewrite: old_record,
             reload: true,
+            expected_state: "8|1 records:2 markers:",
+            ..PLANTED
+        },
+        PlantedTestCase {
+            description: "a replace never reads the records, so records an older SQLLoad wrote don't block it, and the old one goes stale with its commit",
+            strategy: "replace",
+            rewrite: old_record,
             expected_state: "8|1 records:2 markers:",
             ..PLANTED
         },
