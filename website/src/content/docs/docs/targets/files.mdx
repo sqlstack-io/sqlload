@@ -154,9 +154,13 @@ while moving the old table aside, is kept with a warning, as it may hold the tab
 From 0.63.0, a load checks that it still holds the table's lease right before that rename, and
 writes nothing in between. A load that takes the table first moves every hidden folder other loads
 staged beside it away, in one rename each, then checks its own lease again before it repairs
-anything. Right before the rename, the swapping load also checks that its hidden folder is still
-the one it made when it started, so a folder another load moved away, which its later writes made
-again without its earlier files, is never swapped in. A load that checked its lease, then paused
+anything. The swapping load also checks that its hidden folder is the one it made when it started,
+right before the rename and again right after it, at the table path. So a folder another load moved
+away, which its later writes made again without its earlier files, is never swapped in. If the
+check after the rename fails, the load swaps the two folders back at once, with the same one-rename
+swap, and stops with an error a rerun clears, leaving the table as it was. Only filesystems with that
+swap stage a table, so undoing it is always one rename; should even that fail, the error says to
+check the table folder. A load that checked its lease, then paused
 past it while another load took the table, either swaps its table in before that move, or finds
 its hidden folder gone and fails at the rename, leaving the table as it was:
 

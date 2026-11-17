@@ -16,8 +16,9 @@ use crate::adapters::files::tests::helpers::{
     block_on, local_files, repair, top_parts, watch_folder, write_all,
 };
 use crate::adapters::files::tests::test_types::{
-    HeldFolderTestCase, LateSwapTestCase, MarkerPathStallTestCase, RemoveStagedTestCase,
-    RenameRaceTestCase, StagingTestCase, StalledSwapTestCase, SwapFolderTestCase,
+    ExchangeRaceTestCase, HeldFolderTestCase, LateSwapTestCase, MarkerPathStallTestCase,
+    RemoveStagedTestCase, RenameRaceTestCase, StagingTestCase, StalledSwapTestCase,
+    SwapFolderTestCase,
 };
 use crate::file_store::main::open_folder::open_folder;
 use crate::store_paths::models::{Location, StoreKind};
@@ -105,7 +106,7 @@ fn given_a_staged_table_when_swapping_it_in_then_readers_see_the_old_or_new_file
             block_on(async {
                 swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| error.to_string())?
             })
         });
         stop.store(true, Ordering::Relaxed);
@@ -272,7 +273,9 @@ fn given_a_load_stalled_before_its_swap_when_another_load_took_the_table_then_it
             Ok::<_, String>(
                 swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
                     .await
-                    .is_err(),
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_none(),
             )
         })?;
         assert_eq!(
@@ -326,6 +329,7 @@ fn given_a_load_that_checked_its_lease_when_another_load_takes_the_table_before_
         write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
         let staged_path = directory.path().join(&staged.prefix);
         let live_path = directory.path().join(TABLE_PREFIX);
+        let held = std::fs::File::open(&staged_path).map_err(|error| error.to_string())?;
         for _ in 0..test_case.takeovers {
             block_on(async {
                 remove_staged(&live)
@@ -333,7 +337,7 @@ fn given_a_load_that_checked_its_lease_when_another_load_takes_the_table_before_
                     .map_err(|error| error.to_string())
             })?;
         }
-        let renamed = swap_in(&staged_path, &live_path);
+        let renamed = swap_in((&staged_path, &live_path), &held, |_| ());
         block_on(async {
             remove_staged(&live)
                 .await
@@ -341,7 +345,7 @@ fn given_a_load_that_checked_its_lease_when_another_load_takes_the_table_before_
         })?;
         assert_eq!(
             (
-                renamed.is_err(),
+                renamed.ok().and_then(Result::ok).is_none(),
                 top_parts(&live_path),
                 local_files(&directory.path().join("app")).len()
             ),
@@ -406,6 +410,7 @@ fn given_a_stalled_swap_landing_after_another_load_took_the_table_when_that_load
                 .map_err(|error| error.to_string())?
                 .map_err(failed)?;
             write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+            let held = std::fs::File::open(&staged_path).map_err(|error| error.to_string())?;
             let staged_folder = open_folder(&staged).map_err(|error| error.to_string())?;
             carry_over(
                 &folder,
@@ -419,7 +424,8 @@ fn given_a_stalled_swap_landing_after_another_load_took_the_table_when_that_load
                 .map_err(|error| error.to_string())?
                 .map_err(failed)?;
             for _ in 0..usize::from(test_case.swaps_after_take) {
-                swap_in(&staged_path, &live_path).map_err(|error| error.to_string())?;
+                swap_in((&staged_path, &live_path), &held, |_| ())
+                    .map_err(|error| error.to_string())??;
             }
             let state = read_table_state(
                 &folder,
@@ -661,13 +667,73 @@ fn given_a_lapsed_load_that_moved_the_staged_folder_away_when_the_lease_holder_s
             Ok::<_, String>(
                 swap_folder((&live_folder, &lease), &staged_folder, (&replaced, &held))
                     .await
-                    .is_err(),
+                    .ok()
+                    .and_then(Result::ok)
+                    .is_none(),
             )
         })?;
         assert_eq!(
             (swapped, top_parts(&directory.path().join(TABLE_PREFIX))),
             (
                 test_case.expected_failed,
+                test_case
+                    .expected_parts
+                    .iter()
+                    .map(|key| (*key).to_owned())
+                    .collect::<Vec<String>>()
+            ),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_staged_folder_replaced_between_its_check_and_the_exchange_when_swapping_then_the_exchange_is_undone_and_the_table_kept()
+-> Result<(), String> {
+    let test_cases = [
+        ExchangeRaceTestCase {
+            description: "with nothing in between, the load's own folder is swapped in",
+            between: |_| (),
+            expected_raced: false,
+            expected_parts: &["part-new-0.csv"],
+        },
+        ExchangeRaceTestCase {
+            description: "a folder put in place of the staged one after the check is swapped back out at once, and the old table stays",
+            between: |staged| {
+                let _ = std::fs::rename(staged, staged.with_extension("away"))
+                    .and_then(|()| std::fs::create_dir(staged))
+                    .and_then(|()| std::fs::write(staged.join("part-foreign-0.csv"), "foreign"));
+            },
+            expected_raced: true,
+            expected_parts: &["part-old-0.csv"],
+        },
+    ];
+    for test_case in test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let root = directory.path().display().to_string();
+        let live = Location {
+            store: StoreKind::Filesystem { root },
+            prefix: TABLE_PREFIX.to_owned(),
+        };
+        write_all(directory.path(), TABLE_PREFIX, &["part-old-0.csv"], "old")?;
+        let staged = TablePath {
+            folder: live,
+            partition: None,
+        }
+        .staged_folder(&WriteMode::Replace, &uuid::Uuid::new_v4().to_string())
+        .ok_or("no staging folder")?;
+        write_all(directory.path(), &staged.prefix, &["part-new-0.csv"], "new")?;
+        let staged_path = directory.path().join(&staged.prefix);
+        let live_path = directory.path().join(TABLE_PREFIX);
+        let held = std::fs::File::open(&staged_path).map_err(|error| error.to_string())?;
+        let swapped = swap_in((&staged_path, &live_path), &held, test_case.between)
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            (swapped.is_err(), top_parts(&live_path)),
+            (
+                test_case.expected_raced,
                 test_case
                     .expected_parts
                     .iter()

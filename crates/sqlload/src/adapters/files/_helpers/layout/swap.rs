@@ -136,9 +136,30 @@ async fn copy_file(
     }
 }
 
-/// Swap the staged folder in, then delete the old table now at `staged`; a failed delete only warns.
-pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
+/// Swap the folder `held` is open on, at `staged`, in for `live`, then delete the old table now at `staged` (a failed delete only warns). The folder at `staged` is checked to be `held`'s before the exchange, and the one at `live` after it, as another load whose lease lapsed may move `staged` away, and something else may be put there, at any moment (`between` runs between the first check and the exchange; tests use it to do that). When the second check fails the exchange is undone at once, with the same one-rename swap. `Ok(Err(why))` when another load moved the folder: the table is left as it was, and a rerun may pass.
+pub(crate) fn swap_in(
+    (staged, live): (&Path, &Path),
+    held: &std::fs::File,
+    between: fn(&Path),
+) -> std::io::Result<Result<(), String>> {
+    if let Err(moved) = check_held(held, staged)? {
+        return Ok(Err(moved));
+    }
+    between(staged);
+    let existed = live.try_exists()?;
     swap_dirs(staged, live)?;
+    if let Err(moved) = check_held(held, live)? {
+        match existed {
+            true => exchange(staged, live),
+            false => std::fs::rename(live, staged),
+        }
+        .map_err(|error| {
+            std::io::Error::other(format!(
+                "another load moved away the folder this load staged its table in, and the folder swapped in instead could not be swapped back out ({error}); check the table folder"
+            ))
+        })?;
+        return Ok(Err(moved));
+    }
     let removed = match std::fs::remove_dir_all(staged) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         removed => removed,
@@ -146,7 +167,7 @@ pub(crate) fn swap_in(staged: &Path, live: &Path) -> std::io::Result<()> {
     if let Err(error) = removed {
         tracing::warn!(%error, folder = %live.display(), "the new table is in place, but the old one beside it could not be deleted; the next load deletes it");
     }
-    Ok(())
+    Ok(Ok(()))
 }
 
 /// Move every staging folder of table folder `live` (named by `stem`) in its parent away to a fresh name, each in one rename, then delete them: the renames fail the call, a failed delete only warns (the folder keeps a staging name no load owns, so the next load deletes it). An old table an earlier release moved aside is kept, with a warning: a stop at the wrong moment left it the table's only copy.
@@ -231,21 +252,23 @@ pub(crate) fn exchange_support(
     }
 }
 
-/// Fail unless `path` is still the folder `held` was opened on. While the handle is open its folder can't be reused, so a folder another load moved away, and this load's later writes made again at `path` (missing the files written before), never matches.
+/// Whether `path` is still the folder `held` was opened on (same device and inode), or why not. While the handle is open its folder can't be reused, so a folder another load moved away, and anything made again at `path` since (by this load's later writes, missing the files written before), never matches.
 #[cfg(unix)]
-pub(crate) fn check_held(held: &std::fs::File, path: &Path) -> std::io::Result<()> {
+fn check_held(held: &std::fs::File, path: &Path) -> std::io::Result<Result<(), String>> {
     use std::os::unix::fs::MetadataExt;
-    let (was, now) = (held.metadata()?, std::fs::symlink_metadata(path)?);
-    match (was.dev(), was.ino()) == (now.dev(), now.ino()) {
-        true => Ok(()),
-        false => Err(std::io::Error::other(
-            "another load moved away the folder this load staged its table in, so it lacks files this load wrote; the table is left as it was",
-        )),
-    }
+    let was = held.metadata()?;
+    let same = match std::fs::symlink_metadata(path) {
+        Ok(now) => (was.dev(), was.ino()) == (now.dev(), now.ino()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    Ok(same.then_some(()).ok_or_else(|| {
+        "another load moved away the folder this load staged its table in, so it lacks files this load wrote; the table is left as it was".to_owned()
+    }))
 }
 
-/// Fail unless `path` is still the folder `held` was opened on; no system without `check_held` stages a table.
+/// Whether `path` is still the folder `held` was opened on; no system without `check_held` stages a table.
 #[cfg(not(unix))]
-pub(crate) fn check_held(_held: &std::fs::File, _path: &Path) -> std::io::Result<()> {
+fn check_held(_held: &std::fs::File, _path: &Path) -> std::io::Result<Result<(), String>> {
     Err(std::io::ErrorKind::Unsupported.into())
 }

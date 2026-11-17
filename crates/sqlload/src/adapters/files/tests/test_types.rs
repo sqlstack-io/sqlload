@@ -271,6 +271,17 @@ pub(crate) struct HeldFolderTestCase {
     pub(crate) expected_parts: &'static [&'static str],
 }
 
+/// A load swaps its staged folder in while something may replace that folder between the identity check and the exchange.
+pub(crate) struct ExchangeRaceTestCase {
+    pub(crate) description: &'static str,
+    /// Runs between the check and the exchange, given the staged folder's path.
+    pub(crate) between: fn(&std::path::Path),
+    /// Whether the swap reports that another load moved its folder.
+    pub(crate) expected_raced: bool,
+    /// The data files in the table folder afterwards.
+    pub(crate) expected_parts: &'static [&'static str],
+}
+
 pub(crate) struct RemoveStagedTestCase {
     pub(crate) description: &'static str,
     /// Files below the table's parent folder before the cleanup.
