@@ -6,6 +6,7 @@ use crate::adapters::contract::main::cursor_bound::cursor_bound;
 use crate::adapters::contract::main::cursor_from_now::cursor_from_now;
 use crate::adapters::contract::main::cursor_text::cursor_text;
 use crate::adapters::contract::main::escape_literal::escape_literal;
+use crate::adapters::contract::main::newest_by_problem::newest_by_problem;
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::CursorQuery;
 use crate::adapters::contract::models::MergeDedupe;
@@ -296,26 +297,10 @@ fn unwritten_column(
         ));
     }
     let columns = spec.newest_by.iter().filter(|_| spec.python.is_none());
+    let adapter = sql_adapter(spec.warehouse);
     columns
-        .filter_map(|name| unordered_column(schema, name))
+        .filter_map(|name| newest_by_problem(adapter, &schema.write_columns, name))
         .next()
-}
-
-/// Why `newest_by` column `name` cannot say which row is newer: it isn't written, or it is JSON or an array, which have no order.
-fn unordered_column(schema: &SchemaPlan, name: &str) -> Option<String> {
-    let column = schema
-        .write_columns
-        .iter()
-        .find(|column| column.name.eq_ignore_ascii_case(name));
-    match column.map(|column| &column.column_type) {
-        None => Some(format!(
-            "newest_by column {name} is not written to the table (not a column of the source, excluded, not in the enforced contract, or ignored by on_schema_change)"
-        )),
-        Some(column_type @ (ColumnType::Json | ColumnType::Array(_))) => Some(format!(
-            "newest_by column {name} is {column_type}, which has no order to say which row is newer; name a column of another type"
-        )),
-        Some(_) => None,
-    }
 }
 
 /// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
