@@ -113,8 +113,8 @@ pub struct CopyStaged<'a> {
     pub selected: Option<&'a [DesiredColumn]>,
 }
 
-/// The `COPY`s of one batch of a Snowflake source's unloaded files: the table they fill and its columns, the files' read columns, the batch's own values, and where the files are.
-pub struct UnloadedCopy<'a> {
+/// One batch of a Snowflake source's rows loaded inside Snowflake: the table they fill and its columns, the source's read columns, the batch's own values, and where the rows come from.
+pub struct UnloadedLoad<'a> {
     pub into: &'a TableName,
     pub columns: &'a [DesiredColumn],
     pub read: &'a [ReadColumn],
@@ -126,14 +126,24 @@ pub struct UnloadedCopy<'a> {
     pub load_id: &'a str,
     /// The load time as an ISO 8601 UTC timestamp.
     pub loaded_at: &'a str,
-    /// The stage as SQL, `@"DB"."SCHEMA"."STAGE"`.
-    pub stage: &'a str,
-    /// The unload's folder below the stage, ending in `/`.
-    pub folder: &'a str,
-    /// Each file's key below `folder`.
-    pub keys: &'a [String],
-    /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key.
-    pub filename_prefix: &'a str,
+    pub from: UnloadedFrom<'a>,
+}
+
+/// Where a batch loaded inside Snowflake reads the source's rows, each read column under its own name, times and timestamps as whole microseconds.
+pub enum UnloadedFrom<'a> {
+    /// The unload's Parquet files.
+    Files {
+        /// The stage as SQL, `@"DB"."SCHEMA"."STAGE"`.
+        stage: &'a str,
+        /// The unload's folder below the stage, ending in `/`.
+        folder: &'a str,
+        /// Each file's key below `folder`.
+        keys: &'a [String],
+        /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key.
+        filename_prefix: &'a str,
+    },
+    /// The query the unload would run, selected in the same session.
+    Query(&'a str),
 }
 
 /// Where one staged file goes on an internal stage.

@@ -155,7 +155,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
         table: "loaded".to_owned(),
     };
     let batch = UnloadedBatch {
-        files: &files,
+        source: crate::adapters::contract::models::UnloadedSource::Files(&files),
         read: &read,
         write_columns: &columns,
         target: WriteTarget {

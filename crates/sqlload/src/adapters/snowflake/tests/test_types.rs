@@ -107,15 +107,16 @@ pub(crate) struct SnowflakeEncodingTestCase {
     pub(crate) expected_encoding: Option<&'static str>,
 }
 
-/// The `COPY`s of one batch of unloaded files.
-pub(crate) struct CopyUnloadedTestCase {
+/// The statements loading one batch of a Snowflake source's rows inside Snowflake.
+pub(crate) struct UnloadedSqlTestCase {
     pub(crate) description: &'static str,
     /// The table's columns, each with the type the files' column is read as (`None` when the files lack it).
     pub(crate) columns: &'static [(&'static str, ColumnType, Option<ColumnType>)],
-    pub(crate) files: usize,
-    pub(crate) expected_copies: usize,
-    /// Text the first `COPY` holds, in order.
+    /// How many unloaded files; `None` selects the rows with the unload's query.
+    pub(crate) files: Option<usize>,
+    pub(crate) expected_statements: usize,
+    /// Text the first statement holds, in order.
     pub(crate) expected_first: &'static [&'static str],
-    /// Text the last `COPY` holds.
+    /// Text the last statement holds.
     pub(crate) expected_last: &'static str,
 }

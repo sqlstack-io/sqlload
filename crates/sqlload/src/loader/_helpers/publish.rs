@@ -9,7 +9,7 @@ use crate::adapters::contract::models::TableShape;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
 use crate::adapters::contract::models::WriteTarget;
-use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch};
+use crate::adapters::contract::models::{DirectBatch, DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
@@ -82,7 +82,7 @@ use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unarchived;
-use crate::loader::_helpers::sources::unload_source;
+use crate::loader::_helpers::sources::{selected_query, unload_source};
 use crate::loader::_helpers::specs::checked_key;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
@@ -144,7 +144,6 @@ use crate::schema_plan::constants::{
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
-use crate::snowflake_source::models::UnloadedFiles;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::take_lease::take_lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
@@ -165,7 +164,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::loader::_helpers::table_plan::{
-    added_constants, is_direct, publishes_once, pulls_unloaded,
+    added_constants, is_direct, publishes_once, pulls_unloaded, selects_rows,
 };
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
@@ -1073,14 +1072,14 @@ impl Publisher {
         }
     }
 
-    /// Load one unload's `files` by having the destination read them itself, where the plan chose that; the destination must load them so.
+    /// Load one unload's files, or the rows its query selects, by having the destination read them itself, where the plan chose that; the destination must load them so.
     pub(crate) async fn load_unloaded(
         &mut self,
-        files: &UnloadedFiles,
+        source: UnloadedSource<'_>,
     ) -> Result<DirectLoaded, LoaderError> {
         let columns = staged_columns(&self.table);
         let batch = UnloadedBatch {
-            files,
+            source,
             read: &self.table.read_columns,
             write_columns: &self.table.schema.write_columns,
             target: write_target(
@@ -1091,26 +1090,33 @@ impl Publisher {
             ),
             loaded_at: &self.loaded_at,
         };
-        let loaded = load_unloaded(&mut self.writer, &batch).await?.ok_or_else(|| {
-            LoaderError::Invalid(format!(
-                "{}: the plan has the destination load the unloaded files itself, but it cannot",
-                self.table.spec.destination.table
-            ))
-        })?;
+        let loaded = load_unloaded(&mut self.writer, &batch)
+            .await?
+            .ok_or_else(|| {
+                LoaderError::Invalid(format!(
+                    "{}: the plan has the destination load the source's rows itself, but it cannot",
+                    self.table.spec.destination.table
+                ))
+            })?;
         self.note_direct(&loaded);
         Ok(loaded)
     }
 
-    /// Pass `part` of the table's rows on: the destination loads the unloaded files itself where the plan chose that, otherwise SQLLoad stages the rows.
+    /// Pass `part` of the table's rows on: the destination selects them itself, or loads the unloaded files itself, where the plan chose that; otherwise SQLLoad stages the rows.
     async fn pass_part(
         &mut self,
         reader: &SourceReader,
         part: ReadPart,
     ) -> Result<(), LoaderError> {
         let table = self.table.clone();
+        if selects_rows(table.route.as_ref()) {
+            let query = selected_query(&table, part)?;
+            self.load_unloaded(UnloadedSource::Query(&query)).await?;
+            return Ok(());
+        }
         if pulls_unloaded(table.route.as_ref()) {
             unload_source(reader, &table, part, async |files| {
-                self.load_unloaded(files).await
+                self.load_unloaded(UnloadedSource::Files(files)).await
             })
             .await?;
             return Ok(());

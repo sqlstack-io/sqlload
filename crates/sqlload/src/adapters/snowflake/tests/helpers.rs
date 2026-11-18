@@ -375,13 +375,13 @@ pub(crate) fn csv_in(
     }
 }
 
-/// The `COPY`s loading `files` unloaded files (`data_<n>.parquet` under `lake/unload/run-1/`, on the stage's `unload/` folder) into `RAW.ORDERS`, batch 3 of load L1, with constant `region` = `'EU'` and the files' columns read as typed.
-pub(crate) fn unloaded_copies(
+/// The statements loading a Snowflake source's rows into `RAW.ORDERS`, batch 3 of load L1, with constant `region` = `'EU'` and the source's columns read as typed: from `files` unloaded files (`data_<n>.parquet` under `lake/unload/run-1/`, on the stage's `unload/` folder), or with none, from the query `SELECT ...`.
+pub(crate) fn unloaded_sql(
     columns: &[(&str, ColumnType, Option<ColumnType>)],
-    files: usize,
+    files: Option<usize>,
 ) -> Vec<String> {
-    use crate::adapters::snowflake::main::copy::_copy_unloaded::copy_unloaded;
-    use crate::adapters::snowflake::models::UnloadedCopy;
+    use crate::adapters::snowflake::main::copy::_unloaded_sql::unloaded_statements;
+    use crate::adapters::snowflake::models::{UnloadedFrom, UnloadedLoad};
     use crate::postgres_source::models::{ReadColumn, WireType};
     use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
@@ -404,7 +404,7 @@ pub(crate) fn unloaded_copies(
             })
         })
         .collect();
-    let keys: Vec<String> = (0..files)
+    let keys: Vec<String> = (0..files.unwrap_or_default())
         .map(|file| format!("data_{file}.parquet"))
         .collect();
     let table = TableName {
@@ -412,7 +412,7 @@ pub(crate) fn unloaded_copies(
         schema: "raw".to_owned(),
         table: "orders".to_owned(),
     };
-    copy_unloaded(&UnloadedCopy {
+    unloaded_statements(&UnloadedLoad {
         into: &table,
         columns: &desired,
         read: &read,
@@ -421,9 +421,14 @@ pub(crate) fn unloaded_copies(
         batch: 3,
         load_id: "L1",
         loaded_at: "2026-11-18T00:00:00Z",
-        stage: "@\"DB\".\"RAW\".\"LAKE\"",
-        folder: "unload/run-1/",
-        keys: &keys,
-        filename_prefix: "lake/unload/run-1/",
+        from: match files {
+            Some(_) => UnloadedFrom::Files {
+                stage: "@\"DB\".\"RAW\".\"LAKE\"",
+                folder: "unload/run-1/",
+                keys: &keys,
+                filename_prefix: "lake/unload/run-1/",
+            },
+            None => UnloadedFrom::Query("SELECT ..."),
+        },
     })
 }

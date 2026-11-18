@@ -1079,6 +1079,16 @@ pub(crate) fn reader_offer(
         })
         | None => Vec::new(),
     };
+    let selected_by_destination = matches!(
+        &spec.warehouse_source,
+        Some(WarehouseSource {
+            route: WarehouseRoute::Unload {
+                same_connection: true,
+                ..
+            },
+            ..
+        })
+    );
     let direct_blocked = match unload_to.is_empty() {
         true => direct_blocked,
         false => unload_blocked(spec),
@@ -1101,6 +1111,7 @@ pub(crate) fn reader_offer(
             .files
             .as_ref()
             .is_some_and(|files| stage_misses(stage, &files.location)),
+        selected_by_destination,
     }
 }
 
@@ -1130,12 +1141,18 @@ fn one_file_each(count: usize) -> Vec<FileGroup> {
         .collect()
 }
 
-/// Whether `route` has the destination load a warehouse source's unloaded files itself.
+/// Whether `route` has the destination select a warehouse source's rows itself, inside the warehouse.
+pub(crate) fn selects_rows(route: Option<&Route>) -> bool {
+    route.is_some_and(|route| matches!(route.steps.as_slice(), [Step::DestinationSelects]))
+}
+
+/// Whether `route` has the destination load a warehouse source's rows itself: its unloaded files, or the rows it selects inside the warehouse.
 pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
     route.is_some_and(|route| {
         matches!(
             route.steps.as_slice(),
             [Step::Unload(_), Step::DestinationPulls(_)]
+                | [Step::DestinationSelects]
                 | [
                     Step::Unload(_),
                     Step::CopyFiles(Store::Local(_)),

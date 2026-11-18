@@ -1001,6 +1001,9 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
             real.unwrap_or_else(|| files.format.to_string()),
             files.store
         ),
+        [Step::DestinationSelects] => format!(
+            "{warehouse} INSERT ... SELECT on the source's connection (nothing through the loader)"
+        ),
         [Step::Unload(store), Step::DestinationPulls(_)] => {
             format!("unload Parquet to {store} -> {warehouse} {load} (nothing through the loader)")
         }
