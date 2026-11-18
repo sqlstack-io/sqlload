@@ -45,9 +45,14 @@ def rows(ctx):
     yield from json.loads((HERE / "data" / f"{ctx.table}.json").read_text())
 
 
-cloud.table(description="Appended by cursor.", name="events", write_strategy="append", cursor_column="at")(rows)
+# rows() returns every row on each call, as an API that ignores the cursor does, so the cursor tables skip the rows an earlier window read.
+cloud.table(
+    description="Appended by cursor.", name="events", write_strategy="append", cursor_column="at", on_cursor_out_of_range="skip"
+)(rows)
 cloud.table(description="Merged by id.", name="customers", write_strategy="merge", unique_key="id")(rows)
-cloud.table(description="Replaced by cursor window.", name="days", write_strategy="delete_insert", cursor_column="day")(rows)
+cloud.table(
+    description="Replaced by cursor window.", name="days", write_strategy="delete_insert", cursor_column="day", on_cursor_out_of_range="skip"
+)(rows)
 cloud.table(description="Replaced whole.", name="snapshot", write_strategy="replace")(rows)
 cloud.table(
     description="Every portable type.",
@@ -65,6 +70,7 @@ import json, sys, urllib.parse
 import duckdb
 request = json.load(sys.stdin)
 connection = duckdb.connect("md:?motherduck_token=" + urllib.parse.quote(request["token"], safe=""))
+connection.execute("SET enable_progress_bar = false")
 rows = []
 for sql in request["sql"]:
     rows = connection.execute(sql).fetchall()
