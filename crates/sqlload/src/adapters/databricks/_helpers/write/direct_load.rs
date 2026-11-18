@@ -1,6 +1,7 @@
 //! A files batch loaded by Databricks `COPY`ing the source's own Parquet files from S3.
 
 use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
+use crate::adapters::contract::main::_file_constants::file_constants;
 use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, TableName};
 use crate::adapters::contract::types::SqlAdapter;
@@ -11,8 +12,7 @@ use crate::adapters::databricks::constants::{INSERTED_ROWS_COLUMN, MAX_FILES_PER
 use crate::adapters::databricks::main::stage::_direct_problem::direct_problem;
 use crate::adapters::databricks::models::{DatabricksSql, DatabricksWriter};
 use crate::databricks_api::main::execute_statement::execute_statement;
-use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
-use crate::files_source::main::normal_value::normal_value;
+use crate::files_source::constants::SOURCE_FILE_COLUMN;
 use crate::files_source::models::DataFile;
 use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::models::MetadataRole;
@@ -180,48 +180,14 @@ fn inserted_rows(result: &SqlRows) -> Result<u64, LoaderError> {
     })
 }
 
-/// The values SQLLoad gives every row of `data`: its name and version as the files source records them, and its partition values (constants among them), each converted to its column's type as SQLLoad's reader would, so a value that does not convert fails here rather than in Databricks' cast.
+/// The key of `data` below the batch's folder, and the values SQLLoad gives every row of it (see [`file_constants`]).
 fn s3_file(
     batch: &DirectBatch<'_>,
     data: &DataFile,
     columns: &[DesiredColumn],
 ) -> Result<S3File, LoaderError> {
-    let Some(source) = batch.spec.files.as_ref() else {
-        return Err(LoaderError::Invalid("not a files table".to_owned()));
-    };
-    let mut constants = vec![
-        (
-            SOURCE_FILE_COLUMN.to_owned(),
-            Some(format!("{}{}", source.location, data.file.relative_key)),
-        ),
-        (SOURCE_VERSION_COLUMN.to_owned(), Some(data.file.version())),
-    ];
-    for (name, _) in &source.partition_types {
-        let value = data
-            .partitions
-            .iter()
-            .find(|(partition, _)| partition == name)
-            .map(|(_, value)| value.clone());
-        let loaded = batch.spec.source_table.loaded_as(name);
-        let column_type = columns
-            .iter()
-            .find(|column| column.name == loaded)
-            .map(|column| &column.column_type);
-        let value = match (value, column_type) {
-            (Some(value), Some(column_type)) => {
-                Some(normal_value(&value, column_type).map_err(|reason| {
-                    LoaderError::Invalid(format!(
-                        "{}: {name} = {value:?} does not load as {column_type}: {reason}",
-                        data.file.relative_key
-                    ))
-                })?)
-            }
-            (value, _) => value,
-        };
-        constants.push((loaded.to_owned(), value));
-    }
     Ok(S3File {
         key: data.file.relative_key.clone(),
-        constants,
+        constants: file_constants(batch, data, columns)?,
     })
 }

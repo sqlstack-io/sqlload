@@ -39,6 +39,11 @@ impl BigQueryClient {
         &self.location
     }
 
+    /// The service account the client signs in as.
+    pub fn service_account(&self) -> &str {
+        &self.key.client_email
+    }
+
     /// A client running jobs in `project` at `location`, against the REST root `base_url` and the Storage Write API at `storage_url` (the public ones when `None`); nothing is sent until the first request.
     pub fn new(
         http: reqwest::Client,

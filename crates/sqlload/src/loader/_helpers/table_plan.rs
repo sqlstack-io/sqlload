@@ -886,7 +886,7 @@ async fn plan_table_once(
     let planned_stage = planned_stage.flatten();
     schema
         .warnings
-        .extend(route_warning(stage.as_ref()).map(str::to_owned));
+        .extend(route_warning(stage.as_ref(), spec, files.as_ref()));
     schema
         .warnings
         .extend(hmac_warnings(spec, stage.as_ref(), destination));
@@ -1214,12 +1214,10 @@ pub(crate) async fn table_route(
 ) -> Result<Route, String> {
     let reader = reader_offer(spec, read, stage);
     let in_place = reader.needs_loader.is_none() && reader.direct_blocked.is_none();
-    if let Some(files) = spec.files.as_ref().filter(|_| in_place)
-        && let StoreKind::S3 { .. } = files.location.store
-    {
-        let folder = files.location.to_string();
-        let holds_files = read.is_some_and(|read| !read.files.is_empty());
-        list_reach(destination, holds_files.then_some(folder.as_str())).await?;
+    if let Some(files) = spec.files.as_ref().filter(|_| in_place) {
+        let first = read.and_then(|read| read.files.first());
+        let file = first.map(|data| format!("{}{}", files.location, data.file.relative_key));
+        list_reach(destination, &files.location, file.as_deref()).await?;
     }
     plan_route(
         &reader,

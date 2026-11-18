@@ -1,3 +1,4 @@
+pub mod connection_store;
 pub mod escape_partition_value;
 pub mod file_url_path;
 pub mod hive_values;

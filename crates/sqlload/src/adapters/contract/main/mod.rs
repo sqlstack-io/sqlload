@@ -1,6 +1,7 @@
 pub(in crate::adapters) mod _batch_direct_problem;
 pub(in crate::adapters) mod _custom_endpoint;
 pub(in crate::adapters) mod _dropped_ordinals;
+pub(in crate::adapters) mod _file_constants;
 pub(in crate::adapters) mod _files_direct_problem;
 pub(in crate::adapters) mod _footer_rows;
 pub(in crate::adapters) mod _kept_row_ids;

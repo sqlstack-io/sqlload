@@ -24,3 +24,13 @@ pub const STREAMS_PER_BATCH: usize = 4;
 
 /// The most bytes one append request carries, under the Storage Write API's 10 MB request limit.
 pub const APPEND_REQUEST_BYTES: usize = 9 * 1024 * 1024;
+
+/// Why BigQuery doesn't load a files table's Parquet in GCS itself while the table keeps `_sqlload_source_row`: BigQuery's own reads never say where in its file a row was.
+pub const ROW_NUMBER_REASON: &str =
+    "BigQuery doesn't report a row's position in its file, so it can't fill _sqlload_source_row";
+
+/// The name the query that loads a batch's files in GCS gives the temporary external table over them.
+pub const GCS_FILES_TABLE: &str = "_sqlload_files";
+
+/// The types BigQuery reads a Parquet decimal as, the first that holds it: those SQLLoad's decimals load as, then text, which the cast to the column's type then refuses rather than round.
+pub const PARQUET_DECIMAL_TYPES: &[&str] = &["NUMERIC", "BIGNUMERIC", "STRING"];
