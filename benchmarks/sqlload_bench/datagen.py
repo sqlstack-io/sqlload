@@ -6,6 +6,7 @@ files scenarios. Python data is written as NDJSON and Parquet for the bytes and 
 """
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -143,23 +144,48 @@ def checksum(connection: duckdb.DuckDBPyConnection, kind: str, table: str) -> li
 	return ["" if value is None else str(value) for value in (row or ())]
 
 
-def generate(root: Path, seed: int, sizes: Sizes) -> Dataset:
-	"""Generate every dataset under `root/<seed>-<sizes>`; reused when already complete."""
+#: The parts of a dataset, each generated only when a selected scenario reads it: the Postgres tables
+#: (with their Parquet copies), the Parquet part files, the CSV and NDJSON files, and the Python rows.
+PARTS = ("pg", "files_parquet", "files_text", "python")
+
+
+def generate(root: Path, seed: int, sizes: Sizes, parts: tuple[str, ...] = PARTS) -> Dataset:
+	"""Generate `parts` of the dataset under `root/<seed>-<sizes>`; parts already there are reused."""
 	folder = root / f"seed{seed}-n{sizes.narrow}-w{sizes.wide}-f{sizes.flat}-j{sizes.nested}-x{sizes.files}"
 	dataset = Dataset(folder, seed, sizes)
-	if (folder / "expected.json").exists():
+	expected: dict[str, list[str]] = json.loads((folder / "expected.json").read_text()) if (folder / "expected.json").exists() else {}
+	# A dataset written before parts existed has every part.
+	done: list[str] = json.loads((folder / "parts.json").read_text()) if (folder / "parts.json").exists() else (list(PARTS) if expected else [])
+	missing = [part for part in parts if part not in done]
+	if not missing:
 		return dataset
 	for sub in ("pg", "files/parquet", "files/csv", "files/ndjson", "files/single", "python"):
 		(folder / sub).mkdir(parents=True, exist_ok=True)
 	connection = duckdb.connect()
 	connection.execute("SET TimeZone = 'UTC'; SET preserve_insertion_order = true;")
 	connection.execute(MIX_MACRO.format(seed=seed))
-	n, a = sizes.narrow, sizes.append
-	expected: dict[str, list[str]] = {}
 
 	def write(select: str, target: Path, options: str) -> None:
 		connection.execute(f"COPY ({select}) TO '{target}' ({options})")
 
+	for part in missing:
+		{"pg": _write_tables, "files_parquet": _write_parquet_parts, "files_text": _write_text_files, "python": _write_python}[part](
+			folder, seed, sizes, write, connection, expected
+		)
+		done.append(part)
+		(folder / "expected.json").write_text(json.dumps(expected, indent=1))
+		(folder / "parts.json").write_text(json.dumps(done))
+	connection.close()
+	(folder / "sizes.json").write_text(json.dumps(asdict(sizes)))
+	return dataset
+
+
+_Write = Callable[[str, Path, str], None]
+
+
+def _write_tables(folder: Path, seed: int, sizes: Sizes, write: _Write, connection: duckdb.DuckDBPyConnection, expected: dict[str, list[str]]) -> None:
+	"""The narrow, appended and wide rows as Parquet, and as headerless CSV for Postgres `COPY`."""
+	n, a = sizes.narrow, sizes.append
 	write(NARROW_SELECT.format(start=1, stop=n + 1), folder / "narrow.parquet", "FORMAT parquet")
 	write(NARROW_SELECT.format(start=n + 1, stop=n + a + 1), folder / "narrow_append.parquet", "FORMAT parquet")
 	write(WIDE_SELECT.format(start=1, stop=sizes.wide + 1), folder / "wide.parquet", "FORMAT parquet")
@@ -171,32 +197,42 @@ def generate(root: Path, seed: int, sizes: Sizes) -> Dataset:
 	)
 	expected["wide"] = checksum(connection, "wide", f"'{folder / 'wide.parquet'}'")
 
+
+def _write_parquet_parts(folder: Path, seed: int, sizes: Sizes, write: _Write, connection: duckdb.DuckDBPyConnection, expected: dict[str, list[str]]) -> None:
+	"""The files scenarios' rows as Parquet parts."""
+	for start, stop, part in _file_parts(sizes):
+		write(NARROW_SELECT.format(start=start, stop=stop), folder / "files/parquet" / f"part-{part:03d}.parquet", "FORMAT parquet")
+	expected["files"] = checksum(connection, "narrow", f"'{folder / 'files/parquet'}/*.parquet'")
+
+
+def _file_parts(sizes: Sizes) -> list[tuple[int, int, int]]:
+	"""Each part file's first id, the id after its last, and its number."""
 	part_rows = -(-sizes.files // FILE_PARTS)
+	bounds = [(1 + part * part_rows, min(1 + (part + 1) * part_rows, sizes.files + 1), part) for part in range(FILE_PARTS)]
+	return [bound for bound in bounds if bound[0] < bound[1]]
+
+
+def _write_text_files(folder: Path, seed: int, sizes: Sizes, write: _Write, connection: duckdb.DuckDBPyConnection, expected: dict[str, list[str]]) -> None:
+	"""The files scenarios' rows as CSV and NDJSON parts, and as one file of each."""
 	text_select = (
 		"SELECT id, customer_name, strftime(created_at, '%Y-%m-%dT%H:%M:%SZ') AS created_at, amount, is_active, quantity "
 		"FROM ({select})"
 	)
-	for part in range(FILE_PARTS):
-		start, stop = 1 + part * part_rows, min(1 + (part + 1) * part_rows, sizes.files + 1)
-		if start >= stop:
-			break
+	for start, stop, part in _file_parts(sizes):
 		select = NARROW_SELECT.format(start=start, stop=stop)
-		write(select, folder / "files/parquet" / f"part-{part:03d}.parquet", "FORMAT parquet")
 		write(text_select.format(select=select), folder / "files/csv" / f"part-{part:03d}.csv", "FORMAT csv, HEADER true")
 		write(text_select.format(select=select), folder / "files/ndjson" / f"part-{part:03d}.ndjson", "FORMAT json")
 	whole = text_select.format(select=NARROW_SELECT.format(start=1, stop=sizes.files + 1))
 	write(whole, folder / "files/single/narrow.csv", "FORMAT csv, HEADER true")
 	write(whole, folder / "files/single/narrow.ndjson", "FORMAT json")
-	expected["files"] = checksum(connection, "narrow", f"'{folder / 'files/parquet'}/*.parquet'")
 
+
+def _write_python(folder: Path, seed: int, sizes: Sizes, write: _Write, connection: duckdb.DuckDBPyConnection, expected: dict[str, list[str]]) -> None:
+	"""The Python scenarios' rows, and their checksums."""
 	_write_python_data(folder, seed, sizes)
 	expected["flat"] = checksum(connection, "flat", f"read_json('{folder / 'python/flat.ndjson'}', format='newline_delimited')")
 	expected["nested"] = [str(sizes.nested), str(sizes.nested * (sizes.nested + 1) // 2)]
 	expected["nested_lines"] = [str(pydata.nested_lines(sizes.nested, seed))]
-	connection.close()
-	(folder / "sizes.json").write_text(json.dumps(asdict(sizes)))
-	(folder / "expected.json").write_text(json.dumps(expected, indent=1))
-	return dataset
 
 
 def _write_python_data(folder: Path, seed: int, sizes: Sizes) -> None:

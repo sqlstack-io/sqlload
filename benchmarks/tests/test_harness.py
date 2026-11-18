@@ -58,6 +58,21 @@ def test_given_generated_data_when_checksumming_each_format_then_parquet_csv_and
 	assert dataset.first_appended_at() > "2026-01-01T00:00:00Z"
 
 
+def test_given_only_the_parquet_part_when_generating_then_nothing_else_is_written_and_a_later_part_fills_in(tmp_path: Path) -> None:
+	sizes = datagen.SIZES["tiny"]
+	dataset = datagen.generate(tmp_path, 5, sizes, ("files_parquet",))
+	assert sorted(path.name for path in dataset.path("files", "parquet").glob("*.parquet"))[0] == "part-000.parquet"
+	assert not any(dataset.path("pg").iterdir()) and not any(dataset.path("files", "csv").iterdir())
+	assert not dataset.path("python", "flat.ndjson").exists()
+	full = datagen.generate(tmp_path / "full", 5, sizes)
+	assert dataset.expected("files") == full.expected("files")
+	datagen.generate(tmp_path, 5, sizes, ("pg",))
+	assert dataset.expected("narrow") == full.expected("narrow")
+	assert dataset.path("pg", "narrow.csv").exists()
+	assert BY_NAME["files_snowflake"].data == ("files_parquet",)
+	assert BY_NAME["pg_snowflake"].data == ("pg",)
+
+
 def test_given_a_process_tree_when_measured_then_cpu_of_children_and_peak_memory_are_counted(tmp_path: Path) -> None:
 	script = "import subprocess, sys; subprocess.run([sys.executable, '-c', 'x = bytearray(200 << 20); sum(range(3_000_000))'])"
 	done = run([sys.executable, "-c", script], cwd=tmp_path, env={}, log=tmp_path / "log")
