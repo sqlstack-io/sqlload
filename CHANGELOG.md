@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.1](https://github.com/sqlstack-io/sqlload/compare/v0.72.0...v0.72.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **files:** name the fixes when two files of a folder hold one replace_key value ([#334](https://github.com/sqlstack-io/sqlload/issues/334)) ([be4b739](https://github.com/sqlstack-io/sqlload/commit/be4b7394691ad2089ee61295dbf75fcb1466a62e))
+
 ## [0.72.0](https://github.com/sqlstack-io/sqlload/compare/v0.71.1...v0.72.0) (2026-11-18)
 
 
