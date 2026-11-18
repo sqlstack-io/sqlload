@@ -162,7 +162,7 @@ fn group_statement(
 }
 
 /// The rows a `COPY INTO`'s `result` reports it inserted.
-fn inserted_rows(result: &SqlRows) -> Result<u64, LoaderError> {
+pub(in crate::adapters) fn inserted_rows(result: &SqlRows) -> Result<u64, LoaderError> {
     let reported = result
         .columns
         .iter()

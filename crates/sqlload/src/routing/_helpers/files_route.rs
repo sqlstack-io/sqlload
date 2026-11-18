@@ -91,7 +91,7 @@ pub(crate) fn other_reads(
 }
 
 /// Why `writer` refuses `files` it cannot read where they lie, when it reads such files only itself.
-fn must_pull(writer: &WriterAccepts, files: &FileSet) -> Option<String> {
+pub(crate) fn must_pull(writer: &WriterAccepts, files: &FileSet) -> Option<String> {
     writer
         .must_pull
         .as_ref()

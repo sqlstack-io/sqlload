@@ -468,10 +468,7 @@ pub(crate) fn unload_readers_for(
         same_connection: false,
     };
     use crate::snowflake_source::_helpers::catalog::source_column;
-    let column = match test_case.times {
-        true => source_column("at", "TIME(9)", true),
-        false => source_column("id", "NUMBER(38,0)", true),
-    };
+    let column = source_column("c", test_case.column_type, true);
     unload_blocked(
         test_case.warehouse,
         (test_case.masks, &[column]),
