@@ -375,7 +375,7 @@ fn held_types(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
 }
 
 /// The columns a staging table holds, as the staged rows carry them: JSON and UUIDs as text; also the columns that write a table of `held_types` on with no cast.
-fn staged_as_text(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
+pub(in crate::adapters) fn staged_as_text(columns: &[DesiredColumn]) -> Vec<DesiredColumn> {
     columns
         .iter()
         .cloned()

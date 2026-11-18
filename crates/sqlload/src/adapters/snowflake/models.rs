@@ -4,8 +4,10 @@ use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, SnowflakeConfig};
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{DataFile, FilesEncoding, SourceFormat, StoredRead};
+use crate::load_naming::models::Compat;
 use crate::loader::errors::LoaderError;
 use crate::parquet_parts::models::PartWriter;
+use crate::postgres_source::models::ReadColumn;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::models::DesiredColumn;
 use crate::sql_api::models::SqlClient;
@@ -109,6 +111,29 @@ pub struct CopyStaged<'a> {
     pub names: &'a [String],
     /// The columns to fill by a `SELECT`, for a table holding JSON the files carry as text (`PARSE_JSON`); `None` loads by column name.
     pub selected: Option<&'a [DesiredColumn]>,
+}
+
+/// The `COPY`s of one batch of a Snowflake source's unloaded files: the table they fill and its columns, the files' read columns, the batch's own values, and where the files are.
+pub struct UnloadedCopy<'a> {
+    pub into: &'a TableName,
+    pub columns: &'a [DesiredColumn],
+    pub read: &'a [ReadColumn],
+    /// The table's `constant_columns`: name, type and value as text.
+    pub constants: &'a [(String, ColumnType, String)],
+    pub compat: Compat,
+    /// The batch, from 1.
+    pub batch: u64,
+    pub load_id: &'a str,
+    /// The load time as an ISO 8601 UTC timestamp.
+    pub loaded_at: &'a str,
+    /// The stage as SQL, `@"DB"."SCHEMA"."STAGE"`.
+    pub stage: &'a str,
+    /// The unload's folder below the stage, ending in `/`.
+    pub folder: &'a str,
+    /// Each file's key below `folder`.
+    pub keys: &'a [String],
+    /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key.
+    pub filename_prefix: &'a str,
 }
 
 /// Where one staged file goes on an internal stage.
