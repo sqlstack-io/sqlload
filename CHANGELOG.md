@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.70.4](https://github.com/sqlstack-io/sqlload/compare/v0.70.3...v0.70.4) (2026-11-18)
+
+
+### Documentation
+
+* home page hero with tabs of real sqlload output ([#321](https://github.com/sqlstack-io/sqlload/issues/321)) ([479d475](https://github.com/sqlstack-io/sqlload/commit/479d4756eaa83ceacb0a0ee2fd7588635e435961))
+* lead the README with the home page's message and its systems table ([#324](https://github.com/sqlstack-io/sqlload/issues/324)) ([cdf989a](https://github.com/sqlstack-io/sqlload/commit/cdf989aaa361a78fdf0b37592546764f0a80964a))
+
 ## [0.70.3](https://github.com/sqlstack-io/sqlload/compare/v0.70.2...v0.70.3) (2026-11-18)
 
 
