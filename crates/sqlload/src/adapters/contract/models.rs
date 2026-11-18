@@ -283,17 +283,26 @@ pub struct DirectBatch<'a> {
     pub source_folder: Option<&'a OpenFolder>,
 }
 
-/// One unload's files the destination loads by reading them itself: times and timestamps held as whole microseconds, every other column as the type it is read as.
+/// A warehouse source's rows the destination loads itself, without SQLLoad seeing them: times and timestamps held as whole microseconds, every other column as the type it is read as.
 #[derive(Debug, Clone, Copy)]
 pub struct UnloadedBatch<'a> {
-    pub files: &'a UnloadedFiles,
-    /// The columns the files hold, as they are read.
+    pub source: UnloadedSource<'a>,
+    /// The columns the rows hold, as they are read.
     pub read: &'a [ReadColumn],
     /// The table's columns as the load writes them.
     pub write_columns: &'a [DesiredColumn],
     pub target: WriteTarget<'a>,
     /// The load time as an ISO 8601 UTC timestamp, written to every row.
     pub loaded_at: &'a str,
+}
+
+/// Where the destination reads an unloaded batch's rows.
+#[derive(Debug, Clone, Copy)]
+pub enum UnloadedSource<'a> {
+    /// One unload's files, which it reads itself.
+    Files(&'a UnloadedFiles),
+    /// The unload's query, which it runs itself in the source's own session.
+    Query(&'a str),
 }
 
 /// A query a check before publish runs on a relation; each returns its values as text.

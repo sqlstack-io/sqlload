@@ -170,7 +170,7 @@ Errors (1)
 							<div class="step-text">
 								<span class="num">02 · Load</span>
 								<h3>Bulk copy, not row inserts</h3>
-								<p>Files in S3 load into Snowflake straight from an external stage. Parquet loads into DuckDB through DuckDB's own reader. Rows are staged as Parquet and copied in bulk.</p>
+								<p>Files in S3 load into Snowflake straight from an external stage. Parquet loads into DuckDB through DuckDB's own reader. Snowflake tables load into Snowflake on the same connection, or through an external stage that covers the unload, without leaving Snowflake. Rows are staged as Parquet and copied in bulk.</p>
 								<p class="more"><a href="/docs/targets/">Load methods and routes →</a></p>
 							</div>
 <pre class="terminal"><span class="cmd">sqlload plan</span>

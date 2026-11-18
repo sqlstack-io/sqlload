@@ -4,8 +4,10 @@ use crate::column_types::models::ColumnType;
 use crate::config::models::{AuthConfig, SnowflakeConfig};
 use crate::file_store::models::OpenFolder;
 use crate::files_source::models::{DataFile, FilesEncoding, SourceFormat, StoredRead};
+use crate::load_naming::models::Compat;
 use crate::loader::errors::LoaderError;
 use crate::parquet_parts::models::PartWriter;
+use crate::postgres_source::models::ReadColumn;
 use crate::project::models::MaskMethod;
 use crate::schema_plan::models::DesiredColumn;
 use crate::sql_api::models::SqlClient;
@@ -109,6 +111,48 @@ pub struct CopyStaged<'a> {
     pub names: &'a [String],
     /// The columns to fill by a `SELECT`, for a table holding JSON the files carry as text (`PARSE_JSON`); `None` loads by column name.
     pub selected: Option<&'a [DesiredColumn]>,
+}
+
+/// One batch of a Snowflake source's rows loaded inside Snowflake: the table they fill and its columns, the source's read columns, the batch's own values, and where the rows come from.
+#[derive(Debug)]
+pub struct UnloadedLoad<'a> {
+    pub into: &'a TableName,
+    pub columns: &'a [DesiredColumn],
+    pub read: &'a [ReadColumn],
+    /// The table's `constant_columns`: name, type and value as text.
+    pub constants: &'a [(String, ColumnType, String)],
+    pub compat: Compat,
+    /// The batch, from 1.
+    pub batch: u64,
+    pub load_id: &'a str,
+    /// The load time as an ISO 8601 UTC timestamp.
+    pub loaded_at: &'a str,
+    pub from: UnloadedFrom<'a>,
+}
+
+/// Where a batch loaded inside Snowflake reads the source's rows, each read column under its own name, times and timestamps as whole microseconds.
+#[derive(Debug)]
+pub enum UnloadedFrom<'a> {
+    /// The unload's Parquet files.
+    Files {
+        /// The stage as SQL, `@"DB"."SCHEMA"."STAGE"`.
+        stage: &'a str,
+        /// The unload's folder below the stage, ending in `/`.
+        folder: &'a str,
+        /// Each file's key below `folder`.
+        keys: &'a [String],
+        /// What `METADATA$FILENAME` starts each file's name with: the folder's bucket-relative key.
+        filename_prefix: &'a str,
+    },
+    /// The query the unload would run, selected in the same session.
+    Query(&'a str),
+}
+
+/// Which rows one statement of a batch loaded inside Snowflake reads: the unload's files `keys`, the `first`th file on, or the query.
+#[derive(Debug, Clone, Copy)]
+pub enum UnloadedRows<'a> {
+    Files(usize, &'a [String]),
+    Query,
 }
 
 /// Where one staged file goes on an internal stage.
