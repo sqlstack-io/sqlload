@@ -8,10 +8,10 @@
   <sub>by <a href="https://sqlstack.io">SQLStack</a></sub>
 </p>
 
-<h2 align="center">The fastest open-source data loader.</h2>
+<h2 align="center">Loads you can trust.</h2>
 
 <p align="center">
-  <strong>Up to 2.3× faster than ingestr and 150× faster than dlt. 10 million Parquet rows into DuckDB in 3.2 seconds.</strong> <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
+  <strong>Exact types. Loud failures. Bounded memory.</strong>
   <br>
   <a href="https://sqlload.io">Website</a> ·
   <a href="https://sqlload.io/docs/">Docs</a> ·
@@ -21,10 +21,11 @@
 
 Load Postgres, files, Snowflake, BigQuery, Google Sheets and Python sources into your warehouse.
 SQLLoad is Rust and Arrow end to end, and when your warehouse reads the files itself, rows never
-pass through SQLLoad, so there's no loader bottleneck as your data grows.
+pass through SQLLoad, so there's no loader bottleneck as your data grows. It's fast, too: up to
+2.3× faster than ingestr in the [benchmarks](https://sqlload.io/docs/benchmarks/).
 
 ```bash
-uv tool install sqlload        # or: pip install sqlload
+pip install sqlload        # or: uv tool install sqlload
 ```
 
 <p align="center">
@@ -85,27 +86,18 @@ versions and how to run them yourself.
 
 | System | Source | Target |
 |---|---|---|
-| Postgres | ✓ (incl. CDC) | ✓ |
+| Postgres | ✓ (incl. [CDC](https://sqlload.io/docs/sources/postgres-cdc/)) | ✓ |
 | Snowflake | ✓ | ✓ |
-| BigQuery | ✓ | ✓ |
-| Databricks | | ✓ |
-| ClickHouse | | ✓ one self-hosted server¹ |
+| BigQuery (beta) | ✓ | ✓ |
+| Databricks (beta) | ✓ | ✓ |
+| ClickHouse | | ✓ |
 | DuckDB | | ✓ |
-| MotherDuck | | beta² |
-| SQL Server, MySQL, MariaDB, OpenEdge and other databases through ODBC³ | ✓ | |
-| Files | ✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through `pattern` (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
+| MotherDuck (beta) | | ✓ |
+| ODBC | ✓ SQL Server, MySQL, OpenEdge | |
+| Files | ✓ Parquet, CSV, JSON, Excel, XML | ✓ Parquet, CSV |
 | Google Sheets | ✓ | |
-| HTTP APIs and Python | ✓ | |
-| Kafka | ✓ into Snowflake, Databricks or BigQuery, through the Kafka exporter | |
-
-¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
-distributed tables. ClickHouse Cloud is untested.
-
-² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
-
-³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB
-Connector/ODBC and OpenEdge are checked by hand. Another driver works when it describes prepared
-statements and lists tables: `sqlload plan` shows what it reports.
+| APIs, Python | ✓ | |
+| Kafka | ✓ to Snowflake, Databricks, BigQuery | |
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.
