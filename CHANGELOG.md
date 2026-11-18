@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.69.0](https://github.com/sqlstack-io/sqlload/compare/v0.68.0...v0.69.0) (2026-11-18)
+
+
+### Features
+
+* **exporter:** export Kafka topics to BigQuery ([#300](https://github.com/sqlstack-io/sqlload/issues/300)) ([c001276](https://github.com/sqlstack-io/sqlload/commit/c0012765e4baa0b46bd79d157115967793a9c5ab))
+
+
+### Bug Fixes
+
+* **loader:** load stops before writing when the memory budget holds no table ([#307](https://github.com/sqlstack-io/sqlload/issues/307)) ([8c85c26](https://github.com/sqlstack-io/sqlload/commit/8c85c262f0383defddaed963e5628b70bd8e7346))
+
 ## [0.68.0](https://github.com/sqlstack-io/sqlload/compare/v0.67.0...v0.68.0) (2026-11-18)
 
 
