@@ -105,3 +105,10 @@ this gives the same values as SQLLoad's own reader.
   [CSV encodings](/docs/sources/files/#csv-encodings).
 
 Files are never read and re-uploaded by SQLLoad otherwise.
+
+## Snowflake sources into Snowflake
+
+A [Snowflake source](/docs/sources/snowflake/) loads into this target without its rows passing
+through SQLLoad: with one `INSERT ... SELECT` when the target writes through the source's own
+connection, or a `COPY` from the target's external stage when the source unloads inside it. See
+[Snowflake loads the rows itself](/docs/sources/snowflake/#snowflake-loads-the-rows-itself).
