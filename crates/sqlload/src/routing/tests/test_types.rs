@@ -16,3 +16,11 @@ pub(crate) struct PlanRouteErrorTestCase {
     pub(crate) overrides: RouteOverrides,
     pub(crate) expected_message: &'static str,
 }
+
+pub(crate) struct PlanRouteReasonTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) reader: ReaderOffer,
+    pub(crate) writer: WriterAccepts,
+    /// How the route's reason starts.
+    pub(crate) expected_reason: &'static str,
+}

@@ -10,6 +10,8 @@ pub enum RouteError {
         warehouse: &'static str,
         location: String,
     },
+    #[error("{location} {reason}")]
+    Uncovered { location: String, reason: String },
     #[error("the destination cannot load these files exactly by reading them itself: {0}")]
     DirectRefused(String),
     #[error("stage = \"{wanted}\" was requested, but the destination has no {wanted} stage")]

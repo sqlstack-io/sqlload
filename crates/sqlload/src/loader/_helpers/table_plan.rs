@@ -19,6 +19,7 @@ use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
+use crate::adapters::dispatch::main::route::list_reach::list_reach;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
 use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
@@ -894,7 +895,7 @@ async fn plan_table_once(
         .extend(truncated_nanoseconds(spec, live.as_deref()));
     let route = match schema.blocked {
         Some(_) => None,
-        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
+        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination).await {
             Ok(route) => Some(route),
             Err(problem) => {
                 schema = blocked_plan(vec![problem]);
@@ -1204,14 +1205,22 @@ fn copy_warning(route: Option<&Route>) -> Option<String> {
     ))
 }
 
-/// The route a table's data takes into `destination`; `read` is a files table's planned read.
-pub(crate) fn table_route(
+/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3 that nothing sends through SQLLoad, it first looks up where the destination reads files itself (Databricks' external locations).
+pub(crate) async fn table_route(
     spec: &TableSpec,
     read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
     destination: &Destination,
 ) -> Result<Route, String> {
     let reader = reader_offer(spec, read, stage);
+    let in_place = reader.needs_loader.is_none() && reader.direct_blocked.is_none();
+    if let Some(files) = spec.files.as_ref().filter(|_| in_place)
+        && let StoreKind::S3 { .. } = files.location.store
+    {
+        let folder = files.location.to_string();
+        let holds_files = read.is_some_and(|read| !read.files.is_empty());
+        list_reach(destination, holds_files.then_some(folder.as_str())).await?;
+    }
     plan_route(
         &reader,
         &writer_accepts(destination, stage),

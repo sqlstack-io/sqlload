@@ -41,5 +41,6 @@ pub(in crate::adapters) fn connect_databricks(
         catalog: catalog.unwrap_or(own_catalog).to_owned(),
         volume: volume_path(volume),
         ddl: Arc::default(),
+        external_locations: Arc::default(),
     })
 }

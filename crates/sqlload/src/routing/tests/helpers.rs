@@ -60,6 +60,7 @@ pub(crate) fn warehouse_destination(staging: Vec<Store>) -> WriterAccepts {
         rows_into: None,
         reads_files_itself: Some("Snowflake"),
         copies_files_to: Some(user_stage()),
+        must_pull: None,
     }
 }
 
@@ -73,6 +74,22 @@ pub(crate) fn clickhouse_destination() -> WriterAccepts {
         rows_into: None,
         reads_files_itself: None,
         copies_files_to: None,
+        must_pull: None,
+    }
+}
+
+/// Databricks: Parquet files in its volume, which SQLLoad stages, or in S3 under its one external location (the lake), which it reads in place; Parquet in S3 elsewhere it refuses.
+pub(crate) fn databricks_destination() -> WriterAccepts {
+    let volume = Store::InternalStage("/Volumes/main/raw/stage".to_owned());
+    WriterAccepts {
+        pulls_from: vec![volume.clone(), object_store(LAKE)],
+        pull_formats: vec![FileFormat::Parquet],
+        staging: vec![volume],
+        must_pull: Some((
+            object_store("s3://"),
+            "cannot be read by Databricks: no Unity Catalog external location covers it".to_owned(),
+        )),
+        ..WriterAccepts::default()
     }
 }
 
@@ -96,6 +113,7 @@ pub(crate) fn local_destination() -> WriterAccepts {
         rows_into: None,
         reads_files_itself: None,
         copies_files_to: None,
+        must_pull: None,
     }
 }
 

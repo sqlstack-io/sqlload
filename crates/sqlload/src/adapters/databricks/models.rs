@@ -17,6 +17,8 @@ pub struct DatabricksDestination {
     pub volume: String,
     /// Held while a load's tables change the schema, one at a time.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
+    /// The URLs (each ending in `/`) of the Unity Catalog external locations it reads files through, listed once, at plan, when a table's files are in S3.
+    pub external_locations: Arc<tokio::sync::OnceCell<Vec<String>>>,
 }
 
 /// One table's write session on Databricks: Parquet parts uploaded to the volume, then loaded by `COPY INTO`.

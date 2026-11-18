@@ -20,3 +20,17 @@ pub(crate) struct RenderedTestCase {
     pub(crate) rendered: String,
     pub(crate) expected_statement: &'static str,
 }
+
+pub(crate) struct CopyGroupsTestCase {
+    pub(crate) description: &'static str,
+    /// Each file's name and its columns, by name and type.
+    pub(crate) files: Vec<(&'static str, Vec<(&'static str, arrow_schema::DataType)>)>,
+    pub(crate) limit: usize,
+    pub(crate) expected_groups: Vec<Vec<&'static str>>,
+}
+
+pub(crate) struct LocationUrlTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) url: &'static str,
+    pub(crate) expected_url: &'static str,
+}

@@ -104,6 +104,8 @@ pub struct WriterAccepts {
     pub reads_files_itself: Option<&'static str>,
     /// Where files the destination cannot reach are uploaded unchanged for `copy_to_internal_stage`.
     pub copies_files_to: Option<Store>,
+    /// Files of `pull_formats` in this store it reads only itself, with why one `pulls_from` doesn't cover is refused and the fix: they never go through SQLLoad, unless `ReaderOffer::needs_loader` or `direct_blocked` says why they must.
+    pub must_pull: Option<(Store, String)>,
 }
 
 /// How a warehouse source is read.

@@ -1,4 +1,4 @@
-use crate::adapters::duckdb::_helpers::direct_checks::custom_endpoint;
+use crate::adapters::contract::main::_custom_endpoint::custom_endpoint;
 use crate::adapters::duckdb::_helpers::pull_sql::{default_region, s3_secret};
 use crate::adapters::duckdb::tests::test_types::{AwsVariablesTestCase, S3SecretTestCase};
 use crate::store_paths::models::StoreKind;

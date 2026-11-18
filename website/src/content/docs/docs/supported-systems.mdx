@@ -29,7 +29,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |-------------|------------------|------------------|
 | Snowflake | `append`, `merge`, `delete_insert`, `replace` | Parquet staged on an external, user, table or named stage, then `COPY`; or Snowpipe Streaming, or `INSERT`, by `load_method`. Files under an external stage load with `COPY` directly. |
 | BigQuery (beta) | `append`, `merge`, `delete_insert`, `replace` | Arrow streamed through the Storage Write API into a staging table, then one query job per write. See [BigQuery](/docs/targets/bigquery/). |
-| Databricks (beta) | `append`, `merge`, `delete_insert`, `replace` | Parquet staged in a Unity Catalog volume, then `COPY INTO`; one statement per write. Files of a files source pass through SQLLoad. |
+| Databricks (beta) | `append`, `merge`, `delete_insert`, `replace` | Parquet in S3 copied where it lies through a Unity Catalog external location; everything else staged as Parquet in a volume, then `COPY INTO`; one statement per write. |
 | ClickHouse, one self-hosted server | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. No clusters, replicated or distributed tables; ClickHouse Cloud is untested. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
