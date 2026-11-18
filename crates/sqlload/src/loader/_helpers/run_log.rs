@@ -856,18 +856,18 @@ pub(crate) fn with_file_keys(
         }
     }
     let columns = table.spec.replace_key.join(", ");
+    let this = merged_name(file);
+    let this = this.strip_prefix(location.as_str()).unwrap_or(this);
     if let Some((value, first)) = split.first() {
         let more = match split.len() {
             1 => String::new(),
             count => format!(" (and {} more)", count - 1),
         };
         return Err(format!(
-            "it holds the replace_key ({columns}) value ({value}){more}, which {first} also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each ({columns}) value in one file, or remove whichever of the two files is outdated from the folder"
+            "it holds the replace_key ({columns}) value ({value}){more}, which {first} also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if {this} restates {first}, remove {first} from the folder, by hand or with after_load = \"delete\" or after_load = {{ move_to = ... }}, which take each file out of the folder once it loads"
         ));
     }
-    let name = merged_name(file);
-    let name = name.strip_prefix(location.as_str()).unwrap_or(name);
-    earlier.extend(values.iter().map(|value| (value.clone(), name.to_owned())));
+    earlier.extend(values.iter().map(|value| (value.clone(), this.to_owned())));
     Ok(earlier)
 }
 
@@ -960,7 +960,7 @@ pub(crate) fn listed_sources(
     let this = this.strip_prefix(location.as_str()).unwrap_or(this);
     let columns = table.spec.replace_key.join(", ");
     Err(format!(
-        "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each ({columns}) value in one file, or remove the outdated file, {first} or {this}, from the folder"
+        "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if {this} restates {first}, remove {first} from the folder, by hand or with after_load = \"delete\" or after_load = {{ move_to = ... }}, which take each file out of the folder once it loads"
     ))
 }
 
