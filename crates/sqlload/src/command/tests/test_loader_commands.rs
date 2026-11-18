@@ -2,6 +2,7 @@ use crate::command::tests::helpers::{debug_without_host, run_without_host};
 use crate::command::tests::test_types::{
     ExitCodeTestCase, FolderOverlapTestCase, LoaderCommandTestCase, PlanFailureTestCase,
 };
+use clap::Parser;
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
 const NO_LOAD_METHOD: &str = "[connections.wh]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"D\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
@@ -228,4 +229,15 @@ fn given_a_failure_a_rerun_may_pass_when_loading_then_it_exits_75_and_says_so_el
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_tables_help_when_rendered_then_it_names_every_warehouse_the_exporter_writes_to() {
+    let help = match crate::command::models::Cli::try_parse_from(["sqlload", "tables", "--help"]) {
+        Ok(_) => String::new(),
+        Err(error) => error.to_string(),
+    };
+    for destination in ["Snowflake", "Databricks", "BigQuery"] {
+        assert!(help.contains(destination), "{destination}: {help}");
+    }
 }

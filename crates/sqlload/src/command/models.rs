@@ -37,7 +37,7 @@ pub enum Command {
     },
     /// Show what `apply` and `load` would do (exporter: each topic's table and objects).
     Plan(LoaderArgs),
-    /// Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without Snowflake.
+    /// Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without connecting to Snowflake, Databricks or BigQuery.
     Tables {
         /// Read topic names, one per line, from this file instead of Kafka.
         #[arg(long)]

@@ -12,7 +12,7 @@ Usage: sqlload [OPTIONS] <COMMAND>
 Commands:
   debug         Validate the configuration and test every connection
   plan          Show what `apply` and `load` would do (exporter: each topic's table and objects)
-  tables        Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without Snowflake
+  tables        Print `topic<TAB>table<TAB>stream<TAB>group` per topic (`-` when skipped), without connecting to Snowflake, Databricks or BigQuery
   apply         Create or change tables (exporter: create missing tables, stages and pipes); never loads data
   load          Load the selected tables of a loader project
   run           Export until stopped
