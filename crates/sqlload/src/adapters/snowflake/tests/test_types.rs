@@ -120,3 +120,15 @@ pub(crate) struct UnloadedSqlTestCase {
     /// Text the last statement holds.
     pub(crate) expected_last: &'static str,
 }
+
+/// Whether Snowflake loads a Snowflake source's unloaded files itself.
+pub(crate) struct UnloadBlockedTestCase {
+    pub(crate) description: &'static str,
+    /// Where the source unloads: an `s3://` folder, `@stage`, or `None` for the user stage.
+    pub(crate) unload_to: Option<&'static str>,
+    /// Whether the target loads through the external stage on `s3://lake/raw/`; otherwise its user stage.
+    pub(crate) external: bool,
+    pub(crate) masks: bool,
+    /// The reason SQLLoad reads the files instead, or `None` when Snowflake loads them itself.
+    pub(crate) expected_blocked: Option<&'static str>,
+}
