@@ -36,3 +36,6 @@ pub const BEGIN_STATEMENT: &str = "BEGIN";
 
 /// The statement committing a transaction.
 pub const COMMIT_STATEMENT: &str = "COMMIT";
+
+/// Ends a transaction, undoing it.
+pub const ROLLBACK_STATEMENT: &str = "ROLLBACK";

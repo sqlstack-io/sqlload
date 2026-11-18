@@ -35,7 +35,6 @@ use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::ColumnType;
 use crate::commit_spool::main::free_bytes::free_bytes;
 use crate::commit_spool::main::held_estimate::held_estimate;
-use crate::commit_spool::main::held_rows::held_rows;
 use crate::commit_spool::models::Spool;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::OpenFolder;
@@ -63,6 +62,7 @@ use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::models::{Compat, MetadataRole};
 use crate::loader::_helpers::destination::files_read_as;
 use crate::loader::_helpers::destination::nanosecond_columns;
+use crate::loader::_helpers::destination::{commit_mode, deletes_range, piece_mode};
 use crate::loader::_helpers::destination::{give_back, keep_in_background, leased_folder};
 use crate::loader::_helpers::python::list_choices;
 use crate::loader::_helpers::python::live_child_tables;
@@ -106,6 +106,7 @@ use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
 use crate::loader::models::FilesSource;
 use crate::loader::models::FolderSwap;
+use crate::loader::models::Pieces;
 use crate::loader::models::Publisher;
 use crate::loader::models::ReplacedKeys;
 use crate::loader::models::RunEntry;
@@ -115,6 +116,7 @@ use crate::loader::models::TablePlan;
 use crate::loader::models::TransformRun;
 use crate::loader::models::{LoadRun, PlanOptions};
 use crate::masking::main::mask_batch::mask_batch;
+use crate::memory_budget::constants::TABLE_SHARE_PARTS;
 use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
@@ -172,7 +174,7 @@ fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
 }
 
 /// Where the batches go, from the publisher's fields: `staging` when there is one, and `columns` as the staged batches carry them.
-fn write_target<'a>(
+pub(in crate::loader) fn write_target<'a>(
     table: &'a TablePlan,
     staging: Option<&'a TableName>,
     columns: &'a [DesiredColumn],
@@ -631,7 +633,7 @@ impl Publisher {
         let spool = holds_commits(&table)
             .then(|| room_to_hold(&table, options.batch_bytes.unwrap_or(BATCH_BYTES)))
             .transpose()?;
-        Ok(Self {
+        let publisher = Self {
             children,
             writer,
             at_end,
@@ -669,7 +671,10 @@ impl Publisher {
             rebuild,
             transform: None,
             spool,
-        })
+            pieces: Pieces::default(),
+        };
+        publisher.create_marker_table().await?;
+        Ok(publisher)
     }
 
     /// Stage one batch of the source's rows (masked, with the load's metadata added); `state` is a Python table's `ctx.state` when its last row crossed.
@@ -776,17 +781,7 @@ impl Publisher {
         if self.files.is_some() {
             return self.stage_files(batch).await;
         }
-        if let Some(spool) = self.spool.as_mut() {
-            return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
-        }
-        let columns = staged_columns(&self.table);
-        let target = write_target(
-            &self.table,
-            self.staging.as_ref(),
-            &columns,
-            ((&self.load_id, self.batch), (self.direct, self.builds)),
-        );
-        self.writer.write_batch(&target, batch).await
+        self.write_rows(batch).await
     }
 
     /// A `table_progress` event for the batch being read, with the rows so far, at most once per `PROGRESS_EVERY`; a batch's end reports it anyway (see [`Self::flush_batch`]).
@@ -853,12 +848,14 @@ impl Publisher {
 
     /// The end of the read: the last batch is loaded and everything waiting commits (`replace` swaps the staging table in, `--reload` rebuilds the table from it, and a `delete_insert` read of no rows still clears its range, since its rows were deleted upstream); a logged table records `state`, where its function left `ctx.state`, even without rows; a swapped-in or rebuilt table gets its description as its comment again (a table refilled in place keeps its own), where a failure only warns, as its rows are already in.
     pub(crate) async fn finish(&mut self, state: Option<String>) -> Result<u64, LoaderError> {
+        self.stopped()?;
+        self.finish_pieces().await?;
         self.flush_batch().await?;
         if state.is_some() {
             self.state = state;
         }
         let empty_range = self.commits == 0
-            && deletes_range(&self.table)
+            && deletes_range(&self.table.mode)
             && !matches!(self.table.commits, CommitRule::Windows(_));
         let pending = self.waiting_rows > 0
             || (self.waiting_range.is_some() && self.files.is_none())
@@ -866,7 +863,8 @@ impl Publisher {
             || empty_range
             || matches!(&self.table.mode, WriteMode::Changes(change) if change.truncated.is_some())
             || matches!(self.table.mode, WriteMode::MarkMissing(_))
-            || self.leftover_deletes();
+            || self.leftover_deletes()
+            || self.pieces.unfinished;
         if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
                 (&self.table, (&self.load_id, &self.loaded_at)),
@@ -901,6 +899,11 @@ impl Publisher {
         {
             tracing::warn!(table = %spec.destination.table, %error, "the swapped-in table kept no description: setting its comment failed");
         }
+        if !self.child
+            && let Err(error) = self.writer.checkpoint(self.pieces.large > 0).await
+        {
+            tracing::warn!(table = %spec.destination.table, %error, "the table loaded, but DuckDB's checkpoint after it failed: raise memory_limit, or lower batch_size, before the next load");
+        }
         Ok(self.committed_rows)
     }
 
@@ -911,6 +914,7 @@ impl Publisher {
             Box::pin(children.close()).await;
         }
         self.abandon_files().await;
+        self.abandon_pieces().await;
         if let Some(sink) = self.files.as_mut() {
             if let Some((stop, renewal)) = sink.keeper.take() {
                 drop(stop);
@@ -985,6 +989,12 @@ impl Publisher {
             true if self.direct => Box::pin(self.send_held()).await?,
             true => {}
             false => {
+                if self.batch_rows > 0 && (self.direct || self.builds) {
+                    let into = (self.staging.clone())
+                        .unwrap_or_else(|| self.table.spec.destination.clone());
+                    let group = self.check_row_group(&into).await?;
+                    self.pieces.group = group.or(self.pieces.group);
+                }
                 let columns = staged_columns(&self.table);
                 let target = write_target(
                     &self.table,
@@ -999,6 +1009,9 @@ impl Publisher {
                 self.writer.settle_rows().await?;
                 self.writer.load_batch(&target).await?;
                 self.writer.next_batch();
+                if self.direct || self.builds {
+                    self.pieces.held = 0;
+                }
             }
         }
         match self.direct {
@@ -1106,73 +1119,6 @@ impl Publisher {
         Ok(())
     }
 
-    /// Send what `send = "at_commit"` held, in one burst: each held batch written and loaded where it would have gone as it was read, its files removed as they go.
-    pub(crate) async fn send_held(&mut self) -> Result<(), LoaderError> {
-        let held = match self.spool.as_mut() {
-            Some(spool) => spool.take(),
-            None => return Ok(()),
-        };
-        for held in held {
-            Box::pin(self.send_files((held.batch, &held.files), true)).await?;
-        }
-        Ok(())
-    }
-
-    /// Write the rows held in `files` to batch `batch`, removing each file once written, and when `loads` load the batch and start the next; a batch that fails has its staged files removed.
-    async fn send_files(
-        &mut self,
-        (batch, files): (u64, &[std::path::PathBuf]),
-        loads: bool,
-    ) -> Result<(), LoaderError> {
-        let columns = staged_columns(&self.table);
-        let target = write_target(
-            &self.table,
-            self.staging.as_ref(),
-            &columns,
-            ((&self.load_id, batch), (self.direct, self.builds)),
-        );
-        let sent = 'send: {
-            for file in files {
-                let reader = match held_rows(file) {
-                    Ok(reader) => reader,
-                    Err(error) => break 'send Err(LoaderError::Invalid(error)),
-                };
-                for rows in reader {
-                    let rows = match rows {
-                        Ok(rows) => rows,
-                        Err(error) => break 'send Err(LoaderError::Invalid(error.to_string())),
-                    };
-                    if let Err(error) = self.writer.write_batch(&target, rows).await {
-                        break 'send Err(error);
-                    }
-                }
-                let _ = std::fs::remove_file(file);
-            }
-            if !loads {
-                break 'send Ok(());
-            }
-            if let Err(error) = self.writer.finish_files(&target).await {
-                break 'send Err(error);
-            }
-            if let Err(error) = self.writer.settle_rows().await {
-                break 'send Err(error);
-            }
-            self.writer.load_batch(&target).await
-        };
-        match sent {
-            Ok(()) => {
-                if loads {
-                    self.writer.next_batch();
-                }
-                Ok(())
-            }
-            Err(error) => {
-                self.writer.remove_batch_files(&target).await;
-                Err(error)
-            }
-        }
-    }
-
     /// Note what a direct batch did; a batch that is not yet committed waits for `cut`.
     pub(crate) fn note_direct(&mut self, loaded: &DirectLoaded) {
         match loaded {
@@ -1186,7 +1132,8 @@ impl Publisher {
     }
 
     /// Apply the write strategy to the waiting rows in one transaction, with a logged table's record and the emptying of the staging table for the next batches.
-    async fn commit(&mut self, last: bool) -> Result<(), LoaderError> {
+    pub(in crate::loader) async fn commit(&mut self, last: bool) -> Result<(), LoaderError> {
+        self.stopped()?;
         if self.files.is_some() {
             self.waiting_range = None;
             if let Some(children) = &mut self.children {
@@ -1208,13 +1155,22 @@ impl Publisher {
             return Ok(());
         };
         let spec = &self.table.spec;
-        let mode = commit_mode(&self.table.mode, self.waiting_range.take());
+        let mode = match self.pieces.piece {
+            true => piece_mode(&self.table.mode),
+            false => commit_mode(&self.table.mode, self.waiting_range.take()),
+        };
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_file.is_some();
         let file = self.merged_file.clone();
-        let ran = commit_transform(&self.table, self.transform.as_mut());
-        let mut merged = self.merged_file.take().map(|file| {
+        let (ran, taken) = match self.pieces.piece {
+            true => (None, None),
+            false => (
+                commit_transform(&self.table, self.transform.as_mut()),
+                self.merged_file.take(),
+            ),
+        };
+        let mut merged = taken.map(|file| {
             let record = (file, self.waiting_rows);
             with_transform(
                 &self.table,
@@ -1223,6 +1179,7 @@ impl Publisher {
         });
         let held = self.rebuild.as_ref().and_then(|_| merged.take());
         let record = match (&self.run, merged) {
+            _ if self.pieces.piece => None,
             (Some(_), _) => {
                 let record = self.record(self.waiting_rows)?;
                 Some(with_transform(&self.table, record))
@@ -1234,10 +1191,10 @@ impl Publisher {
             .map(|record| insert_run(&runs, &record, warehouse).map_err(LoaderError::Invalid))
             .transpose()?;
         let spec = &self.table.spec;
-        let target = self
-            .rebuild
-            .as_ref()
-            .map_or(&spec.destination, |rebuild| &rebuild.build);
+        let target = (self.rebuild.as_ref())
+            .map_or(&spec.destination, |rebuild| &rebuild.build)
+            .clone();
+        let target = &target;
         let statements = sql_adapter(warehouse).render_commit(
             &WriteStatementsRequest {
                 table: target,
@@ -1245,6 +1202,10 @@ impl Publisher {
                 mode: &mode,
                 hashed: &[],
                 built: self.builds.then_some(self.indexes.as_slice()),
+                spared_load: (self.pieces.committed > 0).then_some((
+                    metadata_name(spec.compat, MetadataRole::LoadId),
+                    self.load_id.as_str(),
+                )),
             },
             &staging,
             (run_insert, self.at_end),
@@ -1332,7 +1293,7 @@ impl Publisher {
             true => ddl_guard(&self.destination).await,
             false => None,
         };
-        execute(&self.destination, guarded).await?;
+        self.execute_checked(guarded, (target, last)).await?;
         if let Some(rebuild) = self.rebuild.as_mut() {
             rebuild.records.extend(held);
         }
@@ -1342,7 +1303,7 @@ impl Publisher {
         if let Some(replaced) = replaced {
             self.replaced = Some(ReplacedKeys::added(self.replaced.take(), replaced));
         }
-        self.committed_state = self.state.clone();
+        self.end_commit(last);
         self.settled_files.append(&mut self.fed_files);
         Ok(())
     }
@@ -1553,17 +1514,6 @@ async fn snapshot(reader: &SourceReader, statement: &str) -> Result<(), LoaderEr
     }
 }
 
-/// Whether the table's commits delete a cursor range (`delete_insert` with a cursor), so its last range commits even without rows: rows deleted upstream go too.
-fn deletes_range(table: &TablePlan) -> bool {
-    matches!(
-        table.mode,
-        WriteMode::DeleteInsert {
-            cursor_column: Some(_),
-            ..
-        }
-    )
-}
-
 /// The cursor value at row `index` of `values` as cursor text, where an ordered read's commit ends.
 fn cut_value(values: &dyn Array, index: usize, cursor_type: &ColumnType) -> Result<String, String> {
     let formatter = ArrayFormatter::try_new(values, &FormatOptions::default())
@@ -1573,31 +1523,6 @@ fn cut_value(values: &dyn Array, index: usize, cursor_type: &ColumnType) -> Resu
         cursor_type,
         chrono_tz::Tz::UTC,
     )
-}
-
-/// The write mode of one commit: the planned one, with a `delete_insert` narrowed to the commit's window or partitions (its `replace_key` kept).
-fn commit_mode(planned: &WriteMode, range: Option<CommitRange>) -> WriteMode {
-    let narrowed = match range {
-        Some(CommitRange::Window { from, to }) => (from, to, Vec::new()),
-        Some(CommitRange::Values(values)) if !values.is_empty() => (None, None, values),
-        _ => return planned.clone(),
-    };
-    match planned {
-        WriteMode::DeleteInsert {
-            cursor_column,
-            replace_key,
-            not_null_keys,
-            ..
-        } => WriteMode::DeleteInsert {
-            cursor_column: cursor_column.clone(),
-            from: narrowed.0,
-            to: narrowed.1,
-            values: narrowed.2,
-            replace_key: replace_key.clone(),
-            not_null_keys: not_null_keys.clone(),
-        },
-        planned => planned.clone(),
-    }
 }
 
 /// Load a table's rows from `reader` commit by commit, as its plan cuts them; a failure stops the table there, keeping what committed before. A table whose source has rows with a NULL cursor, which its read would skip, fails first (see [`null_cursor_rows`]).
@@ -1682,7 +1607,13 @@ async fn feed(
     mut publisher: Publisher,
     (run, transform): (&LoadRun<'_>, Option<&TransformRun>),
 ) -> (Publisher, Result<u64, LoaderError>) {
-    let batch_bytes = run.options.batch_bytes;
+    let part = (run.project.memory.budget.as_ref()).map(|budget| {
+        usize::try_from(budget.table_share / TABLE_SHARE_PARTS).unwrap_or(usize::MAX)
+    });
+    let batch_bytes = match (run.options.batch_bytes, part) {
+        (Some(set), Some(part)) => Some(set.min(part)),
+        (set, part) => set.or(part),
+    };
     let fed = async {
         match &table.commits {
             CommitRule::Windows(windows) if window_concurrency(table) > 1 => {
@@ -1813,7 +1744,7 @@ async fn feed(
                     Ok(())
                 })
                 .await?;
-                if deletes_range(table) {
+                if deletes_range(&table.mode) {
                     let to = table.window.as_ref().and_then(|window| window.to.clone());
                     publisher
                         .cut(CommitRange::Window { from: cut_from, to })
@@ -1847,7 +1778,7 @@ async fn feed(
                     ..ReadPart::default()
                 };
                 publisher.pass_part(reader, part).await?;
-                if deletes_range(table) {
+                if deletes_range(&table.mode) {
                     publisher.cut(CommitRange::Planned).await?;
                 }
             }

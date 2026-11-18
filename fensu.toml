@@ -94,17 +94,22 @@ reason = "ZerobusLink holds the Zerobus Ingest SDK and stream, which implement n
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL303"
 path = "Cargo.toml"
-reason = "unsafe_code is deny, not forbid, so that the one Windows call reading the process's peak working set (GetProcessMemoryInfo, crates/sqlload/src/peak_memory/_helpers/windows.rs) may allow it; no maintained crate wraps it safely. Every crate root but sqlload's still forbids unsafe code."
+reason = "unsafe_code is deny, not forbid, so that the Windows and macOS calls reading the process's memory and the limits on it (crates/sqlload/src/peak_memory/_helpers/windows.rs and macos.rs) may allow it; no maintained crate wraps them safely. Every crate root but sqlload's still forbids unsafe code."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSH012"
 path = "crates/sqlload/src/lib.rs"
-reason = "The library denies unsafe code rather than forbidding it, as forbid cannot be lifted for the Windows peak-memory helper below it; deny still refuses unsafe everywhere else."
+reason = "The library denies unsafe code rather than forbidding it, as forbid cannot be lifted for the Windows and macOS memory helpers below it; deny still refuses unsafe everywhere else."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSH013"
 path = "crates/sqlload/src/peak_memory/_helpers/windows.rs"
-reason = "Reading the process's peak working set on Windows needs GetProcessMemoryInfo, an unsafe FFI call no maintained crate wraps safely; this Windows-only module of one function is the crate's only unsafe."
+reason = "Reading the process's memory and its job object's and the machine's memory limits on Windows needs GetProcessMemoryInfo, OpenProcess, IsProcessInJob, QueryInformationJobObject and GlobalMemoryStatusEx, unsafe FFI calls no maintained crate wraps safely; this Windows-only module and the macOS one are the crate's only unsafe."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSH013"
+path = "crates/sqlload/src/peak_memory/_helpers/macos.rs"
+reason = "Reading what a process holds resident on macOS needs proc_pidinfo, an unsafe FFI call no maintained crate wraps safely without generating bindings at build time; this macOS-only module of one function and the Windows one are the crate's only unsafe."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSH005"

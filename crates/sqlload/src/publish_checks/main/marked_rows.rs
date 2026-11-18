@@ -17,6 +17,7 @@ pub async fn marked_rows(commit: &CheckedCommit<'_>, mark: &MarkWrite) -> Result
         mode: &mode,
         hashed: &[],
         built: None,
+        spared_load: None,
     };
     let [marked, unmarked] =
         sql_adapter(commit.warehouse).render_marked_counts(&request, mark, commit.staging);

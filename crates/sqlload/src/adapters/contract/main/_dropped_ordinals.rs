@@ -40,6 +40,7 @@ pub(in crate::adapters) fn dropped_ordinals<A: SqlAdapter + ?Sized>(
         mode: request.mode,
         hashed: request.hashed,
         built: request.built,
+        spared_load: request.spared_load,
     };
     let source = adapter.render_qualified_name(staging);
     let (kept, _) = ranked_source(adapter, &widened, (&source, &values), false)?;

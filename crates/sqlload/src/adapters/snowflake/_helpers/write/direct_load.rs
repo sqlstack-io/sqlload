@@ -225,6 +225,7 @@ impl SnowflakeWriter {
                             mode,
                             hashed,
                             built: None,
+                            spared_load: None,
                         },
                         from,
                         (None, true),

@@ -19,12 +19,6 @@ impl SqlAdapter for DuckDbSql {
         Warehouse::DuckDb
     }
 
-    fn memory_note(&self) -> Option<&'static str> {
-        Some(
-            "DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit",
-        )
-    }
-
     fn max_identifier_length(&self) -> Option<usize> {
         Some(65536)
     }

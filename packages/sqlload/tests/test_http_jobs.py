@@ -64,6 +64,7 @@ class Api(BaseHTTPRequestHandler):
 			"/v1/ahead": self.ahead,
 			"/v1/ahead_short": self.ahead,
 			"/v1/ahead_end": self.ahead_end,
+			"/v1/ahead_wide": self.ahead,
 			"/v1/refuse_once": self.refuse_once,
 			"/v1/pages": self.page_number,
 			"/v1/cursor": self.cursor,
@@ -246,7 +247,8 @@ class Api(BaseHTTPRequestHandler):
 	def ahead(self, query: dict[str, str]) -> None:
 		"""Offset pages of the orders for reading ahead, logging each request's offset and arrival in `self.server.ahead` and each answer's offset
 		in `ahead_answered`, with the most requests open at once in `most_open`. Offset 2 answers slowly, so the pages after it answer first;
-		offset 4 answers 503 the first time; on `/v1/ahead_short` offset 4 holds one row, so the paging ends there although offset 6 has more."""
+		offset 4 answers 503 the first time; on `/v1/ahead_short` offset 4 holds one row, so the paging ends there although offset 6 has more;
+		on `/v1/ahead_wide` each order carries a 20 MiB note."""
 		server = self.server
 		start, limit = int(query["offset"]), int(query["limit"])
 		with server.ahead_lock:  # type: ignore[attr-defined]
@@ -260,7 +262,10 @@ class Api(BaseHTTPRequestHandler):
 				server.ahead_failed = True  # type: ignore[attr-defined]
 				return self.reply(503, {}, {"Retry-After": "0"})
 			short = self.path.startswith("/v1/ahead_short") and start == 4
-			self.reply(200, ORDERS[start : start + (1 if short else limit)])
+			rows = ORDERS[start : start + (1 if short else limit)]
+			if self.path.startswith("/v1/ahead_wide"):
+				rows = [{**row, "note": "x" * (20 << 20)} for row in rows]
+			self.reply(200, rows)
 		finally:
 			with server.ahead_lock:  # type: ignore[attr-defined]
 				server.open -= 1  # type: ignore[attr-defined]
@@ -926,6 +931,18 @@ def test_given_read_ahead_when_later_pages_answer_first_and_one_is_retried_then_
 	assert answered.index(4) < answered.index(2) and answered.index(6) < answered.index(2), answered
 	assert [start for start, _ in api.ahead].count(4) == 2  # type: ignore[attr-defined]
 	assert 2 <= api.most_open <= 3, api.most_open  # type: ignore[attr-defined]
+
+
+def test_given_read_ahead_under_a_memory_budget_when_pages_are_larger_than_a_quarter_of_the_tables_share_then_one_page_is_requested_at_a_time(
+	tmp_path: Path, api: ThreadingHTTPServer
+) -> None:
+	# At a 1000MB budget, DuckDB's 488 MiB leaves the tables under 512 MiB, so each table's share is under 128 MiB and a quarter of it,
+	# what the pages requested ahead may hold, is under the two 20 MiB pages that a second request in flight would add.
+	project = make_project(tmp_path, api, "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/ahead_wide', paginator=sl.offset(limit=1, read_ahead=3))\n")
+	done = sqlload(project, "load", "--memory-limit", "1000MB")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert query(project, 'SELECT count(*), min(length(note)) FROM "RAW".shop__t') == [(len(ORDERS), 20 << 20)]
+	assert api.most_open == 1, api.most_open  # type: ignore[attr-defined]
 
 
 def test_given_read_ahead_and_a_rate_limit_when_loading_then_every_request_waits_its_turn(tmp_path: Path, api: ThreadingHTTPServer) -> None:

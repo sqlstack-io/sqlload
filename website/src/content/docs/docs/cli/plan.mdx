@@ -45,6 +45,7 @@ selects a table by name, since that table could be one of its own.
 | `--sync-deletes` | From 0.54.0. After each selected table with `deletes` merges, read every key of its source and mark its rows of the keys the source no longer holds. Fails when no selected table sets `deletes`. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
+| `--memory-limit <SIZE>` | From 0.68.0. The memory the run stays under, such as `4GiB`. Default: the project's `memory_limit`. See [Memory budget](/docs/cli/load/#memory-budget). |
 | `--memory-per-table` | From 0.52.0, Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |
 | `-v`, `--verbose` | From 0.58.0. Print every line of the plan: each table's source, route and memory lines and the defaults it follows, each column of a new table, and every connection's and discovery's own line. See [Reading a plan](#reading-a-plan). |
 | `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
@@ -140,8 +141,7 @@ Loads (1)                                           sqlload load
     ├── key     order_id, the primary key the source reports (unique_key = "{primary_key}", sqlload.toml:22)
     ├── reads   updated_at >= 2026-11-02 08:04:00.000+00 (warehouse maximum)
     ├── columns 5
-    ├── commits once, at the end of the read (updated_at isn't read in order)
-    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
+    └── commits once, at the end of the read (updated_at isn't read in order)
 
 ✓ Plan complete  1 selected, 1 to load
 ```

@@ -58,17 +58,32 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             replace_key,
             ..
         } => {
+            let spared = |table: &str| {
+                request.spared_load.map(|(column, load_id)| {
+                    format!(
+                        "{table}{} IS DISTINCT FROM {}",
+                        adapter.render_identifier(column),
+                        adapter.render_loader_value_literal(load_id)
+                    )
+                })
+            };
             let range = match (cursor_column, adapter.render_replaced_rows(request)) {
                 (None, _) => None,
-                (Some(_), Some(condition)) => {
-                    Some(format!("DELETE FROM {target} WHERE {condition}"))
+                (Some(_), condition) => {
+                    let conditions: Vec<String> = condition.into_iter().chain(spared("")).collect();
+                    Some(match conditions.is_empty() {
+                        true => format!("DELETE FROM {target}"),
+                        false => format!("DELETE FROM {target} WHERE {}", conditions.join(" AND ")),
+                    })
                 }
-                (Some(_), None) => Some(format!("DELETE FROM {target}")),
             };
             let keyed = (!replace_key.is_empty()).then(|| {
                 let (keys, join) = replaced_keys(adapter, request, &values, replace_key);
+                let spared = spared("__target.")
+                    .map(|condition| format!(" AND {condition}"))
+                    .unwrap_or_default();
                 format!(
-                    "DELETE FROM {target} AS __target USING (SELECT DISTINCT {keys} FROM {source}) AS __source WHERE {join}"
+                    "DELETE FROM {target} AS __target USING (SELECT DISTINCT {keys} FROM {source}) AS __source WHERE {join}{spared}"
                 )
             });
             range.into_iter().chain(keyed).collect()
