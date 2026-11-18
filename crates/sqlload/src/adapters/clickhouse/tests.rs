@@ -12,3 +12,5 @@ mod pull;
 mod rows;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_unloaded.rs"]
+mod unloaded;
