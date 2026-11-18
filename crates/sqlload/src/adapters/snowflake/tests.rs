@@ -20,5 +20,7 @@ mod stale_folders;
 mod step_failure;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_unload_blocked.rs"]
+mod unload_blocked;
 #[path = "tests/test_unloaded_sql.rs"]
 mod unloaded_sql;

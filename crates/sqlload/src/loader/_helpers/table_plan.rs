@@ -1082,7 +1082,12 @@ pub(crate) fn reader_offer(
         );
     let direct_blocked = match unload_to.is_empty() {
         true => direct_blocked,
-        false => unload_blocked(spec),
+        false => unload_blocked(
+            spec.warehouse,
+            !spec.masked.columns.is_empty(),
+            spec.warehouse_source.as_ref().map(|source| &source.route),
+            stage,
+        ),
     };
     ReaderOffer {
         arrow: unload_to.is_empty(),
