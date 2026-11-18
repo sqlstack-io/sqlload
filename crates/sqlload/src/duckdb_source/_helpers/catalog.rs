@@ -59,9 +59,7 @@ pub(crate) fn catalog_tables(
     }
     for row in keys {
         if let Some(table) = tables.get_mut(&(text(row, 0), text(row, 1))) {
-            table.primary_key = serde_json::from_str(&text(row, 2)).map_err(|error| {
-                DuckDbSourceError::Invalid(format!("{}'s primary key: {error}", table.name))
-            })?;
+            table.primary_key.push(text(row, 2));
         }
     }
     Ok(tables.into_values().collect())

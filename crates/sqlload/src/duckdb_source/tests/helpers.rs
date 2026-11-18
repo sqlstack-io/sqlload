@@ -68,7 +68,12 @@ pub(crate) fn write_when_asked() {
         written.map_or_else(
             |error| format!(
                 "the file was {}: {error}",
-                ["not opened", "locked"][usize::from(error.to_string().contains("lock"))]
+                // DuckDB says "lock" on Unix; on Windows the lock is a sharing violation.
+                ["not opened", "locked"][usize::from(
+                    ["lock", "being used by another process"]
+                        .iter()
+                        .any(|said| error.to_string().contains(said))
+                )]
             ),
             |()| "the file was written".to_owned()
         )

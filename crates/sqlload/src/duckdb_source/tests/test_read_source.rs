@@ -4,7 +4,9 @@ use arrow_cast::display::array_value_to_string;
 use arrow_select::concat::concat_batches;
 
 use crate::column_types::models::ColumnType;
-use crate::duckdb_source::_helpers::connection::open_read_only;
+use crate::duckdb_source::_helpers::catalog::catalog_tables;
+use crate::duckdb_source::_helpers::connection::{TextRows, open_read_only};
+use crate::duckdb_source::constants::CATALOG_QUERIES;
 use crate::duckdb_source::main::duckdb_reader::duckdb_reader;
 use crate::duckdb_source::main::read_catalog::read_catalog;
 use crate::duckdb_source::main::read_columns::read_columns;
@@ -14,8 +16,8 @@ use crate::duckdb_source::tests::helpers::{
     SHOP, runtime, shop_project, write_from_another_process, write_when_asked,
 };
 use crate::duckdb_source::tests::test_types::{
-    LockedFileTestCase, ReadCatalogTestCase, ReadRowsTestCase, RefusedReaderTestCase,
-    SharedLimitTestCase,
+    LockedFileTestCase, PrimaryKeyTestCase, ReadCatalogTestCase, ReadRowsTestCase,
+    RefusedReaderTestCase, SharedLimitTestCase,
 };
 
 #[test]
@@ -48,6 +50,77 @@ fn given_a_duckdb_file_when_listing_its_catalog_then_include_and_exclude_pick_ta
         let names: Vec<String> = tables.iter().map(|table| table.qualified_name()).collect();
         assert_eq!(
             names, test_case.expected_tables,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_duckdb_without_extensions_when_listing_its_catalog_then_every_query_answers_and_keys_keep_their_order()
+-> Result<(), String> {
+    let config = duckdb::Config::default()
+        .with("autoinstall_known_extensions", "false")
+        .and_then(|config| config.with("autoload_known_extensions", "false"))
+        .map_err(|error| error.to_string())?;
+    let connection =
+        duckdb::Connection::open_in_memory_with_flags(config).map_err(|error| error.to_string())?;
+    connection
+        .execute_batch(&format!(
+            "{SHOP} CREATE TABLE sales.pairs (a INTEGER, b INTEGER, c INTEGER, PRIMARY KEY (c, a));"
+        ))
+        .map_err(|error| error.to_string())?;
+    let mut answers: Vec<TextRows> = Vec::new();
+    for query in CATALOG_QUERIES {
+        let mut statement = connection
+            .prepare(query)
+            .map_err(|error| format!("{query}: {error}"))?;
+        let width = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..width)
+                    .map(|index| row.get::<_, Option<String>>(index))
+                    .collect()
+            })
+            .and_then(Iterator::collect)
+            .map_err(|error| format!("{query}: {error}"))?;
+        answers.push(rows);
+    }
+    let tables = catalog_tables(&answers, (&["sales.*".to_owned()], &[]))
+        .map_err(|error| error.to_string())?;
+    let test_cases = [
+        PrimaryKeyTestCase {
+            description: "a one-column key",
+            table: "sales.orders",
+            expected_key: &["id"],
+        },
+        PrimaryKeyTestCase {
+            description: "a key declared out of column order keeps its declared order",
+            table: "sales.pairs",
+            expected_key: &["c", "a"],
+        },
+        PrimaryKeyTestCase {
+            description: "a table without a key",
+            table: "sales.tmp_scratch",
+            expected_key: &[],
+        },
+    ];
+    for test_case in test_cases {
+        let key = tables
+            .iter()
+            .find(|table| table.qualified_name() == test_case.table)
+            .map(|table| table.primary_key.clone());
+        assert_eq!(
+            key.as_deref(),
+            Some(
+                test_case
+                    .expected_key
+                    .iter()
+                    .map(|column| (*column).to_owned())
+                    .collect::<Vec<_>>()
+                    .as_slice()
+            ),
             "{}",
             test_case.description
         );

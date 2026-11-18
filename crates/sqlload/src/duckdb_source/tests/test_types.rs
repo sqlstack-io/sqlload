@@ -17,6 +17,14 @@ pub(crate) struct ReadCatalogTestCase {
     pub(crate) expected_tables: &'static [&'static str],
 }
 
+/// The primary key the catalog reports for one table, in key order.
+pub(crate) struct PrimaryKeyTestCase {
+    pub(crate) description: &'static str,
+    /// The table's qualified name as the catalog lists it.
+    pub(crate) table: &'static str,
+    pub(crate) expected_key: &'static [&'static str],
+}
+
 /// One read of a table or query table the shop source lists.
 pub(crate) struct ReadRowsTestCase {
     pub(crate) description: &'static str,
