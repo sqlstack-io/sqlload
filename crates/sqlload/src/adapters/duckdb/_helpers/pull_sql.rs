@@ -3,16 +3,21 @@
 use crate::adapters::contract::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS};
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
 use crate::adapters::duckdb::constants::UTC_OFFSET;
+use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::s3_keys::s3_keys;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
 use crate::load_naming::models::{Compat, MetadataRole};
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
+use crate::stage_api::models::AwsCredentials;
+use crate::store_paths::models::StoreKind;
 
 /// One file DuckDB reads: where it reads it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,9 +30,8 @@ pub(crate) struct PulledFile {
 pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[(String, String)]),
-    files: &[PulledFile],
+    (files, remote): (&[PulledFile], bool),
     (compat, load_id, loaded_at): (Compat, &str, &str),
-    remote: bool,
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -137,9 +141,8 @@ pub(crate) fn unloaded_insert(
         compat,
         batch,
     }: UnloadedColumns<'_>,
-    urls: &[String],
+    (urls, remote): (&[String], bool),
     (load_id, loaded_at): (&str, &str),
-    remote: bool,
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -257,4 +260,36 @@ pub(crate) fn default_region(variable: &dyn Fn(&str) -> Option<String>) -> Strin
     set("AWS_REGION")
         .or_else(|| set("AWS_DEFAULT_REGION"))
         .unwrap_or_else(|| "us-east-1".to_owned())
+}
+
+/// For files in S3, the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, for the bucket: in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved on this machine. `None` for files elsewhere.
+pub(crate) fn bucket_access(
+    store: &StoreKind,
+) -> Result<Option<(&'static str, (String, Vec<String>))>, DuckDbError> {
+    let StoreKind::S3 {
+        bucket,
+        region,
+        profile,
+        ..
+    } = store
+    else {
+        return Ok(None);
+    };
+    let keys = s3_keys(profile.as_deref())
+        .map_err(DuckDbError::Task)?
+        .map(secret_parameters);
+    let extensions = match keys {
+        Some(_) => "INSTALL httpfs; LOAD httpfs;",
+        None => "INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws;",
+    };
+    let region = region
+        .clone()
+        .unwrap_or_else(|| default_region(&environment_variable));
+    Ok(Some((extensions, s3_secret(bucket, region, keys.as_ref()))))
+}
+
+/// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.
+fn secret_parameters(keys: AwsCredentials) -> [String; 3] {
+    let token = keys.session_token.map(|token| token.0).unwrap_or_default();
+    [keys.key_id, keys.secret.0, token]
 }

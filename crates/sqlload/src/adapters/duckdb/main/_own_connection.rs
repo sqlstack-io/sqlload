@@ -59,5 +59,6 @@ pub(in crate::adapters) fn own_connection(
         memory: destination.memory,
         own_limit: destination.own_limit,
         unflushed: destination.unflushed.clone(),
+        secrets: destination.secrets.clone(),
     })
 }

@@ -21,6 +21,8 @@ pub struct DuckDbDestination {
     pub own_limit: Option<u64>,
     /// The bytes of large values committed to the database since its last checkpoint, which DuckDB holds in memory until then.
     pub unflushed: Arc<std::sync::atomic::AtomicU64>,
+    /// The bucket secrets set on the database, each as its statement and parameters, shared by every table's connection: tables setting one at the same time conflict, so each is set once, before a table opens its transaction, and again only when its keys change.
+    pub secrets: Arc<tokio::sync::Mutex<Vec<(String, Vec<String>)>>>,
 }
 
 /// Where a destination's SQL runs.

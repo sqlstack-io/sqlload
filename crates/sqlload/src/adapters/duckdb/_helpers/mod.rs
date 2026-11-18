@@ -9,8 +9,6 @@ pub(crate) mod motherduck_connection;
 #[cfg(feature = "duckdb")]
 pub(crate) mod pull_sql;
 #[cfg(feature = "duckdb")]
-pub(crate) mod s3_access;
-#[cfg(feature = "duckdb")]
 pub(crate) mod shared_destination;
 pub(crate) mod sql_adapter;
 #[cfg(feature = "duckdb")]

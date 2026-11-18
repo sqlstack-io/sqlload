@@ -51,5 +51,6 @@ pub(crate) fn open_motherduck(
         }),
         own_limit: None,
         unflushed: Arc::default(),
+        secrets: Arc::default(),
     })
 }
