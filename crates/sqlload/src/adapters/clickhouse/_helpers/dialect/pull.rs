@@ -81,7 +81,6 @@ pub(crate) fn pull_insert(
     (file, credentials): (&PulledFile, Option<&PullCredentials>),
     (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
-    let literal = |text: &str| ClickHouseSql.render_loader_value_literal(text);
     let identifier = |name: &str| ClickHouseSql.render_identifier(name);
     let cast = |value: String, column: &DesiredColumn| {
         format!("CAST({value} AS {})", sql_type(&column.column_type))
@@ -116,8 +115,26 @@ pub(crate) fn pull_insert(
         .iter()
         .map(|column| identifier(&column.name))
         .collect();
+    let numbered = columns
+        .iter()
+        .any(|column| column.name == SOURCE_ROW_COLUMN);
+    let settings = match numbered {
+        true => format!(" SETTINGS {ORDERED_READ_SETTINGS}"),
+        false => String::new(),
+    };
+    format!(
+        "INSERT INTO {into} ({}) SELECT {} FROM {}{settings}",
+        targets.join(", "),
+        values.join(", "),
+        s3_parquet(&file.url, credentials)
+    )
+}
+
+/// `s3()` reading the Parquet file at `url`, signed with `credentials` (named as [query parameters](credential_parameters)), or unsigned (`NOSIGN`) when there are none.
+pub(crate) fn s3_parquet(url: &str, credentials: Option<&PullCredentials>) -> String {
+    let literal = |text: &str| ClickHouseSql.render_loader_value_literal(text);
     let parameter = |name: &str| format!("{{{name}:String}}");
-    let mut signed = vec![literal(&file.url)];
+    let mut signed = vec![literal(url)];
     match credentials {
         Some(credentials) => {
             signed.extend([parameter(KEY_ID_PARAMETER), parameter(SECRET_PARAMETER)]);
@@ -131,19 +148,7 @@ pub(crate) fn pull_insert(
         None => signed.push("NOSIGN".to_owned()),
     }
     signed.push(literal("Parquet"));
-    let numbered = columns
-        .iter()
-        .any(|column| column.name == SOURCE_ROW_COLUMN);
-    let settings = match numbered {
-        true => format!(" SETTINGS {ORDERED_READ_SETTINGS}"),
-        false => String::new(),
-    };
-    format!(
-        "INSERT INTO {into} ({}) SELECT {} FROM s3({}){settings}",
-        targets.join(", "),
-        values.join(", "),
-        signed.join(", ")
-    )
+    format!("s3({})", signed.join(", "))
 }
 
 /// The HTTP URL ClickHouse reads `key` of `bucket` at: under `endpoint` by path when there is one (or with the bucket already in it, `in_endpoint`, for virtual-hosted requests to a custom endpoint), otherwise on AWS, in `region` when known, by virtual host unless the bucket's name holds a dot, which AWS's certificate does not cover. Each path segment is percent-encoded, which ClickHouse decodes before signing.

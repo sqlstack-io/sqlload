@@ -13,6 +13,8 @@ pub async fn load_unloaded(
         #[cfg(feature = "duckdb")]
         Writer::DuckDb(duckdb) => duckdb.pull_unloaded(batch).await.map(Some),
         Writer::Snowflake(snowflake) => snowflake.pull_unloaded(batch).await.map(Some),
+        Writer::ClickHouse(clickhouse) => clickhouse.pull_unloaded(batch).await.map(Some),
+        Writer::Databricks(databricks) => databricks.pull_unloaded(batch).await.map(Some),
         _ => Ok(None),
     }
 }

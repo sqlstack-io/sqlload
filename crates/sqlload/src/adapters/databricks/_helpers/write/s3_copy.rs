@@ -12,7 +12,7 @@ use crate::schema_plan::models::DesiredColumn;
 use arrow_schema::{Field, Schema};
 
 /// The path `COPY INTO` reads each row from, as SQLLoad names it: `_metadata.file_path` is percent-encoded, except for `+`, which `url_decode` alone would read as a space.
-const FILE_PATH: &str = "url_decode(replace(_metadata.file_path, '+', '%2B'))";
+pub(crate) const FILE_PATH: &str = "url_decode(replace(_metadata.file_path, '+', '%2B'))";
 
 /// One batch read from S3: the folder `COPY INTO` reads (`s3://bucket/prefix/`), and for each file its key below it and the values SQLLoad gives every row of it (`None` for NULL), by column.
 #[derive(Debug, Clone, PartialEq, Eq)]

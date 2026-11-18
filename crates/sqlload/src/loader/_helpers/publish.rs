@@ -23,6 +23,7 @@ use crate::adapters::dispatch::main::write::file_keys::file_keys;
 use crate::adapters::dispatch::main::write::load_files::load_files;
 use crate::adapters::dispatch::main::write::load_unloaded::load_unloaded;
 use crate::adapters::dispatch::main::write::open_table_writer::open_table_writer;
+use crate::adapters::dispatch::main::write::unloads_directly::unloads_directly;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::dispatch::models::Writer;
 use crate::adapters::files::models::ReplacedFiles;
@@ -168,9 +169,12 @@ use crate::loader::_helpers::table_plan::{
     added_constants, is_direct, pulls_unloaded, selects_rows,
 };
 
-/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
+/// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself), and, for an unload the destination reads itself, one that [loads it directly](unloads_directly).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
-    table.mode == WriteMode::Append && table.logged.is_none() && writer.writes_directly()
+    table.mode == WriteMode::Append
+        && table.logged.is_none()
+        && writer.writes_directly()
+        && (!pulls_unloaded(table.route.as_ref()) || unloads_directly(writer))
 }
 
 /// Where the batches go, from the publisher's fields: `staging` when there is one, and `columns` as the staged batches carry them.
@@ -1073,7 +1077,7 @@ impl Publisher {
         }
     }
 
-    /// Load one unload's files, or the rows its query selects, by having the destination read them itself, where the plan chose that; the destination must load them so.
+    /// Load one unload's files, or the rows its query selects, by having the destination read them itself, where the plan chose that; the destination must load them so. Each unload is a batch of its own, so its rows' merge ordinals follow every earlier window's even when they wait in one staging table.
     pub(crate) async fn load_unloaded(
         &mut self,
         source: UnloadedSource<'_>,
@@ -1100,6 +1104,7 @@ impl Publisher {
                 ))
             })?;
         self.note_direct(&loaded);
+        self.batch += 1;
         Ok(loaded)
     }
 

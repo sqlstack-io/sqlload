@@ -637,3 +637,53 @@ pub(crate) fn merge_newest() -> WriteMode {
         not_null_keys: Vec::new(),
     }
 }
+
+/// The spec of table `current` of a `snowflake` source with stage `url`, loading into DuckDB.
+pub(crate) fn unload_spec(url: &str) -> Result<TableSpec, String> {
+    let text = format!(
+        "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"D\"\n[sources.marts]\nkind = \"snowflake\"\nconnection = \"sf\"\nwrite_strategy = \"replace\"\nstage = {{ url = \"{url}\", storage_integration = \"I\" }}\n[sources.marts.tables.current]\ndescription = \"d\"\nsql = \"SELECT 1 AS id\"\n"
+    );
+    let project = crate::project::main::parse_project::parse_project(&text, &|_| None)
+        .map_err(|error| error.to_string())?;
+    let table = SourceTable {
+        schema: String::new(),
+        name: "current".to_owned(),
+        columns: vec![SourceColumn {
+            name: "id".to_owned(),
+            postgres_type: "NUMBER".to_owned(),
+            pg_type: crate::postgres_source::models::PgType::Other,
+            column_type: Ok(crate::column_types::models::ColumnType::Int),
+            nullable: true,
+            source_spelling: None,
+            repeat_of: None,
+        }],
+        primary_key: Vec::new(),
+        indexed_columns: Vec::new(),
+        estimated_rows: -1,
+        estimated_bytes: -1,
+        split_pages: None,
+        comment: None,
+        listed_keys: Vec::new(),
+    };
+    let resolved = resolve_tables(&project, "marts", &[table]);
+    resolved
+        .specs
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no spec: {:?}", resolved.problems))
+}
+
+/// The store a `snowflake` source with stage `url` unloads table `current` to, as Debug prints it (the whole route when it is no unload).
+pub(crate) fn unload_store(url: &str) -> Result<String, String> {
+    let spec = unload_spec(url)?;
+    let route = spec
+        .warehouse_source
+        .as_ref()
+        .map(|source| format!("{:?}", source.route))
+        .ok_or("no warehouse source")?;
+    Ok(route
+        .split(", stage: ")
+        .next()
+        .unwrap_or_default()
+        .replace("Unload { store: ", ""))
+}

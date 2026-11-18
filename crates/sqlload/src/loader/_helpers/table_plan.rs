@@ -1094,7 +1094,7 @@ pub(crate) fn reader_offer(
         true => direct_blocked,
         false => unload_blocked(
             spec.warehouse,
-            !spec.masked.columns.is_empty(),
+            (!spec.masked.columns.is_empty(), &spec.source_table.columns),
             route,
             stage,
         ),
@@ -1206,7 +1206,7 @@ fn copy_warning(route: Option<&Route>) -> Option<String> {
     ))
 }
 
-/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3 that nothing sends through SQLLoad, it first checks that the destination reaches them (Databricks' external locations, MotherDuck's servers).
+/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3, or an unload to S3, that nothing sends through SQLLoad, it first checks that the destination reaches them (Databricks' external locations, MotherDuck's servers).
 pub(crate) async fn table_route(
     spec: &TableSpec,
     read: Option<&FilesRead>,
@@ -1217,10 +1217,8 @@ pub(crate) async fn table_route(
     let refused = unload_refused(destination, &reader.unload_to);
     reader.direct_blocked = reader.direct_blocked.or(refused);
     let in_place = reader.needs_loader.is_none() && reader.direct_blocked.is_none();
-    if let Some(files) = spec.files.as_ref().filter(|_| in_place)
-        && let StoreKind::S3 { .. } = files.location.store
-    {
-        check_reach(destination, files, read).await?;
+    if in_place {
+        check_reach(destination, (spec.files.as_ref(), &reader.unload_to), read).await?;
     }
     plan_route(
         &reader,
@@ -1751,6 +1749,7 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
                 .filter(|known| spec.python.is_none() || **known != ColumnType::Text),
             now: chrono::Utc::now(),
             zone: spec.zone(),
+            most: spec.most_windows(),
         })?;
         return Ok(CommitRule::Windows(windows));
     }

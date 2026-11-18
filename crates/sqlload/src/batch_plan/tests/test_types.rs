@@ -10,6 +10,8 @@ pub(crate) struct SplitWindowsTestCase {
     pub(crate) cursor_type: Option<ColumnType>,
     /// The table's `timezone`, which a bound without an offset is read in while the cursor's type is unknown.
     pub(crate) zone: chrono_tz::Tz,
+    /// The most windows allowed.
+    pub(crate) most: u64,
     /// Each window as `from..to` (`(` when the start is not read), or the error.
     pub(crate) expected_windows: Result<&'static [&'static str], &'static str>,
 }

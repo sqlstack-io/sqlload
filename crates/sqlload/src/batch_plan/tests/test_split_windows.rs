@@ -1,3 +1,4 @@
+use crate::batch_plan::constants::MAX_WINDOWS;
 use crate::batch_plan::tests::helpers::{owned_windows, windows};
 use crate::batch_plan::tests::test_types::SplitWindowsTestCase;
 use crate::column_types::models::ColumnType;
@@ -16,11 +17,40 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::Date),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&[
                 "2026-11-03..2026-11-04",
                 "2026-11-04..2026-11-05",
                 "2026-11-05..2026-11-06",
             ]),
+        },
+        SplitWindowsTestCase {
+            description: "a read split into exactly the most windows allowed is kept",
+            from: Some("2026-11-03"),
+            to: None,
+            inclusive: true,
+            step: BatchStep::Duration(DAY),
+            cursor_type: Some(ColumnType::Date),
+            zone: chrono_tz::Tz::UTC,
+            most: 3,
+            expected_windows: Ok(&[
+                "2026-11-03..2026-11-04",
+                "2026-11-04..2026-11-05",
+                "2026-11-05..2026-11-06",
+            ]),
+        },
+        SplitWindowsTestCase {
+            description: "one window more than the most allowed is refused",
+            from: Some("2026-11-03"),
+            to: None,
+            inclusive: true,
+            step: BatchStep::Duration(DAY),
+            cursor_type: Some(ColumnType::Date),
+            zone: chrono_tz::Tz::UTC,
+            most: 2,
+            expected_windows: Err(
+                "batch_size splits the read into 3 windows, more than 2; use a larger batch_size, or narrow the read with --start-cursor/--end-cursor",
+            ),
         },
         SplitWindowsTestCase {
             description: "timestamp windows end now, the last one shorter",
@@ -30,6 +60,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::TimestampTz),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&["2026-11-04 12:00:00.000000+00..2026-11-05 10:30:00.000000+00"]),
         },
         SplitWindowsTestCase {
@@ -40,6 +71,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::TimestampNtz),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&[
                 "(2026-11-01 00:00:00.000000..2026-11-02 00:00:00.000000",
                 "2026-11-02 00:00:00.000000..2026-11-02 12:00:00.000000",
@@ -53,6 +85,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Integer(100),
             cursor_type: Some(ColumnType::Int),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&["0..100", "100..200", "200..250"]),
         },
         SplitWindowsTestCase {
@@ -63,6 +96,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: None,
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&["2026-11-04..2026-11-05", "2026-11-05..2026-11-06"]),
         },
         SplitWindowsTestCase {
@@ -73,6 +107,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: None,
             zone: chrono_tz::Tz::Europe__Paris,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&[
                 "2026-02-28 23:00:00.000000+00..2026-03-01 23:00:00.000000+00",
                 "2026-03-01 23:00:00.000000+00..2026-03-02 23:00:00.000000+00",
@@ -86,6 +121,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::Date),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Err(
                 "batch_size needs a start to split the cursor range: set cursor_start for the first load",
             ),
@@ -98,6 +134,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Integer(10),
             cursor_type: Some(ColumnType::Int),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Err(
                 "an integer batch needs --end-cursor to know where the last window ends, with --reload too (a Postgres source ends at its current maximum)",
             ),
@@ -110,6 +147,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(std::time::Duration::from_secs(3600)),
             cursor_type: Some(ColumnType::Date),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Err("a date cursor's batch_size must be whole days, not 1h"),
         },
         SplitWindowsTestCase {
@@ -120,6 +158,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(std::time::Duration::from_secs(60)),
             cursor_type: Some(ColumnType::TimestampTz),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Err(
                 "batch_size splits the read into 13675680 windows, more than 100000; use a larger batch_size, or narrow the read with --start-cursor/--end-cursor",
             ),
@@ -132,6 +171,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Integer(5),
             cursor_type: Some(ColumnType::Int),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Ok(&[]),
         },
         SplitWindowsTestCase {
@@ -142,6 +182,7 @@ fn given_a_cursor_range_when_splitting_by_batch_then_windows_cover_it_in_order()
             step: BatchStep::Duration(DAY),
             cursor_type: Some(ColumnType::Int),
             zone: chrono_tz::Tz::UTC,
+            most: MAX_WINDOWS,
             expected_windows: Err(
                 "a duration batch needs a date or timestamp cursor, but the cursor is int; give an integer step",
             ),

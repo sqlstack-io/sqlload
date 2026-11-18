@@ -38,6 +38,7 @@ pub(crate) fn windows(test_case: &SplitWindowsTestCase) -> Result<Vec<String>, S
         cursor_type: test_case.cursor_type.as_ref(),
         now: now(),
         zone: test_case.zone,
+        most: test_case.most,
     };
     let plan = split_windows(&split)?;
     (0..plan.count)

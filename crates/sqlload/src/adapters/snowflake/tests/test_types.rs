@@ -133,6 +133,16 @@ pub(crate) struct UnloadBlockedTestCase {
     pub(crate) expected_blocked: Option<&'static str>,
 }
 
+pub(crate) struct UnloadReadersTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: crate::column_types::models::Warehouse,
+    pub(crate) masks: bool,
+    /// The Snowflake type of the table's one column.
+    pub(crate) column_type: &'static str,
+    /// How the reason SQLLoad reads the files instead starts, or `None` when the target reads the S3 unload itself.
+    pub(crate) expected_blocked: Option<&'static str>,
+}
+
 /// How the statements loading one unload inside Snowflake are sent.
 pub(crate) struct UnloadedRequestsTestCase {
     pub(crate) description: &'static str,

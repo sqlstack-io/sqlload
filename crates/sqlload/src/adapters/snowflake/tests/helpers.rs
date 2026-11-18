@@ -452,9 +452,28 @@ pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<St
         .unwrap_or(StageRoute::User);
     unload_blocked(
         Warehouse::Snowflake,
-        test_case.masks,
+        (test_case.masks, &[]),
         Some(&route),
         Some(&stage),
+    )
+}
+
+/// Why the case's target does not read a Snowflake unload to `s3://lake/raw/unload/` itself, or `None` when it does.
+pub(crate) fn unload_readers_for(
+    test_case: &crate::adapters::snowflake::tests::test_types::UnloadReadersTestCase,
+) -> Option<String> {
+    let route = WarehouseRoute::Unload {
+        store: Store::ObjectStore("s3://lake/raw/unload/".to_owned()),
+        stage: String::new(),
+        same_connection: false,
+    };
+    use crate::snowflake_source::_helpers::catalog::source_column;
+    let column = source_column("c", test_case.column_type, true);
+    unload_blocked(
+        test_case.warehouse,
+        (test_case.masks, &[column]),
+        Some(&route),
+        None,
     )
 }
 

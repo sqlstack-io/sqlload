@@ -8,3 +8,5 @@ mod s3_copy;
 mod stale_removals;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_unloaded_copy.rs"]
+mod unloaded_copy;
