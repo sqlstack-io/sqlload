@@ -12,6 +12,8 @@ from pathlib import Path
 import psutil
 
 SAMPLE_SECONDS = 0.05
+#: How often the run's own folders are measured: walking them costs more than reading RSS.
+DISK_SAMPLE_SECONDS = 0.5
 
 
 @dataclass
@@ -28,6 +30,8 @@ class Measurement:
 	timed_out: bool = False
 	#: Processes the out-of-memory killer ended in the harness's cgroup during the run; None where that count can't be read.
 	oom_kills: int | None = None
+	#: The most the run's own folder (its HOME, caches and TMPDIR, where a loader spills) held at once; None when it wasn't measured.
+	peak_disk_mb: float | None = None
 
 	@property
 	def cpu_s(self) -> float:
@@ -81,8 +85,20 @@ def _tree_rss(process: psutil.Process) -> int:
 	return total
 
 
-def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s: float = 3600) -> Measurement:
-	"""Run `argv` to completion, sampling the summed RSS of it and its descendants.
+def _folder_bytes(folder: Path) -> int:
+	"""The bytes of every file under `folder`, skipping files removed while it is walked."""
+	total = 0
+	for root, _, files in os.walk(folder):
+		for name in files:
+			try:
+				total += os.lstat(os.path.join(root, name)).st_size
+			except OSError:
+				continue
+	return total
+
+
+def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s: float = 3600, disk: Path | None = None) -> Measurement:
+	"""Run `argv` to completion, sampling the summed RSS of it and its descendants, and the size of `disk` (the run's own folder) when given.
 
 	CPU comes from `RUSAGE_CHILDREN`, which covers every descendant that was waited for, so loaders
 	that start helper processes (ingestr's wrapper and binary) count in full.
@@ -93,16 +109,21 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 	with open(log, "wb") as output:
 		child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=output, stderr=subprocess.STDOUT)
 		peak = 0
+		peak_disk = 0
 		done = threading.Event()
 
 		def sample() -> None:
-			nonlocal peak
+			nonlocal peak, peak_disk
 			try:
 				process = psutil.Process(child.pid)
 			except psutil.Error:
 				return
+			next_disk = 0.0
 			while not done.is_set():
 				peak = max(peak, _tree_rss(process))
+				if disk is not None and time.perf_counter() >= next_disk:
+					peak_disk = max(peak_disk, _folder_bytes(disk))
+					next_disk = time.perf_counter() + DISK_SAMPLE_SECONDS
 				done.wait(SAMPLE_SECONDS)
 
 		sampler = threading.Thread(target=sample, daemon=True)
@@ -134,15 +155,17 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 		output=text[-4000:],
 		timed_out=timed_out,
 		oom_kills=None if oom_before is None or oom_after is None else oom_after - oom_before,
+		peak_disk_mb=None if disk is None else peak_disk / (1 << 20),
 	)
 
 
 def clean_env(home: Path, extra: dict[str, str]) -> dict[str, str]:
-	"""A minimal environment with HOME and XDG folders inside the run's folder."""
-	env = {key: os.environ[key] for key in ("PATH", "LANG", "TERM", "TMPDIR") if key in os.environ}
-	home.mkdir(parents=True, exist_ok=True)
+	"""A minimal environment with HOME, XDG folders and TMPDIR inside the run's folder, so what a loader spills is counted and removed with the run."""
+	env = {key: os.environ[key] for key in ("PATH", "LANG", "TERM") if key in os.environ}
+	(home / "tmp").mkdir(parents=True, exist_ok=True)
 	env.update(
 		HOME=str(home),
+		TMPDIR=str(home / "tmp"),
 		XDG_CONFIG_HOME=str(home / ".config"),
 		XDG_CACHE_HOME=str(home / ".cache"),
 		XDG_DATA_HOME=str(home / ".local/share"),

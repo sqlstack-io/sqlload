@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import psutil
 
 from sqlload_bench import datagen, postgres, snowflake
-from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, all_competitors
+from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, Invocation, all_competitors
 from sqlload_bench.measure import run as measure
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import SCENARIOS, Scenario
@@ -51,7 +52,8 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	"""One fresh destination; for the incremental scenario, the second load is the measured one. A loader that runs past `timeout_s`, crashes or is killed (as the out-of-memory killer does) is a failed run that keeps its time, peak memory and how it ended."""
 	shutil.rmtree(run_dir, ignore_errors=True)
 	run_dir.mkdir(parents=True)
-	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0]}
+	run_dir.mkdir(parents=True, exist_ok=True)
+	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0], "disk_free_gb": shutil.disk_usage(run_dir).free / 1e9}
 	if scenario.group == "snowflake":
 		assert context.warehouse is not None
 		snowflake.drop_table(context.warehouse, scenario.table)
@@ -71,9 +73,9 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {last_line(done.output)}", "output": done.output[-1500:]}
 			postgres.append_rows(context.postgres, context.dataset)
 		invocation = competitor.invocation(scenario, context, run_dir, second=incremental)
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s)
+		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s, disk=home_of(invocation))
 		record.update(
-			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, returncode=done.returncode,
+			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, peak_disk_mb=done.peak_disk_mb, returncode=done.returncode,
 			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills,
 		)
 		if done.returncode != 0:
@@ -85,6 +87,11 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	finally:
 		if incremental:
 			postgres.remove_appended(context.postgres, context.dataset)
+
+
+def home_of(invocation: Invocation) -> Path | None:
+	"""The run's own folder (its HOME, caches and TMPDIR), whose size is the loader's disk use."""
+	return Path(invocation.env["HOME"]) if "HOME" in invocation.env else None
 
 
 def last_line(output: str) -> str:
@@ -127,7 +134,24 @@ def machine() -> dict[str, Any]:
 		cpu = next(line.split(":", 1)[1].strip() for line in open("/proc/cpuinfo") if line.startswith("model name"))
 	except (OSError, StopIteration):
 		pass
-	return {"cpu": cpu, "cores": os.cpu_count(), "platform": platform.platform(), "load_avg": os.getloadavg()}
+	return {"cpu": cpu, "cores": len(os.sched_getaffinity(0)), "memory_limit_gib": memory_limit_gib(), "platform": platform.platform(), "load_avg": os.getloadavg()}
+
+
+def memory_limit_gib() -> float:
+	"""The memory the harness and its loaders may use: their cgroup's limit (cgroup v2), else the machine's."""
+	try:
+		path = Path("/proc/self/cgroup").read_text().splitlines()[0].split("::", 1)[1]
+		limit = Path(f"/sys/fs/cgroup{path}/memory.max").read_text().strip()
+		if limit != "max":
+			return int(limit) / (1 << 30)
+	except (OSError, IndexError):
+		pass
+	return psutil.virtual_memory().total / (1 << 30)
+
+
+def disk_range(results: list[Result]) -> str:
+	free = [run["disk_free_gb"] for result in results for run in result.runs if "disk_free_gb" in run]
+	return f"{min(free):.0f} to {max(free):.0f} GB" if free else "not measured"
 
 
 def load_range(results: list[Result]) -> str:
@@ -251,7 +275,8 @@ def write_results(args: argparse.Namespace, sizes: datagen.Sizes, started: datet
 	summaries = [result.summary() for result in results]
 	header = (
 		f"## SQLLoad benchmarks ({args.size}, seed {args.seed}, median of {args.runs} after {args.warmup} warm-up)\n\n"
-		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({os.cpu_count()} cores); 1-minute load before each run: {load_range(results)}."
+		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({machine()['cores']} cores, {machine()['memory_limit_gib']:.1f} GiB of memory); "
+		f"1-minute load before each run: {load_range(results)}; free disk before each run: {disk_range(results)}."
 	)
 	document = {"started": started.isoformat(), "finished": datetime.now(UTC).isoformat(), "size": args.size, "sizes": sizes.__dict__,
 		"seed": args.seed, "runs": args.runs, "warmup": args.warmup, "versions": versions(), "machine": machine(), "results": summaries}
@@ -266,7 +291,7 @@ def finish(args: argparse.Namespace, sizes: datagen.Sizes, started: datetime, re
 	summaries = document["results"]
 	with (args.out / "history.jsonl").open("a") as history:
 		# One line per suite run, so improvement over time stays visible after results.json is replaced.
-		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "rows_per_s")
+		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "peak_disk_mb", "rows_per_s")
 		line = {key: document[key] for key in ("started", "size", "seed", "versions")}
 		history.write(json.dumps({**line, "results": [{key: s[key] for key in kept} for s in summaries]}, default=str) + "\n")
 	print(table)
