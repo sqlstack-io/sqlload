@@ -1,5 +1,6 @@
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::main::is_variant::is_variant;
+use crate::column_types::main::widened_type::widened_type;
 use crate::column_types::models::{ColumnType, TypeFit};
 use crate::project::models::{Contract, OnSchemaChange, Policy};
 use crate::schema_plan::constants::ALLOW_REBUILD_FLAG;
@@ -119,20 +120,56 @@ pub(crate) fn existing_column(
         && adapter.render_loader_logical_type(&column.column_type).sql
             != adapter.render_loader_logical_type(&live.column_type).sql;
     if narrower {
+        let (held_in, pin, remedy) = match (adapter.runs_sql(), adapter.keeps_tables()) {
+            (false, _) => (
+                "the existing files",
+                "the files' type",
+                "rewrite every file at the pinned type with --reload (--resnapshot for a postgres_cdc table)",
+            ),
+            (true, true) => (
+                "the table",
+                "the table's type",
+                "alter the column to the pinned type yourself",
+            ),
+            (true, false) => (
+                "the table",
+                "the table's type",
+                "rebuild the table at the pinned type with --reload",
+            ),
+        };
         return ColumnDecision {
             problem: Some(format!(
-                "{} is {} in the table but pinned as {}, and a load never narrows a column; pin the table's type (columns = {{ {} = \"{}\" }}), or rebuild the table at the pinned type with --reload (--resnapshot for a postgres_cdc table)",
+                "{} is {} in {held_in} but pinned as {}, and a load never narrows a column; pin {pin} (columns = {{ {} = \"{}\" }}), or {remedy}",
                 live.name, live.column_type, column.column_type, column.name, live.column_type
             )),
             ..ColumnDecision::default()
         };
     }
-    let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
     let retyped = as_text || json_switch;
+    let target = match &fit {
+        TypeFit::WidenInPlace(sql) | TypeFit::NeedsRebuild(sql) if !retyped => Some(sql),
+        _ => None,
+    };
+    let holding = widened_type(&column.column_type, &live.column_type)
+        .unwrap_or_else(|| column.column_type.clone());
+    let pinned_past = column.origin == ColumnOrigin::Pinned
+        && adapter.runs_sql()
+        && target
+            .is_some_and(|sql| *sql != adapter.render_loader_logical_type(&column.column_type).sql);
+    if pinned_past {
+        return ColumnDecision {
+            problem: Some(format!(
+                "{} is {} in the table but pinned as {}, which does not hold every {}; pin {holding} to widen it (columns = {{ {} = \"{holding}\" }})",
+                live.name, live.column_type, column.column_type, live.column_type, column.name
+            )),
+            ..ColumnDecision::default()
+        };
+    }
+    let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
     if widens && column.origin == ColumnOrigin::Inferred && !retyped && adapter.runs_sql() {
         let wider = format!(
-            "{} is {} in the table but {} in the source; pin the wider type to widen it, for example columns = {{ {} = \"{}\" }}",
-            live.name, live.column_type, column.column_type, column.name, column.column_type
+            "{} is {} in the table but {} in the source; pin the wider type to widen it, for example columns = {{ {} = \"{holding}\" }}",
+            live.name, live.column_type, column.column_type, column.name
         );
         let refusal = match (rules.auto_widen, &column.column_type) {
             (false, _) => Some(format!("{wider}, or set auto_widen = true")),

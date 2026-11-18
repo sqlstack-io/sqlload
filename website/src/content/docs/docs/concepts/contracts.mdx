@@ -66,14 +66,25 @@ Objects (1)                                         sqlload apply
 
 A load never narrows a column. A pinned type narrower than the live column fails `plan` for that
 table, and so `load`; `--reload` rebuilds the table at the pinned type, and fails without changing
-it if a value doesn't fit:
+it if a value doesn't fit. Postgres never rebuilds a table, so there you alter the column yourself:
 
 ```console
 $ sqlload plan app__orders
 …
 Errors (1)
 └── raw.app__orders
-    └── reason  total is decimal(14,4) in the table but pinned as decimal(12,2), and a load never narrows a column; pin the table's type (columns = { total = "decimal(14,4)" }), or rebuild the table at the pinned type with --reload (--resnapshot for a postgres_cdc table)
+    └── reason  total is decimal(14,4) in the table but pinned as decimal(12,2), and a load never narrows a column; pin the table's type (columns = { total = "decimal(14,4)" }), or rebuild the table at the pinned type with --reload
+```
+
+A widening pin must hold every value already in the column, so a load widens the column to exactly
+the pin. `plan` refuses one that doesn't and names the type to pin:
+
+```console
+$ sqlload plan app__orders
+…
+Errors (1)
+└── raw.app__orders
+    └── reason  total is decimal(14,4) in the table but pinned as decimal(14,2), which does not hold every decimal(14,4); pin decimal(16,4) to widen it (columns = { total = "decimal(16,4)" })
 ```
 
 A type the source can't be read as fails `plan` too:
