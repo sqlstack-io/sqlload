@@ -609,7 +609,7 @@ impl SourceConfig {
             .unwrap_or_default()
     }
 
-    /// Whether the source finds its tables in a database's catalog with `include` patterns (`postgres`, `postgres_cdc`, `snowflake`, `odbc` or `bigquery`).
+    /// Whether the source finds its tables in a database's catalog with `include` patterns (every database source kind).
     pub fn discovers_tables(&self) -> bool {
         matches!(
             self.kind,
@@ -619,6 +619,7 @@ impl SourceConfig {
                 | SourceKind::Odbc
                 | SourceKind::BigQuery
                 | SourceKind::Databricks
+                | SourceKind::DuckDb
         )
     }
 
@@ -677,6 +678,7 @@ impl SourceConfig {
                 | SourceKind::Odbc
                 | SourceKind::BigQuery
                 | SourceKind::Databricks
+                | SourceKind::DuckDb
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
@@ -703,6 +705,9 @@ pub enum SourceKind {
     BigQuery,
     /// Databricks tables, views and queries, read as Arrow through the Statement Execution API's result links.
     Databricks,
+    /// Tables, views and queries of a DuckDB database file, read as Arrow from a read-only connection.
+    #[serde(rename = "duckdb")]
+    DuckDb,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
     /// Tabs or ranges of a Google Sheets spreadsheet, one table each.
@@ -720,6 +725,7 @@ impl SourceKind {
             Self::Odbc => "odbc",
             Self::BigQuery => "bigquery",
             Self::Databricks => "databricks",
+            Self::DuckDb => "duckdb",
             Self::Python => "python",
             Self::GoogleSheets => "google_sheets",
         }
