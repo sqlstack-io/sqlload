@@ -74,7 +74,7 @@
 			<section class="speed" aria-labelledby="speed-title">
 				<div class="wrap">
 					<div class="speed-head">
-						<h2 id="speed-title">Faster than dlt and ingestr</h2>
+						<h2 id="speed-title">Faster, in a fraction of the memory</h2>
 						<a href="/docs/benchmarks/">How we measured →</a>
 					</div>
 					<div class="speed-rows">
@@ -86,6 +86,13 @@
 							</dl>
 						</div>
 						<div class="speed-row">
+							<h3>S3 Parquet → Snowflake · 100M rows · peak memory</h3>
+							<dl>
+								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 1.4%"></span></span><span class="time">54 MiB</span></dd></div>
+								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span><span class="note">+ 5.7 GiB temp disk</span></span><span class="time">3,836 MiB</span></dd></div>
+							</dl>
+						</div>
+						<div class="speed-row">
 							<h3>Postgres → Snowflake · 1M rows</h3>
 							<dl>
 								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 49.6%"></span></span><span class="time">14.56 s</span></dd></div>
@@ -93,16 +100,8 @@
 								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">29.36 s</span></dd></div>
 							</dl>
 						</div>
-						<div class="speed-row">
-							<h3>Parquet → DuckDB · 1M rows</h3>
-							<dl>
-								<div class="lead"><dt>sqlload</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">0.92 s</span></dd></div>
-								<div><dt>ingestr</dt><dd><span class="track"><span class="bar" style="width: 1.5%"></span></span><span class="time">2.12 s</span></dd></div>
-								<div><dt>dlt</dt><dd><span class="track"><span class="bar" style="width: 100.0%"></span></span><span class="time">138.45 s</span></dd></div>
-							</dl>
-						</div>
 					</div>
-					<p class="caption">Wall time, lower is faster, on one 4-vCPU, 8 GB machine. S3 Parquet → Snowflake: median of 3 runs, 18 November 2026, sqlload 0.70.1 and ingestr 1.1.82; Snowflake copies the files itself on SQLLoad's default route, so no row passes through SQLLoad (54 MiB peak memory, no disk), while ingestr streams every row (3.8 GiB peak memory, 5.7 GiB spilled to disk). Other rows: median of 5 runs, 6 November 2026, sqlload 0.11.1 and 0.11.0, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres). dlt was not run in the S3 scenario.</p>
+					<p class="caption">Lower is better, on one 4-vCPU, 8 GB machine. S3 Parquet → Snowflake: wall time and peak memory from the same 100M-row runs, median of 3, 18 November 2026, sqlload 0.70.1 and ingestr 1.1.82. On SQLLoad's default route Snowflake copies the files itself, so no row passes through SQLLoad and it uses no disk; ingestr streams every row through its own process and spilled 5.7 GiB to disk. Postgres → Snowflake: median of 5 runs, 6 November 2026, sqlload 0.11.1, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres). dlt was not run in the S3 scenario.</p>
 				</div>
 			</section>
 
