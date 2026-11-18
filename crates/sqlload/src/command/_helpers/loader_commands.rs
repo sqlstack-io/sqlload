@@ -498,14 +498,6 @@ async fn run_command(
     if !applies {
         return Ok((lines, exit_code(planned, plan_retryable)));
     }
-    if let Some(problem) = project.memory.problem.as_ref().filter(|_| loads) {
-        for table in &mut plan.tables {
-            table.schema.blocked = Some(Blocked {
-                reasons: vec![problem.clone()],
-                fix_flag: None,
-            });
-        }
-    }
     if follow.is_some() && !render_plan(&plan, verbose).1 {
         return Ok(match json {
             true => {
@@ -522,6 +514,21 @@ async fn run_command(
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
         return Err(problem.into());
     }
+    let reported = project
+        .memory
+        .problem
+        .as_ref()
+        .filter(|_| loads)
+        .map(|problem| {
+            let reported = plan.clone();
+            for table in &mut plan.tables {
+                table.schema.blocked = Some(Blocked {
+                    reasons: vec![problem.clone()],
+                    fix_flag: None,
+                });
+            }
+            reported
+        });
     let flag = match (options.reload, options.resnapshot) {
         (true, true) => "--reload and --resnapshot",
         (true, false) => "--reload",
@@ -602,7 +609,7 @@ async fn run_command(
                 elapsed: started.1.elapsed(),
                 peak_memory_bytes: ended.peak_memory_bytes,
             };
-            let (text, ok, retryable) = json_report(&plan, Some(&run));
+            let (text, ok, retryable) = json_report(reported.as_ref().unwrap_or(&plan), Some(&run));
             return Ok((vec![text], exit_code(ok, retryable)));
         }
         lines.extend(ended.lines);

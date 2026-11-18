@@ -106,7 +106,8 @@ def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_pa
 		report = json.loads(done.stdout)
 		assert report["command"] == "load", report
 		assert report["summary"]["loaded"] == 0, report["summary"]
-		assert any("raise memory_limit to at least" in json.dumps(error) for error in report["plan"]["errors"]), report["plan"]["errors"]
+		# One project error, the budget's: the tables it stops aren't each listed as failing.
+		assert ["raise memory_limit to at least" in json.dumps(error) for error in report["plan"]["errors"]] == [True], report["plan"]["errors"]
 	else:
 		assert "raise memory_limit to at least" in output, output
 	with duckdb.connect(str(tmp_path / "wh.duckdb")) as connection:
