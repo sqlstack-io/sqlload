@@ -46,6 +46,14 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
+    /// GoogleSQL can't order ARRAY, STRUCT, GEOGRAPHY, JSON or graph values: https://cloud.google.com/bigquery/docs/reference/standard-sql/data-types#orderable_data_types
+    fn orders_native(&self, family: &str, _parameterised: bool) -> bool {
+        !matches!(
+            family,
+            "ARRAY" | "STRUCT" | "RECORD" | "GEOGRAPHY" | "JSON" | "GRAPH_ELEMENT" | "GRAPH_PATH"
+        )
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

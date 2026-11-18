@@ -132,6 +132,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         None
     }
 
+    /// Whether the warehouse can order a native type named `family` (upper case, without parameters; `parameterised` when it had them), so `newest_by` can rank rows by it; false only where the warehouse documents it can't.
+    fn orders_native(&self, _family: &str, _parameterised: bool) -> bool {
+        true
+    }
+
     /// The portable type of a live column the information schema reports; `native(...)` when it has none.
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         ColumnType::Native(live.data_type.clone())

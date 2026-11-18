@@ -57,6 +57,11 @@ impl SqlAdapter for PostgresSql {
         logical_type(column_type)
     }
 
+    /// Postgres has no comparison operators for json (only jsonb: https://www.postgresql.org/docs/current/functions-json.html) or xml (https://www.postgresql.org/docs/current/datatype-xml.html).
+    fn orders_native(&self, family: &str, _parameterised: bool) -> bool {
+        !matches!(family, "JSON" | "XML")
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

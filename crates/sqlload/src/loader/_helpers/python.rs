@@ -1,5 +1,6 @@
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::contract::main::newest_by_problem::newest_by_problem;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::models::WriteMode;
 use crate::adapters::contract::models::WriteStatementsRequest;
@@ -389,6 +390,8 @@ pub(crate) fn source_spelling(stored: &str, spec: &TableSpec) -> String {
 pub(crate) struct YieldedData<'a> {
     pub(crate) schema: &'a Schema,
     pub(crate) null_columns: &'a BTreeSet<String>,
+    /// True on the last plan, once every row is in: every column is typed then, and every newest_by column must be written unless there are no rows to merge.
+    pub(crate) settled: bool,
     pub(crate) rows: u64,
 }
 
@@ -808,6 +811,18 @@ impl PythonFeed {
         if unsettled {
             self.plan_data(load, true).await?;
         }
+        let adapter = sql_adapter(self.table.spec.warehouse);
+        let write_columns = &self.table.schema.write_columns;
+        let merged_by = match self.rows {
+            0 => &[][..],
+            _ => &self.table.spec.newest_by[..],
+        };
+        if let Some(problem) = merged_by
+            .iter()
+            .find_map(|name| newest_by_problem(adapter, write_columns, name))
+        {
+            return Err(LoaderError::Invalid(problem));
+        }
         let state = self.state.clone();
         let publisher = self.publisher(load).await?;
         let rows = publisher.finish(state).await?;
@@ -992,6 +1007,7 @@ impl PythonFeed {
         let data = YieldedData {
             schema: &schema,
             null_columns: &nulls,
+            settled: settle,
             rows: self.rows,
         };
         let destination = match &self.publisher {
@@ -1164,6 +1180,24 @@ async fn replan(
             .map(|column| &column.column_type)
     });
     if let Some(problem) = append_problem(&columns.spec, cursor_type) {
+        return Err(LoaderError::Invalid(problem));
+    }
+    let adapter = sql_adapter(columns.spec.warehouse);
+    let seen = |name: &&String| {
+        let typed = |field: &Arc<arrow_schema::Field>| {
+            field.name().eq_ignore_ascii_case(name)
+                && !data
+                    .null_columns
+                    .iter()
+                    .any(|null| null.eq_ignore_ascii_case(name))
+        };
+        (data.settled && data.rows > 0) || data.schema.fields().iter().any(typed)
+    };
+    let newest_by = columns.spec.newest_by.iter().filter(seen);
+    if let Some(problem) = newest_by
+        .filter_map(|name| newest_by_problem(adapter, &columns.schema.write_columns, name))
+        .next()
+    {
         return Err(LoaderError::Invalid(problem));
     }
     let loaded: Vec<String> = columns
@@ -1923,6 +1957,7 @@ impl ChildFeed {
         let data = YieldedData {
             schema: &schema,
             null_columns: &nulls,
+            settled: settle,
             rows: 0,
         };
         let spec = TableSpec {

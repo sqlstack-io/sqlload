@@ -81,6 +81,11 @@ impl SqlAdapter for ClickHouseSql {
         logical_type(column_type)
     }
 
+    /// ClickHouse refuses Variant and Dynamic in ORDER BY unless `allow_suspicious_types_in_order_by` is on: https://clickhouse.com/docs/reference/settings/session-settings/allow-suspicious#allow_suspicious_types_in_order_by
+    fn orders_native(&self, family: &str, _parameterised: bool) -> bool {
+        !matches!(family, "VARIANT" | "DYNAMIC")
+    }
+
     fn live_type(&self, live: &LiveColumnType) -> ColumnType {
         portable_type(live).unwrap_or_else(|| ColumnType::Native(live.data_type.clone()))
     }

@@ -187,3 +187,12 @@ pub(crate) struct KeyMatchTestCase {
     /// The condition the query of rekeyed row ids joins the table and the staged rows on.
     pub(crate) expected_rekeyed: &'static str,
 }
+
+pub(crate) struct NewestByTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    /// The `newest_by` column's type, as the table writes it.
+    pub(crate) column_type: ColumnType,
+    /// The plan's problem with it, or empty when it orders rows.
+    pub(crate) expected_problem: &'static str,
+}
