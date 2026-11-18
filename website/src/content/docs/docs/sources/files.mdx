@@ -552,12 +552,18 @@ $ sqlload plan -v
     └── batch   1 file, one commit each, oldest modified first (ties by path), each recorded in the run log
 ```
 
+It picks files as [merging files](#merging-files) does: each commit records its file and version in
+`_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
+and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
+
 #### When newer files restate older ones
 
 A feed whose deliveries overlap, each restating the end of the period before, holds one value in
 two files on purpose. `on_overlapping_files = "last_wins"` (default `"fail"`) lets the file last in
 `order` replace the values it holds, even while an earlier file holding them is still in the
-folder. Each file still loads in its own commit, so the earlier file's other values stay:
+folder. Each file still loads in its own commit, so the earlier file's other values stay. A file
+that comes before one already loaded, such as an older file rewritten or sent late, still fails
+rather than take back the later file's values:
 
 ```text
 sales/
@@ -584,10 +590,6 @@ Leave it at `"fail"` when the files may be parts of one export, as `"last_wins"`
 the last part's rows of a value split across them. `plan -v` says so on the table's `batch` line.
 It applies only to a files source's `delete_insert` with a `replace_key`, and `plan` refuses it
 elsewhere: a [merge](#merging-files) already lets the last file win each key.
-
-It picks files as [merging files](#merging-files) does: each commit records its file and version in
-`_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
-and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 
 ### Merging files
 

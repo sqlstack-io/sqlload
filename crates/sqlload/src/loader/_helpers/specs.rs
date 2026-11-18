@@ -326,6 +326,9 @@ pub(crate) fn build_spec(
         &settings.on_overlapping_files,
         &defaults.on_overlapping_files,
     )
+    .filter(|(_, origin)| {
+        *origin == SettingOrigin::Table || keyed || strategy_origin != SettingOrigin::Table
+    })
     .map(|(value, _)| value);
     if let Some(problem) = on_overlapping_files.and_then(|_| {
         overlapping_files_problem(context.source.kind == SourceKind::Files, strategy, keyed)

@@ -67,6 +67,31 @@ const SPLIT: &[MergeStep] = &[load_step(
 
 const REFUSED: &[MergeStep] = &[load_step(&[FIRST], OUTSIDE, "")];
 
+/// The newer file loads first, and the older one, by path, arrives in a later run.
+const SENT_LATE: &[MergeStep] = &[
+    load_step(
+        &[MergeFile {
+            key: "sales_2026-11-14.csv",
+            contents: "le_version,line,amount\nP02,X,7\n",
+            modified_secs: 1_000,
+        }],
+        "",
+        "",
+    ),
+    load_step(
+        &[MergeFile {
+            key: "sales_2026-11-07.csv",
+            contents: "le_version,line,amount\nP01,A,1\nP02,A,10\n",
+            modified_secs: 2_000,
+        }],
+        "drop/sales_2026-11-07.csv: the table holds rows of its replace_key (le_version) values from sales_2026-11-14.csv, which is still in the folder and comes after sales_2026-11-07.csv in order; with on_overlapping_files = \"last_wins\" the file last in order keeps a value, so sales_2026-11-07.csv would take back values a later file replaced",
+        "",
+    ),
+];
+
+/// One file of P01 and P02, merged by key.
+const MERGED: &[MergeStep] = &[load_step(&[FIRST], "", "")];
+
 #[test]
 fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_overlapping_files_says_which_wins()
 -> Result<(), String> {
@@ -97,6 +122,20 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 description: "with on_overlapping_files = \"fail\", a value split across part files still fails on the later file, naming both and the setting",
                 settings: FAILS,
                 steps: SPLIT,
+                check_query: CHECK,
+                expected_result: "P01:A:1,P01:B:2,P02:A:10|1",
+            },
+            FilesMergeTestCase {
+                description: "with order = \"path\", an older file sent after a newer one fails instead of taking back the newer file's value, which stays",
+                settings: LAST_WINS_BY_PATH,
+                steps: SENT_LATE,
+                check_query: CHECK,
+                expected_result: "P02:X:7|1",
+            },
+            FilesMergeTestCase {
+                description: "set on the source, it leaves alone a table of the source that merges",
+                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\non_overlapping_files = \"last_wins\"\n[sources.scores.tables.scores]\nwrite_strategy = \"merge\"\nunique_key = [\"le_version\", \"line\"]\n",
+                steps: MERGED,
                 check_query: CHECK,
                 expected_result: "P01:A:1,P01:B:2,P02:A:10|1",
             },
