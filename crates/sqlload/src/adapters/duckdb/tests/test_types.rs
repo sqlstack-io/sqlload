@@ -8,6 +8,8 @@ pub(crate) struct PullInsertTestCase {
     /// Each column the files hold, with its name in them.
     pub(crate) in_files: Vec<(String, String)>,
     pub(crate) files: Vec<PulledFile>,
+    /// The target is MotherDuck, which reads the files on its servers.
+    pub(crate) remote: bool,
     pub(crate) expected_sql: &'static str,
 }
 
@@ -110,7 +112,8 @@ pub(crate) struct DuckDbPathTestCase {
 pub(crate) struct MotherDuckRouteTestCase {
     pub(crate) description: &'static str,
     pub(crate) motherduck: bool,
-    pub(crate) expected_reads_files: bool,
+    /// The stores whose Parquet files the destination reads itself.
+    pub(crate) expected_pulls_from: Vec<crate::routing::models::Store>,
 }
 
 pub(crate) struct AttachedDatabaseTestCase {

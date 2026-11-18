@@ -1,52 +1,41 @@
-//! Run a statement that has DuckDB read files itself, giving it access to the files' bucket first.
+//! Run a statement that has DuckDB, or MotherDuck on its servers, read files itself, giving it access to the files' bucket first.
 
 use crate::adapters::duckdb::_helpers::blocking::with_connection;
-use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
-use crate::adapters::duckdb::_helpers::pull_sql::{default_region, s3_secret};
+use crate::adapters::duckdb::_helpers::s3_access::bucket_access;
 use crate::adapters::duckdb::errors::DuckDbError;
-use crate::adapters::duckdb::models::DuckDbDestination;
-use crate::file_store::main::s3_keys::s3_keys;
-use crate::stage_api::models::AwsCredentials;
+use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
+use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 use crate::store_paths::models::StoreKind;
 
-/// Run `insert` and return the rows it loaded. For S3 files it first loads `httpfs` (installing it on first use) and sets a [temporary secret](s3_secret) for the bucket, in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does: the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain.
+/// Run `insert` and return the rows it loaded, after [`bucket_access`] for S3 files. On MotherDuck the secret is the bridge session's own, which MotherDuck's servers read the files with, and nothing is stored in the account.
 pub(in crate::adapters) async fn pull_files(
     destination: &DuckDbDestination,
     store: &StoreKind,
     insert: String,
 ) -> Result<u64, DuckDbError> {
-    let (bucket, keys) = match store {
-        StoreKind::S3 {
-            bucket,
-            region,
-            profile,
-            ..
-        } => (
-            Some((bucket.clone(), region.clone())),
-            s3_keys(profile.as_deref())
-                .map_err(DuckDbError::Task)?
-                .map(secret_parameters),
-        ),
-        StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => (None, None),
-    };
-    let region = default_region(&environment_variable);
-    with_connection(destination, move |connection| {
-        if let Some((bucket, bucket_region)) = bucket {
-            connection.execute_batch("INSTALL httpfs; LOAD httpfs;")?;
-            if keys.is_none() {
-                connection.execute_batch("INSTALL aws; LOAD aws;")?;
+    let access = bucket_access(store)?;
+    let DuckDbConnection::Bridge(bridge) = &destination.connection else {
+        return with_connection(destination, move |connection| {
+            if let Some((extensions, (secret, parameters))) = access {
+                connection.execute_batch(extensions)?;
+                connection.execute(&secret, duckdb::params_from_iter(parameters))?;
             }
-            let (sql, parameters) =
-                s3_secret(&bucket, bucket_region.unwrap_or(region), keys.as_ref());
-            connection.execute(&sql, duckdb::params_from_iter(parameters))?;
-        }
-        Ok(connection.execute(&insert, [])? as u64)
-    })
-    .await
-}
-
-/// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.
-fn secret_parameters(keys: AwsCredentials) -> [String; 3] {
-    let token = keys.session_token.map(|token| token.0).unwrap_or_default();
-    [keys.key_id, keys.secret.0, token]
+            Ok(connection.execute(&insert, [])? as u64)
+        })
+        .await;
+    };
+    if let Some((extensions, (secret, parameters))) = access {
+        run_statement(bridge, extensions.to_owned(), Vec::new()).await?;
+        run_statement(bridge, secret, parameters).await?;
+    }
+    let rows = run_statement(bridge, insert, Vec::new()).await?;
+    let count = rows.first().and_then(|row| row.first()).cloned().flatten();
+    count
+        .as_deref()
+        .and_then(|count| count.parse::<u64>().ok())
+        .ok_or_else(|| {
+            DuckDbError::MotherDuck(format!(
+                "the insert reported {count:?} rows rather than a count"
+            ))
+        })
 }

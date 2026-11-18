@@ -23,6 +23,7 @@ use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::resolve::source_target;
 use crate::project::main::parse_project::parse_project;
 use crate::project::models::ConnectionConfig;
+use crate::routing::models::{FileFormat, Store};
 
 /// What DuckDB 2.0.0 reports when MotherDuck's extension refuses to load on it, as Python's duckdb package 2.0.0 would in the bridge.
 const UNSUPPORTED_VERSION: &str = "Invalid Input Error: Initialization function \"motherduck_duckdb_cpp_init\" from file \"/home/u/.duckdb/extensions/v2.0.0/linux_amd64/motherduck.duckdb_extension\" threw an exception: \"\nYour DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck.\n\nSee https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.\"";
@@ -346,18 +347,21 @@ fn given_a_duckdb_connection_when_its_database_is_a_motherduck_path_then_it_is_r
 }
 
 #[test]
-fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches()
+fn given_a_motherduck_destination_when_routing_then_it_reads_parquet_only_from_s3_itself()
 -> Result<(), String> {
     let test_cases = [
         MotherDuckRouteTestCase {
-            description: "local DuckDB reads Parquet itself",
+            description: "local DuckDB reads Parquet in S3 and on this machine itself",
             motherduck: false,
-            expected_reads_files: true,
+            expected_pulls_from: vec![
+                Store::ObjectStore("s3://".to_owned()),
+                Store::Local(String::new()),
+            ],
         },
         MotherDuckRouteTestCase {
-            description: "MotherDuck never reads files itself",
+            description: "MotherDuck reads Parquet in S3 on its servers, and never files on this machine",
             motherduck: true,
-            expected_reads_files: false,
+            expected_pulls_from: vec![Store::ObjectStore("s3://".to_owned())],
         },
     ];
     for test_case in test_cases {
@@ -366,8 +370,8 @@ fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches(
         let accepts = writer_accepts(&Destination::DuckDb(destination), None);
         assert!(accepts.arrow, "{}", test_case.description);
         assert_eq!(
-            !accepts.pulls_from.is_empty() || accepts.reads_files_itself.is_some(),
-            test_case.expected_reads_files,
+            (accepts.pulls_from, accepts.pull_formats),
+            (test_case.expected_pulls_from, vec![FileFormat::Parquet]),
             "{}",
             test_case.description
         );
