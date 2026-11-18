@@ -39,7 +39,7 @@ pub(crate) fn select_query(request: &DuckDbReadRequest<'_>) -> String {
 /// `SELECT COUNT(*) FROM <the query or table> WHERE <filter>`, the table and query written as `select_query` writes them: how many rows `filter` selects.
 pub(crate) fn count_query((table, sql): (&SourceTable, Option<&str>), filter: &str) -> String {
     format!(
-        "SELECT COUNT(*) FROM {} WHERE {filter}",
+        "SELECT CAST(COUNT(*) AS VARCHAR) FROM {} WHERE {filter}",
         from_item((table, sql))
     )
 }

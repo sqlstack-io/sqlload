@@ -20,7 +20,8 @@ So SQLLoad sends a MotherDuck target's SQL to a separate Python process running 
 package at a version MotherDuck accepts. The two DuckDB versions never share a process, and every
 other target still uses SQLLoad's own DuckDB.
 
-Install the `motherduck` extra, which adds `duckdb>=1.4.1,<=1.5.6`:
+Install the `motherduck` extra, which adds `duckdb>=1.4.1,<=1.5.6`, and `pyarrow`, which a
+[MotherDuck source](/docs/sources/motherduck/) reads through:
 
 ```bash
 uv tool install 'sqlload[motherduck]'

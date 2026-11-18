@@ -1,6 +1,6 @@
 //! Count a table's rows that a condition selects.
 
-use crate::duckdb_source::_helpers::connection::open_read_only;
+use crate::duckdb_source::_helpers::connection::text_rows;
 use crate::duckdb_source::_helpers::query::count_query;
 use crate::duckdb_source::errors::DuckDbSourceError;
 use crate::duckdb_source::models::DuckDbReader;
@@ -12,14 +12,16 @@ pub async fn count_rows(
     (table, sql): (&SourceTable, Option<&str>),
     filter: &str,
 ) -> Result<u64, DuckDbSourceError> {
-    let (reader, query) = (reader.clone(), count_query((table, sql), filter));
-    tokio::task::spawn_blocking(move || {
-        let connection = open_read_only(&reader)?;
-        let count: i64 = connection.query_row(&query, [], |row| row.get(0))?;
-        u64::try_from(count).map_err(|error| {
-            DuckDbSourceError::Invalid(format!("{query} returned {count}: {error}"))
-        })
+    let query = count_query((table, sql), filter);
+    let answers = text_rows(reader, vec![query.clone()])
+        .await
+        .map_err(|(_, error)| error)?;
+    let count = answers
+        .first()
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.first().cloned().flatten())
+        .unwrap_or_default();
+    count.parse::<u64>().map_err(|error| {
+        DuckDbSourceError::Invalid(format!("{query} returned the count {count:?}: {error}"))
     })
-    .await
-    .map_err(|error| DuckDbSourceError::Invalid(format!("counting rows stopped: {error}")))?
 }

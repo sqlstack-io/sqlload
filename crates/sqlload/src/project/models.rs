@@ -620,6 +620,7 @@ impl SourceConfig {
                 | SourceKind::BigQuery
                 | SourceKind::Databricks
                 | SourceKind::DuckDb
+                | SourceKind::MotherDuck
         )
     }
 
@@ -679,6 +680,7 @@ impl SourceConfig {
                 | SourceKind::BigQuery
                 | SourceKind::Databricks
                 | SourceKind::DuckDb
+                | SourceKind::MotherDuck
                 | SourceKind::Python,
             ) => DEFAULT_TABLE_NAME,
             (None, SourceKind::Files) => DEFAULT_FILES_TABLE_NAME,
@@ -708,6 +710,9 @@ pub enum SourceKind {
     /// Tables, views and queries of a DuckDB database file, read as Arrow from a read-only connection.
     #[serde(rename = "duckdb")]
     DuckDb,
+    /// Tables, views and queries of a MotherDuck database, read as Arrow through the MotherDuck bridge.
+    #[serde(rename = "motherduck")]
+    MotherDuck,
     /// Declared in Python with `sl.source` or `@sl.table`; never written in `sqlload.toml`.
     Python,
     /// Tabs or ranges of a Google Sheets spreadsheet, one table each.
@@ -726,6 +731,7 @@ impl SourceKind {
             Self::BigQuery => "bigquery",
             Self::Databricks => "databricks",
             Self::DuckDb => "duckdb",
+            Self::MotherDuck => "motherduck",
             Self::Python => "python",
             Self::GoogleSheets => "google_sheets",
         }

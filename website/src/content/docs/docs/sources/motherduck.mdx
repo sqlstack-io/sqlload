@@ -1,0 +1,77 @@
+---
+title: "MotherDuck"
+description: "Load tables, views and query results from a MotherDuck database (beta), read as Arrow through a separate DuckDB 1.5 process: connection, choosing tables, query tables, cursors and types."
+sidebar:
+  badge:
+    text: Beta
+    variant: caution
+---
+
+This source is in beta: it is tested, including live against MotherDuck, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
+
+A `motherduck` source loads tables, views and query results from a MotherDuck database. It reads
+the way a [DuckDB source](/docs/sources/duckdb/) does: one `SELECT` per read, streamed as Arrow,
+with the same table choice, cursors, `where` and types.
+
+```toml
+[connections.cloud]
+kind = "motherduck"
+database = "shop"
+token = "${ENV:MOTHERDUCK_TOKEN}"
+
+[sources.shop]
+kind = "motherduck"
+connection = "cloud"
+description = "Tables of the shop's MotherDuck database."
+include = ["sales.*"]
+write_strategy = "replace"
+
+[sources.shop.tables."sales.orders"]
+description = "Orders, one row each."
+cursor_column = "updated_at"
+write_strategy = "merge"
+unique_key = "{primary_key}"
+
+[sources.shop.tables.big_orders]
+description = "Orders over 100."
+sql = "SELECT * FROM sales.orders WHERE amount > 100"
+```
+
+## Install
+
+MotherDuck doesn't accept the DuckDB 2.0 that SQLLoad bundles yet, so SQLLoad reads a MotherDuck
+source through the same separate Python process a [MotherDuck target](/docs/targets/motherduck/#install)
+uses, running Python's `duckdb` 1.4.1 to 1.5.6. That process hands each batch to SQLLoad as Arrow, so
+it also needs `pyarrow`. The `motherduck` extra installs both:
+
+```bash
+pip install 'sqlload[motherduck]'
+```
+
+With `sqlload-cli`, set `SQLLOAD_MOTHERDUCK_PYTHON` to a Python that has `duckdb` 1.4.1 to 1.5.6 and
+`pyarrow`.
+
+## Connection
+
+A source uses a [`motherduck` connection](/docs/configuration/#motherduck), the same kind a
+MotherDuck target uses. Its `database` names the one database the source reads; a connection
+without one is refused, as MotherDuck would otherwise attach every database in the account. The
+token comes from `token`, else the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable,
+and never appears in messages.
+
+## Choosing tables and reading them
+
+`include`, `exclude`, query tables, `cursor_column`, `where`, `exclude_columns` and pinned
+`columns` work as for a [DuckDB source](/docs/sources/duckdb/#choosing-tables): SQLLoad lists the
+database's own tables and views from DuckDB's catalog functions, and writes every filter in DuckDB
+SQL. Each read is one statement on its own connection; the process reads one batch at a time, as
+SQLLoad asks for it, so neither holds the whole table.
+
+Types map as on a [DuckDB source](/docs/sources/duckdb/#types).
+
+## Tested
+
+Live against a MotherDuck account on DuckDB 1.5.6: a table, a cursor merge that reads only changed
+rows, `where`, `exclude_columns`, a list column and a query table, loaded twice into DuckDB.
+Offline, the same load runs through the separate process against a stand-in for MotherDuck that
+keeps the database in a local DuckDB file, with the token checked and kept out of every message.

@@ -6,7 +6,7 @@ use crate::adapters::duckdb::_helpers::blocking::with_connection;
 use crate::adapters::duckdb::constants::DESCRIBE_TABLE_SQL;
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination, DuckDbSql};
-use crate::adapters::motherduck_bridge::main::_run_statement::run_statement;
+use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 use crate::column_types::models::LiveColumnType;
 use crate::schema_plan::models::LiveColumn;
 

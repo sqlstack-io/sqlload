@@ -4,7 +4,7 @@ use arrow_array::RecordBatch;
 use parquet::arrow::ArrowWriter;
 
 use crate::adapters::motherduck_bridge::errors::BridgeError;
-use crate::adapters::motherduck_bridge::main::_run_statement::run_statement;
+use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 use crate::adapters::motherduck_bridge::models::BridgeConnection;
 
 /// Run `insert`, whose one `?` is the path of a Parquet file holding `batch` (such as `INSERT INTO t (a) SELECT a FROM read_parquet(?)`), on `connection`. The file is a temporary one on this machine, which DuckDB reads there and removed once the statement ends: the bridge's DuckDB is another version than SQLLoad's, so Arrow cannot cross between them in memory.

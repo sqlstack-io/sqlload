@@ -1,4 +1,5 @@
 pub(in crate::adapters) mod _append_batch;
-pub(in crate::adapters) mod _fork_connection;
 pub(in crate::adapters) mod _open_bridge;
-pub(in crate::adapters) mod _run_statement;
+pub(crate) mod fork_connection;
+pub(crate) mod run_statement;
+pub(crate) mod stream_rows;

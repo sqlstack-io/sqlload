@@ -6,7 +6,7 @@ use crate::adapters::duckdb::_helpers::blocking::with_connection;
 use crate::adapters::duckdb::constants::{DEFINITION_QUERY, INDEXES_QUERY};
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination, DuckDbSql};
-use crate::adapters::motherduck_bridge::main::_run_statement::run_statement;
+use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 
 /// `table`'s columns and constraints as DuckDB would create them, and its indexes' statements on `table` by its full name (DuckDB stores them on `schema.table`, which MotherDuck's other attached databases can make ambiguous); `None` when there is no such table.
 pub(in crate::adapters) async fn table_shape(
