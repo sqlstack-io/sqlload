@@ -8,7 +8,7 @@ every table under a snapshot. Each later load reads the inserts, updates and del
 since the last one from a logical replication slot, applies them, and stops. It loads into
 DuckDB, Snowflake and Databricks targets, and into files targets as a changelog.
 
-Changes to a table's columns carry through while streaming. A table that joins the source is copied on its own, and a
+Most changes to a table's columns carry through while streaming; see [Schema changes](#schema-changes). A table that joins the source is copied on its own, and a
 first snapshot that stopped part-way resumes. `load --follow` keeps streaming. `--reload` refuses
 captured tables on every target (see [Reloading](/docs/guides/postgres-cdc/#reloading)). A load
 into a files target names each table by its folder.
