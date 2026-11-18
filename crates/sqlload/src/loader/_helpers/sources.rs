@@ -163,6 +163,15 @@ pub(crate) fn files_location(
             endpoint: endpoint.clone(),
             profile: profile.clone(),
         },
+        Some(ConnectionConfig::Gcs {
+            bucket,
+            service_account_key,
+            endpoint,
+        }) => StoreKind::Gcs {
+            bucket: bucket.clone(),
+            service_account_key: service_account_key.clone(),
+            endpoint: endpoint.clone(),
+        },
         Some(ConnectionConfig::Filesystem { root }) => StoreKind::Filesystem { root: root.clone() },
         Some(ConnectionConfig::Sftp {
             host,
@@ -186,7 +195,7 @@ pub(crate) fn files_location(
         },
         _ => {
             return Err(LoaderError::Invalid(format!(
-                "connection {:?} is not an s3, filesystem or sftp connection",
+                "connection {:?} is not an s3, gcs, filesystem or sftp connection",
                 source.connection
             )));
         }

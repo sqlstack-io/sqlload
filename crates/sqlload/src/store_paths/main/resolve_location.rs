@@ -25,8 +25,10 @@ pub fn resolve_location(
             prefix: folder(&[path.strip_prefix("~/").unwrap_or(path)])?,
         });
     }
-    let bucket_relative =
-        matches!(connection, Some((_, StoreKind::S3 { .. }))) && !path.contains("://");
+    let bucket_relative = matches!(
+        connection,
+        Some((_, StoreKind::S3 { .. } | StoreKind::Gcs { .. }))
+    ) && !path.contains("://");
     let from_url = match bucket_relative {
         true => None,
         false => url_location(path)?,
