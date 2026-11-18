@@ -159,6 +159,28 @@ whatever its session time zone. A load fails before it commits when DuckDB loads
 of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
 commits once per run rather than about every 1 GB.
 
+### Databricks and ClickHouse read the files themselves
+
+With a stage given by `url`, Databricks and ClickHouse targets read the unloaded files from S3
+themselves too, so no rows pass through SQLLoad:
+
+```text
+route   unload Parquet to s3://example-bucket/unload/ -> Databricks COPY INTO (nothing through the loader)
+route   unload Parquet to s3://example-bucket/unload/ -> ClickHouse reads them (nothing through the loader)
+```
+
+- **Databricks** `COPY`s the files through the Unity Catalog external location that covers the
+  `url`, as for [Parquet files in S3](/docs/targets/databricks/#parquet-files-in-s3). A `url` no
+  external location covers fails `plan` with the fix; the files never go through SQLLoad instead.
+  Each batch lands in a staging or build table, an `append` too, and publishes only when the
+  `COPY`s load as many rows as `COPY INTO` reported unloading.
+- **ClickHouse** reads each file with `s3()` into the load's staging table, signed with the same
+  S3 credentials as SQLLoad, and publishes only when it loads as many rows as were unloaded.
+
+Timestamps come back exactly from their whole microseconds, whatever the session's time zone. A
+table with a `TIME` column, or a `mask`, goes through SQLLoad into either target, and `plan` says
+why: neither stores a time of day as a time.
+
 ### Snowflake loads the rows itself
 
 Into a Snowflake target, no rows pass through SQLLoad in two cases:
