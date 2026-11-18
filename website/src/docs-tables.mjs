@@ -3,6 +3,8 @@
 // - Code in a table's first column doesn't wrap, so a key or flag never breaks. Code there with
 //   spaces, such as a function signature or an error message, may still wrap between its words:
 //   each word becomes a span that doesn't wrap.
+// - A paragraph starting with a superscript number, the note a table's ¹ points to, is small print
+//   (`.sld-note`).
 const isElement = (node, tagName) => node?.type === 'element' && node.tagName === tagName;
 
 function firstColumnCell(node, ctx) {
@@ -24,6 +26,13 @@ export const docsTables = {
 			filter: ['table'],
 			visit(node, ctx) {
 				ctx.wrapNode(node, { type: 'element', tagName: 'div', properties: { className: ['sld-table'] }, children: [] });
+			},
+		},
+		{
+			filter: ['p'],
+			visit(node, ctx) {
+				if (!/^[¹²³⁴⁵⁶⁷⁸⁹]/.test(ctx.textContent(node))) return;
+				return { ...node, properties: { ...node.properties, className: [...(node.properties?.className ?? []), 'sld-note'] } };
 			},
 		},
 		{
