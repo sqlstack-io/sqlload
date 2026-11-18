@@ -32,6 +32,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "on_duplicate_keys",
     "null_keys",
     "replace_key",
+    "on_overlapping_files",
     "newest_by",
     "naming",
     "compat",

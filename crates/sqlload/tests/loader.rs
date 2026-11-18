@@ -85,6 +85,8 @@ mod test_odbc_memory;
 #[cfg(feature = "odbc")]
 #[path = "loader/test_odbc_to_duckdb.rs"]
 mod test_odbc_to_duckdb;
+#[path = "loader/test_overlapping_files.rs"]
+mod test_overlapping_files;
 #[path = "loader/test_parsed_columns.rs"]
 mod test_parsed_columns;
 #[path = "loader/test_plan_progress.rs"]

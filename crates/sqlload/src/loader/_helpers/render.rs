@@ -27,6 +27,7 @@ use crate::load_naming::main::is_load_column::is_load_column;
 use crate::loader::_helpers::publish::{published_once, records_files, send_lines};
 use crate::loader::_helpers::python::{list_choices, unnested_table};
 use crate::loader::_helpers::resolve::display_name;
+use crate::loader::_helpers::run_log::last_wins_note;
 use crate::loader::_helpers::sources::{readers_note, unarchived};
 use crate::loader::_helpers::table_plan::{
     archived_reason, is_direct, publishes_once, pulls_unloaded,
@@ -822,7 +823,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
         }
         (CommitRule::FileGroups(groups), _) if records_files(table) => {
             format!(
-                "{}, one commit each, {}, each recorded in the run log",
+                "{}, one commit each, {}, each recorded in the run log{}",
                 match groups.len() {
                     1 => "1 file".to_owned(),
                     count => format!("{count} files"),
@@ -830,7 +831,8 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 match spec.files_order {
                     FilesOrder::Modified => "oldest modified first (ties by path)",
                     FilesOrder::Path => "in path order",
-                }
+                },
+                last_wins_note(spec.on_overlapping_files)
             )
         }
         (CommitRule::FileGroups(groups), _) => {

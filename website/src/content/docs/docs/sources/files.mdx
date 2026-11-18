@@ -523,11 +523,11 @@ must hold all of a value's rows. Before each commit, SQLLoad finds the files the
 the commit's values came from, by `_sqlload_source_file`. When one of them is still in the folder,
 or loaded earlier in the same run, the table fails, naming both files: two files of the folder
 holding one value, such as the parts of an export split into part files, would leave only the
-later one's rows. The error names the fixes: put all of a value's rows in one file, or, when one
-file restates another, remove the older one from the folder by hand. A failed load moves nothing,
-so `after_load` can't clear the failure, but `after_load = { move_to = ... }` (or `"delete"`, which
-rules out `--reload`) keeps it from happening again: each file leaves the folder once it loads, and
-a file sent later replaces its values. A file sent again under the same name, or one whose earlier
+later one's rows. The error names the fixes: put all of a value's rows in one file; or, when newer
+files restate older ones, set `on_overlapping_files = "last_wins"` (below), or remove the older file
+from the folder by hand. A failed load moves nothing, so `after_load` can't clear the failure, but
+`after_load = { move_to = ... }` (or `"delete"`, which rules out `--reload`) keeps it from happening
+again: each file leaves the folder once it loads, and a file sent later replaces its values. A file sent again under the same name, or one whose earlier
 file has left the folder (deleted, or moved by `after_load`), replaces the value. A file's rows
 always commit together. `plan` refuses a table that excludes `_sqlload_source_file`.
 
@@ -551,6 +551,39 @@ $ sqlload plan -v
     ├── files   1 new of 1 listed
     └── batch   1 file, one commit each, oldest modified first (ties by path), each recorded in the run log
 ```
+
+#### When newer files restate older ones
+
+A feed whose deliveries overlap, each restating the end of the period before, holds one value in
+two files on purpose. `on_overlapping_files = "last_wins"` (default `"fail"`) lets the file last in
+`order` replace the values it holds, even while an earlier file holding them is still in the
+folder. Each file still loads in its own commit, so the earlier file's other values stay:
+
+```text
+sales/
+  sales_2026-11-07.csv   business_date Nov 1 .. Nov 7
+  sales_2026-11-14.csv   business_date Nov 5 .. Nov 14   <- Nov 5 to 7 come from this file
+```
+
+```toml
+[sources.sales]
+kind = "files"
+connection = "lake"
+path = "sales/"
+pattern = "sales_*.csv"
+format = "csv"
+description = "Daily sales, each delivery restating the days before it."
+write_strategy = "delete_insert"
+replace_key = ["business_date"]
+order = "path"
+on_overlapping_files = "last_wins"
+```
+
+Set `order = "path"` when the names sort by date, as here; by default the file modified last wins.
+Leave it at `"fail"` when the files may be parts of one export, as `"last_wins"` would keep only
+the last part's rows of a value split across them. `plan -v` says so on the table's `batch` line.
+It applies only to a files source's `delete_insert` with a `replace_key`, and `plan` refuses it
+elsewhere: a [merge](#merging-files) already lets the last file win each key.
 
 It picks files as [merging files](#merging-files) does: each commit records its file and version in
 `_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
