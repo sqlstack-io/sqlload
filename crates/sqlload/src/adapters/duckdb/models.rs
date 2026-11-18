@@ -11,7 +11,7 @@ pub struct DuckDbDestination {
     pub connection: DuckDbConnection,
     /// Held while a load's tables change the schema, one at a time: DuckDB fails concurrent catalog changes with write-write conflicts.
     pub ddl: Arc<tokio::sync::Mutex<()>>,
-    /// A MotherDuck database (`md:`), which only takes Arrow batches: it never reads files itself.
+    /// A MotherDuck database (`md:`), which reads files itself only from S3, on its servers.
     pub motherduck: bool,
     /// The version of Python's duckdb package the MotherDuck bridge runs, such as `1.5.6`; empty for the bundled DuckDB.
     pub bridge_duckdb: String,

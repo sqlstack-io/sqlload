@@ -56,6 +56,7 @@ impl DuckDbWriter {
             (carried, &in_files),
             &files,
             (target.compat, target.load_id, batch.loaded_at),
+            self.destination.motherduck,
         );
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {

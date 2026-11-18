@@ -1,4 +1,6 @@
 pub(in crate::adapters) mod _append_batch;
+#[cfg(feature = "duckdb")]
+pub(in crate::adapters) mod _check_files;
 pub(in crate::adapters) mod _describe_table;
 pub(in crate::adapters) mod _direct_problem;
 pub(in crate::adapters) mod _execute_statements;

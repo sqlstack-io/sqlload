@@ -89,6 +89,7 @@ pub(crate) fn unloaded_row_loaded(
         },
         &[file],
         ("L1", "2026-11-08T00:00:00Z"),
+        false,
     );
     connection.execute(&insert, []).map_err(failed)?;
     connection
@@ -232,6 +233,7 @@ pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> Str
         },
         &["/unloaded/data_0.parquet".to_owned()],
         ("L1", "2026-11-08T00:00:00Z"),
+        false,
     )
 }
 

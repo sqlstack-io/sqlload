@@ -21,12 +21,13 @@ pub(crate) struct PulledFile {
     pub constants: Vec<(String, Option<String>)>,
 }
 
-/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
+/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns. Into MotherDuck (`remote`) the files are read on its servers.
 pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[(String, String)]),
     files: &[PulledFile],
     (compat, load_id, loaded_at): (Compat, &str, &str),
+    remote: bool,
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -75,11 +76,12 @@ pub(crate) fn pull_insert(
         .map(|column| identifier(&column.name))
         .collect();
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, file_row_number = true, hive_partitioning = false) AS f",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, file_row_number = true, hive_partitioning = false{}) AS f",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
-        urls.join(", ")
+        urls.join(", "),
+        on_servers(remote)
     )
 }
 
@@ -125,7 +127,7 @@ pub(crate) struct UnloadedColumns<'a> {
     pub batch: u64,
 }
 
-/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL.
+/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL. Into MotherDuck (`remote`) the files are read on its servers.
 pub(crate) fn unloaded_insert(
     into: &TableName,
     UnloadedColumns {
@@ -137,6 +139,7 @@ pub(crate) fn unloaded_insert(
     }: UnloadedColumns<'_>,
     urls: &[String],
     (load_id, loaded_at): (&str, &str),
+    remote: bool,
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
     let identifier = |name: &str| DuckDbSql.render_identifier(name);
@@ -169,11 +172,12 @@ pub(crate) fn unloaded_insert(
         false => "",
     };
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false{numbered}) AS f",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false{numbered}{}) AS f",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
-        urls.join(", ")
+        urls.join(", "),
+        on_servers(remote)
     )
 }
 
@@ -212,6 +216,14 @@ fn unloaded_value(output: &ColumnType, quoted: &str) -> String {
         }
         ColumnType::Time => format!("CAST({timestamp} AS TIME)"),
         _ => format!("f.{quoted}"),
+    }
+}
+
+/// The `read_parquet` option that has MotherDuck read the files on its servers (`remote`), so no row passes through this machine; none for SQLLoad's own DuckDB.
+fn on_servers(remote: bool) -> &'static str {
+    match remote {
+        true => ", MD_RUN = REMOTE",
+        false => "",
     }
 }
 
