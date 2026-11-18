@@ -49,6 +49,8 @@ pub struct SchemaRules {
     pub rebuild_allowed: bool,
     /// Whose names the columns the load adds take: a table holding this compat's load id column is SQLLoad's.
     pub compat: Compat,
+    /// The table is a `postgres_cdc` one, which `--reload` never rebuilds.
+    pub cdc: bool,
 }
 
 /// One change to an existing table.

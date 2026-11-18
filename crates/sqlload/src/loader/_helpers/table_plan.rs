@@ -384,6 +384,7 @@ pub(crate) async fn replan_columns(
                 type_change_rebuild: spec.type_change_rebuild,
                 rebuild_allowed: options.rebuild_allowed,
                 compat: spec.compat,
+                cdc: spec.cdc.is_some(),
             };
             let compared = live.as_deref().filter(|_| !options.reload);
             let mut schema = plan_schema(&desired, compared, rules);
@@ -740,6 +741,7 @@ async fn plan_table_once(
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
         compat: spec.compat,
+        cdc: spec.cdc.is_some(),
     };
     let compared = live.as_deref().filter(|_| !options.reload);
     let mut schema = plan_schema(&desired, compared, rules);

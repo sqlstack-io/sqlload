@@ -12,6 +12,12 @@ const DECIMAL: ColumnType = ColumnType::Decimal {
     scale: 2,
 };
 
+/// The narrowest two-place decimal that holds every `int`.
+const HOLDS_INT: ColumnType = ColumnType::Decimal {
+    precision: 21,
+    scale: 2,
+};
+
 #[test]
 fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies() {
     let test_cases = [
@@ -118,7 +124,7 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
         },
         PlanSchemaTestCase {
             description: "a rebuild waits for confirmation by default",
-            desired: vec![pinned("amount", DECIMAL)],
+            desired: vec![pinned("amount", HOLDS_INT)],
             live: Some(vec![live("AMOUNT", ColumnType::Int)]),
             rules: snowflake_rules(),
             expected_action: &["unchanged"],
@@ -129,13 +135,13 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
         },
         PlanSchemaTestCase {
             description: "the flag confirms a rebuild",
-            desired: vec![pinned("amount", DECIMAL)],
+            desired: vec![pinned("amount", HOLDS_INT)],
             live: Some(vec![live("AMOUNT", ColumnType::Int)]),
             rules: SchemaRules {
                 rebuild_allowed: true,
                 ..snowflake_rules()
             },
-            expected_action: &["rebuild  AMOUNT int -> decimal(18,2) (NUMBER(21,2))"],
+            expected_action: &["rebuild  AMOUNT int -> decimal(21,2) (NUMBER(21,2))"],
             expected_written: &["amount"],
             expected_blocked: "",
             expected_fix_flag: None,
@@ -143,7 +149,7 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
         },
         PlanSchemaTestCase {
             description: "deny blocks a rebuild even with the flag",
-            desired: vec![pinned("amount", DECIMAL)],
+            desired: vec![pinned("amount", HOLDS_INT)],
             live: Some(vec![live("AMOUNT", ColumnType::Int)]),
             rules: SchemaRules {
                 type_change_rebuild: Policy::Deny,
@@ -153,6 +159,205 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_action: &["unchanged"],
             expected_written: &[],
             expected_blocked: "type_change_rebuild = \"deny\"",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin narrower than the table's decimal is refused, naming both types",
+            desired: vec![pinned(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![live(
+                "total",
+                ColumnType::Decimal {
+                    precision: 12,
+                    scale: 2,
+                },
+            )]),
+            rules: SchemaRules {
+                warehouse: Warehouse::DuckDb,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "total is decimal(12,2) in the table but pinned as decimal(8,2)",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin narrower than the table's varchar is refused",
+            desired: vec![pinned("name", ColumnType::Varchar(32))],
+            live: Some(vec![live("NAME", ColumnType::Varchar(64))]),
+            rules: snowflake_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "NAME is varchar(64) in the table but pinned as varchar(32)",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin the warehouse stores as the table's type loads (smallint is a 38-digit integer on Snowflake)",
+            desired: vec![pinned("tier", ColumnType::SmallInt)],
+            live: Some(vec![live("TIER", ColumnType::Int)]),
+            rules: snowflake_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["tier"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a narrower type the source reports, not pinned, loads into the wider column",
+            desired: vec![inferred(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![live(
+                "total",
+                ColumnType::Decimal {
+                    precision: 12,
+                    scale: 2,
+                },
+            )]),
+            rules: SchemaRules {
+                warehouse: Warehouse::DuckDb,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &["total"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a narrower pin on Postgres, which never rebuilds a table, names altering the column, not --reload",
+            desired: vec![pinned(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![
+                live(
+                    "total",
+                    ColumnType::Decimal {
+                        precision: 12,
+                        scale: 2,
+                    },
+                ),
+                live("_sqlload_load_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "pin the table's type (columns = { total = \"decimal(12,2)\" }), or alter the column to the pinned type yourself",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a narrower pin on a postgres_cdc table, which --reload never rebuilds, names altering the column",
+            desired: vec![pinned("name", ColumnType::Varchar(32))],
+            live: Some(vec![live("NAME", ColumnType::Varchar(64))]),
+            rules: SchemaRules {
+                cdc: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "pin the table's type (columns = { name = \"varchar(64)\" }), or alter the column to the pinned type yourself",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a narrower pin on Parquet files names the existing files",
+            desired: vec![pinned(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![live(
+                "total",
+                ColumnType::Decimal {
+                    precision: 12,
+                    scale: 2,
+                },
+            )]),
+            rules: SchemaRules {
+                warehouse: Warehouse::Parquet,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "total is decimal(12,2) in the existing files but pinned as decimal(8,2), and a load never narrows a column; pin the files' type (columns = { total = \"decimal(12,2)\" }), or rewrite every file at the pinned type with --reload (--resnapshot for a postgres_cdc table)",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin that would widen the column past itself is refused, naming the type that holds both",
+            desired: vec![pinned("amount", DECIMAL)],
+            live: Some(vec![
+                live("amount", ColumnType::Int),
+                live("_sqlload_load_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "amount is int in the table but pinned as decimal(18,2), which does not hold every int; pin decimal(21,2) to widen it (columns = { amount = \"decimal(21,2)\" })",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin that holds the column widens it to exactly the pin",
+            desired: vec![pinned(
+                "amount",
+                ColumnType::Decimal {
+                    precision: 21,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![
+                live("amount", ColumnType::Int),
+                live("_sqlload_load_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["widen  amount int -> decimal(21,2) (numeric(21,2))  in place"],
+            expected_written: &["amount"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "an inferred column refused for widening suggests the type that holds both",
+            desired: vec![inferred("amount", DECIMAL)],
+            live: Some(vec![
+                live("amount", ColumnType::Int),
+                live("_sqlload_load_id", ColumnType::Text),
+            ]),
+            rules: postgres_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a Snowflake varchar pin at the text length loads into the VARCHAR column it created",
+            desired: vec![pinned("note", ColumnType::Varchar(16_777_216))],
+            live: Some(vec![live("NOTE", ColumnType::Text)]),
+            rules: snowflake_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["note"],
+            expected_blocked: "",
             expected_fix_flag: None,
             expected_warnings: 0,
         },
@@ -206,7 +411,7 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             },
             expected_action: &["unchanged"],
             expected_written: &[],
-            expected_blocked: "AMOUNT is int in the table but decimal(18,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(18,2)\" }, or set auto_widen = true",
+            expected_blocked: "AMOUNT is int in the table but decimal(18,2) in the source; pin the wider type to widen it, for example columns = { amount = \"decimal(21,2)\" }, or set auto_widen = true",
             expected_fix_flag: None,
             expected_warnings: 0,
         },

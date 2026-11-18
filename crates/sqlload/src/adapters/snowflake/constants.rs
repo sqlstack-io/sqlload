@@ -38,7 +38,7 @@ pub const STREAM_PIPE_SUFFIX: &str = "-STREAMING";
 /// The temporary table probing whether table stages work for this role.
 pub const STAGE_PROBE_TABLE: &str = "__sqlload_stage_probe";
 
-/// The longest text Snowflake holds, which `DESCRIBE TABLE` reports as the length of an unbounded `VARCHAR`.
+/// The length `DESCRIBE TABLE` reports for an unbounded `VARCHAR`, the longest one SQLLoad creates.
 pub const MAX_TEXT_LENGTH: i64 = 16_777_216;
 
 /// Statements that start this way run in a transaction of their own, unlike Snowflake's DDL, which commits by itself.
