@@ -3,8 +3,8 @@ title: "Files"
 description: "The files source: settings, which files load, columns, columns from paths, whole records, SFTP servers and the files a destination reads itself."
 ---
 
-A files source is one table built from every file under a folder, in S3, a local folder or an
-SFTP server. To set one up, see [Load files](/docs/guides/files/).
+A files source is one table built from every file under a folder, in S3, Google Cloud Storage, a
+local folder or an SFTP server. To set one up, see [Load files](/docs/guides/files/).
 
 ```toml
 [connections.lake]
@@ -25,7 +25,7 @@ cursor_column = "dt"
 
 | Setting | Meaning |
 |---------|---------|
-| `connection` | An `s3` or `filesystem` connection, or an `sftp` connection. |
+| `connection` | An `s3`, `gcs` or `filesystem` connection, or an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
 | `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
 | `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
@@ -667,7 +667,8 @@ after_load = { move_to = "loaded" }
   `loaded/2026/a.csv`.
 - A file already at the destination is never replaced: both stay. On a local disk a move is a hard
   link, then a delete; where a hard link fails, as across volumes, the file is copied into a new
-  file that is created only if none is there. S3 has no copy that refuses to replace a file, so
+  file that is created only if none is there. GCS copies only if no file is there.
+  S3 has no copy that refuses to replace a file, so
   SQLLoad checks the destination is free, then copies on the server: a file written to that same
   key at that moment would be replaced. S3 copies files of up to 5 GB; a larger one stays where it
   is and is reported. Either way the copy's size is checked before the source is deleted.
@@ -726,7 +727,7 @@ on_empty = "skip"
 - Only an existing folder holding no file at all (hidden ones aside) counts as empty. A missing
   folder, one that can't be read, and one holding files of another format or that don't match
   `path_columns` still fail.
-- S3 and SFTP list a folder that doesn't exist as empty, so SQLLoad can't tell a mistyped `path`
+- S3, GCS and SFTP list a folder that doesn't exist as empty, so SQLLoad can't tell a mistyped `path`
   from an empty one there. On those connections `on_empty = "skip"` skips an empty
   folder only once its table exists; before its first load it fails, naming the path.
 - `after_load` already skips a folder it emptied once its table exists, without `on_empty`.
@@ -877,7 +878,9 @@ set one up, see [Load files from an SFTP server](/docs/guides/files/#load-files-
 When the destination can load the files exactly by itself, it does, and no row passes through
 SQLLoad:
 
-- **DuckDB** reads Parquet in S3 or a local folder with `read_parquet`.
+- **DuckDB** reads Parquet in S3 or a local folder with `read_parquet`, and in GCS when the `gcs`
+  connection has an HMAC key.
+- **MotherDuck** reads Parquet in S3, and in GCS with an HMAC key, on its servers.
 - **Snowflake** runs `COPY` from an external stage over the files' bucket, for Parquet, JSON,
   NDJSON and CSV.
 - **ClickHouse** reads Parquet in S3 with `s3()`.
