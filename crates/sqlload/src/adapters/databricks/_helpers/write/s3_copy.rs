@@ -9,6 +9,7 @@ use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
 use crate::load_naming::models::MetadataRole;
 use crate::schema_plan::models::DesiredColumn;
+use arrow_schema::{Field, Schema};
 
 /// The path `COPY INTO` reads each row from, as SQLLoad names it: `_metadata.file_path` is percent-encoded, except for `+`, which `url_decode` alone would read as a space.
 const FILE_PATH: &str = "url_decode(replace(_metadata.file_path, '+', '%2B'))";
@@ -100,4 +101,38 @@ fn per_file(batch: &S3Batch, given: &[(&S3File, Option<&String>)]) -> String {
         "CASE {FILE_PATH} {} ELSE raise_error(concat('sqlload: COPY INTO read a file outside the batch: ', _metadata.file_path)) END",
         picks.join(" ")
     )
+}
+
+/// `files`, in order, in the `COPY INTO`s that load them: at most `limit` to each (the most `FILES` takes), and never two that hold one column as different types, which `mergeSchema` refuses to merge (an INT32 in one file and an INT64 in another).
+pub(crate) fn copy_groups<T>(files: Vec<(T, &Schema)>, limit: usize) -> Vec<Vec<T>> {
+    let mut groups: Vec<(Vec<T>, Vec<&Field>)> = Vec::new();
+    for (file, schema) in files {
+        let joins = groups
+            .iter()
+            .position(|(members, held)| members.len() < limit && agrees(held, schema));
+        let index = joins.unwrap_or_else(|| {
+            groups.push((Vec::new(), Vec::new()));
+            groups.len() - 1
+        });
+        let (members, held) = &mut groups[index];
+        members.push(file);
+        for field in schema.fields() {
+            if !held.iter().any(|other| other.name() == field.name()) {
+                held.push(field);
+            }
+        }
+    }
+    groups.into_iter().map(|(members, _)| members).collect()
+}
+
+/// Whether `schema` holds every column it shares with `held` as the same type.
+fn agrees(held: &[&Field], schema: &Schema) -> bool {
+    for field in schema.fields() {
+        for other in held {
+            if other.name() == field.name() && other.data_type() != field.data_type() {
+                return false;
+            }
+        }
+    }
+    true
 }

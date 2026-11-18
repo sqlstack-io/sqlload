@@ -71,6 +71,12 @@ pub(crate) fn other_reads(
             overrides,
             &format!("{LOADER_READS_BECAUSE} {reason}"),
         ),
+        (false, None, Some(reason)) if must_pull(writer, files).is_some() => loader_reads(
+            files,
+            writer,
+            overrides,
+            &format!("{LOADER_READS_BECAUSE} {reason}"),
+        ),
         (false, None, None) if must_pull(writer, files).is_some() => Err(RouteError::Uncovered {
             location: files.store.to_string(),
             reason: must_pull(writer, files).unwrap_or_default(),

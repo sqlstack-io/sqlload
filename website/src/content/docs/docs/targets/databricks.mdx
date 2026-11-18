@@ -56,7 +56,8 @@ is still filling is kept.
 
 Parquet files of a files source in S3 load straight from the bucket, with no row passing through
 SQLLoad, when a Unity Catalog external location covers their folder. `plan` lists the external
-locations the service principal can see, which needs `READ FILES` on the one it reads through:
+locations the service principal can see, and checks with `LIST` that it can read a folder holding
+files to load, which needs `READ FILES` on the location it reads through:
 
 ```sql
 CREATE EXTERNAL LOCATION lake URL 's3://example-bucket/events/' WITH (STORAGE CREDENTIAL lake_reader);
@@ -67,17 +68,23 @@ GRANT READ FILES ON EXTERNAL LOCATION lake TO `<service principal application id
 route   Databricks COPYs directly from s3://example-bucket/events/ (nothing through the loader)
 ```
 
-Each batch is one `COPY INTO` over its files, so a batch lands whole or not at all. The columns
-SQLLoad adds (`_sqlload_source_file`, `_sqlload_source_version`, `_sqlload_source_row`, the load id
-and time) and partition values from the path are filled in the same statement, and the batch fails
-when Databricks reports inserting a different number of rows than the files' footers hold.
+Each batch is one `COPY INTO` over its files, so a batch lands whole or not at all. A batch needs
+more than one only when it holds over 1,000 files (the most `FILES` takes, as one partition of a
+`delete_insert` on a partition cursor can) or files holding one column as different types, such as
+a 32-bit integer in one file and a 64-bit one in another, which Databricks won't merge in one
+`COPY`. Such a batch lands in a staging table first, or, for an `append` straight into the table,
+takes back the rows it loaded when a later `COPY` fails. The columns SQLLoad adds
+(`_sqlload_source_file`, `_sqlload_source_version`, `_sqlload_source_row`, the load id and time)
+and partition values from the path are filled in the same statement, and the batch fails when
+Databricks reports inserting a different number of rows than the files' footers hold.
 
 Parquet in S3 that no external location covers fails `plan`, naming the folder and the fix; such
 files never go through SQLLoad instead. Files go through SQLLoad, staged in the volume as below,
 when Databricks can't load them exactly by reading them itself, and `plan` says why, such as for
 CSV and JSON files, a table that masks columns, has checks or flattens objects, a column held in a way a cast
 wouldn't keep exactly (nanoseconds, a type other than the one it loads as), a time, a UUID or a
-list, and files on an S3-compatible endpoint, which no external location reaches. Files in a local
+list, and files on an S3-compatible endpoint (set on the connection or in `AWS_ENDPOINT` or
+`AWS_ENDPOINT_URL`), which no external location reaches. Files in a local
 folder or over SFTP always go through SQLLoad. `copy_to_internal_stage` is for Snowflake and is
 refused here.
 
@@ -144,8 +151,10 @@ values checked against each source after every round.
 | Files on an SFTP server (gzip CSV, Parquet) | live | not run | not run | refused at `plan` |
 
 Parquet in S3 copied through an external location was also run live with `append`, `replace` and
-`delete_insert` (a staging table), each table compared row for row, lineage columns included, with
-the same files loaded through SQLLoad.
+`delete_insert` (a staging table), including files mixing 32-bit and 64-bit integers, each table
+compared row for row, lineage columns included, with the same files loaded through SQLLoad. A
+folder under an external location the service principal can't read failed `plan` with the grant
+to add.
 
 `merge` is refused for files sources on every target. The live rounds also covered incremental
 loads on a cursor, rows with a NULL cursor under `delete_insert`, an added column, widening a

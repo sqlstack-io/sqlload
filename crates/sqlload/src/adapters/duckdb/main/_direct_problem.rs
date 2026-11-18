@@ -1,7 +1,8 @@
 //! Whether DuckDB may load a files table's files itself.
 
+use crate::adapters::contract::main::_custom_endpoint::custom_endpoint;
 use crate::adapters::contract::main::_files_direct_problem::files_direct_problem;
-use crate::adapters::duckdb::_helpers::direct_checks::{custom_endpoint, reserved_name};
+use crate::adapters::duckdb::_helpers::direct_checks::reserved_name;
 use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
 use crate::files_source::models::{FilesRead, SourceFormat};
 use crate::loader::models::TableSpec;

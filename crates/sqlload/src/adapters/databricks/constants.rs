@@ -26,6 +26,9 @@ pub const COPY_OPTIONS: &str = "FILEFORMAT = PARQUET COPY_OPTIONS ('force' = 'tr
 pub const S3_COPY_OPTIONS: &str =
     "FORMAT_OPTIONS ('mergeSchema' = 'true') COPY_OPTIONS ('force' = 'true')";
 
+/// The most files one `COPY INTO`'s `FILES` list takes.
+pub const MAX_FILES_PER_COPY: usize = 1000;
+
 /// The external locations the service principal can see.
 pub const LIST_LOCATIONS: &str = "SHOW EXTERNAL LOCATIONS";
 

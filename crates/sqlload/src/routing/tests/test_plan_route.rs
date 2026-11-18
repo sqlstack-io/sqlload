@@ -5,7 +5,9 @@ use crate::routing::tests::helpers::{
     files_source, internal_stage, local_destination, object_store, streaming_source, user_stage,
     warehouse_destination, warehouse_source,
 };
-use crate::routing::tests::test_types::{PlanRouteErrorTestCase, PlanRouteTestCase};
+use crate::routing::tests::test_types::{
+    PlanRouteErrorTestCase, PlanRouteReasonTestCase, PlanRouteTestCase,
+};
 
 const HMAC: &str = "email masked with hmac, whose key must never appear in SQL";
 const SMALL: Option<u64> = Some(1024 * 1024);
@@ -365,6 +367,33 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
         assert!(
             error.contains(test_case.expected_message),
             "{}: {error}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_files_sqlload_must_read_when_planning_then_the_route_says_why() {
+    let test_cases = [PlanRouteReasonTestCase {
+        description: "Parquet in S3 Databricks can't load exactly, outside every external location",
+        reader: ReaderOffer {
+            direct_blocked: Some("at is a time".to_owned()),
+            ..files_source("s3://other/scores/", FileFormat::Parquet)
+        },
+        writer: databricks_destination(),
+        expected_reason: "SQLLoad reads the files because at is a time",
+    }];
+    for test_case in test_cases {
+        let reason = plan_route(
+            &test_case.reader,
+            &test_case.writer,
+            RouteOverrides::default(),
+        )
+        .map(|route| route.reason)
+        .unwrap_or_default();
+        assert!(
+            reason.starts_with(test_case.expected_reason),
+            "{}: {reason}",
             test_case.description
         );
     }

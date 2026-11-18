@@ -1200,17 +1200,22 @@ fn copy_warning(route: Option<&Route>) -> Option<String> {
     ))
 }
 
-/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3 it first looks up where the destination reads files itself (Databricks' external locations).
+/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3 that nothing sends through SQLLoad, it first looks up where the destination reads files itself (Databricks' external locations).
 pub(crate) async fn table_route(
     spec: &TableSpec,
     read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
     destination: &Destination,
 ) -> Result<Route, String> {
-    if let Some(StoreKind::S3 { .. }) = spec.files.as_ref().map(|files| &files.location.store) {
-        list_reach(destination).await?;
-    }
     let reader = reader_offer(spec, read, stage);
+    let in_place = reader.needs_loader.is_none() && reader.direct_blocked.is_none();
+    if let Some(files) = spec.files.as_ref().filter(|_| in_place)
+        && let StoreKind::S3 { .. } = files.location.store
+    {
+        let folder = files.location.to_string();
+        let holds_files = read.is_some_and(|read| !read.files.is_empty());
+        list_reach(destination, holds_files.then_some(folder.as_str())).await?;
+    }
     plan_route(
         &reader,
         &writer_accepts(destination, stage),

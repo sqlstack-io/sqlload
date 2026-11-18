@@ -1,5 +1,10 @@
+use crate::adapters::databricks::_helpers::stage::locations::location_url;
+use crate::adapters::databricks::_helpers::write::s3_copy::copy_groups;
 use crate::adapters::databricks::tests::helpers::s3_copy_sql;
-use crate::adapters::databricks::tests::test_types::RenderedTestCase;
+use crate::adapters::databricks::tests::test_types::{
+    CopyGroupsTestCase, LocationUrlTestCase, RenderedTestCase,
+};
+use arrow_schema::{DataType, Field, Schema};
 
 #[test]
 fn given_a_batch_of_parquet_files_in_s3_when_databricks_copies_them_then_each_row_gets_its_files_values_and_the_files_own_columns()
@@ -19,6 +24,103 @@ fn given_a_batch_of_parquet_files_in_s3_when_databricks_copies_them_then_each_ro
     for test_case in &test_cases {
         assert_eq!(
             test_case.rendered, test_case.expected_statement,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_batchs_parquet_files_when_databricks_copies_them_then_each_copy_holds_files_whose_shared_columns_agree_and_no_more_than_files_takes()
+ {
+    let test_cases = [
+        CopyGroupsTestCase {
+            description: "files that agree, or hold different columns, share one copy",
+            files: vec![
+                ("a", vec![("id", DataType::Int64)]),
+                ("b", vec![("id", DataType::Int64), ("name", DataType::Utf8)]),
+                ("c", vec![("name", DataType::Utf8)]),
+            ],
+            limit: 1000,
+            expected_groups: vec![vec!["a", "b", "c"]],
+        },
+        CopyGroupsTestCase {
+            description: "an INT32 and an INT64 of one column go to separate copies, and a later file joins the first copy it agrees with",
+            files: vec![
+                ("a", vec![("id", DataType::Int32)]),
+                ("b", vec![("id", DataType::Int64)]),
+                ("c", vec![("id", DataType::Int32), ("x", DataType::Utf8)]),
+                ("d", vec![("x", DataType::Int64)]),
+            ],
+            limit: 1000,
+            expected_groups: vec![vec!["a", "c"], vec!["b", "d"]],
+        },
+        CopyGroupsTestCase {
+            description: "no copy holds more files than the limit",
+            files: vec![
+                ("a", vec![("id", DataType::Int64)]),
+                ("b", vec![("id", DataType::Int64)]),
+                ("c", vec![("id", DataType::Int64)]),
+            ],
+            limit: 2,
+            expected_groups: vec![vec!["a", "b"], vec!["c"]],
+        },
+    ];
+    for test_case in test_cases {
+        let schemas: Vec<(&str, Schema)> = test_case
+            .files
+            .iter()
+            .map(|(name, columns)| {
+                let fields: Vec<Field> = columns
+                    .iter()
+                    .map(|(column, data_type)| Field::new(*column, data_type.clone(), true))
+                    .collect();
+                (*name, Schema::new(fields))
+            })
+            .collect();
+        let groups = copy_groups(
+            schemas
+                .iter()
+                .map(|(name, schema)| (*name, schema))
+                .collect(),
+            test_case.limit,
+        );
+        assert_eq!(
+            groups, test_case.expected_groups,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_an_external_locations_url_when_comparing_folders_with_it_then_it_is_an_s3_folder() {
+    let test_cases = [
+        LocationUrlTestCase {
+            description: "an s3:// URL without a trailing slash",
+            url: "s3://lake/raw",
+            expected_url: "s3://lake/raw/",
+        },
+        LocationUrlTestCase {
+            description: "an s3a:// URL",
+            url: "s3a://lake/raw/",
+            expected_url: "s3://lake/raw/",
+        },
+        LocationUrlTestCase {
+            description: "an s3n:// URL of a whole bucket",
+            url: "s3n://lake",
+            expected_url: "s3://lake/",
+        },
+        LocationUrlTestCase {
+            description: "an Azure URL stays as it is",
+            url: "abfss://box@account.dfs.core.windows.net/raw",
+            expected_url: "abfss://box@account.dfs.core.windows.net/raw/",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            location_url(test_case.url),
+            test_case.expected_url,
             "{}",
             test_case.description
         );
