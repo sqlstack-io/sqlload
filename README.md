@@ -20,23 +20,23 @@
 </p>
 
 SQLLoad loads databases, files, APIs and Kafka into your warehouse. `sqlload plan` shows every
-table and how it loads before anything moves, and `plan -v` adds each column's type and the run's
-memory budget. Decimals keep their precision, a load that can't fit a column's values stops with
-the reason and the fix, and each run stays within one memory budget. Incremental tables carry on
-from the warehouse's own maximum, so there's no state to drift.
+table and how it loads before anything moves, and `plan -v` adds each new table's column types and
+the run's memory budget. Decimals keep their precision, a value a column can't hold exactly fails
+its table, naming the column and the value, and each run has one memory budget. Tables with a
+cursor column carry on from the warehouse's own maximum, so there's no state to drift.
 
 ```bash
 pip install sqlload        # or: uv tool install sqlload
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="In the playground project, sqlload plan lists the two tables it will create in DuckDB and how each loads from CSV files; sqlload load creates them and loads 1,050 rows, reporting the slowest table and peak memory; with cursor_column misspelled as updated, the next load stops before loading anything: did you mean updated_at?" width="100%">
+  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="In the playground project, sqlload plan lists the two tables it will create in DuckDB and how each loads from CSV files; sqlload load creates them and loads 1,050 rows, reporting the slowest table and peak memory; with cursor_column misspelled as updated, the next load refuses raw.orders before loading it: did you mean updated_at?" width="100%">
 </p>
 
 In the [playground](https://sqlload.io/docs/cli/playground/) project, `sqlload plan` shows the
 tables it will create and how each loads, and `sqlload load` creates and fills them. With
-`cursor_column` misspelled, the next load stops before it touches a table, and says which column
-was meant.
+`cursor_column` misspelled, the next load refuses the orders table before touching it, and says
+which column was meant.
 
 ## Quick start
 
@@ -61,18 +61,20 @@ names dlt gave your tables.
 
 ## Why SQLLoad
 
-- **Exact types.** A source's `decimal(12,2)` loads as `DECIMAL(12,2)`, timestamps keep their
+- **Exact types.** A source's `decimal(12,2)` loads as `DECIMAL(12,2)` (`NUMBER(12,2)` on
+  Snowflake), timestamps keep their
   microseconds, and a pinned type narrower than the live column fails `plan` rather than cutting
   values. See [contracts](https://sqlload.io/docs/concepts/contracts/).
-- **Loud failures.** `plan` names each problem and its fix before anything is created. A table
-  whose [checks](https://sqlload.io/docs/concepts/checks/) fail publishes nothing, every commit
-  lands whole even if a load is killed halfway, and a full refresh swaps in at once, so readers
-  see the old table or the new one, never a mix.
+- **Loud failures.** `plan` names each problem it can find, such as a misspelled column, a
+  narrowing type or a budget too small, and its fix, before anything is created. A commit whose
+  [checks](https://sqlload.io/docs/concepts/checks/) fail publishes none of its rows, every commit
+  lands whole even if a load is killed halfway, and in a warehouse a full refresh swaps in at once,
+  so readers see the old table or the new one, never a mix.
 - **Bounded memory.** A run has one [memory budget](https://sqlload.io/docs/cli/load/#memory-budget),
   shared out between its tables. A budget too small for even one table is refused before anything
   loads, and near the limit SQLLoad stops a table, or the run, and rolls back what it was
-  writing, rather than being killed by the operating system.
-- **No hidden state.** Incremental tables carry on from the
+  writing, rather than waiting for the operating system to kill it.
+- **No hidden state.** Tables with a `cursor_column` carry on from the
   [warehouse's own maximum](https://sqlload.io/docs/concepts/cursors/) of the cursor column, so a
   table you fix or reload by hand never disagrees with a state file.
 

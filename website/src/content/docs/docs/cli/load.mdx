@@ -159,11 +159,11 @@ tables of one run: the table that uses too much stands out. On other systems, `p
 
 ## Memory budget
 
-A run stays under one memory budget, and `plan` shows it first, with where it came
+A run stays under one memory budget, and `plan -v` shows it first, with where it came
 from and how it's shared:
 
 ```console
-$ sqlload plan --memory-limit 1200MB
+$ sqlload plan -v --memory-limit 1200MB
 Memory  1.1 GiB budget (--memory-limit); 39.8 MiB held before loading; DuckDB 488 MiB (memory_limit 244 MiB, 2 threads); 154 MiB per table, 4 at once
 
 Objects (2)                                                                     sqlload apply
@@ -198,7 +198,7 @@ loads with no watchdog, no pieces (each commit is whole), DuckDB with its own
 `memory_limit` (80% of the machine's memory) and threads and its own checkpoints, and an ODBC
 [fetch buffer](/docs/sources/odbc/#memory) of 512 MiB per table. Only the
 [row-group check](#large-rows-in-duckdb) stays, against DuckDB's own `memory_limit`, since a
-checkpoint that can't rewrite a row group fails whatever the budget. `plan` always shows the line,
+checkpoint that can't rewrite a row group fails whatever the budget. `plan -v` always shows the line,
 and `load` still reports its peak memory:
 
 ```text

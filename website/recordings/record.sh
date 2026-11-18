@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record one demo to out/<demo>.gif and out/<demo>.mp4. Usage: record.sh <demo>
+# Record one demo to out/<demo>.gif, out/<demo>.mp4 and out/<demo>.png. Usage: record.sh <demo>
 # Uses the sqlload on PATH; set SQLLOAD_BIN to a directory containing another sqlload to use that instead.
 set -euo pipefail
 demo="$1"

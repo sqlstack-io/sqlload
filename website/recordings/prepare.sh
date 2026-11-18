@@ -12,7 +12,8 @@ case "$demo" in
     # The playground project, and a copy of its settings with cursor_column misspelled, which the
     # tape swaps in after the first load.
     sqlload playground shop >/dev/null
-    sed '/^unique_key = \["order_id"\]/a cursor_column = "updated"' shop/sqlload.toml > typo.toml ;;
+    awk '{print} /^unique_key = \["order_id"\]$/ {print "cursor_column = \"updated\""}' shop/sqlload.toml > typo.toml
+    grep -q '^cursor_column = "updated"' typo.toml || { echo "prepare.sh: no unique_key line to add the typo after" >&2; exit 1; } ;;
   *)
     echo "unknown demo: $demo" >&2
     exit 2 ;;
