@@ -72,11 +72,15 @@ The `ssh` table:
 
 ### `databricks`
 
+In beta.
+
 | Key | Meaning |
 |-----|---------|
 | `host`, `client_id`, `client_secret`, `warehouse_id`, `catalog`, `volume` | See [Databricks](/docs/targets/databricks/#connection). All required, except `volume` on a connection only a [source](/docs/sources/databricks/) uses. |
 
 ### `bigquery`
+
+In beta.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
@@ -277,7 +281,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `replace_key` | none | A column or list of columns whose values `delete_insert` replaces whole: each commit deletes the rows holding a value its rows hold, then inserts them. Not unique. Only for `delete_insert`, and not with a `cursor_column`: each load reads the whole source, or a files source's new and changed files. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). |
 | `deletes` | none | `soft` or `hard`: what `load --sync-deletes` does with the rows of a `merge` table whose key the source no longer holds (Postgres, ODBC, Snowflake and BigQuery sources, and Databricks sources, into DuckDB and Postgres targets, Snowflake, MotherDuck, and BigQuery and Databricks). `soft` sets `_sqlload_deleted_at`; `hard` removes the row. A `postgres_cdc` source applies captured deletes this way, `soft` by default. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
 | `deletes_from` | none | Tables only: `{ table = "audit.deleted_items", cursor_column = "deleted_at" }`, a source table recording deleted keys. Every load loads its new rows into `<table>__sqlload_deletes` and marks the rows they name, as `deletes` says. `lookback = "1h"` reads that far back again on every load, for tombstones written by long transactions. See [Deletes from a tombstone table](/docs/concepts/write-strategies/#deletes-from-a-tombstone-table). |
-| `newest_by` | none | Replacing `dedup_sort`. A column, or a list compared in order, whose higher value is a row's newer version: `merge` keeps the newest of a commit's rows sharing a key, and never overwrites the table's row with an older one. Without it, the row read last wins. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
+| `newest_by` | none | A column, or a list compared in order, whose higher value is a row's newer version: `merge` keeps the newest of a commit's rows sharing a key, and never overwrites the table's row with an older one. Without it, the row read last wins. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
 | `cursor_column` | none | The column runs continue from. A list such as `["updated_at", "created_at"]` reads the first non-NULL column of each row. See [Cursors](/docs/concepts/cursors/). |
 | `cursor_start` | none | Where the first run starts. |
 | `lookback` | none | Read this far before the maximum: a duration on a date or timestamp cursor, such as `"2h"`; a number of cursor units on an integer cursor, such as `1`. See [Cursors](/docs/concepts/cursors/#fiscal-year-tables). |
@@ -299,7 +303,7 @@ Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"
 | `state` | `stateless` | Python tables only. `logged` keeps the table's position in the run log (`ctx.state`) instead of deriving it from the data. See [Logged state](/docs/concepts/cursors/#logged-state). |
 | `type_change_rebuild` | `require_confirmation` | `allow`, `require_confirmation` or `deny`. |
 | `checks` | none | `{ unique, not_null, min_rows, max_row_drop, warn }`, run on the staged rows before they're published. See [Checks before publish](/docs/concepts/checks/). |
-| `constant_columns` | none | The same value in every row, such as `{ tenant_id = "acme" }`, typed by its TOML value or `{ value, type }`. On files sources; on every source but `postgres_cdc`, and per table, where a table's map replaces its source's. A files source replaces a file column of the same name, and `plan` notes it; every other source fails at `plan` when it already has a column of the name, ignoring case, before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
+| `constant_columns` | none | The same value in every row, such as `{ tenant_id = "acme" }`, typed by its TOML value or `{ value, type }`. On every source but `postgres_cdc`, and per table, where a table's map replaces its source's. A files source replaces a file column of the same name, and `plan` notes it; every other source fails at `plan` when it already has a column of the name, ignoring case, before anything is written. See [Several tenants in one table](/docs/concepts/write-strategies/#several-tenants-in-one-table). |
 | `unnest` | none | In a table entry only: the dotted paths of the list fields whose items become rows of child tables, such as `["items", "items.parts"]`, or `"all"`. See [Nested data](/docs/concepts/nested-data/). |
 | `flatten` | none | In a table entry only: the dotted paths of the objects whose keys load as `<object>__<key>` columns, such as `["customer", "customer.address"]`, or `"all"`. JSON and NDJSON files default to `"all"` under `compat = "dlt"`. See [Flattening objects](/docs/concepts/nested-data/#flattening-objects). |
 | `max_depth` | `1000` | In a table entry with `unnest` or `flatten`: how many levels of child tables it makes and objects it flattens at most. |

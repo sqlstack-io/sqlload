@@ -177,7 +177,7 @@ publishes a whole run at once: about 1.5 GiB for 5 million rows of four columns,
 for 20 million narrower rows, each over 1,000 daily partitions. ClickHouse sorts on disk instead
 only once the sort reaches half the memory the server and user have free when it starts, not by a
 per-query `max_memory_usage`. Where the sort runs out of memory, SQLLoad inserts the rows unsorted
-instead, as before: more parts, which ClickHouse merges in the background.
+instead: more parts, which ClickHouse merges in the background.
 
 `replace` and `--reload` into a partitioned table send their rows to an unpartitioned
 table sorted by the partition key, then move them into the new table with one `INSERT ... SELECT`

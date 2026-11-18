@@ -8,7 +8,7 @@ results from any database that has an ODBC driver. SQLLoad reads the rows as Arr
 driver and loads them into the source's target.
 
 The `sqlload` and `sqlload-cli` wheels include ODBC on every
-platform. Before that, and in a build from source (`cargo install`, or pip building an sdist where
+platform. In a build from source (`cargo install`, or pip building an sdist where
 no wheel fits), ODBC is built only with the `odbc` feature (`cargo install sqlload --features odbc`);
 without it, `plan` refuses an `odbc` source.
 
@@ -362,7 +362,7 @@ to raise; it's never cut short. In a long column, the read stops as soon as the 
 value's length or the pieces read pass the cap, so a 2 GB value over the cap isn't read first. Text
 is compared as UTF-8 bytes, on Windows too, where drivers send it as UTF-16.
 
-The driver's own notes on the buffer size it chose for each column are no longer
+The driver's own notes on the buffer size it chose for each column aren't
 logged; set `RUST_LOG=info` to see them again.
 
 ## Memory

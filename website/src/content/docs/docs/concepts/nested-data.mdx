@@ -57,7 +57,7 @@ Set in a table entry:
   every child table, then the commit's new items are inserted. As under `merge`, a failure between
   the two leaves those rows without items until a rerun loads the window again.
 
-Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake, ClickHouse and
+Child tables load into DuckDB, MotherDuck, Postgres, BigQuery, Snowflake, ClickHouse and
 Databricks targets. Databricks child
 tables are staged and copied in as their parent is; so far they are tested against a stand-in for
 the Databricks API, not a live warehouse.
@@ -116,8 +116,7 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
   named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id` or `_dlt_parent_id`,
   whatever the `compat`), and is not another table's child table (`orders__notes__items` when a
   table `orders__notes` holds no parent-id column). Other tables
-  named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
-  `replace` emptied them and a `merge` could delete rows from them.
+  named so, such as a plain `orders__notes` beside `orders`, are left as they are.
 - A list field first seen after a table's first load is a new child table, which
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.

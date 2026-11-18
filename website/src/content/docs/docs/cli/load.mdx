@@ -418,7 +418,6 @@ The events are version 0: names and fields can still change in a minor release u
 | `table_started` | `strategy`: the write strategy, as `plan` shows it. |
 | `table_progress` | `unit` (`page`, `batch`, `window` or `file`), `count` of them read so far, `rows` so far. |
 | `rate_limited` | `connection`, its `rate_limit` as `rate`, and `wait_ms`, how long a request waited. No `table`. |
-| `table_batch_written` | `load --follow` only: a followed batch wrote `rows` to the table, and `behind_secs`, how long ago its newest change committed on the server. See [Following a Postgres CDC source](#following-a-postgres-cdc-source). |
 | `table_committing` | `rows`: the table's rows are read and its last commit starts. |
 | `table_done` | `rows`, `elapsed_ms`, and `position`, the cursor value it reached, when it keeps one. `changes` lists the `created` and `altered` lines of a table that made or widened its columns while loading. `transforms` lists each file or range a [`transform`](/docs/sources/files/#transforming-each-file) ran on, as in the JSON report, and under [`--memory-per-table`](#peak-memory) `peak_memory_bytes` gives the table's peak memory. `names` gives a line per column [`rename`](/docs/concepts/nested-data/#rename) named or numbering numbered, as in the JSON report, and `warnings` what the load warns of, such as rows outside a cursor window. |
 | `table_failed` | `reason`, `retryable` (whether a rerun may pass), `elapsed_ms`, and `peak_memory_bytes` under `--memory-per-table`. |
