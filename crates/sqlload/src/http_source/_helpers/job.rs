@@ -584,9 +584,11 @@ pub(crate) fn drive_job(
         false => jobs.get.clone(),
     };
     let (sender, mut receiver) = channel(PAGES_AHEAD);
-    let task = jobs
-        .runtime
-        .spawn(run_job(job, (connections.clone(), source_part), (http, sender)));
+    let task = jobs.runtime.spawn(run_job(
+        job,
+        (connections.clone(), source_part),
+        (http, sender),
+    ));
     while let Some(page) = receiver.blocking_recv() {
         if !deliver(page) {
             task.abort();
