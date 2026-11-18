@@ -1186,7 +1186,10 @@ async fn replan(
     let seen = |name: &&String| {
         let typed = |field: &Arc<arrow_schema::Field>| {
             field.name().eq_ignore_ascii_case(name)
-                && !data.null_columns.iter().any(|null| null.eq_ignore_ascii_case(name))
+                && !data
+                    .null_columns
+                    .iter()
+                    .any(|null| null.eq_ignore_ascii_case(name))
         };
         (data.settled && data.rows > 0) || data.schema.fields().iter().any(typed)
     };

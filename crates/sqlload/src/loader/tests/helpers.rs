@@ -79,6 +79,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
     let data = YieldedData {
         schema: &schema,
         null_columns: &null_columns,
+        settled: true,
         rows: 1,
     };
     inferred_table(
@@ -178,6 +179,7 @@ pub(crate) fn problems_for(test_case: &DeclaredProblemsTestCase) -> Result<Strin
     let data = YieldedData {
         schema: &schema,
         null_columns: &BTreeSet::new(),
+        settled: true,
         rows: test_case.rows,
     };
     Ok(declared_problems(&spec, &data).join("; "))
