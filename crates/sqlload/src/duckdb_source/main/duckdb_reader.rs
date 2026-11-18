@@ -1,22 +1,24 @@
-//! A reader for a `duckdb` source's connection.
+//! A reader for a `duckdb` source.
 
+use crate::duckdb_source::constants::MEMORY_DATABASE;
 use crate::duckdb_source::errors::DuckDbSourceError;
 use crate::duckdb_source::models::DuckDbReader;
 use crate::project::main::motherduck_path::motherduck_path;
-use crate::project::models::ConnectionConfig;
+use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig};
 
-/// A reader for a `duckdb` connection's database file; each read opens it read-only, with `memory_limit` (half a table's share of the memory budget, or DuckDB's own default without one). `:memory:` and MotherDuck paths are refused: an empty in-memory database has nothing to read, and a MotherDuck database is a `motherduck` source. Nothing is opened yet.
+/// A reader for `source`'s `duckdb` connection's database file; each read opens it read-only, with a `memory_limit` of half a table's share of the project's memory budget (DuckDB's own default without one). `:memory:` and MotherDuck paths are refused: an empty in-memory database has nothing to read, and a MotherDuck database is a `motherduck` source. Nothing is opened yet.
 pub fn duckdb_reader(
-    connection: &ConnectionConfig,
-    memory_limit: Option<u64>,
+    project: &ProjectConfig,
+    source: &SourceConfig,
 ) -> Result<DuckDbReader, DuckDbSourceError> {
-    let ConnectionConfig::DuckDb { database } = connection else {
+    let Some(ConnectionConfig::DuckDb { database }) = project.connections.get(&source.connection)
+    else {
         return Err(DuckDbSourceError::Invalid(format!(
-            "a {} connection is not a duckdb one",
-            connection.kind()
+            "connection {:?} is not a duckdb connection",
+            source.connection
         )));
     };
-    if database == ":memory:" {
+    if database == MEMORY_DATABASE {
         return Err(DuckDbSourceError::Invalid(
             "a duckdb source reads a database file; :memory: holds no tables to read".to_owned(),
         ));
@@ -28,6 +30,6 @@ pub fn duckdb_reader(
     }
     Ok(DuckDbReader {
         database: database.clone(),
-        memory_limit,
+        memory_limit: project.memory.budget.map(|budget| budget.table_share / 2),
     })
 }

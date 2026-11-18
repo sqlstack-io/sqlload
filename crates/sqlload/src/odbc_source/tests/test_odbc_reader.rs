@@ -1,5 +1,5 @@
 use crate::auth::models::Secret;
-use crate::odbc_source::main::odbc_reader::odbc_reader;
+use crate::odbc_source::main::_odbc_reader::odbc_reader;
 use crate::odbc_source::tests::test_types::OdbcReaderTestCase;
 
 #[test]

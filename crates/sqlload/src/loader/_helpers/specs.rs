@@ -539,9 +539,9 @@ pub(crate) fn build_spec(
                     SourceKind::Databricks => DATABRICKS_SOURCE,
                     _ => DUCKDB_SOURCE,
                 },
-                    sql: overrides.sql.clone(),
-                    route: WarehouseRoute::Query,
-                }),
+                sql: overrides.sql.clone(),
+                route: WarehouseRoute::Query,
+            }),
             _ => warehouse_source(context.source, overrides),
         },
         row_filter: layered(&settings.row_filter, &defaults.row_filter)
@@ -1384,7 +1384,7 @@ pub(crate) async fn null_cursor_rows(
         .warehouse_source
         .as_ref()
         .and_then(|source| source.sql.as_deref());
-    crate::loader::main::_count_rows::count_rows(reader, (&spec.source_table, sql), &filter).await
+    crate::loader::_helpers::resolve::count_rows(reader, (&spec.source_table, sql), &filter).await
 }
 
 /// Why `spec`'s load fails: `rows` source rows have a NULL cursor, which its incremental read never selects, so they would never load; with the fixes `plan` accepts for the table: `null_cursor = "include"` on `merge`, a coalesced cursor where one may be listed (not a Python table, `delete_insert` or a files target), and `null_cursor = "ignore"`.

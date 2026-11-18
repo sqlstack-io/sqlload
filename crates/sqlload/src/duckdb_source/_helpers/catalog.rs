@@ -66,7 +66,9 @@ pub(crate) fn catalog_tables(
     for row in rows {
         let (key, name, data_type, nullable) = row?;
         if let Some(table) = tables.get_mut(&key) {
-            table.columns.push(source_column(&name, &data_type, nullable));
+            table
+                .columns
+                .push(source_column(&name, &data_type, nullable));
         }
     }
     let mut keys = connection.prepare(

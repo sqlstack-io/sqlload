@@ -4,18 +4,27 @@ use crate::duckdb_source::_helpers::catalog::catalog_tables;
 use crate::duckdb_source::_helpers::connection::open_read_only;
 use crate::duckdb_source::_helpers::query::subquery;
 use crate::duckdb_source::_helpers::type_map::source_column;
+use crate::duckdb_source::constants::NOT_NULL;
 use crate::duckdb_source::errors::DuckDbSourceError;
 use crate::duckdb_source::models::DuckDbReader;
 use crate::postgres_source::models::SourceTable;
+use crate::project::models::SourceConfig;
 
-/// Every table and view of the reader's database whose `schema.table` matches `include` and not `exclude`; then one table per query in `queries` (name and SQL), its columns those of the query as a load wraps it, described with `DESCRIBE` so it reads no rows.
+/// Every table and view of the reader's database whose `schema.table` matches `source`'s `include` and not its `exclude`; then one table per query table of `source`, its columns those of the query as a load wraps it, described with `DESCRIBE` so it reads no rows.
 pub async fn read_catalog(
     reader: &DuckDbReader,
-    (include, exclude): (&[String], &[String]),
-    queries: &[(String, String)],
+    source: &SourceConfig,
 ) -> Result<Vec<SourceTable>, DuckDbSourceError> {
-    let (reader, include, exclude, queries) =
-        (reader.clone(), include.to_vec(), exclude.to_vec(), queries.to_vec());
+    let queries: Vec<(String, String)> = source
+        .tables
+        .iter()
+        .filter_map(|(name, table)| Some((name.clone(), table.sql.clone()?)))
+        .collect();
+    let (reader, include, exclude) = (
+        reader.clone(),
+        source.include.clone(),
+        source.exclude.clone(),
+    );
     tokio::task::spawn_blocking(move || {
         let connection = open_read_only(&reader)?;
         let mut tables: Vec<SourceTable> = match include.is_empty() {
@@ -32,7 +41,9 @@ pub async fn read_catalog(
                 name: name.clone(),
                 columns: described
                     .iter()
-                    .map(|(column, data_type, nullable)| source_column(column, data_type, *nullable))
+                    .map(|(column, data_type, nullable)| {
+                        source_column(column, data_type, *nullable)
+                    })
                     .collect(),
                 primary_key: Vec::new(),
                 indexed_columns: Vec::new(),
@@ -53,13 +64,13 @@ fn describe(
     connection: &duckdb::Connection,
     sql: &str,
 ) -> Result<Vec<(String, String, bool)>, duckdb::Error> {
-    let mut statement =
-        connection.prepare(&format!("DESCRIBE SELECT * FROM {}", subquery(sql)))?;
+    let mut statement = connection.prepare(&format!("DESCRIBE SELECT * FROM {}", subquery(sql)))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
-            row.get::<_, Option<String>>(2)?.is_none_or(|null| null != "NO"),
+            row.get::<_, Option<String>>(2)?
+                .is_none_or(|null| null != NOT_NULL),
         ))
     })?;
     rows.collect()

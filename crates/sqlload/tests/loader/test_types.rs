@@ -1682,3 +1682,13 @@ pub(crate) struct WideLoadTestCase {
     /// Phrases the last load's output holds (`{table}` is the table's name).
     pub(crate) expected_output: &'static [&'static str],
 }
+
+/// One load from a duckdb source file into DuckDB, after a change to the source.
+pub(crate) struct DuckDbSourceTestCase {
+    pub(crate) description: &'static str,
+    /// SQL run on the source file before the load; empty for none.
+    pub(crate) source_change: &'static str,
+    pub(crate) arguments: &'static [&'static str],
+    /// The orders' rows, the target's columns, the view's row count and the query table's ids.
+    pub(crate) expected_rows: &'static str,
+}
