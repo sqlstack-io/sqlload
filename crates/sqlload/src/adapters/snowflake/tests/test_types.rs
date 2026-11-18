@@ -1,4 +1,5 @@
 use crate::adapters::snowflake::models::CopyColumn;
+use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 
@@ -104,4 +105,17 @@ pub(crate) struct SnowflakeEncodingTestCase {
     pub(crate) label: &'static str,
     /// Snowflake's `ENCODING` for it, or `None` when the direct route refuses it.
     pub(crate) expected_encoding: Option<&'static str>,
+}
+
+/// The `COPY`s of one batch of unloaded files.
+pub(crate) struct CopyUnloadedTestCase {
+    pub(crate) description: &'static str,
+    /// The table's columns, each with the type the files' column is read as (`None` when the files lack it).
+    pub(crate) columns: &'static [(&'static str, ColumnType, Option<ColumnType>)],
+    pub(crate) files: usize,
+    pub(crate) expected_copies: usize,
+    /// Text the first `COPY` holds, in order.
+    pub(crate) expected_first: &'static [&'static str],
+    /// Text the last `COPY` holds.
+    pub(crate) expected_last: &'static str,
 }
