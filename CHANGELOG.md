@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.69.1](https://github.com/sqlstack-io/sqlload/compare/v0.69.0...v0.69.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **loader:** check newest_by against what each target can order, and in Python tables ([#309](https://github.com/sqlstack-io/sqlload/issues/309)) ([c824cf2](https://github.com/sqlstack-io/sqlload/commit/c824cf24fba05716548f60a52e092aa1dc3cf8e1))
+
 ## [0.69.0](https://github.com/sqlstack-io/sqlload/compare/v0.68.0...v0.69.0) (2026-11-18)
 
 
