@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.70.1](https://github.com/sqlstack-io/sqlload/compare/v0.70.0...v0.70.1) (2026-11-18)
+
+
+### Documentation
+
+* bring the docs up to date with main, and mark BigQuery and Databricks beta ([#314](https://github.com/sqlstack-io/sqlload/issues/314)) ([c57fab0](https://github.com/sqlstack-io/sqlload/commit/c57fab0bc6360e63f6ace142d7a7483ac77283ad))
+
 ## [0.70.0](https://github.com/sqlstack-io/sqlload/compare/v0.69.1...v0.70.0) (2026-11-18)
 
 
