@@ -1178,9 +1178,17 @@ footer a {
 	font-weight: 600;
 }
 
+.speed-row .note {
+	display: block;
+	margin-top: 4px;
+	color: var(--muted-foreground);
+	font-family: var(--font-mono);
+	font-size: 11px;
+}
+
 .speed-row .time {
 	flex: none;
-	width: 64px;
+	width: 72px;
 	text-align: right;
 	color: var(--muted-foreground);
 	font-family: var(--font-mono);

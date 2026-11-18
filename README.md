@@ -66,6 +66,11 @@ The same data loaded by each tool on a 4-vCPU machine, median of 5 runs:
 | Parquet folder into DuckDB, 10M rows | **3.20 s** | 5.85 s | over 20 min (one run) |
 | Postgres (40 columns) into DuckDB, 1M rows | **6.84 s** | 8.29 s | 27.2 s |
 | Postgres into Snowflake, 1M rows | **14.56 s** | 16.38 s | 29.4 s |
+| Parquet in S3 into Snowflake, 100M rows¹ | **134 s** | 182 s | not run |
+
+¹ Snowflake copies the files itself on SQLLoad's default route, so no row passes through SQLLoad: it
+peaked at 54 MiB and used no disk. ingestr streams every row, peaking at 3.8 GiB of memory and
+spilling 5.7 GiB to disk. Median of 3 runs, sqlload 0.70.1, 4 cores and 8 GiB, 64 GB disk.
 
 See the [benchmarks](https://sqlload.io/docs/benchmarks/) for every scenario, the method, the
 versions and how to run them yourself.

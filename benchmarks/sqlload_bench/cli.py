@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import psutil
 
 from sqlload_bench import datagen, postgres, snowflake
-from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, all_competitors
+from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, Invocation, all_competitors
+from sqlload_bench.measure import MIN_FREE_DISK_BYTES
 from sqlload_bench.measure import run as measure
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import SCENARIOS, Scenario
@@ -47,36 +49,44 @@ def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir:
 	return True, ""
 
 
-def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path) -> dict[str, Any]:
-	"""One fresh destination; for the incremental scenario, the second load is the measured one."""
+def one_run(
+	competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path, timeout_s: float = 3600, min_free_bytes: int = MIN_FREE_DISK_BYTES
+) -> dict[str, Any]:
+	"""One fresh destination; for the incremental scenario, the second load is the measured one. A loader that runs past `timeout_s`, crashes or is killed (as the out-of-memory killer does) is a failed run that keeps its time, peak memory and how it ended. One stopped because free disk fell below `min_free_bytes` is aborted for the environment instead."""
 	shutil.rmtree(run_dir, ignore_errors=True)
 	run_dir.mkdir(parents=True)
-	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0]}
+	run_dir.mkdir(parents=True, exist_ok=True)
+	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0], "disk_free_gb": shutil.disk_usage(run_dir).free / 1e9}
 	if scenario.group == "snowflake":
 		assert context.warehouse is not None
 		snowflake.drop_table(context.warehouse, scenario.table)
 	planned = competitor.plan_invocation(scenario, context, run_dir)
 	if planned is not None:
 		invocation, expected_text = planned
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "plan.log")
+		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "plan.log", timeout_s=timeout_s)
 		if done.returncode != 0 or expected_text not in done.output:
 			return {**record, "valid": False, "returncode": done.returncode, "error": f"the plan does not say {expected_text!r}: {done.output[-1500:]}"}
 	incremental = scenario.name == "pg_incremental" and context.postgres is not None
 	try:
 		if incremental:
 			first = competitor.invocation(scenario, context, run_dir)
-			done = measure(first.argv, cwd=first.cwd, env=first.env, log=run_dir / "first.log")
+			done = measure(first.argv, cwd=first.cwd, env=first.env, log=run_dir / "first.log", timeout_s=timeout_s)
 			record["first_load_wall_s"] = done.wall_s
 			if done.returncode != 0:
-				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load exited {done.returncode}: {done.output[-1500:]}"}
+				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {last_line(done.output)}", "output": done.output[-1500:]}
 			postgres.append_rows(context.postgres, context.dataset)
 		invocation = competitor.invocation(scenario, context, run_dir, second=incremental)
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log")
-		record.update(
-			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, returncode=done.returncode
+		done = measure(
+			invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s, disk=home_of(invocation), min_free_bytes=min_free_bytes
 		)
-		if done.returncode != 0:
-			record.update(valid=False, error=f"exited {done.returncode}: {done.output[-1500:]}")
+		record.update(
+			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, peak_disk_mb=done.peak_disk_mb, returncode=done.returncode,
+			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills, aborted=done.aborted,
+		)
+		if done.aborted:
+			record.update(valid=False, error=done.failure())
+		elif done.returncode != 0:
+			record.update(valid=False, error=f"{done.failure()}: {last_line(done.output)}", output=done.output[-1500:])
 		else:
 			valid, reason = check(competitor, scenario, context, run_dir)
 			record.update(valid=valid, error=reason)
@@ -84,6 +94,28 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	finally:
 		if incremental:
 			postgres.remove_appended(context.postgres, context.dataset)
+
+
+def home_of(invocation: Invocation) -> Path | None:
+	"""The run's own folder (its HOME, caches and TMPDIR), whose size is the loader's disk use."""
+	return Path(invocation.env["HOME"]) if "HOME" in invocation.env else None
+
+
+def last_line(output: str) -> str:
+	"""The last line a loader printed that isn't blank: where a failing loader says why, after any banner or progress."""
+	return next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
+
+
+def record_run(result: Result, record: dict[str, Any]) -> None:
+	"""Add one run to its loader's result: a warm-up only when it went wrong, and every measured run. A run that exited badly marks the loader failed, and its later runs are skipped; one that finished with the wrong rows marks it invalid; one the harness stopped for low disk marks it aborted, the environment's failure, and its later runs are skipped too."""
+	if record["warmup"] and record["valid"]:
+		return
+	result.runs.append(record)
+	if record.get("aborted"):
+		result.status, result.note = "aborted", record["error"][:300]
+	elif not record["valid"]:
+		result.status = "invalid" if record.get("returncode", 0) == 0 else "failed"
+		result.note = record["error"][:300]
 
 
 def versions() -> dict[str, str]:
@@ -111,7 +143,24 @@ def machine() -> dict[str, Any]:
 		cpu = next(line.split(":", 1)[1].strip() for line in open("/proc/cpuinfo") if line.startswith("model name"))
 	except (OSError, StopIteration):
 		pass
-	return {"cpu": cpu, "cores": os.cpu_count(), "platform": platform.platform(), "load_avg": os.getloadavg()}
+	return {"cpu": cpu, "cores": len(os.sched_getaffinity(0)), "memory_limit_gib": memory_limit_gib(), "platform": platform.platform(), "load_avg": os.getloadavg()}
+
+
+def memory_limit_gib() -> float:
+	"""The memory the harness and its loaders may use: their cgroup's limit (cgroup v2), else the machine's."""
+	try:
+		path = Path("/proc/self/cgroup").read_text().splitlines()[0].split("::", 1)[1]
+		limit = Path(f"/sys/fs/cgroup{path}/memory.max").read_text().strip()
+		if limit != "max":
+			return int(limit) / (1 << 30)
+	except (OSError, IndexError):
+		pass
+	return psutil.virtual_memory().total / (1 << 30)
+
+
+def disk_range(results: list[Result]) -> str:
+	free = [run["disk_free_gb"] for result in results for run in result.runs if "disk_free_gb" in run]
+	return f"{min(free):.0f} to {max(free):.0f} GB" if free else "not measured"
 
 
 def load_range(results: list[Result]) -> str:
@@ -128,6 +177,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser.add_argument("--seed", type=int, default=42)
 	parser.add_argument("--runs", type=int, default=3)
 	parser.add_argument("--warmup", type=int, default=1)
+	parser.add_argument("--timeout-min", type=float, default=60, help="stop a load that runs longer, and record it as failed (default 60)")
 	parser.add_argument("--scenarios", default="", help="comma-separated scenario names or groups (default: all)")
 	parser.add_argument("--competitors", default="", help="comma-separated loader names (default: all)")
 	parser.add_argument("--work", type=Path, help="scratch folder for destinations (default: OUT/work)")
@@ -156,7 +206,8 @@ def main(argv: list[str] | None = None) -> int:
 	scenarios = [s for s in SCENARIOS if selected(args.scenarios, s.name, s.group)]
 	competitors = [c for c in all_competitors() if selected(args.competitors, c.name)]
 	print(f"generating data ({args.size}, seed {args.seed})", flush=True)
-	dataset = datagen.generate(args.data or args.out / "data", args.seed, sizes)
+	parts = tuple(part for part in datagen.PARTS if any(part in scenario.data for scenario in scenarios))
+	dataset = datagen.generate(args.data or args.out / "data", args.seed, sizes, parts)
 	# Snowflake scenarios run only when asked for by name or group, with their variables set.
 	explicit = {value.strip() for value in args.scenarios.split(",")}
 	snowflake_settings: snowflake.Settings | None = None
@@ -210,23 +261,16 @@ def main(argv: list[str] | None = None) -> int:
 			for attempt in range(args.warmup + args.runs):
 				shift = attempt % len(active) if active else 0
 				for competitor, result in active[shift:] + active[:shift]:
-					if result.status == "failed":
+					if result.status in ("failed", "aborted"):
 						continue
 					run_dir = work / scenario.name / competitor.name.replace(" ", "_").replace("(", "").replace(")", "")
 					if args.wait_for_builds:
 						wait_for_builds()
 					print(f"{scenario.name:18} {competitor.name:24} {'warm-up' if attempt < args.warmup else f'run {attempt - args.warmup + 1}'}", flush=True)
-					record = one_run(competitor, scenario, context, run_dir)
+					record = one_run(competitor, scenario, context, run_dir, timeout_s=args.timeout_min * 60)
 					record["warmup"] = attempt < args.warmup
 					print(f"  {record.get('wall_s', 0):8.2f}s valid={record['valid']} {record.get('error', '')[:300]}", flush=True)
-					if record["warmup"]:
-						if not record["valid"]:
-							result.status, result.note = ("invalid" if record.get("returncode") == 0 else "failed"), record["error"][:300]
-							result.runs.append(record)
-						continue
-					result.runs.append(record)
-					if not record["valid"]:
-						result.status, result.note = "invalid", record["error"][:300]
+					record_run(result, record)
 			shutil.rmtree(work / scenario.name, ignore_errors=True)
 			write_results(args, sizes, started, results)
 	finally:
@@ -240,7 +284,8 @@ def write_results(args: argparse.Namespace, sizes: datagen.Sizes, started: datet
 	summaries = [result.summary() for result in results]
 	header = (
 		f"## SQLLoad benchmarks ({args.size}, seed {args.seed}, median of {args.runs} after {args.warmup} warm-up)\n\n"
-		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({os.cpu_count()} cores); 1-minute load before each run: {load_range(results)}."
+		f"Started {started:%Y-%m-%d %H:%M} UTC on {machine()['cpu']} ({machine()['cores']} cores, {machine()['memory_limit_gib']:.1f} GiB of memory); "
+		f"1-minute load before each run: {load_range(results)}; free disk before each run: {disk_range(results)}."
 	)
 	document = {"started": started.isoformat(), "finished": datetime.now(UTC).isoformat(), "size": args.size, "sizes": sizes.__dict__,
 		"seed": args.seed, "runs": args.runs, "warmup": args.warmup, "versions": versions(), "machine": machine(), "results": summaries}
@@ -255,7 +300,7 @@ def finish(args: argparse.Namespace, sizes: datagen.Sizes, started: datetime, re
 	summaries = document["results"]
 	with (args.out / "history.jsonl").open("a") as history:
 		# One line per suite run, so improvement over time stays visible after results.json is replaced.
-		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "rows_per_s")
+		kept = ("scenario", "competitor", "rows", "status", "wall_s", "cpu_s", "peak_rss_mb", "peak_disk_mb", "rows_per_s")
 		line = {key: document[key] for key in ("started", "size", "seed", "versions")}
 		history.write(json.dumps({**line, "results": [{key: s[key] for key in kept} for s in summaries]}, default=str) + "\n")
 	print(table)

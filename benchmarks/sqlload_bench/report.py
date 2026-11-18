@@ -12,12 +12,12 @@ class Result:
 	scenario: str
 	competitor: str
 	rows: int
-	status: str = "ok"  # ok, invalid, failed, n/a, skipped
+	status: str = "ok"  # ok, invalid, failed, aborted (low disk: the environment's failure), n/a, skipped
 	note: str = ""
 	runs: list[dict[str, Any]] = field(default_factory=list)
 
 	def median(self, key: str) -> float | None:
-		values = [run[key] for run in self.runs if run.get("valid")]
+		values = [run[key] for run in self.runs if run.get("valid") and run.get(key) is not None]
 		return statistics.median(values) if values else None
 
 	def summary(self) -> dict[str, Any]:
@@ -33,6 +33,7 @@ class Result:
 			"user_s": self.median("user_s"),
 			"sys_s": self.median("sys_s"),
 			"peak_rss_mb": self.median("peak_rss_mb"),
+			"peak_disk_mb": self.median("peak_disk_mb"),
 			"rows_per_s": self.rows / wall if wall else None,
 			"runs": self.runs,
 		}
@@ -47,8 +48,8 @@ def markdown(summaries: list[dict[str, Any]], header: str) -> str:
 	lines = [
 		header,
 		"",
-		"| Scenario | Loader | Rows | Wall s | CPU s (user+sys) | Peak RSS MiB | Rows/s | vs sqlload (wall) | Status |",
-		"|---|---|---:|---:|---:|---:|---:|---:|---|",
+		"| Scenario | Loader | Rows | Wall s | CPU s (user+sys) | Peak RSS MiB | Peak disk MiB | Rows/s | vs sqlload (wall) | Status |",
+		"|---|---|---:|---:|---:|---:|---:|---:|---:|---|",
 	]
 	sqlload_wall = {s["scenario"]: s["wall_s"] for s in summaries if s["competitor"] == "sqlload" and s["wall_s"]}
 	for s in summaries:
@@ -57,6 +58,6 @@ def markdown(summaries: list[dict[str, Any]], header: str) -> str:
 		status = s["status"] if not s["note"] else f"{s['status']}: {s['note']}"
 		lines.append(
 			f"| {s['scenario']} | {s['competitor']} | {s['rows']:,} | {_number(s['wall_s'])} | {_number(s['cpu_s'])} "
-			f"| {_number(s['peak_rss_mb'], 0)} | {_number(s['rows_per_s'], 0)} | {ratio} | {status} |"
+			f"| {_number(s['peak_rss_mb'], 0)} | {_number(s.get('peak_disk_mb'), 0)} | {_number(s['rows_per_s'], 0)} | {ratio} | {status} |"
 		)
 	return "\n".join(lines) + "\n"

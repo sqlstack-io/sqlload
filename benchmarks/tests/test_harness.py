@@ -1,6 +1,7 @@
 """The harness's own logic: data generation, checksums, measurement, reporting and the perf gate."""
 
 import json
+import shutil
 import subprocess
 import sys
 from decimal import Decimal
@@ -11,8 +12,9 @@ import pytest
 
 from perf import compare
 from sqlload_bench import datagen, pydata, snowflake
-from sqlload_bench.competitors import HIDDEN, SQLLOAD, Context, SqlLoad, all_competitors
-from sqlload_bench.measure import run
+from sqlload_bench.cli import one_run, record_run
+from sqlload_bench.competitors import HIDDEN, SQLLOAD, Competitor, Context, Invocation, SqlLoad, all_competitors
+from sqlload_bench.measure import clean_env, run
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import BY_NAME
 
@@ -57,12 +59,94 @@ def test_given_generated_data_when_checksumming_each_format_then_parquet_csv_and
 	assert dataset.first_appended_at() > "2026-01-01T00:00:00Z"
 
 
+def test_given_only_the_parquet_part_when_generating_then_nothing_else_is_written_and_a_later_part_fills_in(tmp_path: Path) -> None:
+	sizes = datagen.SIZES["tiny"]
+	dataset = datagen.generate(tmp_path, 5, sizes, ("files_parquet",))
+	assert sorted(path.name for path in dataset.path("files", "parquet").glob("*.parquet"))[0] == "part-000.parquet"
+	assert not any(dataset.path("pg").iterdir()) and not any(dataset.path("files", "csv").iterdir())
+	assert not dataset.path("python", "flat.ndjson").exists()
+	full = datagen.generate(tmp_path / "full", 5, sizes)
+	assert dataset.expected("files") == full.expected("files")
+	datagen.generate(tmp_path, 5, sizes, ("pg",))
+	assert dataset.expected("narrow") == full.expected("narrow")
+	assert dataset.path("pg", "narrow.csv").exists()
+	assert BY_NAME["files_snowflake"].data == ("files_parquet",)
+	assert BY_NAME["pg_snowflake"].data == ("pg",)
+
+
 def test_given_a_process_tree_when_measured_then_cpu_of_children_and_peak_memory_are_counted(tmp_path: Path) -> None:
 	script = "import subprocess, sys; subprocess.run([sys.executable, '-c', 'x = bytearray(200 << 20); sum(range(3_000_000))'])"
 	done = run([sys.executable, "-c", script], cwd=tmp_path, env={}, log=tmp_path / "log")
 	assert done.returncode == 0
 	assert done.cpu_s > 0.05
 	assert done.peak_rss_mb > 150
+
+
+class _KilledLoader(Competitor):
+	"""A loader the system kills as it would for running out of memory: it takes 200 MiB, then gets SIGKILL."""
+
+	name = "killed"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		script = "import os, signal, time; x = bytearray(200 << 20); time.sleep(0.5); os.kill(os.getpid(), signal.SIGKILL)"
+		return Invocation([sys.executable, "-c", script], run_dir)
+
+
+def test_given_a_loader_killed_mid_run_when_measured_then_the_run_is_kept_as_failed_with_its_signal_time_and_peak_memory(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	record = one_run(_KilledLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run")
+	record["warmup"] = False
+	result = Result("pg_narrow", "killed", 1000)
+	record_run(result, record)
+	assert record["signal"] == "SIGKILL"
+	assert record["peak_rss_mb"] > 150
+	assert record["wall_s"] >= 0.5
+	assert result.status == "failed"
+	assert result.runs == [record]
+	assert result.note.startswith("killed by SIGKILL after "), result.note
+	assert " MiB peak RSS" in result.note
+	assert "| failed: killed by SIGKILL after " in markdown([result.summary()], "## t")
+
+
+def test_given_a_loader_that_spills_to_its_tmpdir_when_measured_then_its_peak_disk_use_is_kept(tmp_path: Path) -> None:
+	home = tmp_path / "home"
+	env = clean_env(home, {})
+	assert Path(env["TMPDIR"]).is_relative_to(home), "each run spills inside its own folder"
+	script = "import os, tempfile, time; p = os.path.join(tempfile.gettempdir(), 'spill'); open(p, 'wb').write(os.urandom(64 << 20)); time.sleep(2.5); os.remove(p)"
+	done = run([sys.executable, "-c", script], cwd=tmp_path, env=env, log=tmp_path / "load.log", disk=home)
+	assert done.returncode == 0, done.output
+	assert 60 <= done.peak_disk_mb < 80, done.peak_disk_mb
+	result = Result("pg_narrow", "spilling", 1000, runs=[{"valid": True, "wall_s": 1.0, "cpu_s": 1.0, "user_s": 1.0, "sys_s": 0.0, "peak_rss_mb": 10.0, "peak_disk_mb": done.peak_disk_mb}])
+	table = markdown([result.summary()], "## t")
+	assert "| Peak disk MiB |" in table
+	assert f"| {done.peak_disk_mb:,.0f} |" in table
+
+
+class _FailingLoader(Competitor):
+	"""A loader that prints a long banner, then its error on the last line, and exits 1."""
+
+	name = "failing"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		script = "import sys; print('downloading the CLI; this happens once per version\\n' * 80); print('Error: could not write the buffer file'); sys.exit(1)"
+		return Invocation([sys.executable, "-c", script], run_dir)
+
+
+def test_given_a_loader_that_fails_after_a_long_banner_when_recorded_then_the_note_shows_its_last_line(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	record = one_run(_FailingLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run")
+	record["warmup"] = True
+	result = Result("pg_narrow", "failing", 1000)
+	record_run(result, record)
+	assert result.status == "failed"
+	assert result.note.startswith("exited 1 after "), result.note
+	assert result.note.endswith(": Error: could not write the buffer file"), result.note
 
 
 def test_given_results_when_reporting_then_each_row_shows_its_ratio_to_sqlload() -> None:
@@ -187,3 +271,29 @@ def test_given_no_base_results_when_comparing_then_it_reports_nothing_to_compare
 	head = tmp_path / "head.jsonl"
 	head.write_text(_summary_line("g::decode", "narrow", 10) + "\n")
 	assert compare.main(["--base", str(tmp_path / "missing.jsonl"), "--head", str(head)]) == 0
+
+
+class _SleepingLoader(Competitor):
+	"""A loader that would run for 30 seconds."""
+
+	name = "sleeping"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		return Invocation([sys.executable, "-c", "import time; time.sleep(30)"], run_dir, clean_env(run_dir / "home", {}))
+
+
+def test_given_free_disk_below_the_floor_when_a_loader_runs_then_it_is_stopped_and_recorded_as_aborted_for_the_environment(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	unreachable = shutil.disk_usage(tmp_path).free + (1 << 40)
+	record = one_run(_SleepingLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run", min_free_bytes=unreachable)
+	record["warmup"] = False
+	result = Result("pg_narrow", "sleeping", 1000)
+	record_run(result, record)
+	assert record["wall_s"] < 10, "the loader is stopped, not waited for"
+	assert record["aborted"] is True
+	assert result.status == "aborted", "the environment ran out of disk; the loader did not fail"
+	assert result.note.startswith("free disk fell below "), result.note
+	assert "| aborted: free disk fell below " in markdown([result.summary()], "## t")
