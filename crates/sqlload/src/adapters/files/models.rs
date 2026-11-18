@@ -19,7 +19,7 @@ use crate::store_paths::main::escape_partition_value::escape_partition_value;
 use crate::store_paths::main::unescape_partition_value::unescape_partition_value;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// A target that writes tables as Parquet files into an s3 or filesystem connection.
+/// A target that writes tables as Parquet files into an s3, gcs or filesystem connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilesDestination {
     /// The connection's name, for messages and paths.

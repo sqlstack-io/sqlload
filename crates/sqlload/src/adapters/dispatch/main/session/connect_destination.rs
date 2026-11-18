@@ -14,7 +14,7 @@ use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
 use crate::adapters::snowflake::models::SnowflakeAccount;
 use crate::loader::errors::LoaderError;
 use crate::project::models::{ConnectionConfig, ProjectConfig};
-use crate::store_paths::models::StoreKind;
+use crate::store_paths::main::connection_store::connection_store;
 
 /// The open destination of target `name`.
 pub async fn connect_destination(
@@ -57,11 +57,13 @@ pub async fn connect_destination(
         Some(connection @ ConnectionConfig::ClickHouse { .. }) => {
             Destination::ClickHouse(Box::new(connect_clickhouse(connection)?))
         }
-        Some(connection @ (ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. })) => {
-            files(connection, target).ok_or_else(|| {
-                LoaderError::Invalid(format!("target {name:?}: its connection holds no files"))
-            })?
-        }
+        Some(
+            connection @ (ConnectionConfig::S3 { .. }
+            | ConnectionConfig::Gcs { .. }
+            | ConnectionConfig::Filesystem { .. }),
+        ) => files(connection, target).ok_or_else(|| {
+            LoaderError::Invalid(format!("target {name:?}: its connection holds no files"))
+        })?,
         Some(other) => {
             return Err(LoaderError::Invalid(format!(
                 "target {name:?}: {} destinations are not supported yet",
@@ -78,26 +80,12 @@ pub async fn connect_destination(
     Ok(destination)
 }
 
-/// The files destination of `target`, from its `s3` or `filesystem` connection; `None` for another kind.
+/// The files destination of `target`, from its `s3`, `gcs` or `filesystem` connection (the only kinds it is called for).
 fn files(
     connection: &ConnectionConfig,
     target: &crate::project::models::TargetConfig,
 ) -> Option<Destination> {
-    let store = match connection {
-        ConnectionConfig::S3 {
-            bucket,
-            region,
-            endpoint,
-            profile,
-        } => StoreKind::S3 {
-            bucket: bucket.clone(),
-            region: region.clone(),
-            endpoint: endpoint.clone(),
-            profile: profile.clone(),
-        },
-        ConnectionConfig::Filesystem { root } => StoreKind::Filesystem { root: root.clone() },
-        _ => return None,
-    };
+    let store = connection_store(connection)?;
     Some(Destination::Files(Box::new(FilesDestination {
         connection: target.connection.clone(),
         store,
