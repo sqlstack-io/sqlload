@@ -27,7 +27,7 @@ configuration.
 
 `[staging] kind` chooses the route:
 
-| `kind` | Snowflake | Databricks (beta, from 0.66.0) | BigQuery (beta, from 0.69.0) |
+| `kind` | Snowflake | Databricks (beta) | BigQuery (beta) |
 |--------|-----------|--------------------------|------------------------|
 | `none` | Snowpipe Streaming. | Zerobus Ingest: rows sent as JSON records; a batch counts as written once the stream's flush says it's durable. | The Storage Write API's default stream: rows sent as Arrow; each acknowledged append is committed. |
 | `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. | Parquet files uploaded to the stream's Unity Catalog volume (`naming.stage`), then one `COPY INTO` per batch. `apply` creates the volume; `retain` prunes its dated folders. | One load job per batch, with its Parquet file sent along with the job, so no bucket is needed. |

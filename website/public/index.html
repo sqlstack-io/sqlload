@@ -301,7 +301,7 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 								<tr><th scope="row">Kafka</th><td>✓ into Snowflake, or (beta) Databricks or BigQuery, through the <a href="/docs/kafka/">exporter</a></td><td></td></tr>
 							</tbody>
 						</table>
-						<p class="systems-notes">¹ Self-hosted, container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² From 0.34.0, through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
+						<p class="systems-notes">¹ Self-hosted, container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² Through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
 						<ul>
 							<li>Linux, macOS and Windows; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>

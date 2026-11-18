@@ -35,7 +35,7 @@ cursor_column = "last_modified"
 unique_key = "{primary_key}"
 ```
 
-From 0.46.0, `plan` refuses a table that neither it nor its source gives a `write_strategy`, and a
+`plan` refuses a table that neither it nor its source gives a `write_strategy`, and a
 `merge` table without a `unique_key`, naming the table and the lines to add:
 
 ```console
@@ -52,15 +52,6 @@ Errors (1)
                 version
 ```
 
-Before 0.46.0, a table without `write_strategy` took `replace` without a cursor and `merge` with a
-cursor and a key, and `merge` used the primary key its source reported. Neither showed in the
-config, so a driver that reported the wrong key, or none, changed how a table was written without
-anyone seeing it. Before 0.44.0 a table with a cursor and no key took `delete_insert`, which loads
-a row updated after an earlier load again, as its old version is outside the cursor range it
-replaces; with a driver that reports no key for a table that has one, as
-[MariaDB Connector/ODBC 3.1](/docs/sources/odbc/#mariadb-connectorodbc-31) can, that happened
-unnoticed.
-
 `plan` shows each table's strategy next to its name, with its key or cursor, such as
 `merge (unique_key: order_id)`, `delete_insert (cursor: dt)` or
 `delete_insert (replace_key: le_version; NULLs in keys match)`. A key from `"{primary_key}"`
@@ -73,8 +64,8 @@ maximum, so a run with no new rows inserts nothing. A row that arrives later wit
 below the maximum is not picked up; when that can happen, use `delete_insert` (no key needed) or
 `merge` with a `lookback`. The first run reads from `cursor_start`, including it.
 
-`append_cursor_inclusive = true` reads from the maximum itself instead, as SQLLoad did before
-0.25.0 and as SQLBuild does by default. Each run then inserts the rows at the maximum again, and
+`append_cursor_inclusive = true` reads from the maximum itself instead, as SQLBuild does by
+default. Each run then inserts the rows at the maximum again, and
 `plan` warns about it.
 
 ```toml
@@ -124,13 +115,13 @@ without one, it reads the whole table each run.
 
 ### Repeated keys
 
-From 0.39.0, when the rows of one commit hold a `unique_key` value more than
+When the rows of one commit hold a `unique_key` value more than
 once, `merge` keeps one row for each value. The destination never gets the key twice, and the load
 never fails on the warehouse's own error about it.
 
 - Without `newest_by`, the row read last wins, and every row overwrites the table's row of its
   key: the last one the source returned, or the last row of a file.
-- From 0.54.0, `newest_by = "updated_at"` names the column whose higher value is the newer version
+- `newest_by = "updated_at"` names the column whose higher value is the newer version
   of a row. Of a commit's rows sharing a key, the newest wins; a NULL loses to any value, and a tie
   goes to the row read later. It also applies against the table: a row only overwrites the table's
   row of its key when it isn't older, so older data arriving late, such as a file coming back or a
@@ -142,19 +133,18 @@ never fails on the warehouse's own error about it.
   same rule in each column, two NULLs tying and moving on to the next.
 - `newest_by` columns can't be in the key, masked, JSON or an array, or repeated, and need a
   `merge` table. A higher value is always newer, so `newest_by` takes no direction.
-- From 0.69.1, `plan` also refuses a `newest_by` column of a native type the target's documentation
+- `plan` also refuses a `newest_by` column of a native type the target's documentation
   says it can't order, or orders inconsistently: `ARRAY`, `STRUCT`, `GEOGRAPHY`, `JSON` and graph
   types on BigQuery, `MAP`, `VARIANT` and `OBJECT` on Databricks, semi-structured `VARIANT`,
   `OBJECT` and `ARRAY` on Snowflake, `Variant` and `Dynamic` on ClickHouse, and `json` and `xml` on
   Postgres. Pin a portable type for it in `columns`, or name another column. A Python table's
   `newest_by` column is checked once its rows give it a type, and at the latest when the last rows
   are in.
-- From 0.51.0, a NULL in a key column counts as a value: rows whose keys hold the same values and
-  NULLs in the same columns are collapsed like any other repeat, by the same rule. Before 0.51.0
-  each of them was inserted.
+- A NULL in a key column counts as a value: rows whose keys hold the same values and
+  NULLs in the same columns are collapsed like any other repeat, by the same rule.
 - `on_duplicate_keys = "fail"` refuses a commit that repeats a key instead, naming the key's
-  columns and examples, before it writes the commit's rows. Commits before it stay. From 0.51.0
-  it compares NULLs in the key too.
+  columns and examples, before it writes the commit's rows. Commits before it stay. It
+  compares NULLs in the key too.
 - Set on a source, both apply to its `merge` tables only. A table that sets one of them drops the
   other from its source, so a table can choose `"fail"` under a source's `newest_by`, or the
   reverse.
@@ -172,11 +162,10 @@ The plan line names the rule when it isn't the default, as in
 
 ### NULLs in keys
 
-From 0.51.0, `merge` matches a NULL in a key column with a NULL. A row keyed
+`merge` matches a NULL in a key column with a NULL. A row keyed
 `("acme", "bolt", NULL)` on `unique_key = ["company", "item", "site"]` updates the row the table
 holds for that key, and a commit holding it twice keeps one, as [Repeated keys](#repeated-keys)
-says. Before 0.51.0 a NULL matched nothing, as `NULL = NULL` is never true in SQL, so such a row
-was inserted again by every load that read it.
+says.
 
 Each target compares a key column that can be NULL its own way, and one the source declares
 `NOT NULL` with plain `=`, as before:
@@ -216,9 +205,10 @@ NULLs would merge them into one. `plan` refuses such a table, naming the column;
 On a [Postgres target](/docs/targets/postgres/#nulls-in-keys), matching NULLs needs Postgres 15
 or later.
 
-#### Tables loaded before 0.51.0
+#### Removing copies of a key
 
-A table merged before 0.51.0 may already hold several copies of a row whose key has a NULL. They
+A table, such as one another tool wrote, may already hold several copies of a row whose key has a
+NULL. They
 stay: the next load's row matches every copy and updates them all, so they hold the same values
 but are still separate rows. Remove them once, with `sqlload load app__stock --reload` (not on a
 Postgres target, which SQLLoad never rebuilds), or by deleting all but the copy from the newest
@@ -244,7 +234,7 @@ WHERE rowid IN (
 
 ### Rows deleted at the source
 
-From 0.54.0, `deletes` makes a `merge` table drop or mark the rows whose key the source no
+`deletes` makes a `merge` table drop or mark the rows whose key the source no
 longer holds. A merge alone never sees a deleted row: its key just stops arriving. Postgres,
 ODBC, Snowflake and BigQuery sources take it; files, Python and Google Sheets sources, which can't
 list every key, don't.
@@ -275,8 +265,8 @@ nightly `--sync-deletes`, so SQLLoad keeps no schedule.
 - `--sync-deletes` fails `plan` when none of the selected tables sets `deletes`.
 - A table with `unnest`, or one sharing its destination with other tables through
   `constant_columns`, can't take `deletes`.
-- `deletes` and `deletes_from` load only into DuckDB, Postgres and, from 0.56.0, Snowflake,
-  from 0.57.0 MotherDuck, and from 0.59.0 BigQuery and Databricks, the targets their mark
+- `deletes` and `deletes_from` load only into DuckDB, Postgres, Snowflake,
+  MotherDuck, BigQuery and Databricks, the targets their mark
   statements have run on. `plan` refuses them on ClickHouse and files targets rather than run
   untested statements.
 
@@ -308,7 +298,7 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
 
 - Every load, with no flag, loads the new tombstones into a table of their own beside the merged
   one, `<table>__sqlload_deletes`: only the `unique_key` columns and `deleted_at`, read from where
-  the last load stopped, as for any `cursor_column`. From 0.55.0 it loads by `delete_insert`, so the
+  the last load stopped, as for any `cursor_column`. It loads by `delete_insert`, so the
   range a load reads again replaces its rows rather than repeating them. `plan` lists it like any
   other table. It keeps every tombstone; trim it yourself if it grows too big.
 - The tombstone table loads first. Then, once the merge commits, the rows whose key a tombstone
@@ -324,10 +314,10 @@ deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at" }
   only while the source still holds a row its own tombstone says is deleted, such as a late row.
 - Tombstones are read from the latest `deleted_at` already loaded. A tombstone that becomes
   visible later with an earlier time, such as one written by a long transaction, is read only
-  with a `lookback` that reaches it: from 0.55.0,
+  with a `lookback` that reaches it:
   `deletes_from = { table = "audit.deleted_items", cursor_column = "deleted_at", lookback = "1h" }`
   reads the last hour again on every load. Set it longer than the source's longest transaction.
-- From 0.55.0, `plan` fails when `deleted_at` and the table's `cursor_column` don't compare
+- `plan` fails when `deleted_at` and the table's `cursor_column` don't compare
   exactly: both must be timestamps with a time zone, both dates or timestamps without one, both
   numbers, or both text.
 - The tombstone table must hold every `unique_key` column, under the same names; `plan` fails
@@ -375,7 +365,7 @@ reads fails the table rather than being skipped; see
 
 ### Replacing rows by a key
 
-From 0.51.0, `replace_key` names columns whose values `delete_insert` replaces whole. Each commit
+`replace_key` names columns whose values `delete_insert` replaces whole. Each commit
 deletes every row holding a `replace_key` value that its rows hold, then inserts its rows, in one
 transaction. The key need not be unique: a value usually has many rows. Rows of other values stay.
 
@@ -448,7 +438,7 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 
 ## Several tenants in one table
 
-From 0.37.0, [`constant_columns`](/docs/configuration/#table-settings) gives
+[`constant_columns`](/docs/configuration/#table-settings) gives
 every row of a table the same values, so one table can hold several sources' copies of the same
 data, such as one API pulled for each customer. Put the constant in the `unique_key`:
 

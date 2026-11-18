@@ -9,7 +9,7 @@ sidebar:
 
 This target is in beta: it is tested, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
 
-A BigQuery target loads into BigQuery datasets. It's supported from sqlload 0.59.0, after a preview from 0.24.0. SQLLoad
+A BigQuery target loads into BigQuery datasets. SQLLoad
 streams each batch as Arrow through BigQuery's Storage Write API into a staging table, then moves
 the rows into the table with one query job.
 
@@ -181,7 +181,7 @@ as a UTC instant without its offset.
 
 ## Limitations
 
-- Records load as `JSON`, not as typed `STRUCT` columns. From 0.27.0, columns pinned as
+- Records load as `JSON`, not as typed `STRUCT` columns. Columns pinned as
   [`array(T)`](/docs/concepts/types/#arrays) load as `ARRAY<T>`, except `array(timestamp_tz)`.
 - `copy_to_internal_stage` is for Snowflake and is refused here.
 - A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into BigQuery; `plan` refuses
@@ -198,7 +198,7 @@ as a UTC instant without its offset.
 A local fake BigQuery (OAuth, query jobs, table metadata and the Storage Write API) covers the
 protocol and failure cases: wrong offsets, refused appends and commits, and expired tokens.
 
-For 0.59.0, a live round ran against a real BigQuery project, in one dataset dropped afterwards:
+A live round ran against a real BigQuery project, in one dataset dropped afterwards:
 
 - **Sources and strategies:** Postgres, local Parquet files, Python rows, Python Arrow and
   `sl.http` JSON pages, each with `append`, `replace`, `delete_insert` and `merge` where `plan`

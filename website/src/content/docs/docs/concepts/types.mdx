@@ -46,29 +46,29 @@ keeps neither key order nor duplicate keys; DuckDB doesn't enforce `varchar` len
 
 ² `BIGNUMERIC(p,s)` for more than 29 digits before the point or a scale over 9.
 
-³ From 0.27.0. See [Arrays](#arrays).
+³ See [Arrays](#arrays).
 
-⁴ From 0.54.0, `VARIANT` with `json_type = "variant"` on the target. See [VARIANT columns](/docs/targets/duckdb/#variant-columns).
+⁴ `VARIANT` with `json_type = "variant"` on the target. See [VARIANT columns](/docs/targets/duckdb/#variant-columns).
 
 Every ClickHouse column is `Nullable`, such as `Nullable(Int64)`.
 
 `native("GEOGRAPHY")` passes a warehouse-only type through unchanged. SQLLoad doesn't widen or
-convert such columns. Files targets can't hold one: from 0.29.0, `plan` fails
+convert such columns. Files targets can't hold one: `plan` fails
 on a native type pinned in `columns` instead of the load failing. A files source's
 `partition_columns`, `path_columns` and `constant_columns` can't be native for any target, and
-`plan` refuses them from 0.29.0 too; from 0.37.0, neither can any source's
+`plan` refuses them too; neither can any source's
 `constant_columns`.
 
 ## Arrays
 
-From 0.27.0. `array(T)` is a list of values of one portable type, such as
+`array(T)` is a list of values of one portable type, such as
 `array(int)` or `array(decimal(10,2))`. `T` is one of `bool`, `smallint`, `int`, `float`,
 `decimal(p,s)`, `text`, `date`, `timestamp_tz`, `timestamp_ntz` or `uuid`. Arrays of arrays,
 `json` or other types are refused.
 
 An array column is always one you pin in `columns`. Without a pin, lists still load as `json`.
 Pinning an array over a column that already holds `json` fails `plan` on every destination, as
-for any type the column can't hold. From 0.29.0, that includes a Snowflake
+for any type the column can't hold. That includes a Snowflake
 `VARIANT` column; recreate it with `--reload`.
 
 ```toml
@@ -95,19 +95,16 @@ Arrays come from:
 - Python lists, in dicts or in Arrow data.
 
 A value that doesn't convert to `T`, such as `"abc"` in an `array(int)`, fails the load rather than
-loading as NULL. Elements convert as a pinned column of `T` would, so from 0.45.0 an element that
+loading as NULL. Elements convert as a pinned column of `T` would, so an element that
 `T` can't hold exactly fails the load, naming it: `1.5` in an `array(int)`, or `1.239` in an
-`array(decimal(10,2))`, from JSON text, Python lists, Arrow lists or Parquet lists alike. Before
-0.45.0, float elements of Arrow and Parquet lists pinned `array(int)` were cut to whole numbers
-(which `plan` noted), and extra decimal places were rounded to the scale of `decimal(p,s)`. A value that isn't a list or a JSON array fails. From
-0.29.0, a list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
+`array(decimal(10,2))`, from JSON text, Python lists, Arrow lists or Parquet lists alike. A value that isn't a list or a JSON array fails. A list column of Python Arrow data (pyarrow, polars, pandas) pinned as an array
 converts as a Parquet list does, so NaN and infinities in an `array(float)` keep their values, and
-from 0.54.0 so do those in the lists of Python dicts. In Arrow lists that load as `json`, and in the
+so do those in the lists of Python dicts. In Arrow lists that load as `json`, and in the
 Arrow batches of a table that mixes dicts and Arrow data, they load as NULL elements; a dict's list
 that loads as `json` fails the load instead, as JSON can't hold them (see
 [NaN and infinities](/docs/sources/python/#nan-and-infinities)). Into Snowflake, NaN and infinities
-in a pinned Parquet list fail the load, and from 0.29.0 so do those in a pinned Arrow list, and from
-0.54.0 those from dicts. Partition columns, path and constant columns, and Postgres change capture don't take
+in a pinned Parquet list fail the load, and so do those in a pinned Arrow list, and
+those from dicts. Partition columns, path and constant columns, and Postgres change capture don't take
 arrays.
 
 ## Names SQLLoad accepts
@@ -157,14 +154,14 @@ Some names are rejected because they mean different things in different places:
 | `json`, `jsonb` | `json` |
 | `uuid` | `uuid` |
 | `bytea` | `binary` |
-| arrays | `json`; from 0.27.0, `array(T)` when pinned |
+| arrays | `json`; `array(T)` when pinned |
 | other types (enums, `interval`, network types, `timetz`, extension types) | `text` |
 
 Columns pinned in `columns` are read as the pinned type, when the source type can be read that way.
 
 ## Python and files
 
-Python values are typed as described in the [Python API](/docs/sources/python/#types); from 0.54.0,
+Python values are typed as described in the [Python API](/docs/sources/python/#types);
 NaN and infinite floats in dicts keep their values, as Postgres and Parquet floats do (see
 [NaN and infinities](/docs/sources/python/#nan-and-infinities)). Parquet columns
 keep their Arrow types. CSV and JSON columns are inferred from a sample of records; pin any you
@@ -172,7 +169,7 @@ want typed differently.
 
 ### Loading every column as text
 
-From 0.54.0, `infer_types = false` on a source or table loads every column SQLLoad would infer as
+`infer_types = false` on a source or table loads every column SQLLoad would infer as
 `text`. Use it for codes that are numeric in some rows and not in others, such as `1099999500115812`
 and `16ZN102RSC`, or that must keep their leading zeros. Columns pinned in `columns` keep their
 types:
@@ -208,15 +205,14 @@ Turning it on for a table that exists changes its inferred columns to `text`, a 
 already loaded become their text in the warehouse, so `123` stays `123`; later loads keep a
 field's leading zeros.
 
-From 0.45.0, a value that a pinned `decimal(p,s)` or integer type can't hold exactly fails the read,
+A value that a pinned `decimal(p,s)` or integer type can't hold exactly fails the read,
 naming the column and the value, on every source: `12.345` pinned `decimal(10,2)` and `1.5` pinned
-`int` fail rather than load as `12.35` and `1`. Before 0.45.0, Python, Parquet, CSV, JSON and
-BigQuery values were rounded or cut to fit. Pin a type that holds every value, such as a wider
+`int` fail rather than load as `12.35` and `1`. Pin a type that holds every value, such as a wider
 scale or `text`.
 
 ## Parsing text into times
 
-From 0.53.0, a table's `parse` reads text columns as times, on every source: files, Google Sheets,
+A table's `parse` reads text columns as times, on every source: files, Google Sheets,
 databases, Python tables and `sl.http` jobs. Each column lists the formats its values may be in.
 Each value takes the first format that reads it.
 

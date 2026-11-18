@@ -9,7 +9,7 @@ sidebar:
 
 This source is in beta: it is tested, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
 
-From sqlload 0.64.0, a `databricks` source loads tables, views and query results from a Databricks
+A `databricks` source loads tables, views and query results from a Databricks
 SQL warehouse with Unity Catalog. SQLLoad runs one `SELECT` per read on the warehouse and downloads
 its result as Arrow files, several at once, through the short-lived links the
 [Statement Execution API](https://docs.databricks.com/api/workspace/statementexecution) gives.
