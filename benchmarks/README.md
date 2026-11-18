@@ -219,6 +219,23 @@ through the external stage it is faster.
 | sqlload (direct) | 10.30 s | 0.17 s | 46 MiB | 1.00x |
 | ingestr | 19.47 s | 4.41 s | 510 MiB | 1.89x |
 
+`files_snowflake`, 100,000,000 rows
+
+| Loader | Wall | CPU (user+sys) | Peak RSS | Peak disk | Wall vs SQLLoad |
+|---|---:|---:|---:|---:|---:|
+| sqlload (direct) | 134.41 s | 0.84 s | 54 MiB | 0 MiB | 1.00x |
+| ingestr | 182.32 s | 161.97 s | 3,836 MiB | 5,801 MiB | 1.36x |
+
+SQLLoad's default route for Parquet in S3 is warehouse-direct: Snowflake runs `COPY` on the files itself, so no row passes through SQLLoad, which is why it uses under a second of CPU and no disk. ingestr streams every row through its own process. Both ran on their defaults, so the comparison is fair, but the memory and CPU gap is a different route, not the same work done more cheaply. ingestr's peak disk is what it spilled to its `TMPDIR` during the load: about 5.7 GiB per
+100M rows, which a machine running it needs free.
+
+Run on 18 November 2026, unlike the tables above: the same Intel Xeon @ 2.60 GHz VM type, with the
+harness and both loaders held to 4 cores and 8 GiB of memory (no swap) by a cgroup, and a 64 GB disk
+with 16 to 25 GB free before each run. sqlload 0.70.1, ingestr 1.1.82, harness commit `3b49a54`.
+One warm-up, then the median of 3 runs, with the starting loader rotated each round; every run's
+row count and checksum matched the source. Range of the 3 runs: sqlload 132.2 to 135.6 s, ingestr
+145.7 to 207.9 s.
+
 ## Snowflake
 
 These scenarios run only when selected, with these variables set. None runs in CI.

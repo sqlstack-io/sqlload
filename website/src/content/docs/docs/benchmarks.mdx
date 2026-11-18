@@ -19,8 +19,14 @@ which also has peak memory for every run and the commands to reproduce them.
 | Postgres, 40 columns, into Snowflake, 100,000 rows (external stage) | 11.60&nbsp;s | ingestr 14.42&nbsp;s | 1.24x |
 | The same table without a primary key (external stage) | 12.25&nbsp;s | ingestr 14.61&nbsp;s | 1.19x |
 | Parquet in S3 into Snowflake, 1M rows | 10.30&nbsp;s | ingestr 19.47&nbsp;s | 1.89x |
+| Parquet in S3 into Snowflake, 100M rows | 134.4&nbsp;s | ingestr 182.3&nbsp;s | 1.36x |
 
-Wall time is the median of 5 runs. dlt was slower than both in every scenario it ran.
+Wall time is the median of 5 runs, or of 3 at 100M rows. dlt was slower than both in every scenario
+it ran.
+
+Into Snowflake from Parquet in S3, SQLLoad's default route for Parquet in S3 is warehouse-direct: Snowflake runs `COPY` on the files itself, so no row passes through SQLLoad, which is why it uses under a second of CPU and no disk. ingestr streams every row through its own process. Both ran on their defaults, so the comparison is fair, but the memory and CPU gap is a different route, not the same work done more cheaply. At 100M rows SQLLoad peaked at 54&nbsp;MiB of memory
+and used no disk; ingestr peaked at 3,836&nbsp;MiB and spilled 5.7&nbsp;GiB to its temporary folder,
+which a machine running it needs free.
 
 ## Basis
 
@@ -37,6 +43,8 @@ Wall time is the median of 5 runs. dlt was slower than both in every scenario it
 - **S3:** the bucket was in eu-west-2 and the machine in us-west-2, so every request crossed
   regions.
 - **Snowflake:** an X-Small warehouse in AWS eu-west-2. Wall time includes Snowflake's own `COPY`.
+- **100M rows:** run on 18 November 2026 with sqlload 0.70.1 and ingestr 1.1.82, on the same VM
+  type held to 4 cores and 8 GiB by a cgroup, with a 64 GB disk (16 to 25 GB free before each run).
 
 ## Parquet files into DuckDB
 
