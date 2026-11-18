@@ -431,6 +431,13 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
                 &spec.pinned,
             )
         }
+        #[cfg(feature = "duckdb")]
+        (None, None) if system(crate::duckdb_source::constants::DUCKDB_SOURCE) => {
+            crate::duckdb_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
         #[cfg(feature = "odbc")]
         (None, None)
             if spec

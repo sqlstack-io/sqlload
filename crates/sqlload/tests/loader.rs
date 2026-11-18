@@ -47,6 +47,9 @@ mod test_column_names;
 mod test_databricks_loads;
 #[path = "loader/test_databricks_source.rs"]
 mod test_databricks_source;
+#[cfg(feature = "duckdb")]
+#[path = "loader/test_duckdb_source.rs"]
+mod test_duckdb_source;
 #[path = "loader/test_debug_project.rs"]
 mod test_debug_project;
 #[path = "loader/test_file_store.rs"]

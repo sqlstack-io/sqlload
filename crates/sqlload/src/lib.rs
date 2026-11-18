@@ -20,7 +20,6 @@ pub mod contract;
 pub mod copy;
 pub mod databricks_api;
 pub mod databricks_source;
-#[cfg(feature = "duckdb")]
 pub mod duckdb_source;
 pub mod delivery;
 pub mod envelope;

@@ -13,6 +13,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Databases with an ODBC driver: SQL Server, MySQL, MariaDB, OpenEdge and others | Tables and views, by `include` patterns, and query results | The driver, as Arrow. Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand. See [ODBC](/docs/sources/odbc/#drivers). |
 | BigQuery (beta) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
 | Databricks (beta) | Tables and views, by `include` patterns, and query results | One `SELECT` on the SQL warehouse, its result downloaded as Arrow files in parallel through the Statement Execution API's links. See [Databricks](/docs/sources/databricks/). |
+| DuckDB | Tables and views of a database file, by `include` patterns, and query results | One `SELECT` on a read-only connection, streamed as Arrow. See [DuckDB](/docs/sources/duckdb/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON, Excel (xlsx) and XML; gzip or zstd for text formats; ZIP archives of any of them; any file name through `pattern`. See [Files](/docs/sources/files/#excel-xml-and-zip-files). | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
 | Files on an SFTP server | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
@@ -45,6 +46,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ODBC | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
 | BigQuery (beta) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Databricks (beta) | Yes, untested | Yes, untested | Yes, untested | Yes, tested live | Yes, tested live | Yes, tested live | Yes, tested live |
+| DuckDB | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | Read and rewritten by SQLLoad |
 | Files on an SFTP server | Yes, read by SQLLoad, tested live | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
@@ -64,7 +66,7 @@ them into DuckDB.
 |--------|-----------------|
 | Postgres | Real Postgres in containers, as a source and as a target. `postgres_cdc` on Postgres 15, 16 and 17, plus live loads into DuckDB, Snowflake and Databricks. See [Postgres](/docs/targets/postgres/#tested). |
 | ClickHouse | Real ClickHouse 25.3, 25.8 and 26.10 in containers, with an S3-compatible store for the files it reads itself. See [ClickHouse](/docs/targets/clickhouse/#tested). |
-| DuckDB | Real, in process. |
+| DuckDB | Real, in process, as a source and a target. |
 | MotherDuck | Live against a MotherDuck account on DuckDB 1.5.6: every write strategy, an incremental load and rerun, a new column and every portable type. Offline, every change loads through the separate process into a stand-in for MotherDuck and compares with DuckDB. See [MotherDuck](/docs/targets/motherduck/#tested). |
 | ODBC | psqlODBC against real Postgres in containers, into DuckDB, plus a live round from SQL Server and MySQL into Databricks. |
 | Databricks source | A fake Statement Execution API in tests (catalog discovery, result files in several chunks, an expired link fetched again, cursor reads, no token on downloads), plus a live round from a real SQL warehouse into DuckDB, Parquet files, Postgres and ClickHouse: tables, a view, a windowed query table, merges and every column shape. See [Databricks](/docs/sources/databricks/#tested). |

@@ -1738,6 +1738,13 @@ async fn failed_count(
                 .err()
                 .map(|error| error.to_string())
         }
+        #[cfg(feature = "duckdb")]
+        SourceReader::DuckDb(duckdb) => {
+            crate::duckdb_source::main::count_rows::count_rows(duckdb, (table, None), filter)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        }
         SourceReader::Files(_) | SourceReader::Sheets(..) => None,
     }
 }

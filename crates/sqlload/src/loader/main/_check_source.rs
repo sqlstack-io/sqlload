@@ -57,6 +57,9 @@ pub(in crate::loader) async fn check_source(
             ))
         }
         SourceKind::Databricks => check_databricks(project, source).await,
+        SourceKind::DuckDb => {
+            crate::loader::main::_duckdb_source::check_duckdb(project, source).await
+        }
         #[cfg(feature = "odbc")]
         SourceKind::Odbc => {
             let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;

@@ -226,6 +226,7 @@ pub(crate) async fn open_source(
         SourceKind::Databricks => Ok(SourceReader::Databricks(Box::new(databricks_reader(
             project, source,
         )?))),
+        SourceKind::DuckDb => crate::loader::main::_duckdb_source::open_duckdb(project, source),
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -370,6 +371,12 @@ pub(crate) async fn source_tables(
                 .map(|tables| (tables, None, Vec::new()))
                 .map_err(|error| LoaderError::from(error).into()))
         }
+        SourceKind::DuckDb => Ok(
+            crate::loader::main::_duckdb_source::duckdb_tables(project, source)
+                .await
+                .map(|tables| (tables, None, Vec::new()))
+                .map_err(|error| error.into()),
+        ),
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),
@@ -1595,6 +1602,11 @@ async fn read_each(
                 filter: filter.as_deref(),
             };
             Ok(read_databricks_rows(reader, &request, on_batch).await?)
+        }
+        #[cfg(feature = "duckdb")]
+        (SourceReader::DuckDb(reader), _) => {
+            crate::loader::main::_duckdb_source::read_duckdb(reader, table, part.filter, on_batch)
+                .await
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batches =
