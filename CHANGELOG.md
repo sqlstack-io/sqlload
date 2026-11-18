@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.70.2](https://github.com/sqlstack-io/sqlload/compare/v0.70.1...v0.70.2) (2026-11-18)
+
+
+### Documentation
+
+* show table notes as small print ([#318](https://github.com/sqlstack-io/sqlload/issues/318)) ([a50e832](https://github.com/sqlstack-io/sqlload/commit/a50e83220aea285e851571a291d3db849b1a0730))
+
 ## [0.70.1](https://github.com/sqlstack-io/sqlload/compare/v0.70.0...v0.70.1) (2026-11-18)
 
 
