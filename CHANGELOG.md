@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.70.0](https://github.com/sqlstack-io/sqlload/compare/v0.69.1...v0.70.0) (2026-11-18)
+
+
+### Features
+
+* **loader:** memory_limit = "off" runs without a budget, keeping DuckDB's row-group check against its own memory_limit ([e8c44f3](https://github.com/sqlstack-io/sqlload/commit/e8c44f38a475a2c593c4ff2bba7481babf52975c))
+* **loader:** the memory watchdog stops the whole run at 95% when no table can be stopped ([e8c44f3](https://github.com/sqlstack-io/sqlload/commit/e8c44f38a475a2c593c4ff2bba7481babf52975c))
+
 ## [0.69.1](https://github.com/sqlstack-io/sqlload/compare/v0.69.0...v0.69.1) (2026-11-18)
 
 
