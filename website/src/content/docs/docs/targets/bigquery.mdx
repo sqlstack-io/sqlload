@@ -1,7 +1,13 @@
 ---
 title: "BigQuery"
-description: "Load into BigQuery: rows streamed as Arrow through the Storage Write API into a staging table, then one query job per write."
+description: "Load into BigQuery (beta): rows streamed as Arrow through the Storage Write API into a staging table, then one query job per write."
+sidebar:
+  badge:
+    text: Beta
+    variant: caution
 ---
+
+This target is in beta: it is tested, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
 
 A BigQuery target loads into BigQuery datasets. It's supported from sqlload 0.59.0, after a preview from 0.24.0. SQLLoad
 streams each batch as Arrow through BigQuery's Storage Write API into a staging table, then moves

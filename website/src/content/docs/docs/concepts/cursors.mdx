@@ -487,8 +487,10 @@ From 0.68.0, a DuckDB or MotherDuck table can commit one load in
 [pieces](/docs/cli/load/#large-rows-in-duckdb) when its rows are too large for one commit. A rerun
 of a `merge` or `delete_insert` replaces what a stopped load's pieces wrote, but an `append` would
 add those rows again. So an `append`'s first piece also writes a row to `_sqlload_unfinished`, in
-the run log's schema, in the same transaction. Every `append` into DuckDB or MotherDuck creates
-that table when it starts, so it's there, empty, even when no load needed pieces. A row holds the
+the run log's schema, in the same transaction. Every `append` into DuckDB or MotherDuck under a
+memory budget creates that table when it starts, so it's there, empty, even when no load needed
+pieces. With [`memory_limit = "off"`](/docs/cli/load/#memory-budget) nothing is cut into pieces,
+and an `append` neither needs nor creates it. A row holds the
 table, the load's id, the column holding it (`_sqlload_load_id`) and when the load started. The
 load's last commit removes the row in its own transaction, so a crash between them can't leave
 rows without a marker, or a marker without rows.

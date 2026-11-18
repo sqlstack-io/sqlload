@@ -79,6 +79,10 @@ budget. SQLLoad handles this for you:
 - A table whose last row group would hold more large values than a checkpoint can rewrite within
   the `memory_limit` fails before it commits, naming the run's `memory_limit` that would fit it.
 
+With [`memory_limit = "off"`](/docs/cli/load/#memory-budget), DuckDB keeps its own `memory_limit`,
+threads and automatic checkpoints, and commits aren't cut into pieces. Only the row-group check
+stays, against DuckDB's own `memory_limit`.
+
 Loading 300 rows of 1 MiB each with a 256MB `memory_limit` succeeds for every write strategy, in
 pieces. A Postgres target stays bounded without pieces: the same 286 MB loads in about 225 MB with
 `send = "at_commit"` and 410 MB with `send = "per_batch"`.

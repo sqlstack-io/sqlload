@@ -12,8 +12,8 @@ SQLLoad loads data into your warehouse, and shows you how before it changes anyt
 |---|---|---|
 | Postgres | ✓ (incl. CDC) | ✓ |
 | Snowflake | ✓ | ✓ |
-| BigQuery | ✓ | ✓ |
-| Databricks | | ✓ |
+| BigQuery | beta | beta |
+| Databricks | beta | beta |
 | ClickHouse | | ✓ one self-hosted server¹ |
 | DuckDB | | ✓ |
 | MotherDuck | | beta² |
@@ -21,7 +21,7 @@ SQLLoad loads data into your warehouse, and shows you how before it changes anyt
 | Files | ✓ Parquet, CSV, JSON, NDJSON, Excel (xlsx), XML; gzip, zstd and ZIP; any file name through `pattern` (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
 | Google Sheets | ✓ | |
 | HTTP APIs and Python | ✓ | |
-| Kafka | ✓ into Snowflake, Databricks or BigQuery, through the Kafka exporter | |
+| Kafka | ✓ into Snowflake, or (beta) Databricks or BigQuery, through the Kafka exporter | |
 
 ¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
 distributed tables. ClickHouse Cloud is untested.
