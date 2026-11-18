@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.76.0](https://github.com/sqlstack-io/sqlload/compare/v0.75.0...v0.76.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **motherduck:** Parquet files in S3 that MotherDuck's servers can't read now fail plan for a MotherDuck target, naming the bucket and the fix; they no longer load through SQLLoad.
+
+### Features
+
+* **motherduck:** read Parquet files in S3 on MotherDuck's servers ([#344](https://github.com/sqlstack-io/sqlload/issues/344)) ([4cab9f2](https://github.com/sqlstack-io/sqlload/commit/4cab9f2f24b6cab7785c9dfa795fb2c50ac3e1f4))
+
 ## [0.75.0](https://github.com/sqlstack-io/sqlload/compare/v0.74.0...v0.75.0) (2026-11-18)
 
 
