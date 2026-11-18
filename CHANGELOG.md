@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.73.0](https://github.com/sqlstack-io/sqlload/compare/v0.72.1...v0.73.0) (2026-11-18)
+
+
+### Features
+
+* **snowflake:** load a Snowflake source into Snowflake without rows passing through SQLLoad ([#337](https://github.com/sqlstack-io/sqlload/issues/337)) ([7dc9852](https://github.com/sqlstack-io/sqlload/commit/7dc98524ae0caa8956bf0f04a6bac0a8c0d75396))
+
+
+### Documentation
+
+* README around exact types, loud failures and bounded memory, with a re-recorded demo ([#336](https://github.com/sqlstack-io/sqlload/issues/336)) ([5661a2f](https://github.com/sqlstack-io/sqlload/commit/5661a2f0a6dfa340c1a8603ba39c290bd3098aae))
+
 ## [0.72.1](https://github.com/sqlstack-io/sqlload/compare/v0.72.0...v0.72.1) (2026-11-18)
 
 
