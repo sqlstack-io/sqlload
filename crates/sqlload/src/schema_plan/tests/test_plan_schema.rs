@@ -157,6 +157,80 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_warnings: 0,
         },
         PlanSchemaTestCase {
+            description: "a pin narrower than the table's decimal is refused, naming both types",
+            desired: vec![pinned(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![live(
+                "total",
+                ColumnType::Decimal {
+                    precision: 12,
+                    scale: 2,
+                },
+            )]),
+            rules: SchemaRules {
+                warehouse: Warehouse::DuckDb,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "total is decimal(12,2) in the table but pinned as decimal(8,2)",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin narrower than the table's varchar is refused",
+            desired: vec![pinned("name", ColumnType::Varchar(32))],
+            live: Some(vec![live("NAME", ColumnType::Varchar(64))]),
+            rules: snowflake_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "NAME is varchar(64) in the table but pinned as varchar(32)",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a pin the warehouse stores as the table's type loads (smallint is a 38-digit integer on Snowflake)",
+            desired: vec![pinned("tier", ColumnType::SmallInt)],
+            live: Some(vec![live("TIER", ColumnType::Int)]),
+            rules: snowflake_rules(),
+            expected_action: &["unchanged"],
+            expected_written: &["tier"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
+            description: "a narrower type the source reports, not pinned, loads into the wider column",
+            desired: vec![inferred(
+                "total",
+                ColumnType::Decimal {
+                    precision: 8,
+                    scale: 2,
+                },
+            )],
+            live: Some(vec![live(
+                "total",
+                ColumnType::Decimal {
+                    precision: 12,
+                    scale: 2,
+                },
+            )]),
+            rules: SchemaRules {
+                warehouse: Warehouse::DuckDb,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &["total"],
+            expected_blocked: "",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
             description: "an unrelated type change blocks with the pinning fix",
             desired: vec![source("code", ColumnType::Text)],
             live: Some(vec![live("CODE", ColumnType::Int)]),
