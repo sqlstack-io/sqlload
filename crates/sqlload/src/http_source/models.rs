@@ -450,7 +450,7 @@ pub struct Calls {
     pub full_page_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The most the pages `read_ahead` requests may hold at once: a quarter of the table's share of the run's memory budget; `None` without a budget.
     pub source_part: Option<u64>,
-    /// Cancelled once the pages read ahead are no longer wanted: a request already sent still finishes, so its connection goes back to the pool, but no wait for a turn, retry or other attempt starts.
+    /// Cancelled once the pages read ahead are no longer wanted: after paging ends normally a request already sent still finishes, so its connection goes back to the pool, but no wait for a turn, retry or other attempt starts.
     pub stop: tokio_util::sync::CancellationToken,
 }
 
