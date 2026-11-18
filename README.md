@@ -16,7 +16,8 @@
   <a href="https://sqlload.io">Website</a> ·
   <a href="https://sqlload.io/docs/">Docs</a> ·
   <a href="https://sqlload.io/docs/quickstart/">Quickstart</a> ·
-  <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
+  <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a> ·
+  <a href="https://discord.com/invite/gATNYuBK6">Discord</a>
 </p>
 
 SQLLoad loads databases, files, APIs and Kafka into your warehouse. `sqlload plan` shows every
@@ -123,6 +124,7 @@ write strategy.
 
 Built in Rust. Free and open source. [Apache 2.0](https://github.com/sqlstack-io/sqlload/blob/main/LICENSE).
 [Contributing](https://github.com/sqlstack-io/sqlload/blob/main/CONTRIBUTING.md) ·
-[Changelog](https://github.com/sqlstack-io/sqlload/blob/main/CHANGELOG.md)
+[Changelog](https://github.com/sqlstack-io/sqlload/blob/main/CHANGELOG.md) ·
+[Discord](https://discord.com/invite/gATNYuBK6)
 
 Part of [SQLStack](https://sqlstack.io/).

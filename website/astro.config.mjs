@@ -45,7 +45,10 @@ export default defineConfig({
 			description:
 				'SQLLoad loads Postgres tables, files and Python sources into Snowflake, Databricks, DuckDB or Parquet files, and shows you how before it changes anything.',
 			favicon: '/favicon.png',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/sqlstack-io/sqlload' }],
+			social: [
+				{ icon: 'github', label: 'GitHub', href: 'https://github.com/sqlstack-io/sqlload' },
+				{ icon: 'discord', label: 'Discord', href: 'https://discord.com/invite/gATNYuBK6' },
+			],
 			// The social preview image. Absolute, since link previews don't resolve relative URLs.
 			head: [
 				['meta', { property: 'og:image', content: 'https://sqlload.io/assets/og-sqlload-v2.png' }],
