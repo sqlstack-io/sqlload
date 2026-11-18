@@ -79,6 +79,10 @@ def main() -> None:
 	try:
 		with contextlib.redirect_stdout(sys.stderr):
 			code, document = _native.run_cli_captured(args)
+	except BaseException:
+		os.dup2(saved, 1)
+		os.close(saved)
+		raise
 	finally:
 		for stream in (sys.stderr, sys.__stdout__):
 			with contextlib.suppress(Exception):

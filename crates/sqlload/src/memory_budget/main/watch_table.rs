@@ -5,7 +5,7 @@ use std::sync::{Arc, PoisonError};
 use crate::memory_budget::_helpers::watch::TABLE_WATCH;
 use crate::memory_budget::models::{MemoryGuard, TableWatch, WatchedTable};
 
-/// `work`, the load of the table named `name`, watched by `guard` (unwatched without one); and why the watchdog stopped it, when it did.
+/// `work`, the load of the table named `name`, watched by `guard` (unwatched without one); and why the watchdog stopped it, when it did. A table starting after the run stopped is stopped from the start.
 pub async fn watch_table<T>(
     guard: Option<&Arc<MemoryGuard>>,
     name: &str,
@@ -25,6 +25,18 @@ pub async fn watch_table<T>(
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push(table.clone());
+    let run_stop = guard
+        .run_stop
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(reason) = run_stop {
+        table
+            .tripped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert(reason);
+    }
     let watched = WatchedTable {
         guard: guard.clone(),
         table: table.clone(),
