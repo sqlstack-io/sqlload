@@ -168,7 +168,9 @@ Into a Snowflake target, no rows pass through SQLLoad in two cases:
   `INSERT ... SELECT` on the connection's warehouse, and nothing is unloaded.
 - **The source's `stage` `url` is inside the target's external stage `url`**, on another connection
   or account. Snowflake unloads the files there, and the target `COPY`s them through its own stage.
-  The load commits only when it loads as many rows as `COPY INTO` reported unloading.
+  The load commits only when it loads as many rows as `COPY INTO` reported unloading. An `append`
+  that writes straight into its table fails, before loading anything, when one read unloads too
+  many files to `COPY` in one statement (thousands); a smaller `batch_size` splits the read.
 
 `plan` shows which:
 

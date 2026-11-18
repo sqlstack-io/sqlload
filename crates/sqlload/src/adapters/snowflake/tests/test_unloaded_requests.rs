@@ -16,7 +16,7 @@ fn given_an_unload_loaded_inside_snowflake_when_sending_its_statements_then_they
             description: "COPYs past the script limit are split, each request committing its part into the staging table",
             copies: Some((20, 120_000)),
             direct: false,
-            expected_requests: Ok(2),
+            expected_requests: Ok(3),
             expected_checks_count: false,
         },
         UnloadedRequestsTestCase {

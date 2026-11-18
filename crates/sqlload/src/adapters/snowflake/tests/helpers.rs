@@ -462,12 +462,12 @@ pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<St
     )
 }
 
-/// The requests the case's statements are sent as, each checked to fit `MAX_SCRIPT_BYTES`, or the error.
+/// The requests the case's statements are sent as, each checked to fit `MAX_COPY_SQL_BYTES`, or the error.
 pub(crate) fn unloaded_requests_for(
     test_case: &UnloadedRequestsTestCase,
 ) -> Result<Vec<String>, String> {
     use crate::adapters::snowflake::_helpers::write::unloaded_load::unloaded_requests;
-    use crate::adapters::snowflake::constants::MAX_SCRIPT_BYTES;
+    use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
 
     let (statements, unloaded) = match test_case.copies {
         Some((count, length)) => (
@@ -482,7 +482,7 @@ pub(crate) fn unloaded_requests_for(
     assert!(
         requests
             .iter()
-            .all(|request| request.len() <= MAX_SCRIPT_BYTES),
+            .all(|request| request.len() <= MAX_COPY_SQL_BYTES),
         "{}: a request is longer than the limit",
         test_case.description
     );

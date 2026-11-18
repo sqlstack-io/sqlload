@@ -3,7 +3,7 @@
 use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::direct_load::staged_as_text;
-use crate::adapters::snowflake::constants::MAX_SCRIPT_BYTES;
+use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::main::copy::_unloaded_sql::unloaded_statements;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
@@ -14,7 +14,7 @@ use crate::loader::errors::LoaderError;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 impl SnowflakeWriter {
-    /// Load `batch` inside Snowflake, where Arrow batches would go: the load's staging table, the build table, or the table itself. Unloaded files are `COPY`d from the external stage the writer loads through, which must cover them, in one transaction that commits only when they load as many rows as the unload reports; a query's rows are selected by one `INSERT ... SELECT`.
+    /// Load `batch` inside Snowflake, where Arrow batches would go: the load's staging table, the build table, or the table itself. Unloaded files are `COPY`d from the external stage the writer loads through, which must cover them, as [`unloaded_requests`] sends them, and the batch fails unless they load as many rows as the unload reports; a query's rows are selected by one `INSERT ... SELECT`.
     pub(in crate::adapters) async fn pull_unloaded(
         &mut self,
         batch: &UnloadedBatch<'_>,
@@ -108,7 +108,7 @@ impl SnowflakeWriter {
     }
 }
 
-/// The requests loading `statements`, each a [`counted_block`]: one, whose `COPY`s commit only when they load all of the unload's rows (`unloaded`: its rows and files), when it fits `MAX_SCRIPT_BYTES`, as does an `INSERT ... SELECT` (`unloaded` `None`); otherwise several, each committing its `COPY`s into the staging or build table, which publishes only once their rows add up to the unload's, as the caller checks. A `direct` batch commits into the table itself, so it fails instead, before loading anything, as a part committed alone could not be taken back.
+/// The requests loading `statements`, each a [`counted_block`]: one, whose `COPY`s commit only when they load all of the unload's rows (`unloaded`: its rows and files), when it fits `MAX_COPY_SQL_BYTES`, as does an `INSERT ... SELECT` (`unloaded` `None`); otherwise several, each committing its `COPY`s into the staging or build table, which publishes only once their rows add up to the unload's, as the caller checks. A `direct` batch commits into the table itself, so it fails instead, before loading anything, as a part committed alone could not be taken back.
 pub(in crate::adapters) fn unloaded_requests(
     statements: &[String],
     unloaded: Option<(u64, usize)>,
@@ -118,12 +118,12 @@ pub(in crate::adapters) fn unloaded_requests(
         return Ok(vec![counted_block(statements, false, None)]);
     };
     let whole = counted_block(statements, true, Some(rows));
-    if whole.len() <= MAX_SCRIPT_BYTES {
+    if whole.len() <= MAX_COPY_SQL_BYTES {
         return Ok(vec![whole]);
     }
     if direct {
         return Err(format!(
-            "the unload wrote {files} files, more than one transaction of Snowflake COPYs can name, and this append commits into the table itself. Fix: set cursor_column and batch_size, so each read unloads fewer files"
+            "the unload wrote {files} files, whose COPYs are too long to run as one Snowflake statement, and this append commits into the table itself, so they can't be split. Fix: set cursor_column with a smaller batch_size, so each read unloads fewer files"
         ));
     }
     let mut groups: Vec<Vec<String>> = Vec::new();
@@ -131,7 +131,7 @@ pub(in crate::adapters) fn unloaded_requests(
         let fits = groups.last().is_some_and(|group| {
             let mut grown = group.clone();
             grown.push(statement.clone());
-            counted_block(&grown, true, None).len() <= MAX_SCRIPT_BYTES
+            counted_block(&grown, true, None).len() <= MAX_COPY_SQL_BYTES
         });
         match (fits, groups.last_mut()) {
             (true, Some(group)) => group.push(statement.clone()),
