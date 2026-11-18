@@ -21,8 +21,8 @@
 
 Load Postgres, files, Snowflake, BigQuery, Google Sheets and Python sources into your warehouse.
 SQLLoad is Rust and Arrow end to end, and when your warehouse reads the files itself, rows never
-pass through SQLLoad, so there's no loader bottleneck as your data grows. It's fast, too: up to
-2.3× faster than ingestr in the [benchmarks](https://sqlload.io/docs/benchmarks/).
+pass through SQLLoad, so there's no loader bottleneck as your data grows. It's fast, too: faster
+than ingestr and dlt in every [benchmark](https://sqlload.io/docs/benchmarks/) we publish.
 
 ```bash
 pip install sqlload        # or: uv tool install sqlload
@@ -58,19 +58,21 @@ names dlt gave your tables.
 
 ## Speed
 
-The same data loaded by each tool on a 4-vCPU machine, median of 5 runs:
+Faster, in a fraction of the memory. The same data loaded by each tool on one 4-vCPU, 8 GB machine;
+lower is better:
 
 | Scenario | SQLLoad | ingestr | dlt |
 |---|---:|---:|---:|
-| Parquet folder into DuckDB, 1M rows | **0.92 s** | 2.12 s | 138 s |
-| Parquet folder into DuckDB, 10M rows | **3.20 s** | 5.85 s | over 20 min (one run) |
-| Postgres (40 columns) into DuckDB, 1M rows | **6.84 s** | 8.29 s | 27.2 s |
-| Postgres into Snowflake, 1M rows | **14.56 s** | 16.38 s | 29.4 s |
-| Parquet in S3 into Snowflake, 100M rows¹ | **134 s** | 182 s | not run |
+| Parquet in S3 into Snowflake, 100M rows: wall time | **134.4 s** | 182.3 s | not run |
+| The same runs: peak memory | **54 MiB** | 3,836 MiB + 5.7 GiB temp disk | not run |
+| Postgres into Snowflake, 1M rows: wall time | **14.56 s** | 16.38 s | 29.36 s |
 
-¹ Snowflake copies the files itself on SQLLoad's default route, so no row passes through SQLLoad: it
-peaked at 54 MiB and used no disk. ingestr streams every row, peaking at 3.8 GiB of memory and
-spilling 5.7 GiB to disk. Median of 3 runs, sqlload 0.70.1, 4 cores and 8 GiB, 64 GB disk.
+Parquet in S3 into Snowflake: wall time and peak memory from the same 100M-row runs, median of 3,
+18 November 2026, sqlload 0.70.1 and ingestr 1.1.82. On SQLLoad's default route Snowflake copies the
+files itself, so no row passes through SQLLoad and it uses no disk; ingestr streams every row
+through its own process and spilled 5.7 GiB to disk. Postgres into Snowflake: median of 5 runs,
+6 November 2026, sqlload 0.11.1, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres);
+peak memory 131 MiB for SQLLoad, 495 MiB for ingestr and 341 MiB for dlt.
 
 See the [benchmarks](https://sqlload.io/docs/benchmarks/) for every scenario, the method, the
 versions and how to run them yourself.
