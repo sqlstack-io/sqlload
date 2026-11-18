@@ -33,3 +33,17 @@ pub(crate) struct LowerLimitTestCase {
     pub(crate) physical: Option<u64>,
     pub(crate) expected_limit: Option<(u64, LimitOrigin)>,
 }
+
+/// Watchdog readings, each a percent of the budget and whether a table stopped at 90% is still ending, and the reading at which the run stops.
+pub(crate) struct RunStopTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) readings: Vec<(u128, bool)>,
+    pub(crate) expected_stop: Option<usize>,
+}
+
+/// A `memory_limit` as written, or as DuckDB's `current_setting('memory_limit')` prints it, and the setting read from it.
+pub(crate) struct MemorySettingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) expected_setting: Result<crate::memory_budget::models::MemorySetting, &'static str>,
+}

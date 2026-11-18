@@ -2,9 +2,9 @@
 
 use crate::helpers::run_async;
 use crate::memory_helpers::{
-    FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED,
-    OLDER_MARKER, PLAN, REPEATED_KEY, SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases,
-    run_wide_load, wide_postgres,
+    FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OFF,
+    OFF_DUCKDB_2TB, OFF_DUCKDB_256MB, OFF_PLAN, OFF_TRIPPED, OLDER_MARKER, PLAN, REPEATED_KEY,
+    SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases, run_wide_load, wide_postgres,
 };
 use crate::test_types::WideLoadTestCase;
 
@@ -265,7 +265,7 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
             expected_output: &["{table}", "one k value", "memory_limit"],
         },
         WideLoadTestCase {
-            description: "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads",
+            description: "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads, and the run goes on to its end",
             table: "wide_tripped",
             settings: "write_strategy = \"replace\"",
             rows: 300,
@@ -276,7 +276,13 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
                 (true, "300:300:0|2:2:0|none"),
                 (false, "300:300:0|2:2:0|none"),
             ],
-            expected_output: &["{table}", "90%", "memory_limit", "batch_size"],
+            expected_output: &[
+                "{table}",
+                "90%",
+                "memory_limit",
+                "batch_size",
+                "1 loaded, 1 failed",
+            ],
         },
     ];
     run_async(|| async move {
@@ -379,6 +385,97 @@ fn given_a_load_killed_between_its_pieces_when_it_runs_again_then_the_table_is_w
             steps: &[LOAD, OLDER_MARKER],
             expected_results: &[(true, "300:300:0|0"), (true, "300:300:0|0")],
             expected_output: &["killed_older: removed the rows of load older-load"],
+        },
+    ];
+    run_async(|| async move {
+        let (postgres, client) = wide_postgres().await?;
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        for test_case in &test_cases {
+            let (loads, output) =
+                run_wide_load((&client, postgres.port), folder.path(), test_case).await?;
+            assert_eq!(
+                loads,
+                expected_loads(test_case.expected_results),
+                "{}:\n{output}",
+                test_case.description
+            );
+            assert_eq!(
+                missing_phrases(test_case.expected_output, (test_case.table, &output)),
+                Vec::<String>::new(),
+                "{}: phrases missing from:\n{output}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_memory_limit_off_when_loading_1_mib_rows_then_they_commit_whole_without_a_watchdog_and_only_duckdbs_own_limit_stops_a_row_group()
+-> Result<(), String> {
+    let test_cases = [
+        WideLoadTestCase {
+            description: "a merge refusing repeated keys, which the budget stops as its 300 MiB don't fit one commit, loads in one commit with memory_limit off; plan says off",
+            table: "wide_off_refusing",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"k\"]\non_duplicate_keys = \"fail\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD, OFF, OFF_PLAN],
+            expected_results: &[
+                (false, "0:0:0|2:2:0|none"),
+                (true, "300:300:0|2:2:0|none"),
+                (true, "300:300:0|2:2:0|none"),
+            ],
+            expected_output: &["memory  off (--memory-limit): no budget or watchdog"],
+        },
+        WideLoadTestCase {
+            description: "an append without a cursor, which the budget cuts into pieces, commits once with memory_limit off, and leaves no _sqlload_unfinished table",
+            table: "wide_off_append",
+            settings: "write_strategy = \"append\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[OFF],
+            expected_results: &[(true, "300:300:0|2:2:0|none")],
+            expected_output: &["2 loaded, 302 rows"],
+        },
+        WideLoadTestCase {
+            description: "no watchdog runs with memory_limit off: a load a watchdog would stop at 90% loads",
+            table: "wide_off_watched",
+            settings: "write_strategy = \"replace\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[OFF_TRIPPED],
+            expected_results: &[(true, "300:300:0|2:2:0|none")],
+            expected_output: &["2 loaded"],
+        },
+        WideLoadTestCase {
+            description: "with memory_limit off the checkpoint guard stays, against DuckDB's own memory_limit: at 256MB, 768 rows of 1 MiB stop before their row group outgrows it",
+            table: "wide_off_768",
+            settings: "write_strategy = \"replace\"",
+            rows: 768,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[OFF_DUCKDB_256MB],
+            expected_results: &[(false, "0:0:0|2:2:0|none")],
+            expected_output: &[
+                "{table}",
+                "row group",
+                "DuckDB's own memory_limit (the run has no memory budget)",
+            ],
+        },
+        WideLoadTestCase {
+            description: "DuckDB's own memory_limit reported in TiB is read, and the load runs with memory_limit off",
+            table: "wide_off_tib",
+            settings: "write_strategy = \"replace\"",
+            rows: 4,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[OFF_DUCKDB_2TB],
+            expected_results: &[(true, "4:4:0|2:2:0|none")],
+            expected_output: &["2 loaded"],
         },
     ];
     run_async(|| async move {

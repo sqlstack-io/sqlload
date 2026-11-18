@@ -19,7 +19,7 @@ The [Kafka exporter](/docs/kafka/) uses a different file format.
 | `python_paths` | none | Folders, relative to the file, scanned for Python sources. |
 | `default_target` | none | The target for sources that name no `destination`. Not needed with one target. |
 | `concurrency` | 4 | The most tables loading at once. `--concurrency` overrides it. |
-| `memory_limit` | 80% of a container's or Windows job object's limit, else 50% of the machine's memory | From 0.68.0. The memory a run stays under, such as `"4GiB"`. `--memory-limit` overrides it. See [Memory budget](/docs/cli/load/#memory-budget). |
+| `memory_limit` | 80% of a container's or Windows job object's limit, else 50% of the machine's memory | From 0.68.0. The memory a run stays under, such as `"4GiB"`, or (from 0.70.0) `"off"` for no budget. `--memory-limit` overrides it. See [Memory budget](/docs/cli/load/#memory-budget). |
 | `microbatch_concurrency` | `false` | From 0.65.0. Lets tables read several `batch_size` windows at once with `batch_concurrency`; `plan` refuses `batch_concurrency` above 1 without it. |
 | `[connections.NAME]` | | How to reach a system. |
 | `[targets.NAME]` | | Where loaded tables go. |

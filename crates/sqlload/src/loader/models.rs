@@ -787,8 +787,8 @@ pub struct PlanOptions {
     pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
-    /// `--memory-limit`: the run's memory budget, overriding the project's `memory_limit`.
-    pub memory_limit: Option<u64>,
+    /// `--memory-limit`: the run's memory budget, or `off`, overriding the project's `memory_limit`.
+    pub memory_limit: Option<crate::memory_budget::models::MemorySetting>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.
@@ -898,6 +898,19 @@ impl TableOutcome {
                 "not started: --fail-fast stopped the load after {failed} failed"
             )),
             retryable: true,
+            elapsed: std::time::Duration::ZERO,
+            skipped: true,
+            peak_memory_bytes: None,
+        }
+    }
+
+    /// A table the memory watchdog's run stop kept from starting.
+    pub fn run_stopped(table: &TablePlan) -> Self {
+        Self {
+            table: table.outcome_name(),
+            origin: Some(table.origin()),
+            loaded: Err("not started: the memory watchdog stopped the run".to_owned()),
+            retryable: false,
             elapsed: std::time::Duration::ZERO,
             skipped: true,
             peak_memory_bytes: None,

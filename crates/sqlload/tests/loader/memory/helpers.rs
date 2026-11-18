@@ -16,6 +16,7 @@ pub(crate) const LOAD: WideStep = WideStep {
     prepare: "",
     environment: &[],
     command: "load",
+    budget: BUDGET,
 };
 
 /// The plan before a load, whose output the test case reads.
@@ -84,6 +85,36 @@ pub(crate) const REPEATED_KEY: WideStep = WideStep {
     ..LOAD
 };
 
+/// A load with `--memory-limit off`: no budget, no watchdog, no pieces.
+pub(crate) const OFF: WideStep = WideStep {
+    budget: "off",
+    ..LOAD
+};
+
+/// The plan before a load with `--memory-limit off`.
+pub(crate) const OFF_PLAN: WideStep = WideStep {
+    command: "plan -v",
+    ..OFF
+};
+
+/// [`OFF`] while a watchdog would read the process as past 90% of the budget once `wide_off_watched` holds rows (test builds only).
+pub(crate) const OFF_TRIPPED: WideStep = WideStep {
+    environment: &[("SQLLOAD_TEST_WATCH_TRIP", "wide_off_watched")],
+    ..OFF
+};
+
+/// [`OFF`] with DuckDB's own `memory_limit` set to 256MB (test builds only).
+pub(crate) const OFF_DUCKDB_256MB: WideStep = WideStep {
+    environment: &[("SQLLOAD_TEST_DUCKDB_MEMORY_LIMIT", "256MB")],
+    ..OFF
+};
+
+/// [`OFF`] with DuckDB's own `memory_limit` set to 2TB, which DuckDB reports in TiB (test builds only).
+pub(crate) const OFF_DUCKDB_2TB: WideStep = WideStep {
+    environment: &[("SQLLOAD_TEST_DUCKDB_MEMORY_LIMIT", "2TB")],
+    ..OFF
+};
+
 /// The bytes of each source row's `body`: 32 hex digits repeated 32,768 times.
 const BODY_REPEATS: u32 = 32_768;
 
@@ -139,18 +170,15 @@ table_name = "{{table}}"
     text
 }
 
-/// Run `sqlload` with `command` (`load`, or `plan -v`) on `config` under [`BUDGET`], with `environment` set: whether it succeeded, and its output.
-fn load_wide(
-    config: &Path,
-    (command, environment): (&str, &[(&str, &str)]),
-) -> Result<(bool, String), String> {
+/// Run `sqlload` with `step`'s command (`load`, or `plan -v`) on `config` under its budget, with its environment set: whether it succeeded, and its output.
+fn load_wide(config: &Path, step: &WideStep) -> Result<(bool, String), String> {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
         .arg("--config")
         .arg(config)
         .arg("--no-color")
-        .args(command.split(' '))
-        .args(["--memory-limit", BUDGET])
-        .envs(environment.iter().copied())
+        .args(step.command.split(' '))
+        .args(["--memory-limit", step.budget])
+        .envs(step.environment.iter().copied())
         .output()
         .map_err(|error| error.to_string())?;
     Ok((
@@ -216,7 +244,7 @@ pub(crate) async fn run_wide_load(
             .await
             .map_err(|error| error.to_string())?;
         duckdb_execute(&database, &step.prepare.replace("{table}", name))?;
-        let (succeeded, text) = load_wide(&config, (step.command, step.environment))?;
+        let (succeeded, text) = load_wide(&config, step)?;
         results.push((succeeded, wide_result(&database, &names)));
         output = text;
     }

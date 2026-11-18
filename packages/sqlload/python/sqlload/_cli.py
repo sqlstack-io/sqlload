@@ -71,7 +71,7 @@ def main() -> None:
 	args = ["sqlload", *sys.argv[1:]]
 	# Help and the version print on stdout as text, so they keep it.
 	if "--json" not in args or {"-h", "--help", "-V", "--version"} & set(args):
-		sys.exit(_native.run_cli(args))
+		exit_with(_native.run_cli(args))
 	# Under --json, stdout holds the one JSON document and nothing else: for the run, file descriptor 1 is stderr, so what a
 	# source's print(), a child process it starts or os.write(1, ...) writes goes there, and the document is written after.
 	saved = os.dup(1)
@@ -79,14 +79,34 @@ def main() -> None:
 	try:
 		with contextlib.redirect_stdout(sys.stderr):
 			code, document = _native.run_cli_captured(args)
+	except BaseException:
+		os.dup2(saved, 1)
+		os.close(saved)
+		raise
 	finally:
 		for stream in (sys.stderr, sys.__stdout__):
 			with contextlib.suppress(Exception):
 				stream.flush()
+	# After the memory watchdog stopped the run, a Python table may still be busy in its function and print: file
+	# descriptor 1 stays stderr, and the document goes straight to the saved stdout before the process ends.
+	stopped = _native.run_stopped()
+	if not stopped:
 		os.dup2(saved, 1)
-		os.close(saved)
 	# A reader that has gone keeps the command's exit code, as the native command ignores a closed stdout (on Windows
 	# that can be an OSError other than BrokenPipeError).
-	with contextlib.suppress(OSError), open(1, "wb", closefd=False) as stdout:
+	with contextlib.suppress(OSError), open(saved if stopped else 1, "wb", closefd=False) as stdout:
 		stdout.write(document.encode())
+	if stopped:
+		os._exit(code)
+	os.close(saved)
+	sys.exit(code)
+
+
+def exit_with(code: int) -> None:
+	"""Exit with `code`; at once when the memory watchdog stopped the run, since a Python table may still be busy in its function (building the list that filled the memory) and an orderly exit would wait for it."""
+	if _native.run_stopped():
+		for stream in (sys.stdout, sys.stderr):
+			with contextlib.suppress(Exception):
+				stream.flush()
+		os._exit(code)
 	sys.exit(code)

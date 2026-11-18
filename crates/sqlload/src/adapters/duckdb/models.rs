@@ -17,6 +17,8 @@ pub struct DuckDbDestination {
     pub bridge_duckdb: String,
     /// Its part of the run's memory budget, which cuts commits of large values into pieces; `None` without a budget.
     pub memory: Option<crate::memory_budget::models::DuckDbShare>,
+    /// Without a share, the `memory_limit` DuckDB set itself, which a table's last row group is checked against before a checkpoint has to rewrite it; `None` on MotherDuck, which checkpoints on its servers.
+    pub own_limit: Option<u64>,
     /// The bytes of large values committed to the database since its last checkpoint, which DuckDB holds in memory until then.
     pub unflushed: Arc<std::sync::atomic::AtomicU64>,
 }

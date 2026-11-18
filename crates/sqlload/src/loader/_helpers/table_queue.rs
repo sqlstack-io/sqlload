@@ -339,6 +339,13 @@ impl<'a> TableQueue<'a> {
     ) {
         let mut running: JoinSet<TableOutcome> = JoinSet::new();
         loop {
+            if guard
+                .as_ref()
+                .is_some_and(|guard| guard.run_stopped.is_cancelled())
+            {
+                self.stop_run(guard.as_ref(), &mut running);
+                return;
+            }
             while running.len() < threads {
                 if holding(guard.as_ref()) && !running.is_empty() {
                     break;
@@ -352,6 +359,8 @@ impl<'a> TableQueue<'a> {
                 self.started(task.id(), index);
             }
             let joined = tokio::select! {
+                biased;
+                () = run_stopped(guard.as_ref()) => continue,
                 joined = running.join_next_with_id() => joined,
                 () = released(guard.as_ref()) => continue,
             };
@@ -359,6 +368,39 @@ impl<'a> TableQueue<'a> {
                 break;
             };
             self.finish(joined);
+        }
+    }
+
+    /// The watchdog stopped the run: a table whose thread already ended keeps its outcome, each one still running fails with the reason, left to end with the process, and none of the waiting ones starts.
+    fn stop_run(&mut self, guard: Option<&Arc<MemoryGuard>>, running: &mut JoinSet<TableOutcome>) {
+        while let Some(joined) = running.try_join_next_with_id() {
+            self.finish(joined);
+        }
+        let reason = (guard.and_then(|guard| {
+            guard
+                .run_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }))
+        .unwrap_or_default();
+        for index in std::mem::take(&mut self.started).into_values() {
+            let outcome = TableOutcome {
+                table: self.tables[index].outcome_name(),
+                origin: Some(self.tables[index].origin()),
+                loaded: Err(reason.clone()),
+                retryable: false,
+                elapsed: std::time::Duration::ZERO,
+                skipped: false,
+                peak_memory_bytes: None,
+            };
+            emit_outcome(&outcome);
+            self.outcomes.push((index, outcome));
+        }
+        for index in std::mem::take(&mut self.waiting) {
+            let outcome = TableOutcome::run_stopped(self.tables[index]);
+            emit_outcome(&outcome);
+            self.outcomes.push((index, outcome));
         }
     }
 
@@ -394,6 +436,14 @@ pub(crate) fn watch_load(run: &LoadRun<'_>) -> Option<Arc<MemoryGuard>> {
 /// Whether the watchdog holds the load at 80% of its budget, so no table starts.
 fn holding(guard: Option<&Arc<MemoryGuard>>) -> bool {
     guard.is_some_and(|guard| guard.holding.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Wait until the watchdog stops the whole run; never, without one.
+async fn run_stopped(guard: Option<&Arc<MemoryGuard>>) {
+    match guard {
+        Some(guard) => guard.run_stopped.cancelled().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Wait until the watchdog stops holding the load; never, without one.

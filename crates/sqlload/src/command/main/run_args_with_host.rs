@@ -14,6 +14,8 @@ use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest, LogFormat};
+use crate::memory_budget::main::clear_run_stop::clear_run_stop;
+use crate::memory_budget::main::run_stopped::run_stopped;
 use crate::playground::main::run_playground::run_playground;
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
@@ -36,6 +38,7 @@ where
         }
     };
     init_logging(cli.log_format);
+    clear_run_stop();
     let no_color = cli.no_color;
     let (lines, code) = run_parsed(cli, host);
     match captures {
@@ -50,7 +53,7 @@ where
     }
 }
 
-/// Run the parsed command line: the lines it writes to stdout, and its exit code.
+/// Run the parsed command line: the lines it writes to stdout, and its exit code. After the memory watchdog stopped the run, the runtime shuts down without waiting for the tables it left running, which end with the process.
 fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) {
     let (json, name) = match &cli.command {
         Command::Plan(args) => (args.json, "plan"),
@@ -102,6 +105,9 @@ fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) 
                 .map_err(CommandError::from)
         })
     });
+    if run_stopped() {
+        runtime.shutdown_background();
+    }
     let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {

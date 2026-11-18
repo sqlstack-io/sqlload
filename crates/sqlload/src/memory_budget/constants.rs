@@ -75,6 +75,12 @@ pub const HOLD_PERCENT: u64 = 80;
 /// The percent of the budget at which the largest table's running statement is interrupted and the table fails.
 pub const STOP_PERCENT: u64 = 90;
 
+/// The percent of the budget at which the whole run stops, when no table can be stopped to free memory or stopping one didn't bring it back under [`STOP_PERCENT`] within [`RUN_STOP_GRACE`] readings.
+pub const RUN_STOP_PERCENT: u64 = 95;
+
+/// How many readings (of [`WATCH_INTERVAL`]) a stopped table has to bring memory back under [`STOP_PERCENT`] before the run stops: half a second, for its statement to roll back.
+pub const RUN_STOP_GRACE: u32 = 50;
+
 /// How often the watchdog reads the process's memory: rows of 1 MiB grew it by up to 10 MiB per 10 ms.
 pub const WATCH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 

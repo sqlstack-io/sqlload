@@ -49,6 +49,7 @@ pub(in crate::adapters) fn open_motherduck(
             row_group_bytes: u64::MAX,
             ..share
         }),
+        own_limit: None,
         unflushed: Arc::default(),
     })
 }
