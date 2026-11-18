@@ -168,7 +168,8 @@ def main(argv: list[str] | None = None) -> int:
 	scenarios = [s for s in SCENARIOS if selected(args.scenarios, s.name, s.group)]
 	competitors = [c for c in all_competitors() if selected(args.competitors, c.name)]
 	print(f"generating data ({args.size}, seed {args.seed})", flush=True)
-	dataset = datagen.generate(args.data or args.out / "data", args.seed, sizes)
+	parts = tuple(part for part in datagen.PARTS if any(part in scenario.data for scenario in scenarios))
+	dataset = datagen.generate(args.data or args.out / "data", args.seed, sizes, parts)
 	# Snowflake scenarios run only when asked for by name or group, with their variables set.
 	explicit = {value.strip() for value in args.scenarios.split(",")}
 	snowflake_settings: snowflake.Settings | None = None

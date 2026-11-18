@@ -26,6 +26,17 @@ class Scenario:
 	#: The Postgres table a Snowflake scenario reads.
 	source: str = ""
 
+	@property
+	def data(self) -> tuple[str, ...]:
+		"""The dataset parts (`datagen.PARTS`) this scenario reads; the files' checksum comes from the Parquet parts."""
+		if self.group == "postgres" or self.source:
+			return ("pg",)
+		if self.name in ("files_csv", "files_ndjson"):
+			return ("files_parquet", "files_text")
+		if self.group in ("files", "s3", "snowflake"):
+			return ("files_parquet",)
+		return ("python",)
+
 	def rows(self, sizes: Sizes) -> int:
 		return {
 			"pg_narrow": sizes.narrow,
