@@ -9,14 +9,14 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |--------|---------|---------|
 | Postgres | Tables, by `include` patterns | Binary `COPY` into Arrow, over TLS when the connection's `sslmode` asks |
 | Postgres changes (`postgres_cdc`) | Inserts, updates and deletes of tables, by `include` patterns | A snapshot, then a logical replication slot (`pgoutput`), in whole transactions. See [Postgres changes](/docs/sources/postgres-cdc/). |
-| Snowflake (from 0.26.0) | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or (from 0.27.0) by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
-| Databases with an ODBC driver (from 0.27.0): SQL Server, MySQL, MariaDB, OpenEdge and others | Tables and views, by `include` patterns, and query results | The driver, as Arrow. Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand. See [ODBC](/docs/sources/odbc/#drivers). |
-| BigQuery (beta, from 0.30.0) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
-| Databricks (beta, from 0.64.0) | Tables and views, by `include` patterns, and query results | One `SELECT` on the SQL warehouse, its result downloaded as Arrow files in parallel through the Statement Execution API's links. See [Databricks](/docs/sources/databricks/). |
+| Snowflake | Tables and views, by `include` patterns, and query results | Parquet unloaded with `COPY INTO` to the user stage or an S3 stage, then read by SQLLoad, or by DuckDB itself from an S3 stage. See [Snowflake](/docs/sources/snowflake/). |
+| Databases with an ODBC driver: SQL Server, MySQL, MariaDB, OpenEdge and others | Tables and views, by `include` patterns, and query results | The driver, as Arrow. Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand. See [ODBC](/docs/sources/odbc/#drivers). |
+| BigQuery (beta) | Tables and views, by `include` patterns, and query results | The Storage Read API, as Arrow in parallel streams; views and queries through a query job. See [BigQuery](/docs/sources/bigquery/). |
+| Databricks (beta) | Tables and views, by `include` patterns, and query results | One `SELECT` on the SQL warehouse, its result downloaded as Arrow files in parallel through the Statement Execution API's links. See [Databricks](/docs/sources/databricks/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON, Excel (xlsx) and XML; gzip or zstd for text formats; ZIP archives of any of them; any file name through `pattern`. See [Files](/docs/sources/files/#excel-xml-and-zip-files). | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
 | Files in a local folder | As for S3 | As for S3 |
-| Files on an SFTP server (from 0.32.0) | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
-| Google Sheets | From 0.27.0. Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
+| Files on an SFTP server | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
+| Google Sheets | Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
 | Python | Dicts, Arrow data (pyarrow, polars, pandas), JSON and NDJSON bytes | The `sqlload` package, in process |
 | HTTP APIs | JSON, through `sl.http` in a Python source | Rust |
 | Kafka | Topics, through the separate [exporter](/docs/kafka/), into Snowflake, or (beta) Databricks or BigQuery | Rust |
@@ -31,9 +31,9 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse, one self-hosted server | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. No clusters, replicated or distributed tables; ClickHouse Cloud is untested. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| MotherDuck (beta, from 0.33.0) | `append`, `merge`, `delete_insert`, `replace` | From 0.34.0, batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; files are read by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
-| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or, from 0.27.0, CSV: plain, gzip or zstd. |
-| Parquet or CSV files in a local folder | As for S3; from 0.27.0, `replace` swaps the folder in one rename | As for S3 |
+| MotherDuck (beta) | `append`, `merge`, `delete_insert`, `replace` | Batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; files are read by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
+| Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or CSV: plain, gzip or zstd. |
+| Parquet or CSV files in a local folder | As for S3; `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations
 
@@ -41,20 +41,20 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 |-------------|-----------|------------|--------------------|------------|----------|--------|---------------|
 | Postgres | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Postgres changes (`postgres_cdc`) | Yes | Yes | No | No | No | Yes | Yes, as a changelog |
-| Snowflake (from 0.26.0) | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| ODBC (from 0.27.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
-| BigQuery (beta, from 0.30.0) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
-| Databricks (beta, from 0.64.0) | Yes, untested | Yes, untested | Yes, untested | Yes, tested live | Yes, tested live | Yes, tested live | Yes, tested live |
-| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | From 0.27.0, read and rewritten by SQLLoad |
-| Files on an SFTP server (from 0.32.0) | Yes, read by SQLLoad, tested live | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
+| Snowflake | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| ODBC | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes |
+| BigQuery (beta) | Yes, untested | Yes, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
+| Databricks (beta) | Yes, untested | Yes, untested | Yes, untested | Yes, tested live | Yes, tested live | Yes, tested live | Yes, tested live |
+| Files | Yes, read by Snowflake from an external stage | Yes, staged by SQLLoad in the volume | Yes, read by SQLLoad and streamed | Yes; Parquet in S3 read by ClickHouse | Yes, read by SQLLoad | Yes; Parquet read by DuckDB | Read and rewritten by SQLLoad |
+| Files on an SFTP server | Yes, read by SQLLoad, tested live | Yes, read by SQLLoad, tested live | Yes, untested | Yes, untested | Yes, untested | Yes | Yes, untested |
 | Google Sheets | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-A MotherDuck target (beta, from 0.33.0) takes every source a DuckDB target
+A MotherDuck target (beta) takes every source a DuckDB target
 takes, untested, but always through SQLLoad: files are read by SQLLoad, never by MotherDuck.
 
-From 0.27.0, a files source loads into a files target, read and rewritten
-by SQLLoad. Before, `plan` refused it. `merge` isn't available for files sources or files
+A files source loads into a files target, read and rewritten
+by SQLLoad. `merge` isn't available for files sources or files
 targets. Google Sheets tables reach every target through the same Arrow path; the tests load
 them into DuckDB.
 
@@ -72,7 +72,7 @@ them into DuckDB.
 | S3 | A real S3-compatible store in containers; benchmarks against AWS S3. |
 | Local files | Real files in temporary folders. |
 | SFTP | OpenSSH's SFTP server in a container, into DuckDB: new and rewritten files, gzip CSV and Parquet, key and password sign-in, and unknown or changed host keys refused, plus a live round into Databricks. |
-| Kafka | Redpanda in containers. The exporter into Databricks was tested live on all three routes (Zerobus Ingest, a volume and S3), with a restart mid-run, before 0.66.0. |
+| Kafka | Redpanda in containers. The exporter into Databricks was tested live on all three routes (Zerobus Ingest, a volume and S3), with a restart mid-run. |
 | Google Sheets | A local fake Sheets API (OAuth, tabs and A1 ranges, refused tokens), plus a live smoke test on a real spreadsheet with generic contents. |
 | Snowflake | A local fake for protocol and failure tests, plus live tests on a real Snowflake account. |
 | BigQuery | A local fake (OAuth, query jobs, table metadata, the Storage Write API) for protocol and failure tests, plus live tests on a real BigQuery project. See [BigQuery](/docs/targets/bigquery/#tested). |

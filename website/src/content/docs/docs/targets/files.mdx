@@ -19,10 +19,10 @@ path = "{source}/{table}/dt={cursor:date}/"
 |-----|---------|
 | `connection` | An `s3` or `filesystem` connection. |
 | `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
-| `format` | `parquet` (default), or from 0.27.0 `csv`. See [CSV files](#csv-files). |
-| `compression` | From 0.27.0. CSV only: `none` (default), `gzip` or `zstd`. |
-| `csv` | From 0.27.0. CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
-| `single_file` | From 0.27.0. Write one file per table, or per partition, named after the table folder. Default `false`. |
+| `format` | `parquet` (default), or `csv`. See [CSV files](#csv-files). |
+| `compression` | CSV only: `none` (default), `gzip` or `zstd`. |
+| `csv` | CSV only: `{ delimiter, header, quote, null_value }`. Default `{ delimiter = ",", header = true, quote = '"', null_value = "" }`. |
+| `single_file` | Write one file per table, or per partition, named after the table folder. Default `false`. |
 | `max_footer_reads` | The most Parquet footers `plan` reads for one table's schema. Default 100. |
 
 A source's `destination_path`, or one table's, overrides the target's `path`.
@@ -62,7 +62,7 @@ diff --all-files` reads every file's footer to report files whose columns differ
 A [`postgres_cdc` source](/docs/sources/postgres-cdc/#into-parquet-files) loads into a files
 target as a changelog, adding files with each load.
 
-From 0.27.0, a [files source](/docs/sources/files/) loads into a files target.
+A [files source](/docs/sources/files/) loads into a files target.
 SQLLoad reads the source files and writes them out again, with `append`, `replace`, or
 `delete_insert` by a partition cursor. Each commit records the source files it loaded in
 `_sqlload/loaded/<commit>.json`. Under `append`, the next load skips those files and reads only
@@ -73,13 +73,12 @@ rewritten in place fails the table until you reload the table with `--reload`, o
 commit's files: the files of a load that failed and was repaired load again, and the next load
 deletes records whose files are gone.
 
-From 0.61.0, a record groups the source files by the partition folder their rows went to, and a
+A record groups the source files by the partition folder their rows went to, and a
 group counts only while the commit still has files in that folder. A `delete_insert` that replaces
 one partition of an earlier multi-partition commit drops that partition's files from the record,
 and keeps the rest. Once a table has more than 64 records, a load merges them into one,
 `_sqlload/loaded/compacted.<id>.json`, so planning reads a few records rather than one per commit.
-Records written before 0.61.0 are a list of files without their folders, which this release can't
-read. A plan or load that finds one blocks the table rather than treat its files as never loaded:
+A record in an older SQLLoad's format, a list of files without their folders, can't be read. A plan or load that finds one blocks the table rather than treat its files as never loaded:
 
 ```text
 …/_sqlload/loaded/<commit>.json is a record of loaded source files in the format of an older SQLLoad, which this one cannot read. Fix: load the table with --reload, which rewrites its files and records
@@ -93,7 +92,7 @@ SQLLoad keeps its bookkeeping for each table under `<table folder>/_sqlload/`: m
 progress, the run log of `state = "logged"` tables, and the source files a files source's
 loads loaded. Run one load at a time per files table.
 
-From 0.27.0, SQLLoad enforces that rule. A load takes a lease on the table, a
+SQLLoad enforces that rule. A load takes a lease on the table, a
 file in `_sqlload/lease/`, before it repairs or writes anything. It renews the lease every minute
 and releases it when it finishes. While another load holds a live lease, `plan` blocks the table
 and `load` refuses it:
@@ -106,7 +105,7 @@ A lease lasts 10 minutes, so a load that crashed holds the table until then. The
 then repairs what it left. Before deleting older files, a load checks that it still holds the
 lease. If its lease lapsed, or another load took the table, it stops without deleting them.
 
-From 0.61.0, a load also checks, once it holds the lease, that no other load committed to the
+A load also checks, once it holds the lease, that no other load committed to the
 table or replaced its files since the table was planned. Under `append` and `delete_insert`,
 what a load reads was chosen from the files at plan time, so a load planned before
 another one finished would load the same source files or rows again. It stops before writing
@@ -116,11 +115,11 @@ instead, with an error a rerun clears:
 orders: another load changed the table's files in out/orders/ after this load was planned, so what it would read may already be loaded; stopped before writing. Run the load again
 ```
 
-From 0.61.0, repairing a load found writing leaves an `aborted` tombstone for 7 days. That load
+Repairing a load found writing leaves an `aborted` tombstone for 7 days. That load
 may only have lost its lease and still be running: any file it stores later is deleted by the next
 load, rather than counting as written. After 7 days the next load deletes the tombstone.
 
-From 0.62.0, how each commit ended is a file in `_sqlload/decided/`, which is only ever created,
+How each commit ended is a file in `_sqlload/decided/`, which is only ever created,
 never overwritten: a load commits by creating it as `replacing`, and a load repairing the table
 creates it as `aborted` (the tombstone). Of a load committing late and a load repairing it, only
 one decides the commit: a repair that finds the commit already finished withdraws its `aborted`
@@ -136,14 +135,9 @@ repaired the table, fails when it resumes, without deleting any file:
 This uses the same create-only writes as the lease, so it needs no more of the store. A store that
 can't do them fails the load rather than skip the check.
 
-When upgrading to 0.62.0, upgrade every process that writes a files table (scheduled jobs, other
-machines, Python code that calls SQLLoad) before any of them loads it again, and don't go back to an
-earlier release for that table. An earlier release ignores `_sqlload/decided/`, so its load can
-undo a repair that 0.62.0 decided, deleting rows, or repair away a commit that 0.62.0 finished.
-
 ## Replacing a table
 
-From sqlload 0.27.0: in a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
+In a local folder, `replace` and `--reload` write the new table into a hidden folder beside the
 table folder, carry over every file of the table folder that the load doesn't replace (the
 `_sqlload/runs/` log, the load's lease, and any file you keep beside the data), then swap the two folders in one rename
 (`renameat2` with `RENAME_EXCHANGE` on Linux, `RENAME_SWAP` on macOS) and delete the old one. A
@@ -151,7 +145,7 @@ reader sees the old files or the new ones, never both. A hidden folder left by a
 load is deleted by the next load. One ending in `-old`, which an earlier release left when it stopped
 while moving the old table aside, is kept with a warning, as it may hold the table's only copy.
 
-From 0.63.0, a load checks that it still holds the table's lease right before that rename, and
+A load checks that it still holds the table's lease right before that rename, and
 writes nothing in between. A load that takes the table first moves every hidden folder other loads
 staged beside it away, in one rename each, then checks its own lease again before it repairs
 anything. The swapping load also checks that its hidden folder is the one it made when it started,
@@ -175,9 +169,6 @@ old folder, so the other load stops before repairing, with an error a rerun clea
 orders: lost the table's lease to load 3f9c…, as it was not refreshed for 10 minutes; stopped before deleting any files
 ```
 
-This needs every process that writes the table on 0.63.0 or later: an earlier release recreates a
-missing hidden folder at the swap, and deletes other loads' hidden folders without moving them first.
-
 Which path `replace` and `--reload` take:
 
 | Where the table is | How the new table is written | What a reader sees |
@@ -187,19 +178,17 @@ Which path `replace` and `--reload` take:
 | A table at the root of the folder connection | As the row above, since it has no folder beside it | Both, for a moment |
 | S3 | As the row above | Both, for a moment |
 
-From 0.63.0, a load picks its path once, before it writes anything: it tries the one-rename swap on
+A load picks its path once, before it writes anything: it tries the one-rename swap on
 two empty folders beside the table folder, and takes the second row's path if the filesystem doesn't
 support it. A load that started staging never switches path: if the swap then fails, it stops
 without changing the table. Either path keeps a load that stalled past its lease from losing rows.
-Before 0.63.0, a filesystem without the swap moved the old folder aside first, leaving a moment with
-no folder.
 
 `delete_insert` writes the new files first, then deletes the older ones, in every store, as the
 plan's `note` says.
 
 ## CSV files
 
-From sqlload 0.27.0, a files target can write CSV instead of Parquet.
+A files target can write CSV instead of Parquet.
 
 ```toml
 [targets.exports]
@@ -246,16 +235,12 @@ need Parquet, and `single_file` doesn't take `append`; `plan` says so.
 
 ## Limitations
 
-- Before 0.27.0, a files source can't load into a files target.
-- The lease (from 0.27.0) trusts the clocks of the machines that load, and
+- The lease trusts the clocks of the machines that load, and
   needs a store that honours create-only writes, as a local folder and S3 (`If-None-Match: *`) do.
-  An S3-compatible store that ignores that header can still let two loads write one table, as can,
-  before 0.62.0, a load paused for longer than its lease (but see the next point). With
+  An S3-compatible store that ignores that header can still let two loads write one table. With
   `AWS_CONDITIONAL_PUT=disabled`, loads into S3 fail instead.
-- Before 0.63.0, a local `replace` or `--reload` that paused for longer than its lease, after its
-  last lease check, could still swap in a table missing rows, counted as loaded.
 - `replace` and `delete_insert` write the new files first, then delete the older ones. A reader in
   between sees both, as the plan's `note` says.
 - A load that lost its lease and keeps going for more than 7 days after another load repaired it
-  isn't covered: once the `aborted` tombstone is gone, files it stores count as written, and from
-  0.62.0, a commit is refused only while the tombstone exists.
+  isn't covered: once the `aborted` tombstone is gone, files it stores count as written, and a commit
+  is refused only while the tombstone exists.

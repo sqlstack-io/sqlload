@@ -28,14 +28,14 @@ SQLLoad's reader loads a files table instead when DuckDB can't load it exactly:
 A later batch whose files hold a column differently fails the load, naming the column.
 
 DuckDB reads S3 with the keys SQLLoad finds for the [`s3` connection](/docs/configuration/#s3):
-from the environment or, from 0.27.0, the shared credentials file. Without
+from the environment or the shared credentials file. Without
 either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.
 
 ## VARIANT columns
 
-From 0.54.0, `json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
+`json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
 DuckDB's `VARIANT` instead of `JSON`, which holds each value as its text:
 
 ```toml
@@ -58,7 +58,7 @@ with `--allow-type-change-rebuild`. The column keeps its values.
 
 ## Memory
 
-From 0.68.0, a DuckDB target opens with its part of the run's
+A DuckDB target opens with its part of the run's
 [memory budget](/docs/cli/load/#memory-budget): a `memory_limit` of half that part, at least 256MB,
 and one thread per 128 MiB of it, between two and the machine's cores. `plan` shows both on its
 `Memory` line.

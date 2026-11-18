@@ -3,8 +3,8 @@ title: "ClickHouse"
 description: "Load into a self-hosted ClickHouse server: rows sent as Arrow over HTTP into a staging table, then published by swapping in whole tables or partitions."
 ---
 
-A ClickHouse target loads into one self-hosted ClickHouse server over its HTTP interface, from
-sqlload 0.26.0. SQLLoad sends each batch as Arrow into a staging table. The rows reach the table
+A ClickHouse target loads into one self-hosted ClickHouse server over its HTTP interface.
+SQLLoad sends each batch as Arrow into a staging table. The rows reach the table
 only when the load publishes them, by swapping in a whole table or whole partitions. Parquet files
 in S3 skip SQLLoad: ClickHouse reads them itself.
 
@@ -145,7 +145,7 @@ SQLLoad must be the only writer of the tables it loads. Rows another writer adds
 publishes can be lost, and a lightweight `UPDATE` run on the table is undone or refused by the next
 publish, as it lives in a patch part that moving partitions does not carry.
 
-From 0.60.0, `delete_insert`, `append` and `merge` publish once per run. Read in windows
+`delete_insert`, `append` and `merge` publish once per run. Read in windows
 (`batch_size`) or [in cursor order](/docs/concepts/cursors/#batches), they stage everything they
 read and publish it in one commit at the end; a `merge` also commits every 10 million waiting rows
 (below). Readers see the table as it was at the last commit or after the next one, never part way,
@@ -160,7 +160,7 @@ in one set on the server, about 90 bytes a key, so a merge also commits at the e
 batch in which 10 million rows are waiting. A single window holding more rows than that is still
 matched at once, so keep `batch_size` windows well under it. With
 `on_duplicate_keys = "fail"` a merge commits each batch, since a key updated during the read would
-be read twice and fail the load. A `merge` without a cursor commits about every 1 GB, as before.
+be read twice and fail the load. A `merge` without a cursor commits about every 1 GB.
 
 `merge` matches rows on `unique_key` exactly, so readers need no `FINAL`. It replaces whole rows,
 so a column the source no longer has is `NULL` on the rows it updates.
@@ -179,7 +179,7 @@ only once the sort reaches half the memory the server and user have free when it
 per-query `max_memory_usage`. Where the sort runs out of memory, SQLLoad inserts the rows unsorted
 instead, as before: more parts, which ClickHouse merges in the background.
 
-From 0.60.0, `replace` and `--reload` into a partitioned table send their rows to an unpartitioned
+`replace` and `--reload` into a partitioned table send their rows to an unpartitioned
 table sorted by the partition key, then move them into the new table with one `INSERT ... SELECT`
 ordered by that key, just before the swap. Sent straight into partitions, every insert of about a
 million rows would make one part per partition it fills: 20 million rows over 1,000 daily
@@ -188,7 +188,7 @@ reaches `max_parts_in_total`. Sorted, the same load makes about one part per par
 that every row is written twice on the server, and the move holds about 1 to 2 GiB of server
 memory, which grows with the stage's part count, not its rows (from 5 million to 80 million rows it
 stayed in that range). Where the move runs out of memory, the rows are inserted unsorted instead. An
-unpartitioned table takes its rows directly as before, and so does one whose partition key reads a
+unpartitioned table takes its rows directly, and so does one whose partition key reads a
 column the load doesn't send, or that sets a `PRIMARY KEY` or `SAMPLE BY`.
 
 ## Types

@@ -14,7 +14,7 @@ import dltTables from '../../../../../../packages/sqlload/tests/docs_examples/fr
 
 This guide moves dlt pipelines to SQLLoad: what each dlt idea becomes, a REST API and a folder of
 files carried across, tables that keep the names and row ids dlt gave them, and running loads from
-an orchestrator. It needs SQLLoad 0.40.0 or later. Every SQLLoad example on this page is a project
+an orchestrator. Every SQLLoad example on this page is a project
 that SQLLoad's test suite loads twice, and the files example's tables and row ids are checked against
 what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 [SQLLoad, dlt and ingestr](/docs/compared/).
@@ -29,19 +29,19 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 | A resource's table name | `{source}__{table}` by default. `table_name = "{table}"` on the source names it as dlt does. |
 | `write_disposition="append"` or `"replace"` | `write_strategy = "append"` or `"replace"`. |
 | `write_disposition="merge"` with `primary_key` | `write_strategy = "merge"` with `unique_key`. See [merge](/docs/concepts/write-strategies/#merge). |
-| `dedup_sort = ("updated_at", "desc")` on a merge resource | From 0.54.0, `newest_by = "updated_at"`. Unlike dlt's, it also applies across loads: a row older than the table's row of its key never overwrites it. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
-| A sentinel such as `""` filled into a key column that can be empty, as dlt makes `primary_key` columns `NOT NULL` | Not needed: from 0.51.0 `merge` matches a NULL in a key column with a NULL. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
-| `merge_key`, dlt's `delete-insert` of the partitions a load holds | From 0.51.0, `write_strategy = "delete_insert"` with `replace_key` set to the `merge_key` columns: each commit deletes the rows holding a key value it read, then inserts. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). Without a `cursor_column`: each load reads the whole source, as `plan` refuses the two together. Where the partition is a cursor range, `cursor_column` alone does it. |
+| `dedup_sort = ("updated_at", "desc")` on a merge resource | `newest_by = "updated_at"`. Unlike dlt's, it also applies across loads: a row older than the table's row of its key never overwrites it. See [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). |
+| A sentinel such as `""` filled into a key column that can be empty, as dlt makes `primary_key` columns `NOT NULL` | Not needed: `merge` matches a NULL in a key column with a NULL. See [NULLs in keys](/docs/concepts/write-strategies/#nulls-in-keys). |
+| `merge_key`, dlt's `delete-insert` of the partitions a load holds | `write_strategy = "delete_insert"` with `replace_key` set to the `merge_key` columns: each commit deletes the rows holding a key value it read, then inserts. See [Replacing rows by a key](/docs/concepts/write-strategies/#replacing-rows-by-a-key). Without a `cursor_column`: each load reads the whole source, as `plan` refuses the two together. Where the partition is a cursor range, `cursor_column` alone does it. |
 | `dlt.sources.incremental("updated_at", initial_value=...)` | `cursor_column = "updated_at"` and `cursor_start`, with `ctx.cursor_value` in a Python table. `lag` is `lookback`. See [Cursors](/docs/concepts/cursors/). |
 | `incremental(..., on_cursor_value_missing=...)` | `null_cursor`: `"include"` is `null_cursor = "include"` and `"exclude"` is `null_cursor = "ignore"`. dlt's default, `"raise"`, raises on a row it reads with no cursor, but its `sql_database` filters later runs with `cursor >= last_value` in SQL, so it never reads those rows to raise on ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/sql_database/helpers.py#L196-L207)). SQLLoad's default, `fail`, counts them and fails the load. See [NULL cursor values](/docs/concepts/cursors/#null-cursor-values). |
-| A `sql_database` table's `query_adapter_callback` that adds a `WHERE` | From 0.54.0, `where = "status <> 'X'"` on the table, or on the source for every table it reads. The table keeps its primary key and cursor. See [Filtering rows](/docs/sources/postgres/#filtering-rows). |
+| A `sql_database` table's `query_adapter_callback` that adds a `WHERE` | `where = "status <> 'X'"` on the table, or on the source for every table it reads. The table keeps its primary key and cursor. See [Filtering rows](/docs/sources/postgres/#filtering-rows). |
 | Pipeline state (`_dlt_pipeline_state`) | The destination's own maximum of `cursor_column`, read each run. `state = "logged"` keeps a position for the tables that need one. |
 | The stored schema (`_dlt_version`) | The live table, read each run. See [Contracts](/docs/concepts/contracts/). |
 | `max_table_nesting` and child tables | `unnest` and `max_depth`. See [Nested data](/docs/concepts/nested-data/). |
 | `rest_api` | `sl.http`, below. |
 | `filesystem` with a reader | A [files source](/docs/sources/files/), below. |
-| A transformer, or `add_map`, that reshapes each file's rows | From 0.52.0, a files source's `transform`, an `@sl.transform` function. See [Transforming each file](/docs/sources/files/#transforming-each-file). |
-| `add_map` on a `rest_api` resource, reshaping each page's records | From 0.52.0, `transform=` on `paginate` or `fan_out`. See [Transforming each page](/docs/sources/python/#transforming-each-page). |
+| A transformer, or `add_map`, that reshapes each file's rows | A files source's `transform`, an `@sl.transform` function. See [Transforming each file](/docs/sources/files/#transforming-each-file). |
+| `add_map` on a `rest_api` resource, reshaping each page's records | `transform=` on `paginate` or `fan_out`. See [Transforming each page](/docs/sources/python/#transforming-each-page). |
 | `secrets.toml` and `config.toml` | `${ENV:NAME}` in `sqlload.toml`. |
 | `pipeline.run()` from a task | `sqlload load --json`, below. |
 
@@ -124,7 +124,7 @@ How `rest_api` settings map:
 - `method: POST` with a `json` body is `method="POST", json_body={...}`, and paginators that page in
   the body take `location="body"`; see [POST with a JSON body](/docs/sources/python/#post-with-a-json-body).
 - A resource reshaped with `add_map` (each record split, unpivoted or cleaned in Python) is
-  `transform=` on the job: a function called once per page with the page's rows, from 0.52.0; see
+  `transform=` on the job: a function called once per page with the page's rows,; see
   [Transforming each page](/docs/sources/python/#transforming-each-page).
 - `response_actions` that ignore a status are `on_status={404: "skip"}`. 429, 5xx and dropped
   connections are retried, honouring `Retry-After`; `retries=` on `sl.http` sets how many times.
@@ -153,16 +153,16 @@ table is named after the source:
   deletes it. See [Deleting or moving loaded files](/docs/sources/files/#deleting-or-moving-loaded-files).
 - `format` is `parquet`, `csv`, `json`, `ndjson`, `xlsx` or `xml`, and the files can be on S3 or an
   SFTP server.
-- A `filesystem` source's `file_glob` is `pattern`, from 0.54.0, which chooses files of any name, such
+- A `filesystem` source's `file_glob` is `pattern` which chooses files of any name, such
   as `pattern = "file_*.txt"`. See [Choosing files](/docs/sources/files/#choosing-files).
 - A CSV reader's `escape_char` is `csv = { escape = "\\" }`, and `quote_char: null` is
-  `csv = { quote = false }`, from 0.54.0. See [Quotes and escapes](/docs/sources/files/#quotes-and-escapes).
+  `csv = { quote = false }`. See [Quotes and escapes](/docs/sources/files/#quotes-and-escapes).
 - An Excel template read as a cell range without a header row, with its own column names
   (`sheet_range: A:C` and `column_names: [metric, category, value]` in a pipeline's settings), is
   `xlsx = { range = "A:C", header = false }` and `column_names = ["metric", "category", "value"]`
-  from 0.49.0. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns).
+ . See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns).
 - A file that needs reshaping before it loads (title rows, a header split over two rows, months
-  across), read in dlt by a custom reader or reshaped by `add_map`, takes a `transform` from 0.52.0:
+  across), read in dlt by a custom reader or reshaped by `add_map`, takes a `transform`:
   a Python function under `python_paths`, decorated with `@sl.transform` and named in `transform`,
   that gets each file's rows as a `pyarrow.Table` and returns or yields the rows to load. See
   [Transforming each file](/docs/sources/files/#transforming-each-file).
@@ -198,14 +198,9 @@ A table dlt loaded can carry on under SQLLoad with the same settings: the first 
 columns to it and merges into the rows dlt wrote. dlt's default `delete-insert` merge gives root
 rows random ids, where SQLLoad's `merge` (like dlt's `upsert`) derives them from the key
 ([helpers.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/common/normalizers/json/helpers.py#L107-L120)).
-From 0.41.1, SQLLoad's merge also finds a merged row's child rows by the id it
+SQLLoad's merge also finds a merged row's child rows by the id it
 held before, so the items dlt loaded are replaced like any others, and the row keeps its new,
-key-derived id from then on. Before 0.41.1 those items stay beside the new ones: load such a table
-from the start once instead, with `sqlload load --reload --yes <table>` for a Python table, or for a
-files source by dropping its tables and merging every file again, moving files `after_load` moved
-back under `path` first. Postgres targets refuse `--reload`
-([Reloading a table](/docs/concepts/write-strategies/#reloading-a-table)), so there drop the table
-and its child tables and load it again.
+key-derived id from then on.
 
 How `_dlt_id` is made, and the other ways names can differ, are under
 [Naming](/docs/concepts/nested-data/#naming).
@@ -277,8 +272,5 @@ Under `compat = "dlt"`, SQLLoad's tables still differ from dlt's in a few ways:
   With dlt's names the link columns are `_dlt_parent_id` and `_dlt_id`.
 - Two columns whose names normalise to one are numbered (`order_id`, `order_id_1`), where dlt keeps
   one of them. See [on_duplicate_names](/docs/concepts/nested-data/#on_duplicate_names).
-- Before 0.42.0, `unnest` is refused on Databricks and files targets, under `delete_insert`,
-  `state = "logged"` and `contract = "enforced"`, and for `postgres_cdc` sources, and `plan` names
-  the setting. ClickHouse targets take it from 0.41.0.
 
 The full list, with how row ids are derived, is under [Naming](/docs/concepts/nested-data/#naming).
