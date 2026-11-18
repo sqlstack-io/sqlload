@@ -27,6 +27,23 @@ pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
             prefix: folder(&[key])?,
         }));
     }
+    if let Some(rest) = path.strip_prefix("gs://") {
+        let (bucket, key) = rest.split_once('/').unwrap_or((rest, ""));
+        if bucket.is_empty() {
+            return Err(PathError::Empty {
+                path: path.to_owned(),
+                store: "GCS account",
+            });
+        }
+        return Ok(Some(Location {
+            store: StoreKind::Gcs {
+                bucket: bucket.to_owned(),
+                service_account_key: None,
+                endpoint: None,
+            },
+            prefix: folder(&[key])?,
+        }));
+    }
     let windows = cfg!(windows);
     let local = match path.strip_prefix("file://") {
         Some(rest) => windows_file_url_path(rest, windows),
@@ -56,7 +73,8 @@ pub(crate) fn url_location(path: &str) -> Result<Option<Location>, PathError> {
 
 pub(crate) fn same_store(connection: &StoreKind, url: &StoreKind) -> bool {
     match (connection, url) {
-        (StoreKind::S3 { bucket, .. }, StoreKind::S3 { bucket: other, .. }) => bucket == other,
+        (StoreKind::S3 { bucket, .. }, StoreKind::S3 { bucket: other, .. })
+        | (StoreKind::Gcs { bucket, .. }, StoreKind::Gcs { bucket: other, .. }) => bucket == other,
         (StoreKind::Filesystem { .. }, StoreKind::Filesystem { .. }) => true,
         _ => false,
     }
@@ -65,6 +83,7 @@ pub(crate) fn same_store(connection: &StoreKind, url: &StoreKind) -> bool {
 pub(crate) fn describe(store: &StoreKind) -> String {
     match store {
         StoreKind::S3 { bucket, .. } => format!("S3 bucket {bucket}"),
+        StoreKind::Gcs { bucket, .. } => format!("GCS bucket {bucket}"),
         StoreKind::Filesystem { root } => format!("filesystem {root}"),
         StoreKind::Sftp { server, .. } => format!("SFTP server {}", server.host),
     }

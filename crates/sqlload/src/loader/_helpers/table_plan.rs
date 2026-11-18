@@ -999,7 +999,7 @@ pub(crate) fn reader_offer(
 ) -> ReaderOffer {
     let existing_files = spec.files.as_ref().map(|files| FileSet {
         store: match files.location.store {
-            StoreKind::S3 { .. } | StoreKind::Sftp { .. } => {
+            StoreKind::S3 { .. } | StoreKind::Gcs { .. } | StoreKind::Sftp { .. } => {
                 Store::ObjectStore(files.location.to_string())
             }
             StoreKind::Filesystem { .. } => Store::Local(files.location.to_string()),
