@@ -57,6 +57,7 @@ pub(in crate::adapters) fn own_connection(
         motherduck: destination.motherduck,
         bridge_duckdb: destination.bridge_duckdb.clone(),
         memory: destination.memory,
+        own_limit: destination.own_limit,
         unflushed: destination.unflushed.clone(),
     })
 }

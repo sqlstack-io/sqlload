@@ -702,6 +702,11 @@ pub trait TableWriter {
         None
     }
 
+    /// Without a memory share, the `memory_limit` DuckDB set itself, which a table's last row group is checked against; `None` elsewhere.
+    fn own_memory_limit(&self) -> Option<u64> {
+        None
+    }
+
     /// After a commit: write what the destination holds in memory since its last checkpoint to its file, when that passed its share's checkpoint bytes, or always when `force` (the load of a table with large values is done).
     fn checkpoint(&mut self, _force: bool) -> impl Future<Output = Result<(), LoaderError>> + Send {
         async { Ok(()) }

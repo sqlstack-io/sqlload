@@ -41,7 +41,26 @@ pub(in crate::adapters) fn open_duckdb(
             )));
         }
     }
+    let own_limit = match memory {
+        Some(_) => None,
+        None => Some(own_memory_limit(&connection)?),
+    };
     let mut destination = shared_destination(connection)?;
     destination.memory = memory;
+    destination.own_limit = own_limit;
     Ok(destination)
+}
+
+/// The `memory_limit` DuckDB set itself (80% of the machine's memory by default); in a test build, `SQLLOAD_TEST_DUCKDB_MEMORY_LIMIT` sets it first, so a test reaches it.
+fn own_memory_limit(connection: &duckdb::Connection) -> Result<u64, DuckDbError> {
+    #[cfg(feature = "container-tests")]
+    if let Ok(limit) = std::env::var("SQLLOAD_TEST_DUCKDB_MEMORY_LIMIT") {
+        connection.execute_batch(&format!("SET memory_limit = '{limit}'"))?;
+    }
+    let text: String =
+        connection.query_row("SELECT current_setting('memory_limit')", [], |row| {
+            row.get(0)
+        })?;
+    crate::config::_helpers::units::parse_byte_size(&text)
+        .map_err(|error| DuckDbError::Task(format!("DuckDB's memory_limit {text:?}: {error}")))
 }

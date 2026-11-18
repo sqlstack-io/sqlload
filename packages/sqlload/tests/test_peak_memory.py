@@ -164,3 +164,22 @@ def test_memory_no_table_can_free_stops_the_run_at_95_percent_and_rolls_back(tmp
 	assert all(error.startswith("stopped: the run held ") and "raise memory_limit, or lower concurrency" in error for error in errors.values()), errors
 	with duckdb.connect(str(tmp_path / "wh.duckdb")) as connection:
 		assert connection.execute("SELECT count(*), min(id) FROM RAW.a_slow").fetchone() == (10, 0)
+
+
+def test_memory_limit_off_in_the_project_has_no_budget_and_still_reports_peak_memory(tmp_path: Path) -> None:
+	"""`memory_limit = "off"`: plan always says so, and a Python table building a list past what a 1GB budget would stop at loads, its peak still reported."""
+	(tmp_path / "sources").mkdir()
+	(tmp_path / "sqlload.toml").write_text('memory_limit = "off"\n' + PROJECT)
+	(tmp_path / "sources" / "shop.py").write_text(GROWING)
+	home = tmp_path / "home"
+	home.mkdir()
+	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache")}
+	cli = [sys.executable, "-c", "from sqlload._cli import main; main()"]
+	planned = subprocess.run([*cli, "plan"], cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert planned.returncode == 0, planned.stdout + planned.stderr
+	assert "Memory  off (memory_limit): no budget or watchdog, and DuckDB keeps its own memory_limit and threads" in planned.stdout, planned.stdout
+	grown = subprocess.run([*cli, "load", "--json"], cwd=tmp_path, env={**env, "SQLLOAD_TEST_GROW": "1"}, capture_output=True, text=True, timeout=60)
+	assert grown.returncode == 0, grown.stdout + grown.stderr
+	report = json.loads(grown.stdout)
+	assert report["summary"]["loaded"] == 2, report["summary"]
+	assert report["summary"]["peak_memory_bytes"] > 2_000_000_000, report["summary"]

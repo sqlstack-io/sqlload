@@ -1137,8 +1137,13 @@ impl Publisher {
         if self.pieces.overflow {
             return self.count_overflow(&batch);
         }
-        let large = share.and_then(|_| large_values(&batch));
-        let (Some(share), Some(large)) = (share, large) else {
+        let guarded = share.is_some() || self.writer.own_memory_limit().is_some();
+        let large = large_values(&batch).filter(|_| guarded);
+        let (Some(share), Some(large)) = (share, large.as_ref()) else {
+            if let Some(large) = &large {
+                self.pieces.rows += batch.num_rows() as u64;
+                self.pieces.large += large.iter().sum::<u64>();
+            }
             return self.write_part(batch).await;
         };
         self.pieces.rows += batch.num_rows() as u64;
@@ -1472,10 +1477,17 @@ impl Publisher {
         &self,
         into: &TableName,
     ) -> Result<Option<RowGroupSeen>, LoaderError> {
-        let Some(share) = self.writer.memory_share() else {
-            return Ok(None);
-        };
-        if self.pieces.large == 0 || self.pieces.rows == 0 || share.row_group_bytes == u64::MAX {
+        let (row_group_bytes, memory_limit, own) =
+            match (self.writer.memory_share(), self.writer.own_memory_limit()) {
+                (Some(share), _) => (share.row_group_bytes, share.memory_limit, false),
+                (None, Some(limit)) => (
+                    limit.saturating_mul(DUCKDB_ROW_GROUP_PERCENT) / 100,
+                    limit,
+                    true,
+                ),
+                (None, None) => return Ok(None),
+            };
+        if self.pieces.large == 0 || self.pieces.rows == 0 || row_group_bytes == u64::MAX {
             return Ok(None);
         }
         let adapter = crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter(
@@ -1526,11 +1538,18 @@ impl Publisher {
             .earlier
             .saturating_add(large)
             .max(open.min(self.pieces.rows).saturating_mul(width));
-        if group <= share.row_group_bytes {
+        if group <= row_group_bytes {
             return Ok(Some(seen));
         }
         let needed = group.saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
         let whole = (DUCKDB_ROW_GROUP_ROWS * width).saturating_mul(100) / DUCKDB_ROW_GROUP_PERCENT;
+        let fix = |bytes: u64| match own {
+            false => needed_budget(bytes),
+            true => format!(
+                "DuckDB's own memory_limit, kept as memory_limit is off, would have to be at least {}",
+                memory_text(bytes)
+            ),
+        };
         Err(LoaderError::Invalid(format!(
             "{}: its last row group would hold {} of strings, {} of them values over {} from this load (rows of about {} each), more than DuckDB rewrites at a checkpoint within its {} memory_limit; {} (a row group fills at {} rows, and rows this wide need a memory_limit of {} by then)",
             self.table.spec.destination.table,
@@ -1538,10 +1557,13 @@ impl Publisher {
             memory_text(group.saturating_sub(seen.earlier)),
             memory_text(LARGE_VALUE_BYTES as u64),
             memory_text(width),
-            memory_text(share.memory_limit),
-            needed_budget(needed),
+            memory_text(memory_limit),
+            fix(needed),
             thousands(DUCKDB_ROW_GROUP_ROWS),
-            needed_budget(whole).replace("raise memory_limit to ", "")
+            match own {
+                false => needed_budget(whole).replace("raise memory_limit to ", ""),
+                true => format!("at least {}", memory_text(whole)),
+            }
         )))
     }
 
@@ -1558,7 +1580,8 @@ impl Publisher {
             Some(marker) => adapter.render_logged(statements, marker),
             None => statements,
         };
-        let checks = self.writer.memory_share().is_some()
+        let checks = (self.writer.memory_share().is_some()
+            || self.writer.own_memory_limit().is_some())
             && self.pieces.large > 0
             && statements
                 .last()

@@ -51,7 +51,7 @@ where
     }
 }
 
-/// Run the parsed command line: the lines it writes to stdout, and its exit code.
+/// Run the parsed command line: the lines it writes to stdout, and its exit code. After the memory watchdog stopped the run, the runtime shuts down without waiting for the tables it left running, which end with the process.
 fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) {
     let (json, name) = match &cli.command {
         Command::Plan(args) => (args.json, "plan"),
@@ -103,7 +103,6 @@ fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) 
                 .map_err(CommandError::from)
         })
     });
-    // Tables the memory watchdog's run stop left running end with the process: shutting down doesn't wait for their threads.
     if run_stopped() {
         runtime.shutdown_background();
     }

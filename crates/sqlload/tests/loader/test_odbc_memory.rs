@@ -92,6 +92,15 @@ fn given_each_odbc_driver_when_a_table_has_an_unbounded_text_column_then_every_v
                 "{}",
                 test_case.description
             );
+            let (_, off) =
+                run_sqlload(&config, &["plan", "-v", "--memory-limit", "off"], ("", ""))?;
+            assert!(
+                off.contains(
+                    "512 MiB fetch buffer per table (default; the run has no memory budget)"
+                ) && off.contains("memory  off (--memory-limit)"),
+                "{}: with memory_limit off the fetch buffer is 512 MiB:\n{off}",
+                test_case.description
+            );
             Ok(())
         })?;
     }

@@ -147,7 +147,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
 fn with_memory(project: &ProjectConfig, options: &PlanOptions) -> ProjectConfig {
     let set = match (options.memory_limit, project.memory_limit) {
         (Some(bytes), _) => Some((bytes, BudgetOrigin::Flag)),
-        (None, Some(size)) => Some((size.0, BudgetOrigin::Setting)),
+        (None, Some(setting)) => Some((setting, BudgetOrigin::Setting)),
         (None, None) => None,
     };
     let duckdb = project
@@ -285,7 +285,7 @@ pub(crate) fn exit_code(ok: bool, retryable: bool) -> u8 {
     }
 }
 
-/// Run a loader command against the project in `request.text`: the lines to print, and its exit code. Under `--json` every failure is a JSON error document.
+/// Run a loader command against the project in `request.text`: the lines to print, and its exit code. Under `--json` every failure is a JSON error document. A Python host finishes after the command, unless the memory watchdog stopped the run, when a table may still be busy in its function.
 pub(crate) async fn run_loader(
     request: LoaderRequest<'_>,
 ) -> Result<(Vec<String>, u8), CommandError> {
@@ -334,7 +334,6 @@ pub(crate) async fn run_loader(
             outcome
         }
     };
-    // After the watchdog stopped the run, a Python table may still be busy in its function, which finishing would wait for.
     if let Some(host) = request.host.filter(|_| !run_stopped()) {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }

@@ -126,6 +126,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             motherduck: false,
             bridge_duckdb: String::new(),
             memory: None,
+            own_limit: None,
             unflushed: Arc::default(),
         },
         open_transaction: false,

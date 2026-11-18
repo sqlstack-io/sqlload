@@ -194,6 +194,11 @@ reason = "Test-only stop (container-tests feature) used by sqlload's integration
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSS130"
+path = "crates/sqlload/src/memory_budget/_helpers/watch.rs"
+reason = "The memory watchdog's run stop ends the process: its thread sets the flag once, and the command and the Python entry point read it after the run returns to exit at once, which no call chain from the watchdog thread reaches."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSS130"
 path = "crates/sqlload/src/adapters/clickhouse/_helpers/session/stops.rs"
 reason = "Test-only stop (container-tests feature, absent from released builds): integration tests arm it across the loader's calls, which pass no test state through."
 

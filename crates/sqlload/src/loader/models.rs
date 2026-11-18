@@ -787,8 +787,8 @@ pub struct PlanOptions {
     pub range_flags: RangeFlags,
     /// `--concurrency`: the most tables loading at once, overriding the project's `concurrency`.
     pub concurrency: Option<usize>,
-    /// `--memory-limit`: the run's memory budget, overriding the project's `memory_limit`.
-    pub memory_limit: Option<u64>,
+    /// `--memory-limit`: the run's memory budget, or `off`, overriding the project's `memory_limit`.
+    pub memory_limit: Option<crate::memory_budget::models::MemorySetting>,
     /// The bytes a batch holds before it may commit, instead of about 1 GB (a hidden flag, for tests).
     pub batch_bytes: Option<usize>,
     /// `--resnapshot`: drop and recreate each selected `postgres_cdc` source's slot and copy every table again.

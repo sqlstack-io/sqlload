@@ -36,9 +36,9 @@ pub struct ProjectConfig {
     /// The most tables loading at once (each table's batches still commit one at a time); `--concurrency` overrides it.
     #[serde(default)]
     pub concurrency: Option<usize>,
-    /// The memory a run stays under, shared between the DuckDB and MotherDuck targets and the tables loading at once; 80% of a container's or Windows job object's limit when unset, else 50% of the machine's memory. `--memory-limit` overrides it.
+    /// The memory a run stays under, shared between the DuckDB and MotherDuck targets and the tables loading at once; 80% of a container's or Windows job object's limit when unset, else 50% of the machine's memory; `"off"` for none. `--memory-limit` overrides it.
     #[serde(default)]
-    pub memory_limit: Option<crate::config::models::ByteSize>,
+    pub memory_limit: Option<crate::memory_budget::models::MemorySetting>,
     /// Let a Postgres table read several of its `batch_size` windows at once (`batch_concurrency`), still committing them in order; off by default.
     #[serde(default)]
     pub microbatch_concurrency: bool,

@@ -150,6 +150,14 @@ impl TableWriter for Writer {
         }
     }
 
+    fn own_memory_limit(&self) -> Option<u64> {
+        match self {
+            #[cfg(feature = "duckdb")]
+            Writer::DuckDb(writer) => writer.own_memory_limit(),
+            _ => None,
+        }
+    }
+
     async fn checkpoint(&mut self, force: bool) -> Result<(), LoaderError> {
         match self {
             #[cfg(feature = "duckdb")]

@@ -47,16 +47,15 @@ fn given_readings_past_95_percent_when_watching_then_the_run_stops_only_when_no_
         },
     ];
     for test_case in test_cases {
-        let mut over = 0;
-        let mut stopped = None;
-        for (index, (percent, stopping)) in test_case.readings.iter().enumerate() {
-            let stops;
-            (over, stops) = run_stop_due(*percent, over, *stopping);
-            if stops {
-                stopped = Some(index);
-                break;
-            }
-        }
+        let stopped = test_case
+            .readings
+            .iter()
+            .scan(0, |over, (percent, stopping)| {
+                let stops;
+                (*over, stops) = run_stop_due(*percent, *over, *stopping);
+                Some(stops)
+            })
+            .position(|stops| stops);
         assert_eq!(
             stopped, test_case.expected_stop,
             "{}",

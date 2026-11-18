@@ -16,6 +16,44 @@ pub enum LimitOrigin {
     Machine,
 }
 
+/// `memory_limit` (or `--memory-limit`) as set: the memory a run stays under, or `off`, for no budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemorySetting {
+    /// The budget, in bytes.
+    Limit(u64),
+    /// No budget: no watchdog, no pieces, and DuckDB's own `memory_limit` and threads.
+    Off,
+}
+
+impl std::str::FromStr for MemorySetting {
+    type Err = String;
+
+    /// `off`, or a size such as `4GiB`.
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text.trim().eq_ignore_ascii_case("off") {
+            true => Ok(Self::Off),
+            false => crate::config::_helpers::units::parse_byte_size(text)
+                .map(Self::Limit)
+                .map_err(|error| format!("{error}, or off")),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MemorySetting {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Number(u64),
+            Text(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Number(bytes) => Ok(Self::Limit(bytes)),
+            Raw::Text(text) => text.parse().map_err(serde::de::Error::custom),
+        }
+    }
+}
+
 /// Where the run's budget came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetOrigin {

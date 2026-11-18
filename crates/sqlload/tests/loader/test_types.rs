@@ -1661,6 +1661,8 @@ pub(crate) struct WideStep {
     pub(crate) environment: &'static [(&'static str, &'static str)],
     /// The command run, with its flags: `load`, or `plan -v` to read the plan's output.
     pub(crate) command: &'static str,
+    /// Its `--memory-limit`: the budget, or `off`.
+    pub(crate) budget: &'static str,
 }
 
 /// Loads of a source table of 1 MiB rows into a DuckDB file under a budget that gives DuckDB its least `memory_limit`.

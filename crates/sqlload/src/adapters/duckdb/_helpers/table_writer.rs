@@ -92,6 +92,10 @@ impl TableWriter for DuckDbWriter {
         self.destination.memory
     }
 
+    fn own_memory_limit(&self) -> Option<u64> {
+        self.destination.own_limit
+    }
+
     async fn checkpoint(&mut self, force: bool) -> Result<(), LoaderError> {
         let Some(share) = self.destination.memory else {
             return Ok(());

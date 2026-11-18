@@ -193,6 +193,18 @@ Loads (2)  into DuckDB dev                                                      
   [fetch buffer](/docs/sources/odbc/#memory), the pages an `sl.http` job requests ahead
   (`read_ahead` sends fewer at once when its pages are large), and a Postgres source's batches.
 
+From 0.70.0, `memory_limit = "off"` (or `--memory-limit off`) turns the budget off. The run then
+loads as it did before 0.68.0: no watchdog, no pieces (each commit is whole), DuckDB with its own
+`memory_limit` (80% of the machine's memory) and threads and its own checkpoints, and an ODBC
+[fetch buffer](/docs/sources/odbc/#memory) of 512 MiB per table. Only the
+[row-group check](#large-rows-in-duckdb) stays, against DuckDB's own `memory_limit`, since a
+checkpoint that can't rewrite a row group fails whatever the budget. `plan` always shows the line,
+and `load` still reports its peak memory:
+
+```text
+Memory  off (memory_limit): no budget or watchdog, and DuckDB keeps its own memory_limit and threads
+```
+
 `plan` fails when the budget can't hold what SQLLoad holds already, or leaves no table 64 MiB,
 naming the budget the run needs, and `load` stops there, before it creates or loads anything:
 
@@ -261,7 +273,7 @@ and rolled back, and it fails while the other tables carry on. A table holding n
 failed  raw.attachments  raw.attachments stopped: the load held 1 GiB of its 1.1 GiB memory budget (90%); from 90% the table holding the most large values in memory stops, here this one with 39 MiB; raise memory_limit, or lower batch_size
 ```
 
-From 95%, when no table holds large values to stop (memory taken by a Python function building a
+From 0.70.0, from 95%, when no table holds large values to stop (memory taken by a Python function building a
 list, or an ODBC driver's own buffers), or the table stopped at 90% didn't bring memory back under
 90% within half a second, the whole run stops. Every running DuckDB and MotherDuck statement is
 interrupted and rolled back, the running tables fail with the reason below, and the others don't
