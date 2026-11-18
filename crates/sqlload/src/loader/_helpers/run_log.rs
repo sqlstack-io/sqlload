@@ -930,7 +930,7 @@ pub(crate) fn file_column_problem(
     None
 }
 
-/// Why the commit of `file` (`name|version`), a files source's `delete_insert` by `replace_key` into `table`, cannot replace the rows of its key values: some of them come from `sources` (other files the table's rows of those values came from, by name) that are still listed in the source's folder, so two files of the folder hold one value and which is current can't be told. A file that has left the folder (deleted, or moved by `after_load`) is replaced; under `on_overlapping_files = "last_wins"` so is one still listed that comes before `file` in the source's `order`, but never one after it, whose values a file sent late or rewritten would otherwise take back.
+/// Why the commit of `file` (`name|version`), a files source's `delete_insert` by `replace_key` into `table`, cannot replace the rows of its key values: some of them come from `sources` (other files the table's rows of those values came from, by name) that are still listed in the source's folder, so two files of the folder hold one value and which is current can't be told. A file that has left the folder (deleted, or moved by `after_load`) is replaced; under `on_overlapping_files = "last_wins"` so is one still listed that comes before `file` in the source's `order`, or that this run reads again (it loads in order, replacing the values back), but never another after it, whose values a file sent late or rewritten would otherwise take back.
 pub(crate) fn listed_sources(
     table: &TablePlan,
     file: &str,
@@ -950,6 +950,12 @@ pub(crate) fn listed_sources(
         .iter()
         .map(|data| (format!("{location}{}", data.file.relative_key), order(data)))
         .collect();
+    let read: Vec<String> = table
+        .files
+        .iter()
+        .flat_map(|read| &read.files)
+        .map(|data| format!("{location}{}", data.file.relative_key))
+        .collect();
     let this_name = merged_name(file);
     let this_order = listed
         .iter()
@@ -961,7 +967,8 @@ pub(crate) fn listed_sources(
         let Some((_, at)) = listed.iter().find(|(listed, _)| listed == name) else {
             continue;
         };
-        if !last_wins || this_order.as_ref().is_none_or(|this| at > this) {
+        if !last_wins || (!read.contains(name) && this_order.as_ref().is_none_or(|this| at > this))
+        {
             held.push(name.strip_prefix(location.as_str()).unwrap_or(name));
         }
     }

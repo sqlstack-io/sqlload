@@ -89,6 +89,27 @@ const SENT_LATE: &[MergeStep] = &[
     ),
 ];
 
+/// Both files load, then both are rewritten in place before the next run, which reads them again in order.
+const REWRITTEN: &[MergeStep] = &[
+    load_step(&[FIRST, SECOND], "", ""),
+    load_step(
+        &[
+            MergeFile {
+                key: "first.csv",
+                contents: "le_version,line,amount\nP01,A,5\nP02,A,11\n",
+                modified_secs: 3_000,
+            },
+            MergeFile {
+                key: "second.csv",
+                contents: "le_version,line,amount\nP02,X,70\nP03,Z,9\n",
+                modified_secs: 4_000,
+            },
+        ],
+        "",
+        "",
+    ),
+];
+
 /// One file of P01 and P02, merged by key.
 const MERGED: &[MergeStep] = &[load_step(&[FIRST], "", "")];
 
@@ -131,6 +152,13 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 steps: SENT_LATE,
                 check_query: CHECK,
                 expected_result: "P02:X:7|1",
+            },
+            FilesMergeTestCase {
+                description: "with order = \"path\", both files rewritten in place reload in order, the later one, read again in the same run, not blocking the earlier",
+                settings: LAST_WINS_BY_PATH,
+                steps: REWRITTEN,
+                check_query: CHECK,
+                expected_result: "P01:A:5,P02:X:70,P03:Z:9|4",
             },
             FilesMergeTestCase {
                 description: "set on the source, it leaves alone a table of the source that merges",

@@ -561,9 +561,7 @@ and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 A feed whose deliveries overlap, each restating the end of the period before, holds one value in
 two files on purpose. `on_overlapping_files = "last_wins"` (default `"fail"`) lets the file last in
 `order` replace the values it holds, even while an earlier file holding them is still in the
-folder. Each file still loads in its own commit, so the earlier file's other values stay. A file
-that comes before one already loaded, such as an older file rewritten or sent late, still fails
-rather than take back the later file's values:
+folder. Each file still loads in its own commit, so the earlier file's other values stay:
 
 ```text
 sales/
@@ -586,6 +584,10 @@ on_overlapping_files = "last_wins"
 ```
 
 Set `order = "path"` when the names sort by date, as here; by default the file modified last wins.
+A file that comes before one already loaded, such as an older file sent late, or with
+`order = "path"` one rewritten while the later file isn't, still fails rather than take back the
+later file's values. By modified time a rewritten file sorts last and replaces them, and files
+rewritten together load again in order.
 Leave it at `"fail"` when the files may be parts of one export, as `"last_wins"` would keep only
 the last part's rows of a value split across them. `plan -v` says so on the table's `batch` line.
 It applies only to a files source's `delete_insert` with a `replace_key`, and `plan` refuses it
