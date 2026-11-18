@@ -24,6 +24,20 @@ fn given_a_portable_type_when_mapping_to_a_warehouse_then_the_sql_name_and_loss_
             expected_lossy: true,
         },
         WarehouseTypeTestCase {
+            description: "a Snowflake varchar at the longest length is the unbounded VARCHAR",
+            column_type: ColumnType::Varchar(16_777_216),
+            warehouse: Warehouse::Snowflake,
+            expected_sql: "VARCHAR",
+            expected_lossy: false,
+        },
+        WarehouseTypeTestCase {
+            description: "a Snowflake varchar longer than VARCHAR holds is marked lossy",
+            column_type: ColumnType::Varchar(20_000_000),
+            warehouse: Warehouse::Snowflake,
+            expected_sql: "VARCHAR",
+            expected_lossy: true,
+        },
+        WarehouseTypeTestCase {
             description: "Snowflake json is VARIANT",
             column_type: ColumnType::Json,
             warehouse: Warehouse::Snowflake,

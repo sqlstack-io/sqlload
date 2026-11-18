@@ -33,7 +33,10 @@ pub(crate) fn logical_type(column_type: &ColumnType) -> WarehouseType {
         ColumnType::Decimal { precision, scale } => exact(format!("NUMBER({precision},{scale})")),
         ColumnType::Float => exact("FLOAT"),
         ColumnType::Text => exact("VARCHAR"),
-        ColumnType::Varchar(length) if i64::from(*length) >= MAX_TEXT_LENGTH => exact("VARCHAR"),
+        ColumnType::Varchar(length) if i64::from(*length) == MAX_TEXT_LENGTH => exact("VARCHAR"),
+        ColumnType::Varchar(length) if i64::from(*length) > MAX_TEXT_LENGTH => {
+            lossy("VARCHAR", "holds at most 16,777,216 characters")
+        }
         ColumnType::Varchar(length) => exact(format!("VARCHAR({length})")),
         ColumnType::Date => exact("DATE"),
         ColumnType::Time => exact("TIME(9)"),

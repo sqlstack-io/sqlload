@@ -120,18 +120,19 @@ pub(crate) fn existing_column(
         && adapter.render_loader_logical_type(&column.column_type).sql
             != adapter.render_loader_logical_type(&live.column_type).sql;
     if narrower {
-        let (held_in, pin, remedy) = match (adapter.runs_sql(), adapter.keeps_tables()) {
+        let rebuilds = !adapter.keeps_tables() && !rules.cdc;
+        let (held_in, pin, remedy) = match (adapter.runs_sql(), rebuilds) {
             (false, _) => (
                 "the existing files",
                 "the files' type",
                 "rewrite every file at the pinned type with --reload (--resnapshot for a postgres_cdc table)",
             ),
-            (true, true) => (
+            (true, false) => (
                 "the table",
                 "the table's type",
                 "alter the column to the pinned type yourself",
             ),
-            (true, false) => (
+            (true, true) => (
                 "the table",
                 "the table's type",
                 "rebuild the table at the pinned type with --reload",

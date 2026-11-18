@@ -24,6 +24,7 @@ pub(in crate::loader) fn files_schema(
         type_change_rebuild: spec.type_change_rebuild,
         rebuild_allowed: options.rebuild_allowed,
         compat: spec.compat,
+        cdc: spec.cdc.is_some(),
     };
     let recopied = spec.cdc.is_some() && options.resnapshot;
     let compared = live.filter(|_| !options.reload && !recopied);

@@ -263,6 +263,20 @@ fn given_desired_and_live_columns_when_planning_then_changes_follow_the_policies
             expected_warnings: 0,
         },
         PlanSchemaTestCase {
+            description: "a narrower pin on a postgres_cdc table, which --reload never rebuilds, names altering the column",
+            desired: vec![pinned("name", ColumnType::Varchar(32))],
+            live: Some(vec![live("NAME", ColumnType::Varchar(64))]),
+            rules: SchemaRules {
+                cdc: true,
+                ..snowflake_rules()
+            },
+            expected_action: &["unchanged"],
+            expected_written: &[],
+            expected_blocked: "pin the table's type (columns = { name = \"varchar(64)\" }), or alter the column to the pinned type yourself",
+            expected_fix_flag: None,
+            expected_warnings: 0,
+        },
+        PlanSchemaTestCase {
             description: "a narrower pin on Parquet files names the existing files",
             desired: vec![pinned(
                 "total",

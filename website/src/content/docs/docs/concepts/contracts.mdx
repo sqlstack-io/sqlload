@@ -66,7 +66,8 @@ Objects (1)                                         sqlload apply
 
 A load never narrows a column. A pinned type narrower than the live column fails `plan` for that
 table, and so `load`; `--reload` rebuilds the table at the pinned type, and fails without changing
-it if a value doesn't fit. Postgres never rebuilds a table, so there you alter the column yourself:
+it if a value doesn't fit. A Postgres target, or a `postgres_cdc` table, is never rebuilt, so there
+you alter the column yourself:
 
 ```console
 $ sqlload plan app__orders
