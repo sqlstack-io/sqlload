@@ -12,7 +12,7 @@ class Result:
 	scenario: str
 	competitor: str
 	rows: int
-	status: str = "ok"  # ok, invalid, failed, n/a, skipped
+	status: str = "ok"  # ok, invalid, failed, aborted (low disk: the environment's failure), n/a, skipped
 	note: str = ""
 	runs: list[dict[str, Any]] = field(default_factory=list)
 

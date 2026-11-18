@@ -1,6 +1,7 @@
 """The harness's own logic: data generation, checksums, measurement, reporting and the perf gate."""
 
 import json
+import shutil
 import subprocess
 import sys
 from decimal import Decimal
@@ -270,3 +271,29 @@ def test_given_no_base_results_when_comparing_then_it_reports_nothing_to_compare
 	head = tmp_path / "head.jsonl"
 	head.write_text(_summary_line("g::decode", "narrow", 10) + "\n")
 	assert compare.main(["--base", str(tmp_path / "missing.jsonl"), "--head", str(head)]) == 0
+
+
+class _SleepingLoader(Competitor):
+	"""A loader that would run for 30 seconds."""
+
+	name = "sleeping"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		return Invocation([sys.executable, "-c", "import time; time.sleep(30)"], run_dir, clean_env(run_dir / "home", {}))
+
+
+def test_given_free_disk_below_the_floor_when_a_loader_runs_then_it_is_stopped_and_recorded_as_aborted_for_the_environment(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	unreachable = shutil.disk_usage(tmp_path).free + (1 << 40)
+	record = one_run(_SleepingLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run", min_free_bytes=unreachable)
+	record["warmup"] = False
+	result = Result("pg_narrow", "sleeping", 1000)
+	record_run(result, record)
+	assert record["wall_s"] < 10, "the loader is stopped, not waited for"
+	assert record["aborted"] is True
+	assert result.status == "aborted", "the environment ran out of disk; the loader did not fail"
+	assert result.note.startswith("free disk fell below "), result.note
+	assert "| aborted: free disk fell below " in markdown([result.summary()], "## t")
