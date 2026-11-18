@@ -386,7 +386,7 @@ def enter_job(limit):
 
 
 def job_object_checks(exe, work):
-    """Under a job object's 1.5 GiB process limit, plan's budget is 80% of it, and a load into DuckDB runs within it."""
+    """Under a job object's 1.5 GiB process limit, plan -v shows a budget of 80% of it, and a load into DuckDB runs within it."""
     source = work / "in" / "job"
     source.mkdir(parents=True, exist_ok=True)
     (source / "rows.csv").write_text("id,name\n" + "".join(f"{i},row {i}\n" for i in range(1, 1001)), encoding="utf-8")
@@ -417,7 +417,7 @@ write_strategy = "replace"
         encoding="utf-8",
     )
     enter_job(JOB_MEMORY_LIMIT)
-    planned = sqlload(exe, "plan", config=config)
+    planned = sqlload(exe, "plan", "-v", config=config)
     expect("1.2 GiB budget (80% of the 1.5 GiB job object limit)" in planned, True, "plan's budget is 80% of the job object's limit")
     sqlload(exe, "load", config=config)
     expect(query(database, "SELECT count(*) FROM raw.job"), [(1000,)], "a load under the job object's limit")

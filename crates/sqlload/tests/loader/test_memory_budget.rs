@@ -3,7 +3,7 @@
 use crate::helpers::run_async;
 use crate::memory_helpers::{
     FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED,
-    OLDER_MARKER, PLAN, SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases,
+    OLDER_MARKER, PLAN, REPEATED_KEY, SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases,
     run_wide_load, wide_postgres,
 };
 use crate::test_types::WideLoadTestCase;
@@ -208,6 +208,47 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
             steps: &[LOAD],
             expected_results: &[(false, "0:0:0|2:2:0|none")],
             expected_output: &["{table}", "row group", "memory_limit"],
+        },
+        WideLoadTestCase {
+            description: "a merge under on_duplicate_keys = \"fail\" whose 300 MiB repeat a key isn't cut into pieces, which would merge the repeat: its one commit doesn't fit, so it stops, writing nothing",
+            table: "wide_repeated",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"k\"]\non_duplicate_keys = \"fail\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[REPEATED_KEY],
+            expected_results: &[(false, "0:0:0|2:2:0|none")],
+            expected_output: &[
+                "{table}",
+                "refuses repeated keys commits whole",
+                "memory_limit",
+            ],
+        },
+        WideLoadTestCase {
+            description: "the same merge of 300 MiB without a repeated key stops the same way, writing nothing",
+            table: "wide_refusing",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"k\"]\non_duplicate_keys = \"fail\"",
+            rows: 300,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[LOAD],
+            expected_results: &[(false, "0:0:0|2:2:0|none")],
+            expected_output: &[
+                "{table}",
+                "refuses repeated keys commits whole",
+                "memory_limit",
+            ],
+        },
+        WideLoadTestCase {
+            description: "a merge under on_duplicate_keys = \"fail\" of 12 rows of 1 MiB, which fit one commit, is refused for its repeated key, writing nothing",
+            table: "wide_refused",
+            settings: "write_strategy = \"merge\"\nunique_key = [\"k\"]\non_duplicate_keys = \"fail\"",
+            rows: 12,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[REPEATED_KEY],
+            expected_results: &[(false, "0:0:0|2:2:0|none")],
+            expected_output: &["{table}", "repeat its unique_key", "(k)"],
         },
         WideLoadTestCase {
             description: "one replace_key value of 300 MiB can't be cut between keys: the table stops, keeping its rows",

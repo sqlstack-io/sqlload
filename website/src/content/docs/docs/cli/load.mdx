@@ -215,8 +215,7 @@ time as well. How the pieces commit depends on the table:
   between values of its `replace_key`, or of its cursor for a window, so each piece replaces whole
   keys or a whole part of the window; its deletes keep the rows this load committed in earlier
   pieces. Until the last piece, a reader may see part of the load, as with commits every
-  `batch_size`. A `merge` checks for repeated `unique_key` values within each piece, so a key
-  repeated in two pieces isn't refused: the later piece's row wins.
+  `batch_size`.
 - An `append` that stops between its pieces, even by a crash, leaves a marker; the next `load` of
   that table removes that load's rows before it loads, so it reads them again. See
   [Unfinished appends](/docs/concepts/cursors/#unfinished-appends).
@@ -242,8 +241,11 @@ tables load:
   failed  raw.documents  documents: its last row group would hold 366 MiB of strings, 366 MiB of them values over 85 KiB from this load (rows of about 1 MiB each), more than DuckDB rewrites at a checkpoint within its 244 MiB memory_limit; raise memory_limit to at least 2GiB (a row group fills at 122,880 rows, and rows this wide need a memory_limit of at least 640.1GiB by then)
   ```
 
-Unnested child tables, Postgres CDC changes and the key scan of `--sync-deletes` aren't cut into
-pieces; they fail the same way when one commit is too large. A CDC table then stops at that commit
+Unnested child tables, Postgres CDC changes, the key scan of `--sync-deletes`, a `merge` that
+refuses repeated keys (`on_duplicate_keys = "fail"`) and a table with
+[checks](/docs/concepts/checks/) that isn't rebuilt aren't cut into pieces: a refusing merge and
+checks must see every row of a commit before any of it is written. They fail the same way when one
+commit is too large, writing nothing of it. A CDC table then stops at that commit
 until `memory_limit` is raised, and its replication slot keeps the source's write-ahead log
 meanwhile.
 

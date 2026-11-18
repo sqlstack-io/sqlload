@@ -1231,10 +1231,20 @@ impl Publisher {
         }
     }
 
-    /// Where the table's commits may be cut: anywhere into a table this load builds or creates, or straight into the table; a `delete_insert` into a table with rows only between its values, so no value is half replaced.
+    /// Where the table's commits may be cut: anywhere into a table this load builds or creates, or straight into the table; a `delete_insert` into a table with rows only between its values, so no value is half replaced; never a merge that refuses repeated keys, or a table with checks it doesn't build, whose checks cover the whole commit.
     fn cuts(&self) -> Cuts {
         if self.children.is_some() {
             return Cuts::Never("a table with unnest's child tables commits whole");
+        }
+        if let WriteMode::Merge { dedupe: None, .. } = &self.table.mode {
+            return Cuts::Never(
+                "a merge that refuses repeated keys commits whole, so it checks every key of the commit before writing any",
+            );
+        }
+        if self.table.spec.checks.is_some() && !self.builds {
+            return Cuts::Never(
+                "a table with checks commits whole, so they cover every row of the commit before it publishes any",
+            );
         }
         match &self.table.mode {
             _ if self.builds || self.direct || !self.table.exists => Cuts::Anywhere,

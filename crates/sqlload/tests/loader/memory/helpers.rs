@@ -78,6 +78,12 @@ pub(crate) const WIDE_THEN_SMALL: WideStep = WideStep {
     ..LOAD
 };
 
+/// A load after the last row took the first row's `k`, so the rows repeat a key, the first and the last.
+pub(crate) const REPEATED_KEY: WideStep = WideStep {
+    change: "UPDATE public.{table} SET k = 1 WHERE id = (SELECT max(id) FROM public.{table});",
+    ..LOAD
+};
+
 /// The bytes of each source row's `body`: 32 hex digits repeated 32,768 times.
 const BODY_REPEATS: u32 = 32_768;
 
