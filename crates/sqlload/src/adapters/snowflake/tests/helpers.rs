@@ -447,9 +447,8 @@ pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<St
         stage: String::new(),
         same_connection: false,
     };
-    let stage = test_case
-        .external
-        .then(|| StageRoute::External(Box::new(stage())))
+    let stage = Some(StageRoute::External(Box::new(stage())))
+        .filter(|_| test_case.external)
         .unwrap_or(StageRoute::User);
     unload_blocked(
         Warehouse::Snowflake,
