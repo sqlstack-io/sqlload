@@ -83,6 +83,8 @@ pub struct ReaderOffer {
     pub copy_to_internal_stage: bool,
     /// The destination's store paths name `existing_files`, but it cannot read them (the same bucket on another endpoint).
     pub out_of_reach: bool,
+    /// The destination can select a warehouse source's rows itself, as it writes through the source's own connection.
+    pub selected_by_destination: bool,
 }
 
 /// What a destination can take.
@@ -154,6 +156,8 @@ pub enum Step {
     DestinationTakesArrow,
     /// The rows go in without files, this way.
     RowsInto(String),
+    /// The destination selects the source's rows itself, inside the warehouse; no data leaves it.
+    DestinationSelects,
 }
 
 impl std::fmt::Display for Step {
@@ -176,6 +180,7 @@ impl std::fmt::Display for Step {
             }
             Self::DestinationTakesArrow => formatter.write_str("destination takes Arrow"),
             Self::RowsInto(how) => formatter.write_str(how),
+            Self::DestinationSelects => formatter.write_str("destination selects the rows itself"),
         }
     }
 }

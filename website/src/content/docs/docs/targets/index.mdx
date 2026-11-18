@@ -20,6 +20,10 @@ names the route for every table.
 | ClickHouse | In S3: ClickHouse reads them with `s3()` into a staging table. In a folder: read by SQLLoad, sent as Arrow | Read by SQLLoad, sent as Arrow into a staging table | Sent as Arrow into a staging table, then swapped in by table or partition |
 | Postgres | Read by SQLLoad, then binary `COPY` into a temporary staging table | As for Parquet files | Binary `COPY` into a temporary staging table, then one transaction per commit |
 
+A Snowflake source loading into Snowflake stays inside Snowflake: an `INSERT ... SELECT` on the
+source's own connection, or a `COPY` of its unloaded files through the target's external stage.
+See [Snowflake loads the rows itself](/docs/sources/snowflake/#snowflake-loads-the-rows-itself).
+
 There are no silent fallbacks. If the route a table needs can't be used, `plan` fails for that
 table and says how to fix it.
 

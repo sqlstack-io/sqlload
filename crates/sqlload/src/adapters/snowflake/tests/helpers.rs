@@ -1,18 +1,25 @@
 use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
 use crate::adapters::snowflake::_helpers::stage::create_stage::create_stage;
 use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
+use crate::adapters::snowflake::models::StageRoute;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};
-use crate::adapters::snowflake::tests::test_types::CopyFrom;
+use crate::adapters::snowflake::tests::test_types::{
+    CopyFrom, UnloadBlockedTestCase, UnloadedRequestsTestCase,
+};
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::StoredRead;
 use crate::http::errors::ApiError;
+use crate::loader::models::WarehouseRoute;
+use crate::routing::models::Store;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
 use chrono::{DateTime, Utc};
@@ -373,4 +380,120 @@ pub(crate) fn csv_in(
         record: Some(crate::files_source::constants::RECORD_COLUMN.to_owned()),
         ..FilesEncoding::default()
     }
+}
+
+/// The statements loading a Snowflake source's rows into `RAW.ORDERS`, batch 3 of load L1, with constant `region` = `'EU'` and the source's columns read as typed: from `files` unloaded files (`data_<n>.parquet` under `lake/unload/run-1/`, on the stage's `unload/` folder), or with none, from the query `SELECT ...`.
+pub(crate) fn unloaded_sql(
+    columns: &[(&str, ColumnType, Option<ColumnType>)],
+    files: Option<usize>,
+) -> Vec<String> {
+    use crate::adapters::snowflake::main::copy::_unloaded_sql::unloaded_statements;
+    use crate::adapters::snowflake::models::{UnloadedFrom, UnloadedLoad};
+    use crate::postgres_source::models::{ReadColumn, WireType};
+    use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+
+    let desired: Vec<DesiredColumn> = columns
+        .iter()
+        .map(|(name, column_type, _)| DesiredColumn {
+            name: (*name).to_owned(),
+            column_type: column_type.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let read: Vec<ReadColumn> = columns
+        .iter()
+        .filter_map(|(name, _, read)| {
+            Some(ReadColumn {
+                name: (*name).to_owned(),
+                expression: format!("\"{name}\""),
+                wire: WireType::Text,
+                output: read.clone()?,
+            })
+        })
+        .collect();
+    let keys: Vec<String> = (0..files.unwrap_or_default())
+        .map(|file| format!("data_{file}.parquet"))
+        .collect();
+    let table = TableName {
+        database: None,
+        schema: "raw".to_owned(),
+        table: "orders".to_owned(),
+    };
+    unloaded_statements(&UnloadedLoad {
+        into: &table,
+        columns: &desired,
+        read: &read,
+        constants: &[("region".to_owned(), ColumnType::Text, "EU".to_owned())],
+        compat: crate::load_naming::models::Compat::Sqlload,
+        batch: 3,
+        load_id: "L1",
+        loaded_at: "2026-11-18T00:00:00Z",
+        from: files.map_or(UnloadedFrom::Query("SELECT ..."), |_| UnloadedFrom::Files {
+            stage: "@\"DB\".\"RAW\".\"LAKE\"",
+            folder: "unload/run-1/",
+            keys: &keys,
+            filename_prefix: "lake/unload/run-1/",
+        }),
+    })
+}
+
+/// Why Snowflake does not load the case's unloaded files itself, or `None` when it does.
+pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<String> {
+    let route = WarehouseRoute::Unload {
+        store: test_case.unload_to.map_or_else(
+            || Store::InternalStage("sqlload_unload".to_owned()),
+            |folder| Store::ObjectStore(folder.to_owned()),
+        ),
+        stage: String::new(),
+        same_connection: false,
+    };
+    let stage = Some(StageRoute::External(Box::new(stage())))
+        .filter(|_| test_case.external)
+        .unwrap_or(StageRoute::User);
+    unload_blocked(
+        Warehouse::Snowflake,
+        test_case.masks,
+        Some(&route),
+        Some(&stage),
+    )
+}
+
+/// How many requests the case's statements are sent as, each checked to fit `MAX_COPY_SQL_BYTES`, and whether the first commits only when every unloaded row loads; or the error up to its first comma.
+pub(crate) fn unloaded_requests_for(
+    test_case: &UnloadedRequestsTestCase,
+) -> Result<(usize, bool), String> {
+    use crate::adapters::snowflake::_helpers::write::unloaded_load::unloaded_requests;
+    use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
+
+    let (statements, unloaded) = test_case.copies.map_or_else(
+        || (vec!["INSERT INTO t SELECT 1".to_owned()], None),
+        |(count, length)| {
+            (
+                (0..count)
+                    .map(|index| format!("COPY INTO t /* {index} */ {}", "x".repeat(length)))
+                    .collect::<Vec<String>>(),
+                Some((10, count * 1_000)),
+            )
+        },
+    );
+    let requests = unloaded_requests(&statements, unloaded, test_case.direct)
+        .map_err(|error| error.split(',').next().unwrap_or_default().to_owned())?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.len() <= MAX_COPY_SQL_BYTES),
+        "{}: a request is longer than the limit",
+        test_case.description
+    );
+    let sent: usize = requests
+        .iter()
+        .map(|request| request.matches("COPY INTO t /*").count())
+        .sum();
+    assert_eq!(
+        sent,
+        test_case.copies.map_or(0, |(count, _)| count),
+        "{}: every COPY is sent once",
+        test_case.description
+    );
+    Ok((requests.len(), requests[0].contains("IF (loaded = ")))
 }

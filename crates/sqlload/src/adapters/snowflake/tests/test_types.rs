@@ -1,4 +1,5 @@
 use crate::adapters::snowflake::models::CopyColumn;
+use crate::column_types::models::ColumnType;
 use crate::files_source::models::SourceFormat;
 use crate::project::models::MaskMethod;
 
@@ -104,4 +105,41 @@ pub(crate) struct SnowflakeEncodingTestCase {
     pub(crate) label: &'static str,
     /// Snowflake's `ENCODING` for it, or `None` when the direct route refuses it.
     pub(crate) expected_encoding: Option<&'static str>,
+}
+
+/// The statements loading one batch of a Snowflake source's rows inside Snowflake.
+pub(crate) struct UnloadedSqlTestCase {
+    pub(crate) description: &'static str,
+    /// The table's columns, each with the type the files' column is read as (`None` when the files lack it).
+    pub(crate) columns: &'static [(&'static str, ColumnType, Option<ColumnType>)],
+    /// How many unloaded files; `None` selects the rows with the unload's query.
+    pub(crate) files: Option<usize>,
+    pub(crate) expected_statements: usize,
+    /// Text the first statement holds, in order.
+    pub(crate) expected_first: &'static [&'static str],
+    /// Text the last statement holds.
+    pub(crate) expected_last: &'static str,
+}
+
+/// Whether Snowflake loads a Snowflake source's unloaded files itself.
+pub(crate) struct UnloadBlockedTestCase {
+    pub(crate) description: &'static str,
+    /// Where the source unloads: an `s3://` folder, `@stage`, or `None` for the user stage.
+    pub(crate) unload_to: Option<&'static str>,
+    /// Whether the target loads through the external stage on `s3://lake/raw/`; otherwise its user stage.
+    pub(crate) external: bool,
+    pub(crate) masks: bool,
+    /// The reason SQLLoad reads the files instead, or `None` when Snowflake loads them itself.
+    pub(crate) expected_blocked: Option<&'static str>,
+}
+
+/// How the statements loading one unload inside Snowflake are sent.
+pub(crate) struct UnloadedRequestsTestCase {
+    pub(crate) description: &'static str,
+    /// How many `COPY`s, and how long each is; `None` is one `INSERT ... SELECT`.
+    pub(crate) copies: Option<(usize, usize)>,
+    /// Whether the batch commits into the table itself.
+    pub(crate) direct: bool,
+    /// How many requests, and whether the first commits only when every unloaded row loads; or the error up to its first comma.
+    pub(crate) expected_requests: Result<(usize, bool), &'static str>,
 }

@@ -9,11 +9,10 @@ pub async fn load_unloaded(
     writer: &mut Writer,
     batch: &UnloadedBatch<'_>,
 ) -> Result<Option<DirectLoaded>, LoaderError> {
-    #[cfg(not(feature = "duckdb"))]
-    let _ = batch;
     match writer {
         #[cfg(feature = "duckdb")]
         Writer::DuckDb(duckdb) => duckdb.pull_unloaded(batch).await.map(Some),
+        Writer::Snowflake(snowflake) => snowflake.pull_unloaded(batch).await.map(Some),
         _ => Ok(None),
     }
 }

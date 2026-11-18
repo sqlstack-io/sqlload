@@ -19,26 +19,29 @@
   <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
 </p>
 
-Load Postgres, files, Snowflake, BigQuery, Google Sheets and Python sources into your warehouse.
-SQLLoad is Rust and Arrow end to end, and when your warehouse reads the files itself, rows never
-pass through SQLLoad, so there's no loader bottleneck as your data grows. It's fast, too: faster
-than ingestr and dlt in every [benchmark](https://sqlload.io/docs/benchmarks/) we publish.
+SQLLoad loads databases, files, APIs and Kafka into your warehouse. `sqlload plan` shows every
+table and how it loads before anything moves, and `plan -v` adds each new table's column types and
+the run's memory budget. Decimals keep their precision, a value a column can't hold exactly fails
+its table, naming the column and the value, and each run has one memory budget. Tables with a
+cursor column carry on from the warehouse's own maximum, so there's no state to drift.
 
 ```bash
-uv tool install sqlload        # or: pip install sqlload
+pip install sqlload        # or: uv tool install sqlload
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="sqlload plan lists the two tables it will create from Postgres, their column types in DuckDB, and how each loads; sqlload load then creates them and loads 1,050 rows" width="100%">
+  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="In the playground project, sqlload plan lists the two tables it will create in DuckDB and how each loads from CSV files; sqlload load creates them and loads 1,050 rows, reporting the slowest table and peak memory; with cursor_column misspelled as updated, the next load refuses raw.orders before loading it: did you mean updated_at?" width="100%">
 </p>
 
-`sqlload plan` shows the tables it will create from Postgres, each column's DuckDB type and how
-each table loads. `sqlload load` then creates and fills them.
+In the [playground](https://sqlload.io/docs/cli/playground/) project, `sqlload plan` shows the
+tables it will create and how each loads, and `sqlload load` creates and fills them. With
+`cursor_column` misspelled, the next load refuses the orders table before touching it, and says
+which column was meant.
 
 ## Quick start
 
 ```bash
-sqlload plan     # every table, column type and route, before anything is created
+sqlload plan     # every table and how it loads, before anything is created (-v: column types)
 sqlload apply    # create the tables
 sqlload load     # load them
 ```
@@ -52,7 +55,30 @@ configuration file:
 sqlload copy orders/ duckdb://shop.duckdb#raw.orders
 ```
 
-## Speed
+Moving from dlt? [Coming from dlt](https://sqlload.io/docs/guides/from-dlt/) maps sources,
+write dispositions, incremental loading, `rest_api` and `filesystem`, and keeps the table and column
+names dlt gave your tables.
+
+## Why SQLLoad
+
+- **Exact types.** A source's `decimal(12,2)` loads as `DECIMAL(12,2)` (`NUMBER(12,2)` on
+  Snowflake), timestamps keep their
+  microseconds, and a pinned type narrower than the live column fails `plan` rather than cutting
+  values. See [contracts](https://sqlload.io/docs/concepts/contracts/).
+- **Loud failures.** `plan` names each problem it can find, such as a misspelled column, a
+  narrowing type or a budget too small, and its fix, before anything is created. A commit whose
+  [checks](https://sqlload.io/docs/concepts/checks/) fail publishes none of its rows, every commit
+  lands whole even if a load is killed halfway, and in a warehouse (except a ClickHouse `Ordinary` database) a full refresh swaps in at once,
+  so readers see the old table or the new one, never a mix.
+- **Bounded memory.** A run has one [memory budget](https://sqlload.io/docs/cli/load/#memory-budget),
+  shared out between its tables. A budget too small for even one table is refused before anything
+  loads, and near the limit SQLLoad stops a table, or the run, and rolls back what it was
+  writing, rather than waiting for the operating system to kill it.
+- **No hidden state.** Tables with a `cursor_column` carry on from the
+  [warehouse's own maximum](https://sqlload.io/docs/concepts/cursors/) of the cursor column, so a
+  table you fix or reload by hand never disagrees with a state file.
+
+## Speed and memory
 
 Faster, in a fraction of the memory. The same data loaded by each tool on one 4-vCPU, 8 GB machine;
 lower is better:
@@ -73,37 +99,22 @@ peak memory 131 MiB for SQLLoad, 495 MiB for ingestr and 341 MiB for dlt.
 See the [benchmarks](https://sqlload.io/docs/benchmarks/) for every scenario, the method, the
 versions and how to run them yourself.
 
-## Why SQLLoad
-
-- **See the plan before any data moves.** `sqlload plan` shows every table, column type, write
-  strategy and route before anything is created or loaded, so there are no surprises in your
-  warehouse.
-- **Crash-safe loads.** Every commit lands whole, even if a load is killed halfway. A full refresh
-  swaps in one go, so your dashboards see the old table or the new one, never a mix.
-- **Postgres change data capture.** A `postgres_cdc` source copies your tables once, then applies
-  every insert, update and delete from a logical replication slot, in whole source transactions.
-  `sqlload load --follow` keeps streaming. See
-  [Postgres CDC](https://sqlload.io/docs/sources/postgres-cdc/).
-
 ## What it loads
 
 | System | Source | Target |
 |---|---|---|
-| Postgres | ✓ (incl. CDC) | ✓ |
+| Postgres | ✓ (incl. [CDC](https://sqlload.io/docs/sources/postgres-cdc/)) | ✓ |
 | Snowflake | ✓ | ✓ |
-| BigQuery | ✓ | preview |
-| Databricks | | ✓ |
-| ClickHouse | | preview |
-| DuckDB | | ✓ |
-| MotherDuck | | beta² |
-| Files | ✓ Parquet, CSV, JSON (S3, local folder, SFTP) | ✓ Parquet, CSV (S3, local folder) |
+| BigQuery (beta) | ✓ | ✓ |
+| Databricks (beta) | ✓ | ✓ |
+| ClickHouse | | ✓ |
+| DuckDB | ✓ | ✓ |
+| MotherDuck (beta) | ✓ | ✓ |
+| ODBC | ✓ SQL Server, MySQL, OpenEdge | |
+| Files | ✓ Parquet, CSV, JSON, Excel, XML | ✓ Parquet, CSV |
 | Google Sheets | ✓ | |
-| HTTP APIs and Python | ✓ | |
-| ODBC databases¹ | ✓ | |
-
-¹ In the published wheels from 0.39.0; before that, in builds with the `odbc` feature.
-
-² From 0.34.0, through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
+| APIs, Python | ✓ | |
+| Kafka | ✓ to Snowflake, Databricks, BigQuery | |
 
 See [Supported systems](https://sqlload.io/docs/supported-systems/) for every combination and
 write strategy.

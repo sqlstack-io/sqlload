@@ -208,6 +208,32 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
+            description: "a warehouse writing through the source's own connection selects the rows itself",
+            reader: ReaderOffer {
+                selected_by_destination: true,
+                ..warehouse_source(BIG)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_steps: &["destination selects the rows itself"],
+        },
+        PlanRouteTestCase {
+            description: "on the source's own connection, a table that needs the loader is still unloaded and read back",
+            reader: ReaderOffer {
+                selected_by_destination: true,
+                needs_loader: Some(HMAC.to_owned()),
+                ..warehouse_source(BIG)
+            },
+            writer: warehouse_destination(vec![object_store(LAKE)]),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "unload Parquet to s3://lake/unload/",
+                "read parquet into Arrow",
+                "write Parquet to s3://lake/",
+                "destination loads parquet files from s3://lake/",
+            ],
+        },
+        PlanRouteTestCase {
             description: "a local directory downloads an unload from the lake",
             reader: warehouse_source(BIG),
             writer: local_destination(),
