@@ -110,6 +110,30 @@ def test_given_a_loader_killed_mid_run_when_measured_then_the_run_is_kept_as_fai
 	assert "| failed: killed by SIGKILL after " in markdown([result.summary()], "## t")
 
 
+class _FailingLoader(Competitor):
+	"""A loader that prints a long banner, then its error on the last line, and exits 1."""
+
+	name = "failing"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		script = "import sys; print('downloading the CLI; this happens once per version\\n' * 80); print('Error: could not write the buffer file'); sys.exit(1)"
+		return Invocation([sys.executable, "-c", script], run_dir)
+
+
+def test_given_a_loader_that_fails_after_a_long_banner_when_recorded_then_the_note_shows_its_last_line(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	record = one_run(_FailingLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run")
+	record["warmup"] = True
+	result = Result("pg_narrow", "failing", 1000)
+	record_run(result, record)
+	assert result.status == "failed"
+	assert result.note.startswith("exited 1 after "), result.note
+	assert result.note.endswith(": Error: could not write the buffer file"), result.note
+
+
 def test_given_results_when_reporting_then_each_row_shows_its_ratio_to_sqlload() -> None:
 	runs = [{"valid": True, "wall_s": wall, "cpu_s": 1.0, "user_s": 1.0, "sys_s": 0.0, "peak_rss_mb": 100.0} for wall in (2.0, 3.0, 4.0)]
 	sqlload = Result("pg_narrow", "sqlload", 1000, runs=runs)

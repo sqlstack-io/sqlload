@@ -68,7 +68,7 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 			done = measure(first.argv, cwd=first.cwd, env=first.env, log=run_dir / "first.log", timeout_s=timeout_s)
 			record["first_load_wall_s"] = done.wall_s
 			if done.returncode != 0:
-				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {done.output[-1500:]}"}
+				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {last_line(done.output)}", "output": done.output[-1500:]}
 			postgres.append_rows(context.postgres, context.dataset)
 		invocation = competitor.invocation(scenario, context, run_dir, second=incremental)
 		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s)
@@ -77,7 +77,7 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills,
 		)
 		if done.returncode != 0:
-			record.update(valid=False, error=f"{done.failure()}: {done.output[-1500:]}")
+			record.update(valid=False, error=f"{done.failure()}: {last_line(done.output)}", output=done.output[-1500:])
 		else:
 			valid, reason = check(competitor, scenario, context, run_dir)
 			record.update(valid=valid, error=reason)
@@ -85,6 +85,11 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	finally:
 		if incremental:
 			postgres.remove_appended(context.postgres, context.dataset)
+
+
+def last_line(output: str) -> str:
+	"""The last line a loader printed that isn't blank: where a failing loader says why, after any banner or progress."""
+	return next((line.strip() for line in reversed(output.splitlines()) if line.strip()), "")
 
 
 def record_run(result: Result, record: dict[str, Any]) -> None:
