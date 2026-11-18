@@ -1,5 +1,6 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::dispatch::main::route::unload_refused::unload_refused;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
 use crate::adapters::dispatch::main::session::drop_stale_staging::drop_stale_staging;
 use crate::adapters::dispatch::main::session::text_values::text_values;
@@ -23,6 +24,8 @@ use crate::column_types::models::Warehouse;
 use crate::loader::_helpers::resolve::source_target;
 use crate::project::main::parse_project::parse_project;
 use crate::project::models::ConnectionConfig;
+use crate::routing::main::plan_route::plan_route;
+use crate::routing::models::{FileFormat, ReadVia, ReaderOffer, RouteOverrides, Step, Store};
 
 /// What DuckDB 2.0.0 reports when MotherDuck's extension refuses to load on it, as Python's duckdb package 2.0.0 would in the bridge.
 const UNSUPPORTED_VERSION: &str = "Invalid Input Error: Initialization function \"motherduck_duckdb_cpp_init\" from file \"/home/u/.duckdb/extensions/v2.0.0/linux_amd64/motherduck.duckdb_extension\" threw an exception: \"\nYour DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported version is v1.5.6. Please downgrade to use MotherDuck.\n\nSee https://motherduck.com/docs/getting-started/connect-query-from-duckdb-cli for more information.\"";
@@ -346,18 +349,21 @@ fn given_a_duckdb_connection_when_its_database_is_a_motherduck_path_then_it_is_r
 }
 
 #[test]
-fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches()
+fn given_a_motherduck_destination_when_routing_then_it_reads_parquet_only_from_s3_itself()
 -> Result<(), String> {
     let test_cases = [
         MotherDuckRouteTestCase {
-            description: "local DuckDB reads Parquet itself",
+            description: "local DuckDB reads Parquet in S3 and on this machine itself",
             motherduck: false,
-            expected_reads_files: true,
+            expected_pulls_from: vec![
+                Store::ObjectStore("s3://".to_owned()),
+                Store::Local(String::new()),
+            ],
         },
         MotherDuckRouteTestCase {
-            description: "MotherDuck never reads files itself",
+            description: "MotherDuck reads Parquet in S3 on its servers, and never files on this machine",
             motherduck: true,
-            expected_reads_files: false,
+            expected_pulls_from: vec![Store::ObjectStore("s3://".to_owned())],
         },
     ];
     for test_case in test_cases {
@@ -366,8 +372,62 @@ fn given_a_motherduck_destination_when_routing_then_it_takes_only_arrow_batches(
         let accepts = writer_accepts(&Destination::DuckDb(destination), None);
         assert!(accepts.arrow, "{}", test_case.description);
         assert_eq!(
-            !accepts.pulls_from.is_empty() || accepts.reads_files_itself.is_some(),
-            test_case.expected_reads_files,
+            (accepts.pulls_from, accepts.pull_formats),
+            (test_case.expected_pulls_from, vec![FileFormat::Parquet]),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_snowflake_source_unloading_to_s3_when_routing_into_motherduck_then_sqlload_reads_the_unloaded_files()
+-> Result<(), String> {
+    let test_cases = [
+        MotherDuckRouteTestCase {
+            description: "local DuckDB reads the unloaded files itself",
+            motherduck: false,
+            expected_pulls_from: vec![Store::ObjectStore("s3://lake/unload/".to_owned())],
+        },
+        MotherDuckRouteTestCase {
+            description: "MotherDuck's files from an unload go through SQLLoad, as before",
+            motherduck: true,
+            expected_pulls_from: vec![],
+        },
+    ];
+    for test_case in test_cases {
+        let mut destination = open_duckdb(":memory:", None).map_err(|error| error.to_string())?;
+        destination.motherduck = test_case.motherduck;
+        let destination = Destination::DuckDb(destination);
+        let unload_to = vec![Store::ObjectStore("s3://lake/unload/".to_owned())];
+        let reader = ReaderOffer {
+            arrow: true,
+            direct_blocked: unload_refused(&destination, &unload_to),
+            unload_to,
+            ..ReaderOffer::default()
+        };
+        let route = plan_route(
+            &reader,
+            &writer_accepts(&destination, None),
+            RouteOverrides {
+                read_via: ReadVia::Unload,
+                ..RouteOverrides::default()
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        let pulled: Vec<Store> = route
+            .steps
+            .iter()
+            .filter_map(|step| {
+                let Step::DestinationPulls(files) = step else {
+                    return None;
+                };
+                Some(files.store.clone())
+            })
+            .collect();
+        assert_eq!(
+            pulled, test_case.expected_pulls_from,
             "{}",
             test_case.description
         );

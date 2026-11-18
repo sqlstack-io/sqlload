@@ -28,3 +28,5 @@ pub const CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(
 pub const NO_AUTOCHECKPOINT: &str = "SET checkpoint_threshold = '1TB'";
 /// The suffix of a DuckDB file's write-ahead log.
 pub const WAL_SUFFIX: &str = ".wal";
+/// How long a bucket secret on the AWS credential chain is used before it is set again: DuckDB resolves the chain's keys once, when the secret is set, and temporary keys from a role may have only five minutes left when fetched.
+pub const CHAIN_SECRET_REFRESH: std::time::Duration = std::time::Duration::from_secs(240);

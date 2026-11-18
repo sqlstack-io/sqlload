@@ -8,6 +8,8 @@ pub(crate) struct PullInsertTestCase {
     /// Each column the files hold, with its name in them.
     pub(crate) in_files: Vec<(String, String)>,
     pub(crate) files: Vec<PulledFile>,
+    /// The target is MotherDuck, which reads the files on its servers.
+    pub(crate) remote: bool,
     pub(crate) expected_sql: &'static str,
 }
 
@@ -110,7 +112,8 @@ pub(crate) struct DuckDbPathTestCase {
 pub(crate) struct MotherDuckRouteTestCase {
     pub(crate) description: &'static str,
     pub(crate) motherduck: bool,
-    pub(crate) expected_reads_files: bool,
+    /// The stores whose Parquet files the destination reads itself.
+    pub(crate) expected_pulls_from: Vec<crate::routing::models::Store>,
 }
 
 pub(crate) struct AttachedDatabaseTestCase {
@@ -148,4 +151,13 @@ pub(crate) struct MergeDedupeTestCase {
     pub(crate) staged: &'static [&'static str],
     /// The table's rows after the merge, as `id:name`, sorted.
     pub(crate) expected_rows: &'static [&'static str],
+}
+
+pub(crate) struct SecretCurrentTestCase {
+    pub(crate) description: &'static str,
+    /// The secret set on the database for the bucket: its parameters, whether its keys come from the credential chain, and how many seconds ago it was set.
+    pub(crate) set: Option<(&'static [&'static str], bool, u64)>,
+    /// The secret a table would set now: its parameters, and whether its keys come from the credential chain.
+    pub(crate) wanted: (&'static [&'static str], bool),
+    pub(crate) expected_current: bool,
 }

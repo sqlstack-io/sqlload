@@ -33,7 +33,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse, one self-hosted server | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. No clusters, replicated or distributed tables; ClickHouse Cloud is untested. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| MotherDuck (beta) | `append`, `merge`, `delete_insert`, `replace` | Batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; files are read by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
+| MotherDuck (beta) | `append`, `merge`, `delete_insert`, `replace` | Batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; Parquet in S3 is read on MotherDuck's servers, other files by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
 | Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or CSV: plain, gzip or zstd. |
 | Parquet or CSV files in a local folder | As for S3; `replace` swaps the folder in one rename | As for S3 |
 
@@ -55,7 +55,8 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | Python | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
 A MotherDuck target (beta) takes every source a DuckDB target
-takes, untested, but always through SQLLoad: files are read by SQLLoad, never by MotherDuck.
+takes, untested, through SQLLoad, except a files source's Parquet in S3, which MotherDuck's servers
+read themselves.
 
 A files source loads into a files target, read and rewritten
 by SQLLoad. `merge` isn't available for files sources or files

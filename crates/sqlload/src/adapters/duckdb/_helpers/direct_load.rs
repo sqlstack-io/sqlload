@@ -7,6 +7,7 @@ use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
 use crate::adapters::duckdb::_helpers::pull_sql::{PulledFile, pull_insert};
 use crate::adapters::duckdb::main::_direct_problem::direct_problem;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
+use crate::adapters::duckdb::main::_open_bucket::open_bucket;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
@@ -54,15 +55,16 @@ impl DuckDbWriter {
         let insert = pull_insert(
             target.staging.unwrap_or(target.table),
             (carried, &in_files),
-            &files,
+            (&files, self.destination.motherduck),
             (target.compat, target.load_id, batch.loaded_at),
         );
+        open_bucket(&self.destination, &source.location.store).await?;
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
-        let rows = pull_files(&self.destination, &source.location.store, insert).await?;
+        let rows = pull_files(&self.destination, insert).await?;
         let expected = footer_rows(batch.footers);
         if rows != expected {
             return Err(LoaderError::Invalid(format!(

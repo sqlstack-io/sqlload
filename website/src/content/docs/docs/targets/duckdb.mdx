@@ -29,7 +29,8 @@ A later batch whose files hold a column differently fails the load, naming the c
 
 DuckDB reads S3 with the keys SQLLoad finds for the [`s3` connection](/docs/configuration/#s3):
 from the environment or the shared credentials file. Without
-either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
+either, it uses the AWS credential chain, which it resolves again every four minutes as its keys may
+expire. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.
 

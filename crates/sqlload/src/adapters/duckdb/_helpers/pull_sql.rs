@@ -1,18 +1,26 @@
 //! The statement that has DuckDB load Parquet files itself.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::Instant;
+
 use crate::adapters::contract::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS};
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::duckdb::constants::UTC_OFFSET;
-use crate::adapters::duckdb::models::DuckDbSql;
+use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
+use crate::adapters::duckdb::constants::{CHAIN_SECRET_REFRESH, UTC_OFFSET};
+use crate::adapters::duckdb::errors::DuckDbError;
+use crate::adapters::duckdb::models::{DuckDbSql, SetSecret};
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
+use crate::file_store::main::s3_keys::s3_keys;
 use crate::files_source::constants::SOURCE_ROW_COLUMN;
 use crate::load_naming::main::metadata_role::metadata_role;
 use crate::load_naming::models::{Compat, MetadataRole};
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
+use crate::stage_api::models::AwsCredentials;
+use crate::store_paths::models::StoreKind;
 
 /// One file DuckDB reads: where it reads it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,11 +29,11 @@ pub(crate) struct PulledFile {
     pub constants: Vec<(String, Option<String>)>,
 }
 
-/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns.
+/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns. Into MotherDuck (`remote`) the files are read on its servers.
 pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[(String, String)]),
-    files: &[PulledFile],
+    (files, remote): (&[PulledFile], bool),
     (compat, load_id, loaded_at): (Compat, &str, &str),
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
@@ -75,11 +83,12 @@ pub(crate) fn pull_insert(
         .map(|column| identifier(&column.name))
         .collect();
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, file_row_number = true, hive_partitioning = false) AS f",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], union_by_name = true, file_row_number = true, hive_partitioning = false{}) AS f",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
-        urls.join(", ")
+        urls.join(", "),
+        on_servers(remote)
     )
 }
 
@@ -215,6 +224,14 @@ fn unloaded_value(output: &ColumnType, quoted: &str) -> String {
     }
 }
 
+/// The `read_parquet` option that has MotherDuck read the files on its servers (`remote`), so no row passes through this machine; none for SQLLoad's own DuckDB.
+fn on_servers(remote: bool) -> &'static str {
+    match remote {
+        true => ", MD_RUN = REMOTE",
+        false => "",
+    }
+}
+
 /// The statement, with its parameters, that gives DuckDB a temporary secret for `bucket`: scoped to it and named after it (hex, so two buckets never share a name), in `region`, with `keys` (key id, secret and session token, empty when there is none) passed as parameters and never in SQL, or else the AWS credential chain.
 pub(crate) fn s3_secret(
     bucket: &str,
@@ -245,4 +262,71 @@ pub(crate) fn default_region(variable: &dyn Fn(&str) -> Option<String>) -> Strin
     set("AWS_REGION")
         .or_else(|| set("AWS_DEFAULT_REGION"))
         .unwrap_or_else(|| "us-east-1".to_owned())
+}
+
+/// What DuckDB needs to read files in an S3 bucket itself: the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, whose keys come from the AWS credential chain when `chain`.
+pub(crate) struct BucketAccess {
+    pub bucket: String,
+    pub extensions: &'static str,
+    pub statement: String,
+    pub parameters: Vec<String>,
+    pub chain: bool,
+}
+
+impl BucketAccess {
+    /// The secret as it is set `at`, with a hash of its statement and parameters in place of the keys.
+    pub(crate) fn set_at(&self, at: Instant) -> SetSecret {
+        let mut hasher = DefaultHasher::new();
+        (&self.statement, &self.parameters).hash(&mut hasher);
+        SetSecret {
+            hash: hasher.finish(),
+            chain: self.chain,
+            at,
+        }
+    }
+}
+
+/// Whether the secret `set` on the database for a bucket still serves `wanted`, the one a table would set `now`: the same statement and parameters, and, for keys DuckDB resolved through the AWS credential chain when it was set, set less than [`CHAIN_SECRET_REFRESH`] ago, as they may expire.
+pub(crate) fn secret_current(set: Option<&SetSecret>, wanted: &SetSecret, now: Instant) -> bool {
+    set.is_some_and(|set| {
+        set.hash == wanted.hash
+            && (!set.chain || now.saturating_duration_since(set.at) < CHAIN_SECRET_REFRESH)
+    })
+}
+
+/// For files in S3, [`BucketAccess`] for their bucket: the secret in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved where DuckDB runs. `None` for files elsewhere.
+pub(crate) fn bucket_access(store: &StoreKind) -> Result<Option<BucketAccess>, DuckDbError> {
+    let StoreKind::S3 {
+        bucket,
+        region,
+        profile,
+        ..
+    } = store
+    else {
+        return Ok(None);
+    };
+    let keys = s3_keys(profile.as_deref())
+        .map_err(DuckDbError::Task)?
+        .map(secret_parameters);
+    let extensions = match keys {
+        Some(_) => "INSTALL httpfs; LOAD httpfs;",
+        None => "INSTALL httpfs; LOAD httpfs; INSTALL aws; LOAD aws;",
+    };
+    let region = region
+        .clone()
+        .unwrap_or_else(|| default_region(&environment_variable));
+    let (statement, parameters) = s3_secret(bucket, region, keys.as_ref());
+    Ok(Some(BucketAccess {
+        bucket: bucket.clone(),
+        extensions,
+        statement,
+        parameters,
+        chain: keys.is_none(),
+    }))
+}
+
+/// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.
+fn secret_parameters(keys: AwsCredentials) -> [String; 3] {
+    let token = keys.session_token.map(|token| token.0).unwrap_or_default();
+    [keys.key_id, keys.secret.0, token]
 }

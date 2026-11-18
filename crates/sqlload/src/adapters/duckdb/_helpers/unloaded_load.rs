@@ -4,6 +4,7 @@ use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
+use crate::adapters::duckdb::main::_open_bucket::open_bucket;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::loader::errors::LoaderError;
@@ -48,12 +49,13 @@ impl DuckDbWriter {
             &urls,
             (target.load_id, batch.loaded_at),
         );
+        open_bucket(&self.destination, &files.folder.store).await?;
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
-        let rows = pull_files(&self.destination, &files.folder.store, insert).await?;
+        let rows = pull_files(&self.destination, insert).await?;
         if rows != files.rows {
             return Err(LoaderError::Invalid(format!(
                 "DuckDB loaded {rows} rows from the unloaded files in {}, but the unload reports {}; the batch is not committed",
