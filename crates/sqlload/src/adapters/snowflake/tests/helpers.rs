@@ -1,18 +1,23 @@
 use crate::adapters::contract::models::TableName;
+use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
 use crate::adapters::snowflake::_helpers::stage::create_stage::create_stage;
 use crate::adapters::snowflake::_helpers::stage::stale_folders::stale_folders;
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::main::stage::_stage_lookup::stage_lookup;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
 use crate::adapters::snowflake::models::CopyStaged;
+use crate::adapters::snowflake::models::StageRoute;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};
-use crate::adapters::snowflake::tests::test_types::CopyFrom;
+use crate::adapters::snowflake::tests::test_types::{CopyFrom, UnloadBlockedTestCase};
 use crate::column_types::models::ColumnType;
+use crate::column_types::models::Warehouse;
 use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::StoredRead;
 use crate::http::errors::ApiError;
+use crate::loader::models::WarehouseRoute;
+use crate::routing::models::Store;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::store_paths::models::{Location, StoreKind};
 use chrono::{DateTime, Utc};
@@ -431,4 +436,26 @@ pub(crate) fn unloaded_sql(
             None => UnloadedFrom::Query("SELECT ..."),
         },
     })
+}
+
+/// Why Snowflake does not load the case's unloaded files itself, or `None` when it does.
+pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<String> {
+    let route = WarehouseRoute::Unload {
+        store: match test_case.unload_to {
+            Some(folder) => Store::ObjectStore(folder.to_owned()),
+            None => Store::InternalStage("sqlload_unload".to_owned()),
+        },
+        stage: String::new(),
+        same_connection: false,
+    };
+    let stage = match test_case.external {
+        true => StageRoute::External(Box::new(stage())),
+        false => StageRoute::User,
+    };
+    unload_blocked(
+        Warehouse::Snowflake,
+        test_case.masks,
+        Some(&route),
+        Some(&stage),
+    )
 }
