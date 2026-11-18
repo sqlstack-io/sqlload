@@ -11,7 +11,8 @@ import pytest
 
 from perf import compare
 from sqlload_bench import datagen, pydata, snowflake
-from sqlload_bench.competitors import HIDDEN, SQLLOAD, Context, SqlLoad, all_competitors
+from sqlload_bench.cli import one_run, record_run
+from sqlload_bench.competitors import HIDDEN, SQLLOAD, Competitor, Context, Invocation, SqlLoad, all_competitors
 from sqlload_bench.measure import run
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import BY_NAME
@@ -63,6 +64,35 @@ def test_given_a_process_tree_when_measured_then_cpu_of_children_and_peak_memory
 	assert done.returncode == 0
 	assert done.cpu_s > 0.05
 	assert done.peak_rss_mb > 150
+
+
+class _KilledLoader(Competitor):
+	"""A loader the system kills as it would for running out of memory: it takes 200 MiB, then gets SIGKILL."""
+
+	name = "killed"
+
+	def unsupported(self, scenario: object) -> None:
+		return None
+
+	def invocation(self, scenario: object, context: Context, run_dir: Path, *, second: bool = False) -> Invocation:
+		script = "import os, signal, time; x = bytearray(200 << 20); time.sleep(0.5); os.kill(os.getpid(), signal.SIGKILL)"
+		return Invocation([sys.executable, "-c", script], run_dir)
+
+
+def test_given_a_loader_killed_mid_run_when_measured_then_the_run_is_kept_as_failed_with_its_signal_time_and_peak_memory(tmp_path: Path) -> None:
+	dataset = datagen.Dataset(tmp_path / "seed1", 1, datagen.SIZES["tiny"])
+	record = one_run(_KilledLoader(), BY_NAME["pg_narrow"], Context(dataset, None, tmp_path), tmp_path / "run")
+	record["warmup"] = False
+	result = Result("pg_narrow", "killed", 1000)
+	record_run(result, record)
+	assert record["signal"] == "SIGKILL"
+	assert record["peak_rss_mb"] > 150
+	assert record["wall_s"] >= 0.5
+	assert result.status == "failed"
+	assert result.runs == [record]
+	assert result.note.startswith("killed by SIGKILL after "), result.note
+	assert " MiB peak RSS" in result.note
+	assert "| failed: killed by SIGKILL after " in markdown([result.summary()], "## t")
 
 
 def test_given_results_when_reporting_then_each_row_shows_its_ratio_to_sqlload() -> None:

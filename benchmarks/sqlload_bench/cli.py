@@ -47,8 +47,8 @@ def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir:
 	return True, ""
 
 
-def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path) -> dict[str, Any]:
-	"""One fresh destination; for the incremental scenario, the second load is the measured one."""
+def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path, timeout_s: float = 3600) -> dict[str, Any]:
+	"""One fresh destination; for the incremental scenario, the second load is the measured one. A loader that runs past `timeout_s`, crashes or is killed (as the out-of-memory killer does) is a failed run that keeps its time, peak memory and how it ended."""
 	shutil.rmtree(run_dir, ignore_errors=True)
 	run_dir.mkdir(parents=True)
 	record: dict[str, Any] = {"load_avg_1m": os.getloadavg()[0]}
@@ -58,25 +58,26 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	planned = competitor.plan_invocation(scenario, context, run_dir)
 	if planned is not None:
 		invocation, expected_text = planned
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "plan.log")
+		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "plan.log", timeout_s=timeout_s)
 		if done.returncode != 0 or expected_text not in done.output:
 			return {**record, "valid": False, "returncode": done.returncode, "error": f"the plan does not say {expected_text!r}: {done.output[-1500:]}"}
 	incremental = scenario.name == "pg_incremental" and context.postgres is not None
 	try:
 		if incremental:
 			first = competitor.invocation(scenario, context, run_dir)
-			done = measure(first.argv, cwd=first.cwd, env=first.env, log=run_dir / "first.log")
+			done = measure(first.argv, cwd=first.cwd, env=first.env, log=run_dir / "first.log", timeout_s=timeout_s)
 			record["first_load_wall_s"] = done.wall_s
 			if done.returncode != 0:
-				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load exited {done.returncode}: {done.output[-1500:]}"}
+				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {done.output[-1500:]}"}
 			postgres.append_rows(context.postgres, context.dataset)
 		invocation = competitor.invocation(scenario, context, run_dir, second=incremental)
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log")
+		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s)
 		record.update(
-			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, returncode=done.returncode
+			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, returncode=done.returncode,
+			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills,
 		)
 		if done.returncode != 0:
-			record.update(valid=False, error=f"exited {done.returncode}: {done.output[-1500:]}")
+			record.update(valid=False, error=f"{done.failure()}: {done.output[-1500:]}")
 		else:
 			valid, reason = check(competitor, scenario, context, run_dir)
 			record.update(valid=valid, error=reason)
@@ -84,6 +85,16 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 	finally:
 		if incremental:
 			postgres.remove_appended(context.postgres, context.dataset)
+
+
+def record_run(result: Result, record: dict[str, Any]) -> None:
+	"""Add one run to its loader's result: a warm-up only when it went wrong, and every measured run. A run that exited badly marks the loader failed, and its later runs are skipped; one that finished with the wrong rows marks it invalid."""
+	if record["warmup"] and record["valid"]:
+		return
+	result.runs.append(record)
+	if not record["valid"]:
+		result.status = "invalid" if record.get("returncode", 0) == 0 else "failed"
+		result.note = record["error"][:300]
 
 
 def versions() -> dict[str, str]:
@@ -128,6 +139,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 	parser.add_argument("--seed", type=int, default=42)
 	parser.add_argument("--runs", type=int, default=3)
 	parser.add_argument("--warmup", type=int, default=1)
+	parser.add_argument("--timeout-min", type=float, default=60, help="stop a load that runs longer, and record it as failed (default 60)")
 	parser.add_argument("--scenarios", default="", help="comma-separated scenario names or groups (default: all)")
 	parser.add_argument("--competitors", default="", help="comma-separated loader names (default: all)")
 	parser.add_argument("--work", type=Path, help="scratch folder for destinations (default: OUT/work)")
@@ -216,17 +228,10 @@ def main(argv: list[str] | None = None) -> int:
 					if args.wait_for_builds:
 						wait_for_builds()
 					print(f"{scenario.name:18} {competitor.name:24} {'warm-up' if attempt < args.warmup else f'run {attempt - args.warmup + 1}'}", flush=True)
-					record = one_run(competitor, scenario, context, run_dir)
+					record = one_run(competitor, scenario, context, run_dir, timeout_s=args.timeout_min * 60)
 					record["warmup"] = attempt < args.warmup
 					print(f"  {record.get('wall_s', 0):8.2f}s valid={record['valid']} {record.get('error', '')[:300]}", flush=True)
-					if record["warmup"]:
-						if not record["valid"]:
-							result.status, result.note = ("invalid" if record.get("returncode") == 0 else "failed"), record["error"][:300]
-							result.runs.append(record)
-						continue
-					result.runs.append(record)
-					if not record["valid"]:
-						result.status, result.note = "invalid", record["error"][:300]
+					record_run(result, record)
 			shutil.rmtree(work / scenario.name, ignore_errors=True)
 			write_results(args, sizes, started, results)
 	finally:
