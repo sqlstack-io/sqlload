@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.70.3](https://github.com/sqlstack-io/sqlload/compare/v0.70.2...v0.70.3) (2026-11-18)
+
+
+### Bug Fixes
+
+* **cli:** name every warehouse the exporter writes to in tables --help ([#316](https://github.com/sqlstack-io/sqlload/issues/316)) ([8f196eb](https://github.com/sqlstack-io/sqlload/commit/8f196eb7f9abc1add1e6516f8daeec9f048e0749))
+
+
+### Documentation
+
+* print the home page plan example's error reason on one line ([#320](https://github.com/sqlstack-io/sqlload/issues/320)) ([e004d4e](https://github.com/sqlstack-io/sqlload/commit/e004d4edf9dff61f719f49146ce3d80e13f9170f))
+
 ## [0.70.2](https://github.com/sqlstack-io/sqlload/compare/v0.70.1...v0.70.2) (2026-11-18)
 
 
