@@ -58,6 +58,7 @@ use crate::project::models::{
     ConnectionConfig, ProjectConfig, RenameSetting, SourceKind, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
+use crate::schema_plan::models::Blocked;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
@@ -513,6 +514,21 @@ async fn run_command(
     if let Some(problem) = follow.and_then(|_| follow_problem(&plan)) {
         return Err(problem.into());
     }
+    let reported = project
+        .memory
+        .problem
+        .as_ref()
+        .filter(|_| loads)
+        .map(|problem| {
+            let reported = plan.clone();
+            for table in &mut plan.tables {
+                table.schema.blocked = Some(Blocked {
+                    reasons: vec![problem.clone()],
+                    fix_flag: None,
+                });
+            }
+            reported
+        });
     let flag = match (options.reload, options.resnapshot) {
         (true, true) => "--reload and --resnapshot",
         (true, false) => "--reload",
@@ -593,7 +609,7 @@ async fn run_command(
                 elapsed: started.1.elapsed(),
                 peak_memory_bytes: ended.peak_memory_bytes,
             };
-            let (text, ok, retryable) = json_report(&plan, Some(&run));
+            let (text, ok, retryable) = json_report(reported.as_ref().unwrap_or(&plan), Some(&run));
             return Ok((vec![text], exit_code(ok, retryable)));
         }
         lines.extend(ended.lines);

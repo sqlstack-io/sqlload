@@ -194,7 +194,7 @@ Loads (2)  into DuckDB dev                                                      
   (`read_ahead` sends fewer at once when its pages are large), and a Postgres source's batches.
 
 `plan` fails when the budget can't hold what SQLLoad holds already, or leaves no table 64 MiB,
-naming the budget the run needs:
+naming the budget the run needs, and `load` stops there, before it creates or loads anything:
 
 ```text
 the 600 MiB memory budget leaves the tables 11.7 MiB after DuckDB's 488 MiB, under the 64 MiB one table loads in; raise memory_limit to at least 653MiB
