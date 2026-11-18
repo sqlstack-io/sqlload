@@ -2,9 +2,12 @@ use crate::loader::_helpers::table_plan::blocked_table;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::models::{ProjectPlan, PythonTable, SkippedTable};
 use crate::loader::tests::helpers::{
-    merge_failing_repeats, merge_newest, python_spec, replace_mode, streamed_route, unload_store,
+    merge_failing_repeats, merge_newest, python_spec, replace_mode, streamed_route, unload_spec,
+    unload_store,
 };
-use crate::loader::tests::test_types::{ModedTable, PlanLinesTestCase, UnloadStoreTestCase};
+use crate::loader::tests::test_types::{
+    ModedTable, MostWindowsTestCase, PlanLinesTestCase, UnloadStoreTestCase,
+};
 
 #[test]
 fn given_tables_when_printing_the_plan_without_verbose_then_only_their_own_lines_show_grouped_by_source()
@@ -116,6 +119,33 @@ fn given_a_snowflake_stage_url_when_resolving_its_table_then_the_unload_store_is
         assert_eq!(
             format!("{:?}", unload_store(test_case.url)),
             test_case.expected_store,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_table_when_splitting_its_read_into_windows_then_an_unloaded_table_takes_fewer_so_its_merge_row_numbers_fit_64_bits()
+ {
+    let test_cases = [
+        MostWindowsTestCase {
+            description: "a table SQLLoad reads takes up to 100,000 windows",
+            spec: || python_spec("{}"),
+            expected_most: Ok(100_000),
+        },
+        MostWindowsTestCase {
+            description: "an unloaded table's rows number from the window times 2^48, so it takes up to 32,767",
+            spec: || unload_spec("s3://lake/unload/"),
+            expected_most: Ok(32_767),
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            (test_case.spec)()
+                .map(|spec| spec.most_windows())
+                .map_err(|_| "no spec"),
+            test_case.expected_most,
             "{}",
             test_case.description
         );
