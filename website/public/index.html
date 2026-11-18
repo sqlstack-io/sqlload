@@ -173,7 +173,7 @@ Errors (1)
 							<div class="step-text">
 								<span class="num">02 · Load</span>
 								<h3>Bulk copy, not row inserts</h3>
-								<p>Files in S3 load into Snowflake straight from an external stage, and Parquet in S3 into Databricks through an external location. Parquet loads into DuckDB through DuckDB's own reader, and Parquet in S3 into MotherDuck on its servers. Snowflake tables load into Snowflake on the same connection, or through an external stage that covers the unload, without leaving Snowflake. Snowflake tables unloaded to S3 load into DuckDB, Databricks and ClickHouse with no row passing through SQLLoad. Rows are staged as Parquet and copied in bulk.</p>
+								<p>Files in S3 load into Snowflake straight from an external stage, and Parquet in S3 into Databricks through an external location. Parquet loads into DuckDB through DuckDB's own reader, and Parquet in S3 or Google Cloud Storage into MotherDuck on its servers. Snowflake tables load into Snowflake on the same connection, or through an external stage that covers the unload, without leaving Snowflake. Snowflake tables unloaded to S3 load into DuckDB, Databricks and ClickHouse with no row passing through SQLLoad. Rows are staged as Parquet and copied in bulk.</p>
 								<p class="more"><a href="/docs/targets/">Load methods and routes →</a></p>
 							</div>
 <pre class="terminal"><span class="cmd">sqlload plan</span>
@@ -284,7 +284,7 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 								<tr><th scope="row">DuckDB</th><td></td><td>✓</td></tr>
 								<tr><th scope="row">MotherDuck <span class="beta">Beta</span></th><td></td><td>✓</td></tr>
 								<tr><th scope="row"><a href="/docs/sources/odbc/">ODBC</a></th><td>✓ SQL Server, MySQL, OpenEdge</td><td></td></tr>
-								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON, Excel, XML</td><td>✓ Parquet, CSV</td></tr>
+								<tr><th scope="row">Files: S3, GCS, local, SFTP</th><td>✓ Parquet, CSV, JSON, Excel, XML</td><td>✓ Parquet, CSV</td></tr>
 								<tr><th scope="row">Google Sheets</th><td>✓</td><td></td></tr>
 								<tr><th scope="row">APIs, Python</th><td>✓</td><td></td></tr>
 								<tr><th scope="row"><a href="/docs/kafka/">Kafka</a></th><td>✓ to Snowflake, Databricks, BigQuery</td><td></td></tr>
