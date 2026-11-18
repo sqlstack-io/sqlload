@@ -195,7 +195,8 @@ jobs:
       # stops before compiling anything when the Actions cache won't answer its startup check (a 503
       # from the cache service, say), which SCCACHE_IGNORE_SERVER_IO_ERROR doesn't cover, so it is
       # started here first, as the build would start it: when it can't start, the wheels build
-      # without it. A cache outage costs time, never a release.
+      # without it. The build starts its own server a minute or so later, so a cache that fails
+      # only in that gap still fails the build; rerun it (PyPI skips wheels it already has).
       # The cache's URL and token reach only JavaScript actions, such as maturin-action, which passes
       # them on to the build; the check needs them too.
       - name: Give the sccache check the Actions cache
@@ -215,8 +216,7 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
         run: |
-          python -m pip install --quiet 'sccache>=0.10.0'
-          if sccache --start-server; then
+          if python -m pip install --quiet 'sccache>=0.10.0' && sccache --start-server; then
             sccache --stop-server > /dev/null || true
             echo "usable=true" >> "$GITHUB_OUTPUT"
           else
