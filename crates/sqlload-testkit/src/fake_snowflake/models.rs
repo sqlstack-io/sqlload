@@ -80,6 +80,10 @@ pub struct FakeState {
     pub driver_failure: Option<(String, String)>,
     /// While set, `SHOW STAGES` says the schema does not exist.
     pub schema_missing: bool,
+    /// Auto-ingest loads by table, as COPY_HISTORY lists them.
+    pub copy_history: BTreeMap<String, Vec<CopyHistoryRow>>,
+    /// While set, auto-ingest pipes receive bucket notifications and load new files.
+    pub notifications: bool,
     /// The `LastModified` of every object listed; now when unset.
     pub objects_modified: Option<String>,
     /// What each statement of a multi-statement request returned, by handle.
@@ -87,6 +91,44 @@ pub struct FakeState {
 }
 
 impl FakeState {
+    /// Load every object under an auto-ingest pipe's folder that it has not loaded, recording each in COPY_HISTORY.
+    pub fn notify_auto_ingest(&mut self) {
+        let pipes: Vec<FakePipe> = self
+            .pipes
+            .values()
+            .filter(|pipe| pipe.auto_ingest)
+            .cloned()
+            .collect();
+        for pipe in pipes {
+            let keys: Vec<String> = self
+                .objects
+                .keys()
+                .filter(|key| key.starts_with(&pipe.location) && !self.loaded.contains(*key))
+                .cloned()
+                .collect();
+            for key in keys {
+                let before = self
+                    .tables
+                    .get(&pipe.table)
+                    .map_or(0, |found| found.rows.len());
+                self.load_object(&pipe.table, &key);
+                let after = self
+                    .tables
+                    .get(&pipe.table)
+                    .map_or(0, |found| found.rows.len());
+                self.copy_history
+                    .entry(pipe.table.clone())
+                    .or_default()
+                    .push(CopyHistoryRow {
+                        stage_location: format!("s3://{}", pipe.location),
+                        file_name: key.strip_prefix(&pipe.location).unwrap_or(&key).to_owned(),
+                        status: "Loaded".to_owned(),
+                        rows: after - before,
+                    });
+            }
+        }
+    }
+
     /// Load a file sent to `pipe` and record its load event; a missing object fails to load.
     pub fn load_file(&mut self, pipe: &str, table: &str, path: &str, key: &str) {
         let event = match self.objects.contains_key(key) {
@@ -158,6 +200,16 @@ pub struct StalledFile {
 pub struct FakePipe {
     pub table: String,
     pub location: String,
+    pub auto_ingest: bool,
+}
+
+/// One COPY_HISTORY row: the pipe's folder, the file name relative to it, the status and the rows loaded.
+#[derive(Debug, Clone)]
+pub struct CopyHistoryRow {
+    pub stage_location: String,
+    pub file_name: String,
+    pub status: String,
+    pub rows: usize,
 }
 
 /// Shared fake state.
@@ -271,5 +323,10 @@ impl FakeSnowflake {
     /// Every SQL statement received, in order.
     pub fn statements(&self) -> Vec<String> {
         self.state.lock().statements.clone()
+    }
+
+    /// Deliver bucket notifications to auto-ingest pipes while `deliver` is set, so they load new files before COPY_HISTORY is read.
+    pub fn deliver_notifications(&self, deliver: bool) {
+        self.state.lock().notifications = deliver;
     }
 }

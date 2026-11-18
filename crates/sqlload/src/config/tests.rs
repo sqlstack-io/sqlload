@@ -1,3 +1,5 @@
+#[path = "tests/test_bigquery_destination.rs"]
+mod bigquery_destination;
 #[path = "tests/test_destinations.rs"]
 mod destinations;
 #[path = "tests/helpers.rs"]

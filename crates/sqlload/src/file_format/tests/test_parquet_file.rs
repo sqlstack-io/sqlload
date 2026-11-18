@@ -7,7 +7,7 @@ use crate::file_format::main::encode_file::encode_file;
 use crate::file_format::tests::helpers::{
     first_date, first_int32, first_int64, first_text, first_timestamp, parquet_config, read_parquet,
 };
-use crate::file_format::tests::test_types::ParquetColumnTestCase;
+use crate::file_format::tests::test_types::{ParquetColumnTestCase, ParquetDateTestCase};
 
 const COLUMNS: &str = "[envelope]\ntime_zone = \"America/Los_Angeles\"\n[[envelope.columns]]\nname = \"TOPIC\"\nfield = \"topic\"\ntype = \"VARCHAR\"\n[[envelope.columns]]\nname = \"KAFKA_PARTITION\"\nfield = \"partition\"\ntype = \"NUMBER(38,0)\"\n[[envelope.columns]]\nname = \"KAFKA_OFFSET\"\nfield = \"offset\"\ntype = \"NUMBER(38,0)\"\n[[envelope.columns]]\nname = \"KAFKA_TIMESTAMP\"\nfield = \"timestamp\"\ntype = \"NUMBER(38,0)\"\n[[envelope.columns]]\nname = \"KEY\"\nfield = \"key\"\ntype = \"VARCHAR\"\n[[envelope.columns]]\nname = \"VALUE\"\nfield = \"value\"\ntype = \"VARCHAR\"\n[[envelope.columns]]\nname = \"PAYLOAD\"\nfield = \"value\"\ntype = \"VARIANT\"\n[[envelope.columns]]\nname = \"HEADERS\"\nfield = \"headers\"\ntype = \"VARIANT\"\n[[envelope.columns]]\nname = \"EXPORTED_AT\"\nfield = \"exported_at\"\ntype = \"TIMESTAMP_TZ\"\n[[envelope.columns]]\nname = \"DATE\"\nfield = \"date\"\ntype = \"DATE\"\n";
 
@@ -152,5 +152,53 @@ fn given_encoded_rows_when_writing_parquet_then_each_column_has_its_type_and_val
         .filter(|array| array.is_null(1))
         .count();
     assert_eq!(missing, 3, "a missing key and value are nulls");
+    Ok(())
+}
+
+#[test]
+fn given_a_kafka_timestamp_far_in_the_future_when_writing_parquet_then_its_date_still_loads()
+-> Result<(), String> {
+    let config = parquet_config(COLUMNS)?;
+    let unwrap = std::collections::BTreeMap::new();
+    let context = RowContext {
+        exported_at_ms: EXPORTED_AT_MS,
+        time_zone: chrono_tz::UTC,
+        unwrap: &unwrap,
+    };
+    let test_cases = [
+        ParquetDateTestCase {
+            description: "a timestamp this century",
+            timestamp_ms: KAFKA_MS,
+            expected_days: "20760",
+        },
+        ParquetDateTestCase {
+            description: "a producer writing microseconds puts the date past year 9999, which still reads",
+            timestamp_ms: KAFKA_MS * 1000,
+            expected_days: "20760182",
+        },
+    ];
+    for test_case in &test_cases {
+        let record = KafkaRecord {
+            topic: "shop.orders".to_owned(),
+            partition: 0,
+            offset: 0,
+            key: None,
+            timestamp_ms: Some(test_case.timestamp_ms),
+            timestamp_type: Some(0),
+            value: None,
+            headers: Vec::new(),
+        };
+        let line = encode_row(&config.envelope.columns, &record, &context);
+        let (body, _) = encode_file(FileFormat::Parquet, &config.envelope.columns, &[&line])
+            .map_err(|error| format!("{}: {error}", test_case.description))?;
+        let batch = read_parquet(&body)?;
+        let array = batch.column_by_name("DATE").ok_or(test_case.description)?;
+        assert_eq!(
+            first_date(array.as_ref()),
+            test_case.expected_days,
+            "{}",
+            test_case.description
+        );
+    }
     Ok(())
 }

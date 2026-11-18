@@ -1,3 +1,5 @@
+#[path = "tests/test_bigquery_plan.rs"]
+mod bigquery_plan;
 #[path = "tests/test_build_plan.rs"]
 mod build_plan;
 #[path = "tests/test_databricks_plan.rs"]

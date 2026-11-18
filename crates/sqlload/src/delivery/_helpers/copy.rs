@@ -17,7 +17,7 @@ use crate::file_format::main::databricks_copy::databricks_copy;
 use crate::file_format::main::encode_file::encode_file;
 use crate::file_format::main::file_extension::file_extension;
 use crate::http::errors::ApiError;
-use crate::naming::main::databricks_table::databricks_table;
+use crate::naming::main::quoted_table::quoted_table;
 use crate::stage_api::main::put_object::put_object;
 use crate::stage_api::models::{ObjectUpload, PutOutcome};
 use crate::time_text::main::now_ms::now_ms;
@@ -63,7 +63,7 @@ impl CopyDelivery {
     }
 
     /// The batch's file keys, kept from an earlier failed attempt at the same rows so a retry reuses its names and uploads.
-    fn staged_batch(&self, batch: &Batch, parts: &[Part<'_>]) -> StagedBatch {
+    pub(crate) fn staged_batch(&self, batch: &Batch, parts: &[Part<'_>]) -> StagedBatch {
         let digest = rows_digest(&batch.rows.iter().collect::<Vec<_>>());
         if let Some(staged) = self
             .staged
@@ -83,11 +83,12 @@ impl CopyDelivery {
         StagedBatch { digest, files }
     }
 
-    /// `<folder>/<stream>_<digest>.parquet`: the `s3` path template, or the UTC date in the volume.
+    /// `<folder>/<stream>_<run>_<digest>.parquet`: the `s3` path template, or the UTC date in the volume.
     fn file_key(&self, part: &Part<'_>, now: i64) -> String {
         let file = format!(
-            "{}_{}.{}",
+            "{}_{}_{}.{}",
             self.stream.name,
+            self.run,
             rows_digest(&part.rows),
             file_extension(FileFormat::Parquet)
         );
@@ -141,7 +142,7 @@ impl CopyDelivery {
             let (folder, file) = key.rsplit_once('/').unwrap_or(("", key));
             folders.entry(folder).or_default().push(file);
         }
-        let table = databricks_table(&self.config, &self.stream.table);
+        let table = quoted_table(&self.config, &self.stream.table);
         for (folder, files) in folders {
             let location = match &self.s3 {
                 Some(target) => format!("s3://{}/{}{folder}/", target.bucket, target.prefix),

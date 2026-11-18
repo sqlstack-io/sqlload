@@ -448,6 +448,8 @@ pub struct Calls {
     pub on_status: BTreeMap<u16, StatusAction>,
     /// Whether an offset page of this request held its whole limit in this job, which shows the API does not cap its pages lower, so a short first page needs no check; shared by its clones, the keys of a fan-out.
     pub full_page_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The most the pages `read_ahead` requests may hold at once: a quarter of the table's share of the run's memory budget; `None` without a budget.
+    pub source_part: Option<u64>,
 }
 
 /// What one try at a request came to.
@@ -477,7 +479,17 @@ pub struct Fetched {
 pub enum KeyFeed {
     Values(Vec<Value>),
     Pages(Box<(Calls, Request)>),
-    FanOut(Box<(FanOut, Map<String, Value>, reqwest::Client)>),
+    FanOut(Box<FanOutLevel>),
+}
+
+/// A fan-out one level up, with what its requests run with.
+#[derive(Debug)]
+pub struct FanOutLevel {
+    pub fan_out: FanOut,
+    pub connections: Map<String, Value>,
+    pub http: reqwest::Client,
+    /// The most the pages its requests read ahead may hold (see [`Calls`]); `None` without a budget.
+    pub source_part: Option<u64>,
 }
 
 /// A fan-out key: the placeholder values it fills, its ancestors' included, and the trail of requests that produced it (such as `/orders order_id=7 → `), which prefixes a multi-level job's errors.

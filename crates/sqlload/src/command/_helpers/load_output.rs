@@ -110,6 +110,8 @@ pub(crate) struct Tally {
     pub(crate) slowest: Option<(String, u64)>,
     /// The most memory the whole process held at once, in bytes, as the run's end reported it.
     pub(crate) peak_memory_bytes: Option<u64>,
+    /// The tables the plan's errors kept from loading, which the plan printed above.
+    pub(crate) plan_errors: usize,
 }
 
 impl Tally {
@@ -396,9 +398,15 @@ pub(crate) fn change_tally_line(line: &str, name_width: usize) -> String {
     tally_line((verb, name), detail.trim_start(), name_width)
 }
 
-/// What `load` prints of its plan before it starts: the closing line, pointing a complete plan to `sqlload plan`, and the Errors and Warnings sections when there are any; the Objects, Loads and Skipped trees and the `Plan ready` line are `plan`'s (and Objects `apply`'s), and the `created` and `altered` lines follow.
+/// What `load` prints of its plan before it starts: the closing line, pointing a complete plan to `sqlload plan`, and the Errors and Warnings sections when there are any; the Memory line, the Objects, Loads and Skipped trees and the `Plan ready` line are `plan`'s (and Objects `apply`'s), and the `created` and `altered` lines follow.
 pub(crate) fn start_lines(plan_lines: Vec<String>) -> Vec<String> {
-    let dropped = ["Plan ready", "Objects (", "Loads (", "Skipped ("];
+    let dropped = [
+        "Plan ready",
+        "Memory  ",
+        "Objects (",
+        "Loads (",
+        "Skipped (",
+    ];
     let mut kept: Vec<String> = Vec::new();
     for section in plan_lines.split(String::is_empty) {
         let first = section.first().map_or("", String::as_str);
@@ -495,13 +503,17 @@ fn live_bar() -> indicatif::ProgressBar {
     bar
 }
 
-/// The line a load ends with, and the branches under it: what never started, the slowest table, the run's peak memory, and after failures whether running it again helps and what it would do.
+/// The line a load ends with (a ✗ after failures, or when plan errors kept tables from loading), and the branches under it: what never started, the slowest table, the run's peak memory, and after failures whether running it again helps and what it would do.
 pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Vec<String> {
     let mut clauses: Vec<String> = Vec::new();
     clauses.extend((tally.loaded > 0).then(|| format!("{} loaded", tally.loaded)));
     clauses.extend((tally.failed > 0).then(|| format!("{} failed", tally.failed)));
     clauses.extend(
         (!tally.not_started.is_empty()).then(|| format!("{} not started", tally.not_started.len())),
+    );
+    clauses.extend(
+        (tally.plan_errors > 0)
+            .then(|| format!("{} not loaded (plan errors above)", tally.plan_errors)),
     );
     clauses.extend((tally.loaded > 0).then(|| match tally.rows {
         1 => "1 row".to_owned(),
@@ -557,7 +569,7 @@ pub(crate) fn summary_lines(tally: &Tally, elapsed_ms: u64, exit_code: u8) -> Ve
             },
         ));
     }
-    let mut lines = vec![match tally.failed {
+    let mut lines = vec![match tally.failed + tally.plan_errors {
         0 => format!("✓ Completed  {}", clauses.join(", ")),
         _ => format!("✗ Completed with failures  {}", clauses.join(", ")),
     }];

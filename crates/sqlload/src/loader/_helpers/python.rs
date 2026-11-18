@@ -68,6 +68,7 @@ use crate::loader::models::TableLoaded;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::masking::models::MaskRules;
+use crate::memory_budget::constants::TABLE_SHARE_PARTS;
 use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
@@ -1140,16 +1141,12 @@ async fn replan(
         data,
         planned.live.as_deref(),
     );
-    let mut project = load.project.clone();
-    if let Some(source) = project.sources.get_mut(&spec.source_name) {
-        source.tables.retain(|name, _| *name == table.name);
-    }
     let named = KnownNames {
         numbered: Vec::new(),
         named: Some(names.loaded.clone()),
         existing: Vec::new(),
     };
-    let resolved = resolve_known(&project, &spec.source_name, &[table], &named);
+    let resolved = resolve_known(load.project, &spec.source_name, &[table], &named);
     let problems: Vec<String> = resolved
         .problems
         .into_iter()
@@ -1282,6 +1279,8 @@ fn table_read(
             sql_adapter(spec.warehouse).max_identifier_length(),
         ),
         zone: spec.timezone.map(|(zone, _)| zone),
+        source_part: (load.project.memory.budget.as_ref())
+            .map(|budget| budget.table_share / TABLE_SHARE_PARTS),
     }
 }
 
@@ -1687,6 +1686,7 @@ impl ChildTables {
             mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         };
         let dropped: Vec<i64> = match adapter.render_dropped_ordinals(&request, staging) {
             Some(query) => text_values(destination, query)

@@ -31,9 +31,26 @@ fn given_load_events_when_rendering_them_then_each_table_prints_as_it_finishes_a
             rows_width: 5,
             elapsed_ms: 8_300,
             exit_code: 0,
+            plan_errors: 0,
             expected_lines: "loaded  raw.a      1 row  0.3s
 loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
 ✓ Completed  2 loaded, 1,310 rows, 8.3s
+└── slowest      raw.b 8.0s",
+        },
+        LoadOutputTestCase {
+            description: "a run whose plan errors kept tables from loading ends with a cross, counting them, though every table it started loaded",
+            events: vec![
+                (Some("raw.a"), done(1, 300, None)),
+                (Some("raw.b"), done(1_309, 8_000, None)),
+            ],
+            name_width: 7,
+            rows_width: 5,
+            elapsed_ms: 8_300,
+            exit_code: 1,
+            plan_errors: 3,
+            expected_lines: "loaded  raw.a      1 row  0.3s
+loaded  raw.b  1,309 rows 8.0s
+✗ Completed with failures  2 loaded, 3 not loaded (plan errors above), 1,310 rows, 8.3s
 └── slowest      raw.b 8.0s",
         },
         LoadOutputTestCase {
@@ -55,6 +72,7 @@ loaded  raw.b  1,309 rows 8.0s  3 files, moved to archive/receipts/
             rows_width: 5,
             elapsed_ms: 400,
             exit_code: 0,
+            plan_errors: 0,
             expected_lines: "created  raw.a__items  6 columns
 loaded  raw.a      1 row  0.3s
 ✓ Completed  1 loaded, 1 row, 0.4s
@@ -70,6 +88,7 @@ loaded  raw.a      1 row  0.3s
             rows_width: 7,
             elapsed_ms: 2_200,
             exit_code: 0,
+            plan_errors: 0,
             expected_lines: "loaded  raw.a  123,456 rows 2.0s
 loaded  raw.b        1 row  0.1s
 ✓ Completed  2 loaded, 123,457 rows, 2.2s
@@ -99,6 +118,7 @@ loaded  raw.b        1 row  0.1s
             rows_width: 5,
             elapsed_ms: 18_100,
             exit_code: 0,
+            plan_errors: 0,
             expected_lines: "written  raw.a      2 rows 6s behind
 written  raw.b      1 row
 loaded  raw.a      2 rows 18.0s
@@ -148,6 +168,7 @@ loaded  raw.b      1 row  18.0s
             rows_width: 5,
             elapsed_ms: 500,
             exit_code: 1,
+            plan_errors: 0,
             expected_lines: "loaded  raw.a      1 row  0.3s  id now 7  peak memory 85 MiB
 failed  raw.b  HTTP 404 not found
                peak memory 1.8 GiB
@@ -158,7 +179,10 @@ failed  raw.b  HTTP 404 not found
         },
     ];
     for test_case in test_cases {
-        let mut tally = Tally::default();
+        let mut tally = Tally {
+            plan_errors: test_case.plan_errors,
+            ..Tally::default()
+        };
         let mut lines: Vec<String> = Vec::new();
         for (table, kind) in test_case.events {
             let event = LoadEvent {

@@ -30,3 +30,23 @@ pub const RUNS_COLUMNS: &[&str] = &[
 
 /// How `recorded_at` is written: ISO 8601 UTC with microseconds, so text order is time order.
 pub const RECORDED_AT_FORMAT: &str = "%Y-%m-%dT%H:%M:%S%.6fZ";
+
+/// The recovery markers' table, beside the run log: a load that commits a table in pieces marks it until its last commit, so a load after a crash first removes the rows the unfinished one committed.
+pub const UNFINISHED_TABLE: &str = "_sqlload_unfinished";
+
+/// The recovery markers' columns: the table, the load, the column holding each row's load id, and when the load started.
+pub const UNFINISHED_COLUMNS: &[(&str, crate::column_types::models::ColumnType)] = &[
+    ("table_name", crate::column_types::models::ColumnType::Text),
+    ("load_id", crate::column_types::models::ColumnType::Text),
+    (
+        "load_id_column",
+        crate::column_types::models::ColumnType::Text,
+    ),
+    (
+        "started_at",
+        crate::column_types::models::ColumnType::TimestampTz,
+    ),
+];
+
+/// The separator of the fields recovery reads as one text per row (`chr(31)` in SQL), which no table name or load id holds.
+pub const UNFINISHED_SEPARATOR: char = '\u{1f}';

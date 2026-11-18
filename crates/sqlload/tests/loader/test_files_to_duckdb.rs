@@ -1725,7 +1725,7 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     removed: &[],
                     loads: true,
                     reload: false,
-                    expected_error: "replace_key column version is not a column of the table (not in the source, excluded, not in the enforced contract, or ignored by on_schema_change) └── fix name a column the table loads in replace_key",
+                    expected_error: "replace_key column \"version\" is not a column of the table",
                     expected_plan: "",
                 }],
                 check_query: NO_TABLE,

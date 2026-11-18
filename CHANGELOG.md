@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.68.0](https://github.com/sqlstack-io/sqlload/compare/v0.67.0...v0.68.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** a run stays under one memory budget (memory_limit or --memory-limit, else 80% of a container's or Windows job object's limit, else 50% of the machine's memory), and plan fails when the budget can't hold one table; plan -v shows the budget on a memory line, which plain plan shows only when it asks for something, and plan no longer prints DuckDB's memory note per table. DuckDB and MotherDuck targets open with a memory_limit and thread count from the budget and without automatic checkpoints, and commit large rows in pieces. An ODBC source's default fetch buffer is at most a quarter of each table's share of the budget, and its plan warning compares each fetch with that share. A merge with newest_by cut into pieces counts the older rows it skips per piece, so the "older rows skipped" count can differ from one whole commit's. A merge that refuses repeated keys (on_duplicate_keys = "fail") and a table with checks it doesn't rebuild aren't cut into pieces, and stop, naming the memory_limit they need, when one commit's large values don't fit DuckDB's share. Every append into DuckDB or MotherDuck under a budget creates an _sqlload_unfinished table beside _sqlload_runs.
+
+### Features
+
+* **loader:** one memory budget per run, DuckDB commits in pieces, and a memory watchdog ([3437106](https://github.com/sqlstack-io/sqlload/commit/3437106088227628a9c025ebc05d2c832dc9f013))
+
+## [0.67.0](https://github.com/sqlstack-io/sqlload/compare/v0.66.0...v0.67.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** a unique_key, replace_key, cursor_column or newest_by that names a column in neither its source spelling nor its loaded name, including in another case, now fails plan with the nearest column; use the spelling it suggests.
+
+### Bug Fixes
+
+* **loader:** a table whose column names were numbered loads again beside other table overrides ([#302](https://github.com/sqlstack-io/sqlload/issues/302)) ([8481e06](https://github.com/sqlstack-io/sqlload/commit/8481e0606a066e8c6fea789ea0abeecda62e8d9c))
+* **loader:** plan checks the columns table settings name, and a load with plan errors no longer reads as completed ([#303](https://github.com/sqlstack-io/sqlload/issues/303)) ([fd20aec](https://github.com/sqlstack-io/sqlload/commit/fd20aec2a1c520f2f8ff53274f792c5f6d3075e5))
+
+## [0.66.0](https://github.com/sqlstack-io/sqlload/compare/v0.65.0...v0.66.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **exporter:** staging.s3.auto_ingest needs destination.warehouse, which runs the COPY_HISTORY check; plan refuses the configuration without it. Add a warehouse, ideally a dedicated X-Small with a 60-second AUTO_SUSPEND.
+
+### Features
+
+* **cli:** sqlload playground, and a quickstart whose output comes from real runs ([#297](https://github.com/sqlstack-io/sqlload/issues/297)) ([91728f0](https://github.com/sqlstack-io/sqlload/commit/91728f08459336cf26b32b57b0fbe725bf1071d8))
+* **exporter:** export Kafka topics to Databricks ([#299](https://github.com/sqlstack-io/sqlload/issues/299)) ([b389528](https://github.com/sqlstack-io/sqlload/commit/b389528ed47b2ffd043cd0ddf7f3208ce3990b4d))
+
+
+### Bug Fixes
+
+* **exporter:** name staged files after the exporter's run, so a replay after DELETE, a re-created table or a consumer group reset can no longer be skipped as already loaded while its offsets are committed (Snowflake COPY, Snowpipe insertFiles and auto-ingest, Databricks COPY INTO), and deployments sharing a bucket path no longer overwrite each other's files ([8f091d4](https://github.com/sqlstack-io/sqlload/commit/8f091d42e65daf0d1aae51b05ef2641694e5c9ea))
+* **exporter:** Snowpipe auto-ingest commits offsets only once COPY_HISTORY shows the files loaded, instead of when the upload succeeds ([8f091d4](https://github.com/sqlstack-io/sqlload/commit/8f091d42e65daf0d1aae51b05ef2641694e5c9ea))
+
 ## [0.65.0](https://github.com/sqlstack-io/sqlload/compare/v0.64.0...v0.65.0) (2026-11-17)
 
 

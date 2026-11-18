@@ -113,7 +113,7 @@ fn given_a_mysql_table_of_265_text_columns_when_loading_then_it_reads_value_by_v
             " per fetch, 65,536 rows\n",
             "2 loaded",
         ],
-        expected_warning: "lower max_batch_memory on source erp, or lower concurrency (now 4)",
+        expected_warning: "lower max_batch_memory on source erp, or raise memory_limit",
         expected_max_peak_kib: 384 * 1024,
         expected_wide: "5000 | v265-4321 | id,c001,c002,c264,c265",
     }];

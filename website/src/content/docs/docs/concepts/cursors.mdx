@@ -454,7 +454,9 @@ def events(ctx: sl.Context):
 
 The run log is `_sqlload_runs` in the table's schema, or objects under `<table folder>/_sqlload/runs/`
 on a files target. It's written in the same transaction as the data where the warehouse allows it,
-so a failed load never moves the position.
+so a failed load never moves the position. Beside it, a DuckDB or MotherDuck schema may hold
+`_sqlload_unfinished`, which marks appends that stopped part-way; see
+[Unfinished appends](#unfinished-appends).
 
 A logged table with a `cursor_column` also logs the data's cursor. When the log and the data
 disagree, the data wins, and the load appends a visible reconciliation. Deleting the log is safe: the
@@ -478,3 +480,34 @@ A record SQLLoad can't read, because it's corrupt or written by a newer version,
 own table. `logged-state show` lists it, and a `reset ... --yes` starts a new position after it.
 
 See [`sqlload logged-state`](/docs/cli/logged-state/) for every subcommand and flag.
+
+### Unfinished appends
+
+From 0.68.0, a DuckDB or MotherDuck table can commit one load in
+[pieces](/docs/cli/load/#large-rows-in-duckdb) when its rows are too large for one commit. A rerun
+of a `merge` or `delete_insert` replaces what a stopped load's pieces wrote, but an `append` would
+add those rows again. So an `append`'s first piece also writes a row to `_sqlload_unfinished`, in
+the run log's schema, in the same transaction. Every `append` into DuckDB or MotherDuck creates
+that table when it starts, so it's there, empty, even when no load needed pieces. A row holds the
+table, the load's id, the column holding it (`_sqlload_load_id`) and when the load started. The
+load's last commit removes the row in its own transaction, so a crash between them can't leave
+rows without a marker, or a marker without rows.
+
+The next `load` that loads that table, after it plans and before it loads, deletes the table's rows
+of each marked load, the load's records in `_sqlload_runs` and the marker, in one transaction. It
+then plans again, from where the table was before that load, and warns. Only the markers of the
+tables it loads are read, since on MotherDuck another process may be loading other tables of the
+same database at the time; don't run two loads of one table at once:
+
+```console
+$ sqlload load
+Warnings (1)
+└── raw.attachments: removed the rows of load 5a401302-7d41-4426-83d0-e1cb1168174d, which stopped before its last commit, so this load reads from before it
+
+✓ Plan complete  2 to load   (sqlload plan shows the tree)
+
+loaded  raw.customers        2 rows 0.0s
+loaded  raw.attachments    300 rows 4.1s
+```
+
+Only the marked load's rows go; rows of other loads stay.

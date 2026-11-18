@@ -18,11 +18,13 @@ const SETUP: &str = "
 CREATE TABLE public.accounts (id int8 PRIMARY KEY, name text, email text, balance numeric(12,2), updated_at timestamptz NOT NULL);
 CREATE TABLE public.events (event_id int8, kind text, at timestamptz NOT NULL);
 CREATE TABLE public.stores (code text, city text);
+CREATE TABLE public.prices (id int8, \"Unit Price\" numeric(10,2), unit_price numeric(10,2));
 INSERT INTO public.accounts VALUES
   (1, 'Acme Ltd', 'a@example.com', 10.50, '2026-11-01 10:00:00+00'),
   (2, 'Beta Co', 'b@example.com', 20.00, '2026-11-02 10:00:00+00');
 INSERT INTO public.events VALUES (1, 'open', '2026-11-01 09:00:00+00'), (2, 'close', '2026-11-02 09:00:00+00');
 INSERT INTO public.stores VALUES ('L1', 'Leeds'), ('Y1', 'York');
+INSERT INTO public.prices VALUES (1, 1.50, 1.25);
 ";
 
 const TABLES: &str = r#"
@@ -39,6 +41,9 @@ cursor_column = "at"
 [sources.app.tables."public.stores"]
 write_strategy = "replace"
 mask = { city = "hash" }
+
+[sources.app.tables."public.prices"]
+write_strategy = "replace"
 "#;
 
 const PINNED_SETUP: &str = "
@@ -79,8 +84,7 @@ Loads (1)                                           sqlload load
     ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
     ├── reads   updated_at: first run, everything
     ├── columns 5
-    ├── commits once, at the end of the read (updated_at isn't read in order)
-    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
+    └── commits once, at the end of the read (updated_at isn't read in order)
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
 
@@ -95,8 +99,7 @@ Loads (1)                                           sqlload load
     ├── key     id, the primary key the source reports (unique_key = \"{primary_key}\")
     ├── reads   updated_at >= 2026-11-02 10:00:00.000+00 (warehouse maximum)
     ├── columns 5
-    ├── commits once, at the end of the read (updated_at isn't read in order)
-    └── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
+    └── commits once, at the end of the read (updated_at isn't read in order)
 
 ✓ Plan complete  1 selected, 1 to load";
 
@@ -215,7 +218,6 @@ Loads (1)                                           sqlload load
     ├── reads   seq >= 0 (first run, from cursor_start)
     ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 3 windows of 1, one commit each, up to the source's maximum 2 (read at plan)
-    ├── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 object to create, 1 to load";
@@ -230,7 +232,6 @@ Loads (1)                                           sqlload load
     ├── reads   seq >= 2 (warehouse maximum)
     ├── columns 4, 4 named by snake_case: OrderID -> order_id, Seq -> seq, ...
     ├── commits 2 windows of 1, one commit each, up to the source's maximum 3 (read at plan)
-    ├── memory  DuckDB holds a commit's rows in memory until a row group fills, so a table of few, wide rows peaks at about 4x its largest commit's bytes, plus DuckDB's cache up to its memory_limit
     └── note    windows are read in one REPEATABLE READ snapshot, held open on the source for the whole table load (mind idle_in_transaction_session_timeout and vacuum)
 
 ✓ Plan complete  1 selected, 1 to load";
@@ -297,6 +298,12 @@ fn given_postgres_tables_when_loading_repeatedly_into_duckdb_then_each_strategy_
                 source_change: "ALTER TABLE public.stores ADD COLUMN opened date; UPDATE public.stores SET opened = '2020-01-02';",
                 check_query: "SELECT string_agg(code || '@' || CAST(opened AS VARCHAR), ',') FROM raw.app__stores",
                 expected_result: "L1@2020-01-02",
+            },
+            LoadRunTestCase {
+                description: "a table whose names were numbered loads again beside the other tables' overrides, keeping its numbers",
+                source_change: "UPDATE public.prices SET unit_price = 2.25;",
+                check_query: "SELECT (SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = 'raw' AND table_name = 'app__prices') || '|' || (SELECT string_agg(unit_price || ':' || unit_price_1, ',') FROM raw.app__prices)",
+                expected_result: "id,unit_price,unit_price_1,_sqlload_load_id,_sqlload_loaded_at|1.50:2.25",
             },
             LoadRunTestCase {
                 description: "every row carries the metadata of the load that wrote it",

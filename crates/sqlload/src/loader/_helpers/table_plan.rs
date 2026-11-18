@@ -31,6 +31,7 @@ use crate::adapters::files::main::output_problems::output_problems;
 use crate::adapters::files::models::{OutputCheck, PartitionBy, TablePath};
 use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
+use crate::batch_plan::main::ignored_batch::ignored_batch;
 use crate::batch_plan::main::ignored_concurrency::ignored_concurrency;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
@@ -239,7 +240,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
     }
 }
 
-/// One table's plan against its live destination table; a Python table's live columns count as its source's, since it has no catalog.
+/// One table's plan against its live destination table; a Python table's live columns count as its source's, since it has no catalog. A setting naming no column blocks the table after its live table is read, so a table that exists still counts as existing for `new_tables` and the first-load check.
 pub(crate) async fn plan_table(
     spec: &TableSpec,
     destination: &Destination,
@@ -261,6 +262,10 @@ pub(crate) async fn plan_table(
         Some(augmented) => plan_table_once(&augmented, destination, options).await?,
         None => plan,
     };
+    if !spec.setting_problems.is_empty() {
+        plan.schema = blocked_plan(spec.setting_problems.clone());
+        return Ok(plan);
+    }
     plan.schema.warnings.extend(ignored_batch(&plan));
     plan.schema.warnings.extend(ignored_concurrency(&plan));
     let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
@@ -346,24 +351,6 @@ fn unordered_merge(
             )),
         )),
     }
-}
-
-/// Why the table's `batch_size` setting has no effect, if it has none: a files source commits by whole partitions, `replace` swaps the whole table in once, as does `--reload` (whose cursor windows still cut the reads), and windows need a cursor.
-fn ignored_batch(plan: &TablePlan) -> Option<String> {
-    let spec = &plan.spec;
-    let step = spec.batch?;
-    let reason = match (&spec.files, &plan.mode, &spec.cursor, step) {
-        (Some(_), _, _, _) => "a files source commits in batches of whole partitions",
-        (None, WriteMode::Replace, _, _) => "replace swaps the whole table in once",
-        (None, WriteMode::Recreate, None, _) | (None, WriteMode::Recreate, _, BatchStep::Whole) => {
-            "--reload rebuilds the whole table once"
-        }
-        (None, _, None, BatchStep::Duration(_) | BatchStep::Integer(_)) => {
-            "windows need a cursor_column"
-        }
-        _ => return None,
-    };
-    Some(format!("batch_size is ignored: {reason}"))
 }
 
 /// A table's columns and schema plan once more during its load, when its source shows new columns; nothing else about its plan is read or checked again. `known` is the live columns when they are known to be current (a Python table's first batch, just after plan); otherwise one read of them, except that a files target has no SQL to read them with and keeps `stale`, what plan saw.

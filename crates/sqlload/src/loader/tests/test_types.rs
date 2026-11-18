@@ -113,6 +113,8 @@ pub(crate) struct ViewLinesTestCase {
     pub(crate) loads: &'static [ItemSpec],
     pub(crate) errors: &'static [ItemSpec],
     pub(crate) warnings: &'static [ItemSpec],
+    /// The run's memory budget line.
+    pub(crate) memory: Option<&'static str>,
     pub(crate) expected_output: &'static str,
 }
 

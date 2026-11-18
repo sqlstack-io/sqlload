@@ -1,5 +1,7 @@
 use crate::auth::models::{Authenticator, Secret};
 use crate::batching::models::{Batch, Partition};
+use crate::bigquery_api::main::run_query::run_query;
+use crate::bigquery_api::models::BigQueryClient;
 use crate::config::models::{ColumnConfig, Config, LoadErrorPolicy, OversizedPolicy};
 use crate::databricks_api::main::execute_statement::execute_statement;
 use crate::databricks_api::models::DatabricksClient;
@@ -54,6 +56,7 @@ pub struct StageClients {
 pub enum Warehouse {
     Snowflake(SnowflakeClients),
     Databricks(DatabricksClients),
+    BigQuery(BigQueryClient),
 }
 
 /// The Snowflake clients, on one authenticator.
@@ -88,6 +91,7 @@ impl Warehouse {
         match self {
             Self::Snowflake(snowflake) => execute_sql(&snowflake.sql, statement).await,
             Self::Databricks(databricks) => execute_statement(&databricks.api, statement).await,
+            Self::BigQuery(bigquery) => run_query(bigquery, statement).await,
         }
     }
 
@@ -95,7 +99,7 @@ impl Warehouse {
     pub fn uses_key_pair(&self) -> bool {
         match self {
             Self::Snowflake(snowflake) => snowflake.auth.uses_key_pair(),
-            Self::Databricks(_) => false,
+            Self::Databricks(_) | Self::BigQuery(_) => false,
         }
     }
 }
@@ -121,9 +125,13 @@ pub struct StageDelivery {
     pub(crate) path: LoadPath,
     pub(crate) stage_info: Option<StageInfo>,
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
     pub(crate) pending: PendingLoads,
     pub(crate) begin_mark: Option<String>,
+    /// Set while the stream stops: auto-ingest checks COPY_HISTORY on every poll, so the files of the last minutes are committed before it exits.
+    pub(crate) final_checks: bool,
 }
 
 /// Batches handed to Snowpipe whose loads are not all reported yet, oldest first.
@@ -243,7 +251,32 @@ pub struct CopyDelivery {
     pub(crate) stream: Stream,
     /// The bucket, for `staging.kind = "s3"`; otherwise files go to the stream's volume.
     pub(crate) s3: Option<ObjectTarget>,
+    /// A random id for this delivery, in every staged file's name: the warehouse skips a file whose name it loaded before, so names from offsets alone could match an earlier run's file and commit offsets nothing was loaded for.
+    pub(crate) run: String,
     pub(crate) staged: Option<StagedBatch>,
+}
+
+/// Rows written to one BigQuery table: appended to its default stream, or loaded by load jobs, at most one a minute.
+#[derive(Debug)]
+pub struct BigQueryDelivery {
+    pub(crate) api: BigQueryClient,
+    pub(crate) config: Arc<Config>,
+    pub(crate) stream: Stream,
+    pub(crate) path: LoadPath,
+    /// A random id for this delivery, in every load job's name: job names are unique across the project for months, so offsets alone would match another table's or another run's job.
+    pub(crate) run: String,
+    /// The load of a batch whose job failed or never answered, kept so its retry reuses the job's name and the uploaded files.
+    pub(crate) staged: Option<StagedLoad>,
+    /// When the table's last load job was started.
+    pub(crate) last_load: Option<tokio::time::Instant>,
+}
+
+/// A batch's load job: its rows' digest, which attempt it is, and the files in the bucket it reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedLoad {
+    pub digest: String,
+    pub attempt: u32,
+    pub uris: Vec<String>,
 }
 
 /// The configured delivery mode for one stream.
@@ -253,6 +286,7 @@ pub enum Delivery {
     Stage(Box<StageDelivery>),
     Zerobus(Box<ZerobusDelivery>),
     Copy(Box<CopyDelivery>),
+    BigQuery(Box<BigQueryDelivery>),
 }
 
 impl Delivery {
@@ -320,8 +354,22 @@ impl Delivery {
             config: inputs.config.clone(),
             stream: stream.clone(),
             s3,
+            run: uuid::Uuid::new_v4().simple().to_string(),
             staged: None,
         })))
+    }
+
+    /// BigQuery delivery for one table on `path`.
+    pub fn bigquery(inputs: &DeliveryInputs, api: &BigQueryClient, stream: &Stream) -> Self {
+        Self::BigQuery(Box::new(BigQueryDelivery {
+            api: api.clone(),
+            config: inputs.config.clone(),
+            stream: stream.clone(),
+            path: inputs.path,
+            run: uuid::Uuid::new_v4().simple().to_string(),
+            staged: None,
+            last_load: None,
+        }))
     }
 
     /// True when Snowflake, not Kafka, holds the resume position.
@@ -333,14 +381,14 @@ impl Delivery {
     pub async fn open(&mut self, partition: &Partition) -> Result<Option<i64>, DeliveryError> {
         match self {
             Self::Streaming(streaming) => streaming.open(partition).await,
-            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => Ok(None),
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => Ok(None),
         }
     }
 
     pub fn is_open(&self, partition: &Partition) -> bool {
         match self {
             Self::Streaming(streaming) => streaming.is_open(partition),
-            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => true,
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => true,
         }
     }
 
@@ -350,6 +398,7 @@ impl Delivery {
             Self::Stage(stage) => stage.deliver(batch).await,
             Self::Zerobus(zerobus) => zerobus.deliver(batch).await,
             Self::Copy(copy) => copy.deliver(batch).await,
+            Self::BigQuery(bigquery) => bigquery.deliver(batch).await,
         }
     }
 
@@ -357,7 +406,7 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.has_pending(),
             Self::Stage(stage) => !stage.pending.is_empty(),
-            Self::Zerobus(_) | Self::Copy(_) => false,
+            Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => false,
         }
     }
 
@@ -365,14 +414,16 @@ impl Delivery {
     pub fn confirm_interval(&self) -> std::time::Duration {
         match self {
             Self::Streaming(_) => STREAMING_CONFIRM_POLL,
-            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) => STAGE_CONFIRM_POLL,
+            Self::Stage(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => {
+                STAGE_CONFIRM_POLL
+            }
         }
     }
 
     /// True when the stream's files sent but not committed fill `staging.max_pending_files`.
     pub fn is_full(&self) -> bool {
         match self {
-            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => false,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => false,
             Self::Stage(stage) => stage.is_full(),
         }
     }
@@ -380,7 +431,7 @@ impl Delivery {
     /// Files sent to Snowpipe whose offsets are not committed yet.
     pub fn pending_files(&self) -> usize {
         match self {
-            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => 0,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => 0,
             Self::Stage(stage) => stage.pending.file_count(),
         }
     }
@@ -388,7 +439,7 @@ impl Delivery {
     /// When the oldest uncommitted file was first sent, in Unix milliseconds.
     pub fn oldest_pending_ms(&self) -> Option<i64> {
         match self {
-            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) => None,
+            Self::Streaming(_) | Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => None,
             Self::Stage(stage) => stage.pending.oldest_sent_ms(),
         }
     }
@@ -397,7 +448,14 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.poll().await,
             Self::Stage(stage) => stage.poll().await,
-            Self::Zerobus(_) | Self::Copy(_) => Ok(Confirmation::default()),
+            Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => Ok(Confirmation::default()),
+        }
+    }
+
+    /// The stream is stopping: auto-ingest checks every waiting file on each poll from now on, instead of once per `pending_check_after`; other routes poll as before.
+    pub fn check_until_stopped(&mut self) {
+        if let Self::Stage(stage) = self {
+            stage.final_checks = true;
         }
     }
 
@@ -407,6 +465,7 @@ impl Delivery {
             Self::Stage(stage) => stage.pending.clear(),
             Self::Zerobus(zerobus) => zerobus.link = ZerobusLink::default(),
             Self::Copy(copy) => copy.staged = None,
+            Self::BigQuery(bigquery) => bigquery.staged = None,
         }
     }
 
@@ -414,14 +473,14 @@ impl Delivery {
         match self {
             Self::Streaming(streaming) => streaming.forget(partitions),
             Self::Stage(stage) => stage.pending.forget(partitions),
-            Self::Zerobus(_) | Self::Copy(_) => {}
+            Self::Zerobus(_) | Self::Copy(_) | Self::BigQuery(_) => {}
         }
     }
 
     /// Remove expired staged files; returns how many were removed.
     pub async fn prune(&self) -> Result<u64, DeliveryError> {
         match self {
-            Self::Streaming(_) | Self::Zerobus(_) => Ok(0),
+            Self::Streaming(_) | Self::Zerobus(_) | Self::BigQuery(_) => Ok(0),
             Self::Stage(stage) => stage.prune().await,
             Self::Copy(copy) => copy.prune().await,
         }

@@ -286,8 +286,16 @@ pub(crate) fn parse_stage_pipe(statement: &str) -> Option<(String, FakePipe)> {
         FakePipe {
             table: last_name(table),
             location: stage_relative(location),
+            auto_ingest: rest.contains("AUTO_INGEST = TRUE"),
         },
     ))
+}
+
+/// `... INFORMATION_SCHEMA.COPY_HISTORY(TABLE_NAME => '"DB"."SCHEMA"."T"' ...` → the table.
+pub(crate) fn copy_history_table(statement: &str) -> Option<String> {
+    let (_, rest) = statement.split_once("INFORMATION_SCHEMA.COPY_HISTORY(TABLE_NAME => '")?;
+    let (table, _) = rest.split_once("',")?;
+    Some(last_name(table))
 }
 
 /// `COPY INTO T ... FROM @STAGE/folder/ ... FILES = ('a', 'b') ...` → the table and the object keys to load.

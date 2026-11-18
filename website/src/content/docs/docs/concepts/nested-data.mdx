@@ -240,11 +240,13 @@ columns' order. `load` prints the same `names` lines under each table, and its
   from a `table_name` template are in lower case.
 
 Settings may name a column either way (`unique_key = ["OrderID"]` or `["order_id"]`), and `plan`
-shows the loaded name, and so may `flatten` paths. `exclude_columns`, `allow_columns` and
-`skip_tables_with_columns` match the source's own names: a Python table's fields as yielded
-(`accessToken`, or `api_secret__key` once flattened), before naming changes them. A Python table's
-`ctx.cursor_column` is the cursor's loaded name (`updated_at` for a field yielded as `UpdatedAt`).
-The target schema keeps the name it is given.
+shows the loaded name, and so may `flatten` paths. Any other spelling, including another case
+(`orderid`), fails `plan`, which suggests the nearest column in both spellings: `unique_key column
+"orderid" is not a column of the table; did you mean OrderID (loads as order_id)?`.
+`exclude_columns`, `allow_columns` and `skip_tables_with_columns` match the source's own names: a
+Python table's fields as yielded (`accessToken`, or `api_secret__key` once flattened), before naming
+changes them. A Python table's `ctx.cursor_column` is the cursor's loaded name (`updated_at` for a
+field yielded as `UpdatedAt`). The target schema keeps the name it is given.
 
 ### rename
 

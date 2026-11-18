@@ -1,6 +1,7 @@
 pub mod cursor_rules;
 pub mod cut_index;
 pub mod file_groups;
+pub mod ignored_batch;
 pub mod ignored_concurrency;
 pub mod last_value;
 pub mod outside_text;

@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use crate::auth::main::account_url::account_url;
 use crate::auth::models::Authenticator;
+use crate::bigquery_api::main::parse_key::parse_key;
+use crate::bigquery_api::models::BigQueryClient;
 use crate::config::models::{Config, Destination, StagingKind};
 use crate::databricks_api::models::DatabricksClient;
 use crate::delivery::models::{DatabricksClients, SnowflakeClients, Warehouse, ZerobusSettings};
@@ -51,6 +53,18 @@ pub fn build_clients(config: &Config) -> Result<Clients, ApiError> {
                 _ => None,
             };
             Warehouse::Databricks(DatabricksClients { api, zerobus })
+        }
+        Destination::BigQuery(destination) => {
+            let key = parse_key(destination.service_account_key.expose())?;
+            Warehouse::BigQuery(BigQueryClient::new(
+                http.clone(),
+                (&destination.project, &destination.location),
+                key,
+                (
+                    destination.base_url.as_deref(),
+                    destination.storage_url.as_deref(),
+                ),
+            ))
         }
     };
     Ok(Clients {

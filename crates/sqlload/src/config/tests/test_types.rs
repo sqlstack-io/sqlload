@@ -65,3 +65,11 @@ pub(crate) struct ExampleConfigTestCase {
     pub(crate) expected_first_column: Option<&'static str>,
     pub(crate) expected_column_count: usize,
 }
+
+pub(crate) struct BigQueryConfigTestCase {
+    pub(crate) description: &'static str,
+    /// Lines added after the BigQuery `[destination]`.
+    pub(crate) text: &'static str,
+    pub(crate) expected_path: crate::planning::models::LoadPath,
+    pub(crate) expected_format: crate::config::models::FileFormat,
+}

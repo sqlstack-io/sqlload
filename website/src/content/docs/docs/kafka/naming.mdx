@@ -1,6 +1,6 @@
 ---
 title: "Kafka topic naming"
-description: "How Kafka topics map to Snowflake or Databricks tables, stages, volumes, pipes and consumer groups."
+description: "How Kafka topics map to Snowflake, Databricks or BigQuery tables, stages, volumes, pipes and consumer groups."
 ---
 
 Each topic exports to a table. `[naming]` decides which, in this order:
@@ -9,8 +9,8 @@ Each topic exports to a table. `[naming]` decides which, in this order:
 2. The first `[[naming.rules]]` entry whose `match` fits the topic.
 3. The default rule: strip `strip_prefix`, upper-case, `.` becomes `__`, other symbols `_`.
 
-On Databricks the table and volume names are then lower-cased: `shop.orders` exports to
-`shop__orders`.
+On Databricks and BigQuery the table and volume names are then lower-cased: `shop.orders` exports
+to `shop__orders`.
 
 Several topics can share a table through rules or map entries. If any of them reaches the table
 through the default rule, the configuration fails, so grouping is always on purpose. Topics whose

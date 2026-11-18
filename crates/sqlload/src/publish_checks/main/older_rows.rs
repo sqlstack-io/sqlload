@@ -14,6 +14,7 @@ pub async fn older_rows(commit: &CheckedCommit<'_>, mode: &WriteMode) -> Result<
         mode,
         hashed: &[],
         built: None,
+        spared_load: None,
     };
     let query = sql_adapter(commit.warehouse).render_older_rows(&request, commit.staging);
     match query.filter(|_| commit.exists) {

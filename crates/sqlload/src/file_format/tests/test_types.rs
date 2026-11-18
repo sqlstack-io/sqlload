@@ -23,3 +23,10 @@ pub(crate) struct DatabricksCopyTestCase {
     pub(crate) files: &'static [&'static str],
     pub(crate) expected_statement: &'static str,
 }
+
+pub(crate) struct ParquetDateTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) timestamp_ms: i64,
+    /// The `date` column's days since the epoch.
+    pub(crate) expected_days: &'static str,
+}

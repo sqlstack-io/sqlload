@@ -89,25 +89,30 @@ pub enum StartFrom {
 pub enum Destination {
     Snowflake(SnowflakeConfig),
     Databricks(DatabricksConfig),
+    #[serde(rename = "bigquery")]
+    BigQuery(BigQueryConfig),
 }
 
 impl Destination {
-    /// The database (Snowflake) or catalog (Databricks) tables are created in.
+    /// The database (Snowflake), catalog (Databricks) or project (BigQuery) tables are created in.
     pub fn database(&self) -> &str {
         match self {
             Self::Snowflake(snowflake) => &snowflake.database,
             Self::Databricks(databricks) => &databricks.catalog,
+            Self::BigQuery(bigquery) => &bigquery.project,
         }
     }
 
+    /// The schema, or the BigQuery dataset.
     pub fn schema(&self) -> &str {
         match self {
             Self::Snowflake(snowflake) => &snowflake.schema,
             Self::Databricks(databricks) => &databricks.schema,
+            Self::BigQuery(bigquery) => &bigquery.dataset,
         }
     }
 
-    /// True for Snowflake, whose unquoted names are upper case; Databricks names are lower case.
+    /// True for Snowflake, whose unquoted names are upper case; Databricks and BigQuery names are lower case.
     pub fn is_snowflake(&self) -> bool {
         matches!(self, Self::Snowflake(_))
     }
@@ -145,6 +150,25 @@ pub struct DatabricksConfig {
     /// The workspace's Zerobus Ingest endpoint, `https://<workspace-id>.zerobus.<region>.cloud.databricks.com`; `staging.kind = "none"` writes through it.
     #[serde(default)]
     pub zerobus_endpoint: Option<String>,
+}
+
+/// A BigQuery dataset, written to as a service account.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BigQueryConfig {
+    /// The project the dataset is in; load jobs and queries run there too.
+    pub project: String,
+    pub dataset: String,
+    /// The dataset's location, such as `EU` or `europe-west2`, where jobs run.
+    pub location: String,
+    /// The service-account key file's JSON text, such as `${ENV:BIGQUERY_KEY}`.
+    pub service_account_key: Secret,
+    /// Overrides the REST API's root, for tests.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Overrides the Storage Write API's root, for tests.
+    #[serde(default)]
+    pub storage_url: Option<String>,
 }
 
 /// How sqlload authenticates to the warehouse.
@@ -208,6 +232,8 @@ pub struct StagingConfig {
     pub pending_recheck_every: Duration,
     #[serde(default)]
     pub s3: Option<S3Config>,
+    #[serde(default)]
+    pub gcs: Option<GcsConfig>,
 }
 
 /// What happens to a staged file Snowpipe failed to load, fully or partly.
@@ -239,6 +265,8 @@ pub enum StagingKind {
     None,
     Internal,
     S3,
+    /// BigQuery: files in a Google Cloud Storage bucket, then a load job.
+    Gcs,
 }
 
 /// How staged files are loaded into tables.
@@ -271,6 +299,18 @@ pub struct S3Config {
     pub path_style: bool,
     #[serde(default = "defaults::auto_ingest")]
     pub auto_ingest: bool,
+}
+
+/// The bucket used by the `gcs` delivery mode (BigQuery).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GcsConfig {
+    pub bucket: String,
+    #[serde(default)]
+    pub prefix: String,
+    /// Folder template under `prefix`, with the placeholders of `staging.s3.path`.
+    #[serde(default = "defaults::s3_path")]
+    pub path: String,
 }
 
 /// When a stream's buffered records become one batch.

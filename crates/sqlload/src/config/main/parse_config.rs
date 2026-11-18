@@ -27,9 +27,11 @@ pub fn parse_config(
                 s3.stage = s3.stage.to_ascii_uppercase();
             }
         }
-        Destination::Databricks(databricks) => {
-            databricks.catalog = databricks.catalog.to_ascii_lowercase();
-            databricks.schema = databricks.schema.to_ascii_lowercase();
+        Destination::Databricks(_) | Destination::BigQuery(_) => {
+            if let Destination::Databricks(databricks) = &mut config.destination {
+                databricks.catalog = databricks.catalog.to_ascii_lowercase();
+                databricks.schema = databricks.schema.to_ascii_lowercase();
+            }
             let naming = &mut config.naming;
             naming.table_prefix = naming.table_prefix.to_ascii_uppercase();
             for table in naming.map.values_mut().chain(naming.fallback.as_mut()) {

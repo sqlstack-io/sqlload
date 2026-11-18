@@ -125,6 +125,8 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             ddl: Arc::new(tokio::sync::Mutex::new(())),
             motherduck: false,
             bridge_duckdb: String::new(),
+            memory: None,
+            unflushed: Arc::default(),
         },
         open_transaction: false,
     };
@@ -276,6 +278,7 @@ pub(crate) fn merged_rows(
             mode: &mode,
             hashed: &[],
             built: None,
+            spared_load: None,
         },
         &staging,
         (None, false),

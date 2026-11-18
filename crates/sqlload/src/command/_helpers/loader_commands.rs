@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::adapters::contract::main::cursor_text::cursor_text;
+use crate::adapters::dispatch::main::session::recover_unfinished::recover_unfinished;
 use crate::adapters::dispatch::models::Destination;
 use crate::auth::main::allow_sign_in::allow_sign_in;
 use crate::column_types::models::ColumnType;
@@ -30,6 +31,7 @@ use crate::load_events::main::emit::emit;
 use crate::load_events::main::listen::listen;
 use crate::load_events::main::take_timings::take_timings;
 use crate::load_events::models::{EventKind, LoadEvent};
+use crate::loader::constants::DEFAULT_THREADS;
 use crate::loader::constants::{NO_PYTHON_HOST, NO_RENAME_HOST, NO_TRANSFORM_HOST};
 use crate::loader::main::apply_project::apply_project;
 use crate::loader::main::connect_targets::connect_targets;
@@ -44,13 +46,17 @@ use crate::loader::models::{
     LoadRun, PlanOptions, ProjectPlan, RangeFlags, RunReport, StateKind, StateRequest,
     TableOutcome, TablePlan, TypedCursors,
 };
+use crate::memory_budget::main::run_memory::run_memory;
+use crate::memory_budget::models::BudgetOrigin;
 use crate::number_text::main::thousands::thousands;
 use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
 use crate::peak_memory::main::run_peak_bytes::run_peak_bytes;
 use crate::project::main::config_lines::config_lines;
 use crate::project::main::parse_project::parse_project;
 use crate::project::main::parse_python_project::parse_python_project;
-use crate::project::models::{ProjectConfig, RenameSetting, SourceKind, TableSettings};
+use crate::project::models::{
+    ConnectionConfig, ProjectConfig, RenameSetting, SourceKind, TableSettings,
+};
 use crate::python_sources::types::PythonHost;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
@@ -124,6 +130,7 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
         end_cursor: args.end_cursor,
         range_flags: RangeFlags::default(),
         concurrency: args.concurrency.map(usize::from),
+        memory_limit: args.memory_limit,
         resnapshot: args.resnapshot,
         sync_deletes: args.sync_deletes,
         fail_fast: args.fail_fast,
@@ -132,6 +139,33 @@ pub(crate) fn options(args: LoaderArgs) -> Result<PlanOptions, String> {
             .batch_bytes
             .map(|bytes| usize::try_from(bytes).unwrap_or(usize::MAX)),
     })
+}
+
+/// `project` with its run's memory budget: `--memory-limit`, else its `memory_limit`, else the limit the OS sets, shared with its DuckDB and MotherDuck targets.
+fn with_memory(project: &ProjectConfig, options: &PlanOptions) -> ProjectConfig {
+    let set = match (options.memory_limit, project.memory_limit) {
+        (Some(bytes), _) => Some((bytes, BudgetOrigin::Flag)),
+        (None, Some(size)) => Some((size.0, BudgetOrigin::Setting)),
+        (None, None) => None,
+    };
+    let duckdb = project
+        .targets
+        .values()
+        .filter(|target| {
+            matches!(
+                project.connections.get(&target.connection),
+                Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. })
+            )
+        })
+        .count();
+    let concurrency = options
+        .concurrency
+        .or(project.concurrency)
+        .unwrap_or(DEFAULT_THREADS);
+    ProjectConfig {
+        memory: run_memory(set, duckdb, concurrency),
+        ..project.clone()
+    }
 }
 
 /// The project in `request.text`, with where its settings are written in its file; a project `sqlload copy` wrote has neither those lines nor the variables its connections read.
@@ -336,6 +370,28 @@ pub(crate) fn json_error(code: &str, error: &str, retryable: bool) -> String {
         .to_string()
 }
 
+/// The project's plan; before a load, after removing what loads of its tables that stopped between their pieces committed, planned again when that removed any, with a warning for each.
+async fn plan_recovered(
+    project: &ProjectConfig,
+    destinations: &BTreeMap<String, Destination>,
+    (options, loads): (&PlanOptions, bool),
+) -> Result<ProjectPlan, CommandError> {
+    let plan = plan_project(project, destinations, options).await?;
+    let mut recovered: Vec<String> = Vec::new();
+    for (target, destination) in destinations.iter().filter(|_| loads) {
+        let tables: Vec<_> = (plan.tables.iter())
+            .filter(|table| &table.spec.target == target)
+            .map(|table| &table.spec.destination)
+            .collect();
+        recovered.extend(recover_unfinished(destination, &tables).await?);
+    }
+    if recovered.is_empty() {
+        return Ok(plan);
+    }
+    let mut plan = plan_project(project, destinations, options).await?;
+    plan.warnings.extend(recovered);
+    Ok(plan)
+}
 /// A project that does not parse: a failed plan's `Errors` for `plan`, `apply` and `load` (as JSON under `--json`), else the error.
 fn config_failure(command: &Command, error: String) -> Result<(Vec<String>, u8), String> {
     let (Command::Plan(args) | Command::Apply(args) | Command::Load(args)) = command else {
@@ -415,11 +471,12 @@ async fn run_command(
         Progress::Auto => streams && !json && !log_json && std::io::stderr().is_terminal(),
     };
     let options = options(args)?;
+    let project = &with_memory(project, &options);
     let receiver = listen(&uuid::Uuid::new_v4().to_string());
     let (destinations, mut plan) = planning(
         async {
             let destinations = connect_targets(project).await?;
-            let plan = plan_project(project, &destinations, &options).await?;
+            let plan = plan_recovered(project, &destinations, (&options, loads)).await?;
             Ok::<_, CommandError>((destinations, plan))
         },
         project.sources.len(),
@@ -639,7 +696,8 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
         },
     );
     close();
-    let (lines, tally) = writer.await.unwrap_or_default();
+    let (lines, mut tally) = writer.await.unwrap_or_default();
+    tally.plan_errors = not_planned(load.plan);
     kept.extend(lines);
     if to_load > 0 {
         kept.push(String::new());
@@ -651,6 +709,24 @@ async fn streamed_load(load: StreamedLoad<'_>) -> StreamedEnd {
         exit_code: code,
         peak_memory_bytes,
     }
+}
+
+/// How many tables `plan`'s errors keep from loading: those whose plan is blocked, and those a problem names that never got a plan.
+fn not_planned(plan: &ProjectPlan) -> usize {
+    let blocked = plan
+        .tables
+        .iter()
+        .filter(|table| table.schema.blocked.is_some())
+        .map(TablePlan::outcome_name);
+    let named = plan
+        .problem_names
+        .iter()
+        .filter(|(problem, _)| plan.problems.contains(problem))
+        .map(|(_, table)| table.clone());
+    blocked
+        .chain(named)
+        .collect::<std::collections::BTreeSet<String>>()
+        .len()
 }
 
 /// The width of the tally's name column: the widest name of a table the plan loads, or of an object `applied` changed, and two spaces.
