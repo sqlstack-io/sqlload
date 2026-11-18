@@ -74,6 +74,10 @@ Differences a reader should know:
   summed RSS of the tree (sampled every 50 ms) and rows/s. Postgres's own CPU and memory are not counted.
 - Correctness: after each run the destination's row count and an order-independent checksum over
   key columns must match the source, or the run is marked invalid and has no figures.
+- A loader that crashes, is killed (by the out-of-memory killer, for example) or runs past
+  `--timeout-min` (default 60) is marked failed. The run keeps how it ended (exit code or signal,
+  and whether the cgroup counted an out-of-memory kill), how long it ran and its peak RSS, and
+  that loader's later runs of the scenario are skipped.
 - The 1-minute load average before each run is recorded. On a shared machine, prefer CPU seconds,
   and pass `--wait-for-builds` to start runs only while no compiler is running.
 
