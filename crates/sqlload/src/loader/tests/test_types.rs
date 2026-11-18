@@ -250,3 +250,10 @@ pub(crate) struct PlanLinesTestCase {
     pub(crate) skipped: &'static [(&'static str, &'static str)],
     pub(crate) expected_output: &'static str,
 }
+
+/// A `snowflake` source whose stage `url` is written as `url`, and the store its unloads go to.
+pub(crate) struct UnloadStoreTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) url: &'static str,
+    pub(crate) expected_store: &'static str,
+}
