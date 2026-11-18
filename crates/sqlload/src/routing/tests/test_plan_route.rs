@@ -194,6 +194,16 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             ],
         },
         PlanRouteTestCase {
+            description: "Databricks reads an unload under its external location itself",
+            reader: warehouse_source(BIG),
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "unload Parquet to s3://lake/unload/",
+                "destination loads parquet files from s3://lake/unload/",
+            ],
+        },
+        PlanRouteTestCase {
             description: "an unload the destination could read itself is read back when the table needs the loader",
             reader: ReaderOffer {
                 needs_loader: Some(HMAC.to_owned()),
@@ -376,6 +386,16 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
             writer: databricks_destination(),
             overrides: RouteOverrides::default(),
             expected_message: "s3://other/events/ cannot be read by Databricks: no Unity Catalog external location covers it",
+        },
+        PlanRouteErrorTestCase {
+            description: "an S3 unload outside every external location fails Databricks, never read back by SQLLoad",
+            reader: ReaderOffer {
+                unload_to: vec![object_store("s3://other/unload/")],
+                ..warehouse_source(BIG)
+            },
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_message: "s3://other/unload/ cannot be read by Databricks: no Unity Catalog external location covers it",
         },
         PlanRouteErrorTestCase {
             description: "a source with nothing to offer",

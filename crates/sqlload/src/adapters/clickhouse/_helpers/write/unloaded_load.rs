@@ -62,11 +62,10 @@ impl ClickHouseWriter {
             )
             .map_err(LoaderError::Invalid)?;
             let insert = unloaded_insert(
-                &into,
-                (columns, &sql_type),
-                (batch.read, target.constants),
+                (&into, columns, &sql_type),
+                target,
+                (batch.read, batch.loaded_at),
                 (&UnloadedFile { url: &url, index }, credentials.as_ref()),
-                (target.compat, target.batch, target.load_id, batch.loaded_at),
             );
             rows += written_rows(&self.destination, &insert, &parameters)
                 .await

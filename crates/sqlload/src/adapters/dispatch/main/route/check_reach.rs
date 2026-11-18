@@ -8,13 +8,25 @@ use crate::adapters::dispatch::models::Destination;
 use crate::adapters::duckdb::main::_check_files::check_files;
 use crate::files_source::models::FilesRead;
 use crate::loader::models::FilesSource;
+use crate::routing::models::Store;
+use crate::store_paths::models::StoreKind;
 
-/// Check, at plan, that `destination` reads the files of `source` in S3 where they lie, for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers. The error says why it can't, with the fix.
+/// Check, at plan, that `destination` reads the files of `source` in S3 where they lie, or the S3 folder a warehouse source unloads to (`unload_to`), for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers. An unload's folder is new each run, so for it Databricks only lists its locations, and the route then needs one to cover it. The error says why it can't, with the fix.
 pub async fn check_reach(
     destination: &Destination,
-    source: &FilesSource,
+    (source, unload_to): (Option<&FilesSource>, &[Store]),
     read: Option<&FilesRead>,
 ) -> Result<(), String> {
+    let source = source.filter(|source| matches!(source.location.store, StoreKind::S3 { .. }));
+    let unloads = unload_to
+        .iter()
+        .any(|store| matches!(store, Store::ObjectStore(url) if url.starts_with("s3://")));
+    let Some(source) = source else {
+        return match (destination, unloads) {
+            (Destination::Databricks(databricks), true) => databricks_reach(databricks, None).await,
+            _ => Ok(()),
+        };
+    };
     let first = read.and_then(|read| read.files.first());
     let folder = source.location.to_string();
     match destination {

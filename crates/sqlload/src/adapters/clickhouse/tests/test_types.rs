@@ -78,3 +78,11 @@ pub(crate) struct SortedInsertTestCase {
     pub(crate) key_columns: &'static [&'static str],
     pub(crate) expected_insert: &'static str,
 }
+
+pub(crate) struct UnloadedInsertTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    /// Whether the read is signed, or unsigned for a public bucket.
+    pub(crate) signed: bool,
+    pub(crate) expected_insert: &'static str,
+}
