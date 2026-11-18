@@ -48,12 +48,12 @@ pub(in crate::loader) async fn check_source(
         }
         SourceKind::Databricks => check_databricks(project, source).await,
         #[cfg(feature = "duckdb")]
-        SourceKind::DuckDb => {
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
             let reader = crate::duckdb_source::main::duckdb_reader::duckdb_reader(project, source)?;
             Ok(crate::duckdb_source::main::describe_source::describe_source(&reader).await?)
         }
         #[cfg(not(feature = "duckdb"))]
-        SourceKind::DuckDb => Err(LoaderError::Invalid(
+        SourceKind::DuckDb | SourceKind::MotherDuck => Err(LoaderError::Invalid(
             crate::loader::constants::NO_DUCKDB_SOURCE.to_owned(),
         )),
         #[cfg(feature = "odbc")]

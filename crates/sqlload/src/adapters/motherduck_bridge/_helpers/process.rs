@@ -10,7 +10,7 @@ use crate::adapters::motherduck_bridge::constants::{
     BRIDGE_SCRIPT, PYTHON_VARIABLE, STDERR_TAIL_BYTES, SUPPORTED_DUCKDB,
 };
 use crate::adapters::motherduck_bridge::errors::BridgeError;
-use crate::adapters::motherduck_bridge::models::{BridgeProcess, Replies};
+use crate::adapters::motherduck_bridge::models::{BridgeCursor, BridgeProcess, Replies};
 
 /// Start the bridge on `python`: a writer thread feeding its stdin (closing it, and reaping the process, once every handle is gone), a reader thread routing its replies and, once stdout and stderr have both closed or a reply is unreadable, failing what still waits, and one keeping its stderr's tail with each of `hidden` taken out.
 pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProcess>, BridgeError> {
@@ -98,6 +98,19 @@ pub(crate) fn send(
         )));
     }
     Ok(received)
+}
+
+/// Send `request` on `cursor` and wait for its reply, failed or not, or why the bridge stopped first.
+pub(crate) async fn ask(
+    cursor: &BridgeCursor,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, BridgeError> {
+    let received = send(&cursor.process, request)?;
+    let python = cursor.process.python.clone();
+    tokio::task::spawn_blocking(move || received.recv())
+        .await
+        .map_err(|error| BridgeError::Stopped(error.to_string()))?
+        .map_err(|_| BridgeError::Stopped(format!("the MotherDuck bridge on {python} stopped")))?
 }
 
 /// `reply`'s failure, as its message and its Python error type; `None` when it succeeded.

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
-use crate::adapters::motherduck_bridge::main::_fork_connection::fork_connection;
+use crate::adapters::motherduck_bridge::main::fork_connection::fork_connection;
 use crate::memory_budget::main::table_memory::table_memory;
 
 /// A new connection to the same database, so one table's transaction never mixes with another table's loading at the same time. Under the memory watchdog, the table it loads can have the connection's running statement interrupted.

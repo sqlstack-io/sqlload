@@ -2,7 +2,8 @@
 
 use arrow_array::RecordBatch;
 
-use crate::duckdb_source::_helpers::connection::open_read_only;
+use crate::adapters::motherduck_bridge::main::stream_rows::stream_rows;
+use crate::duckdb_source::_helpers::connection::{open_bridge, open_read_only};
 use crate::duckdb_source::_helpers::convert::{convert_batch, output_schema};
 use crate::duckdb_source::_helpers::query::select_query;
 use crate::duckdb_source::constants::BATCHES_AHEAD;
@@ -10,7 +11,7 @@ use crate::duckdb_source::errors::DuckDbSourceError;
 use crate::duckdb_source::models::{DuckDbReadRequest, DuckDbReader};
 use crate::row_batches::main::loaded_batch::loaded_batch;
 
-/// Read `request`'s rows and pass them to `on_batch` in batches of about `batch_rows`, each converted to the read columns' types; returns the row count. One statement streams the rows, so the read is consistent on its own; a thread reads at most a few batches ahead of `on_batch`, and stops when `on_batch` fails.
+/// Read `request`'s rows and pass them to `on_batch` in batches of about `batch_rows`, each converted to the read columns' types; returns the row count. One statement streams the rows, so the read is consistent on its own. From a file, a thread reads at most a few batches ahead of `on_batch`; from MotherDuck, the bridge reads one batch at a time as it is asked. Either stops when `on_batch` fails.
 pub async fn read_rows(
     reader: &DuckDbReader,
     request: &DuckDbReadRequest<'_>,
@@ -18,6 +19,22 @@ pub async fn read_rows(
     mut on_batch: impl AsyncFnMut(RecordBatch) -> Result<(), String>,
 ) -> Result<u64, DuckDbSourceError> {
     let shape = output_schema(request.columns).map_err(DuckDbSourceError::Invalid)?;
+    if reader.motherduck.is_some() {
+        let bridge = open_bridge(reader).await?;
+        let converted = async |batch: RecordBatch| {
+            let batch = loaded_batch(&batch, request.table)
+                .and_then(|batch| convert_batch(&batch, (&shape.0, &shape.1)))?;
+            on_batch(batch).await
+        };
+        return stream_rows(&bridge, select_query(request), batch_rows, converted)
+            .await
+            .map_err(|error| match error {
+                crate::adapters::motherduck_bridge::errors::BridgeError::Consumer(said) => {
+                    DuckDbSourceError::Consumer(said)
+                }
+                other => DuckDbSourceError::Bridge(other),
+            });
+    }
     let (reader, query) = (reader.clone(), select_query(request));
     let (sender, mut receiver) =
         tokio::sync::mpsc::channel::<Result<RecordBatch, DuckDbSourceError>>(BATCHES_AHEAD);

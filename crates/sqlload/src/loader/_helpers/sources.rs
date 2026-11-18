@@ -238,11 +238,13 @@ pub(crate) async fn open_source(
             project, source,
         )?))),
         #[cfg(feature = "duckdb")]
-        SourceKind::DuckDb => Ok(SourceReader::DuckDb(Box::new(duckdb_reader(
-            project, source,
-        )?))),
+        SourceKind::DuckDb | SourceKind::MotherDuck => Ok(SourceReader::DuckDb(Box::new(
+            duckdb_reader(project, source)?,
+        ))),
         #[cfg(not(feature = "duckdb"))]
-        SourceKind::DuckDb => Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned())),
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned()))
+        }
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -388,7 +390,7 @@ pub(crate) async fn source_tables(
                 .map_err(|error| LoaderError::from(error).into()))
         }
         #[cfg(feature = "duckdb")]
-        SourceKind::DuckDb => {
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
             let read =
                 async { read_duckdb_catalog(&duckdb_reader(project, source)?, source).await };
             Ok(read
@@ -397,7 +399,9 @@ pub(crate) async fn source_tables(
                 .map_err(|error| LoaderError::from(error).into()))
         }
         #[cfg(not(feature = "duckdb"))]
-        SourceKind::DuckDb => Ok(Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned()).into())),
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            Ok(Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned()).into()))
+        }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),

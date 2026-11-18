@@ -433,7 +433,10 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
             )
         }
         #[cfg(feature = "duckdb")]
-        (None, None) if system(crate::duckdb_source::constants::DUCKDB_SOURCE) => {
+        (None, None)
+            if system(crate::duckdb_source::constants::DUCKDB_SOURCE)
+                || system(crate::duckdb_source::constants::MOTHERDUCK_SOURCE) =>
+        {
             crate::duckdb_source::main::read_columns::read_columns(
                 &selected_columns(spec),
                 &spec.pinned,

@@ -45,7 +45,8 @@ TOKEN = "tok&en=#1"
 #: after checking the token, with another database attached as MotherDuck attaches the account's others. MD_REFUSE makes
 #: it refuse as MotherDuck's extension does on a DuckDB version it doesn't support; MD_DIE_ON ends the bridge when a
 #: statement holds that text; MD_LOG records every statement. MD_CLIENT_VERSION is the duckdb version the bridge reports,
-#: and MD_SERVER_VERSION what `md_version()` answers (without it, the function doesn't exist).
+#: and MD_SERVER_VERSION what `md_version()` answers (without it, the function doesn't exist). MD_READ_ONLY opens each
+#: database read-only, so a source's bridges (one per table) can hold it at once as MotherDuck allows.
 STAND_IN = r'''
 import os
 import sys
@@ -102,7 +103,10 @@ def connect(database=":memory:", *args, config=None, **kwargs):
             'threw an exception: "\nYour DuckDB version (v2.0.0) is not yet supported by MotherDuck. The latest supported '
             f'version is v1.5.6. Please downgrade to use MotherDuck. {database}\n"'
         )
-    inner = _connect(os.path.join(FOLDER, f"{name}.duckdb"), config=config or {})
+    read_only = {"access_mode": "READ_ONLY"} if os.environ.get("MD_READ_ONLY") else {}
+    inner = _connect(os.path.join(FOLDER, f"{name}.duckdb"), config={**(config or {}), **read_only})
+    if read_only:
+        return Database(inner)
     inner.execute(f"ATTACH '{os.path.join(FOLDER, 'other.duckdb')}' AS other")
     inner.execute("CREATE SCHEMA IF NOT EXISTS other.raw; CREATE TABLE IF NOT EXISTS other.raw.cloud__cloud_rows (stray INTEGER)")
     if os.environ.get("MD_SERVER_VERSION"):
@@ -487,3 +491,83 @@ def test_given_json_type_variant_on_motherduck_when_planning_and_loading_then_th
 		loaded = load(project, "cloud_rows", **env)
 		assert ("unshredded" in loaded.stdout + loaded.stderr) == ("unshredded" in expected), loaded.stdout + loaded.stderr
 		assert cloud(project, 'SELECT variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM raw.cloud__cloud_rows') == [("OBJECT(user)", 42)]
+
+
+#: A project reading the stand-in's `shop` database as a motherduck source into the local DuckDB file.
+SOURCE_PROJECT = """\
+[connections.wh]
+kind = "duckdb"
+database = "wh.duckdb"
+
+[connections.md]
+kind = "motherduck"
+database = "shop"
+token = "${ENV:SHOP_MD_TOKEN}"
+
+[targets.local]
+connection = "wh"
+loader_schema = "raw"
+
+[sources.shop]
+kind = "motherduck"
+connection = "md"
+destination = "local"
+description = "The shop's MotherDuck database."
+include = ["sales.*"]
+exclude = ["sales.tmp_*"]
+exclude_columns = ["card"]
+write_strategy = "replace"
+
+[sources.shop.tables."sales.orders"]
+description = "Orders, merged after their cursor."
+write_strategy = "merge"
+unique_key = ["id"]
+cursor_column = "updated_at"
+where = "region = 'EU'"
+
+[sources.shop.tables.big_query]
+description = "Orders over 25, by query."
+sql = "SELECT id, amount FROM sales.orders WHERE amount > 25 -- big ones"
+"""
+
+SHOP = """
+CREATE SCHEMA sales;
+CREATE TABLE sales.orders (id INTEGER PRIMARY KEY, amount DECIMAL(12,2), updated_at TIMESTAMP, tags VARCHAR[], card VARCHAR, region VARCHAR);
+INSERT INTO sales.orders VALUES
+    (1, 10.50, '2026-01-01 00:00:00', ['a'], '4111', 'EU'),
+    (2, 20.00, '2026-01-02 00:00:00', [], '4222', 'EU'),
+    (3, 30.25, '2026-01-03 00:00:00', NULL, '4333', 'US');
+CREATE VIEW sales.big_orders AS SELECT id, amount FROM sales.orders WHERE amount > 15;
+CREATE TABLE sales.tmp_scratch (x INTEGER);
+"""
+
+ORDERS = "SELECT id, CAST(amount AS VARCHAR), CAST(tags AS VARCHAR) FROM raw.shop__orders ORDER BY id"
+
+
+def test_given_a_motherduck_source_when_loading_again_then_its_tables_views_and_queries_load_through_the_bridge_and_the_cursor_merges_changes(
+	tmp_path: Path,
+) -> None:
+	project = make_project(tmp_path, "")
+	(project / "sqlload.toml").write_text(SOURCE_PROJECT)
+	with duckdb.connect(str(project / "md" / "shop.duckdb")) as shop:
+		shop.execute(SHOP)
+	statements = project / "statements.log"
+	debug = sqlload(project, "debug", MD_LOG=str(statements), MD_READ_ONLY="1")
+	assert debug.returncode == 0 and "shop on MotherDuck, through DuckDB" in debug.stdout, debug.stdout + debug.stderr
+	assert TOKEN not in debug.stdout + debug.stderr
+	planned = sqlload(project, "plan", MD_READ_ONLY="1")
+	assert planned.returncode == 0, planned.stdout + planned.stderr
+	assert "tmp_scratch" not in planned.stdout, planned.stdout
+	load(project, MD_READ_ONLY="1")
+	assert local(project, ORDERS) == [(1, "10.50", "[\"a\"]"), (2, "20.00", "[]")]
+	assert local(project, "SELECT count(*) FROM raw.shop__big_orders") == [(2,)]
+	assert local(project, "SELECT id FROM raw.shop__big_query ORDER BY id") == [(3,)]
+	columns = "SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__orders' AND column_name NOT LIKE '\\_sqlload%' ESCAPE '\\'"
+	assert sorted(row[0] for row in local(project, columns)) == ["amount", "id", "region", "tags", "updated_at"]
+	with duckdb.connect(str(project / "md" / "shop.duckdb")) as shop:
+		shop.execute("UPDATE sales.orders SET amount = 21.00, updated_at = '2026-01-05 00:00:00' WHERE id = 2")
+		shop.execute("INSERT INTO sales.orders VALUES (4, 40.00, '2026-01-06 00:00:00', ['b', 'c'], '4444', 'EU')")
+	load(project, MD_LOG=str(statements), MD_READ_ONLY="1")
+	assert local(project, ORDERS) == [(1, "10.50", "[\"a\"]"), (2, "21.00", "[]"), (4, "40.00", "[\"b\",\"c\"]")]
+	reads = [line for line in statements.read_text().splitlines() if line.startswith("SELECT \"id\"") and "sales\".\"orders\"" in line]
+	assert reads and all("\"updated_at\" >" in read for read in reads), reads

@@ -18,7 +18,7 @@ use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::databricks_source::constants::DATABRICKS_SOURCE;
-use crate::duckdb_source::constants::DUCKDB_SOURCE;
+use crate::duckdb_source::constants::{DUCKDB_SOURCE, MOTHERDUCK_SOURCE};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
@@ -532,12 +532,14 @@ pub(crate) fn build_spec(
             kind @ (SourceKind::Odbc
             | SourceKind::BigQuery
             | SourceKind::Databricks
-            | SourceKind::DuckDb) => Some(WarehouseSource {
+            | SourceKind::DuckDb
+            | SourceKind::MotherDuck) => Some(WarehouseSource {
                 system: match kind {
                     SourceKind::Odbc => ODBC_SOURCE,
                     SourceKind::BigQuery => BIGQUERY_SOURCE,
                     SourceKind::Databricks => DATABRICKS_SOURCE,
-                    _ => DUCKDB_SOURCE,
+                    SourceKind::DuckDb => DUCKDB_SOURCE,
+                    _ => MOTHERDUCK_SOURCE,
                 },
                 sql: overrides.sql.clone(),
                 route: WarehouseRoute::Query,
@@ -783,7 +785,8 @@ pub(crate) fn missing_description(
         | SourceKind::Odbc
         | SourceKind::BigQuery
         | SourceKind::Databricks
-        | SourceKind::DuckDb => format!(
+        | SourceKind::DuckDb
+        | SourceKind::MotherDuck => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };

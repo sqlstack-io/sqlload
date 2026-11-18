@@ -6,6 +6,10 @@ SQLLoad starts it as `python -c <this file>` and sends one JSON request per line
         -> {"id": 1, "ok": true, "duckdb": "1.5.6", "python": "3.12.3"}
     {"id": 2, "op": "run", "cursor": 3, "sql": "SELECT ...", "params": ["raw"]}
         -> {"id": 2, "ok": true, "rows": [["id", "BIGINT"], ...]}
+    {"id": 3, "op": "stream", "cursor": 4, "sql": "SELECT ...", "rows": 100000}
+        -> {"id": 3, "ok": true}
+    {"id": 4, "op": "next", "cursor": 4, "path": "/tmp/batch.arrow"}
+        -> {"id": 4, "ok": true, "rows": 100000}, the next batch of at most that many rows written there as an Arrow IPC file; 0 rows once all are read
     {"op": "close", "cursor": 3}
         -> no reply
     {"op": "interrupt", "cursor": 3}
@@ -41,6 +45,19 @@ def plain(value):
 	return str(value)
 
 
+def write_next(batches, path):
+	"""The next batch `batches` holds, written to `path` as an Arrow IPC file; its row count, 0 once every batch is read."""
+	import pyarrow.ipc
+
+	try:
+		batch = batches.read_next_batch()
+	except StopIteration:
+		return 0
+	with pyarrow.ipc.new_file(path, batch.schema) as writer:
+		writer.write_batch(batch)
+	return batch.num_rows
+
+
 def main():
 	# Replies go to a private copy of stdout; anything else that prints (DuckDB, an extension) lands on stderr instead.
 	replies = os.fdopen(os.dup(1), "wb", buffering=0)
@@ -64,6 +81,7 @@ def main():
 
 	def serve(work, number):
 		cursor = None
+		batches = None
 		while True:
 			request = work.get()
 			if request is None:
@@ -71,7 +89,17 @@ def main():
 			try:
 				if cursor is None:
 					cursor = opened[number] = database.cursor()
+				if request["op"] == "next":
+					reply({"id": request["id"], "ok": True, "rows": write_next(batches, request["path"])})
+					continue
 				cursor.execute(request["sql"], request.get("params") or None)
+				if request["op"] == "stream":
+					# Arrow batches straight from DuckDB's streaming result, one at a time as `next` asks, so the bridge never holds them all.
+					# duckdb 1.4 names the reader fetch_record_batch; 1.5 adds to_arrow_reader, and 2.0 keeps only that.
+					reader = getattr(cursor, "to_arrow_reader", None) or cursor.fetch_record_batch
+					batches = reader(request["rows"])
+					reply({"id": request["id"], "ok": True})
+					continue
 				rows = cursor.fetchall() if cursor.description else []
 				reply({"id": request["id"], "ok": True, "rows": [[plain(value) for value in row] for row in rows]})
 			except BaseException as error:  # noqa: BLE001 - every failure goes back to SQLLoad as its reply, or it would wait forever
@@ -91,7 +119,7 @@ def main():
 				reply({"id": request["id"], "ok": True, "duckdb": duckdb.__version__, "python": sys.version.split()[0]})
 			except Exception as error:  # noqa: BLE001
 				failed(request, error)
-		elif op == "run":
+		elif op in ("run", "stream", "next"):
 			work = cursors.get(request["cursor"])
 			if work is None:
 				work = cursors[request["cursor"]] = queue.Queue()
