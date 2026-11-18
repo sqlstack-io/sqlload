@@ -110,6 +110,23 @@ pub(crate) fn existing_column(
         }
         fit => fit,
     };
+    let narrower = column.origin == ColumnOrigin::Pinned
+        && fit == TypeFit::Fits
+        && !matches!(
+            column.column_type,
+            ColumnType::Native(_) | ColumnType::Array(_)
+        )
+        && adapter.render_loader_logical_type(&column.column_type).sql
+            != adapter.render_loader_logical_type(&live.column_type).sql;
+    if narrower {
+        return ColumnDecision {
+            problem: Some(format!(
+                "{} is {} in the table but pinned as {}, and a load never narrows a column; pin the table's type (columns = {{ {} = \"{}\" }}), or rebuild the table at the pinned type with --reload (--resnapshot for a postgres_cdc table)",
+                live.name, live.column_type, column.column_type, column.name, live.column_type
+            )),
+            ..ColumnDecision::default()
+        };
+    }
     let widens = matches!(fit, TypeFit::WidenInPlace(_) | TypeFit::NeedsRebuild(_));
     let retyped = as_text || json_switch;
     if widens && column.origin == ColumnOrigin::Inferred && !retyped && adapter.runs_sql() {
