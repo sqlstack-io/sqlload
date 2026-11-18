@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.72.0](https://github.com/sqlstack-io/sqlload/compare/v0.71.1...v0.72.0) (2026-11-18)
+
+
+### Features
+
+* read DuckDB files and MotherDuck databases as sources ([#330](https://github.com/sqlstack-io/sqlload/issues/330)) ([0be3344](https://github.com/sqlstack-io/sqlload/commit/0be33447b0772833db7f377bc1e6b6c9201f180a))
+
+
+### Documentation
+
+* match the READMEs' speed section to the home page ([#331](https://github.com/sqlstack-io/sqlload/issues/331)) ([d8a0a0c](https://github.com/sqlstack-io/sqlload/commit/d8a0a0c812ce2c3f7ce8a69677fb83bcf4bbbac8))
+
 ## [0.71.1](https://github.com/sqlstack-io/sqlload/compare/v0.71.0...v0.71.1) (2026-11-18)
 
 
