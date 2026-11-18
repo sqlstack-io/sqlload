@@ -55,13 +55,9 @@
 			<div class="hero wrap">
 				<div class="hero-text">
 					<p class="eyebrow">Rust-powered · Free and open source · Apache-2.0</p>
-					<h1>Load data into your warehouse. Fast.</h1>
-					<p class="tagline">See the plan before any data moves.</p>
-					<p class="lede">
-						When your files are already in a bucket or folder, the warehouse loads them itself, and no
-						row passes through the loader. Everything else is staged as Parquet and bulk-loaded, not
-						inserted row by row.
-					</p>
+					<h1>Loads you can trust.</h1>
+					<p class="tagline">Exact types. Loud failures. Bounded memory.</p>
+					<p class="lede"><code>sqlload plan</code> shows every column's type, every refusal and the memory budget before any data moves. Then <code>load</code> does exactly that, carrying on from the warehouse's own maximum, with no state kept anywhere else.</p>
 					<div class="actions">
 						<div class="install">
 							<span><span class="prompt">$</span> uv tool install sqlload</span>
@@ -72,15 +68,7 @@
 						<a class="button" href="https://github.com/sqlstack-io/sqlload">View on GitHub</a>
 					</div>
 				</div>
-<pre class="terminal hero-visual" aria-label="sqlload copy loads Parquet files in S3 into Snowflake: the plan creates a stage and a table, then 10,000,000 rows load."><span class="cmd">sqlload copy --no-color s3://your-bucket/sqlload/orders/ wh:SQLLOAD_RAW.ORDERS</span>
-<span class="dim">…</span>
-<span class="ok">✓ Plan complete  2 objects to create, 1 to load</span>   (sqlload plan shows the tree)
-
-created  @"SQLLOAD_TEST"."SQLLOAD_RAW"."_SQLLOAD_STAGE"  stage on s3://your-bucket/sqlload/
-created  SQLLOAD_RAW.ORDERS                              11 columns
-loaded   SQLLOAD_RAW.ORDERS                              10,000,000 rows  12.0s
-
-<span class="ok">✓ Completed  1 loaded, 10,000,000 rows, 19.6s</span></pre>
+<div class="hero-visual hv-tabs" data-tabs><div class="hv-tablist" role="tablist" aria-label="SQLLoad output"><button type="button" role="tab" id="tab-types" aria-controls="pane-types" aria-selected="true" data-tab="types">Exact types</button><button type="button" role="tab" id="tab-refusals" aria-controls="pane-refusals" aria-selected="false" data-tab="refusals">Clear refusals</button><button type="button" role="tab" id="tab-memory" aria-controls="pane-memory" aria-selected="false" data-tab="memory">Memory budget</button><button type="button" role="tab" id="tab-state" aria-controls="pane-state" aria-selected="false" data-tab="state">No hidden state</button></div><div class="hv-panes"><pre class="terminal hv-pane" role="tabpanel" id="pane-types" aria-labelledby="tab-types" data-pane="types"><span class="ln" style="--hang:0ch"><span class="cmd">sqlload plan -v</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:0ch">Objects (3)                                         sqlload apply</span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:4ch">├── raw.app__orders                                 create table</span><span class="ln" style="--hang:20ch">│   ├── order_id    int             -&gt; BIGINT</span><span class="ln" style="--hang:8ch">│   ├── customer_id int             -&gt; BIGINT</span><span class="ln" style="--hang:20ch">│   ├── status      text            -&gt; VARCHAR</span><span class="ln" style="--hang:20ch">│   ├── total       decimal(12,2)   -&gt; <span class="ok">DECIMAL(12,2)</span></span><span class="ln" style="--hang:20ch">│   ├── currency    text            -&gt; VARCHAR</span><span class="ln" style="--hang:20ch">│   ├── items       int             -&gt; BIGINT</span><span class="ln" style="--hang:20ch">│   ├── created_at  timestamp_tz    -&gt; TIMESTAMP WITH TIME ZONE  <span class="dim">(stored as a UTC instant; the offset is not kept)</span></span><span class="ln" style="--hang:20ch">│   ├── updated_at  timestamp_tz    -&gt; TIMESTAMP WITH TIME ZONE  <span class="dim">(stored as a UTC instant; the offset is not kept)</span></span><span class="ln" style="--hang:8ch">│   └── + _sqlload_load_id, _loaded_at</span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="cm"># the source changes total to numeric(14,4)</span></span><span class="ln" style="--hang:0ch"><span class="cmd">sqlload load</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:9ch">altered  raw.app__orders     widen  total decimal(12,2) -&gt; <span class="ok">decimal(14,4) (DECIMAL(14,4))  in place</span></span><span class="ln" style="--hang:8ch">loaded  raw.app__orders         4,023 rows 0.4s</span></pre><pre class="terminal hv-pane" role="tabpanel" id="pane-refusals" aria-labelledby="tab-refusals" data-pane="refusals" hidden><span class="ln" style="--hang:0ch"><span class="cmd">sqlload load</span></span><span class="ln" style="--hang:0ch"><span class="ok">✓</span> Connected   local DuckDB · app PostgreSQL   0.03s</span><span class="ln" style="--hang:0ch"><span class="ok">✓</span> Discovered  3 tables in 2 sources   0.02s</span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch">Errors (2)</span><span class="ln" style="--hang:4ch">├── raw.app__customers</span><span class="ln" style="--hang:16ch">│   └── reason  <span class="bad">cursor_column column "updatedat" is not a column of the table; did you mean updated_at?</span></span><span class="ln" style="--hang:4ch">└── raw.app__orders</span><span class="ln" style="--hang:16ch">    └── reason  <span class="bad">total is decimal(14,4) in the table but float in the source; pin a type the table can hold, for example columns = { total = "decimal(14,4)" }</span></span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="bad">✗ Plan failed  1 to load, 2 errors</span></span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:8ch">loaded  raw.events  1,000,000 rows 0.9s</span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="bad">✗ Completed with failures  1 loaded, 2 not loaded (plan errors above), 1,000,000 rows, 1.1s</span></span><span class="ln" style="--hang:4ch">├── slowest      raw.events 0.9s</span><span class="ln" style="--hang:4ch">└── peak memory  365 MiB</span></pre><pre class="terminal hv-pane" role="tabpanel" id="pane-memory" aria-labelledby="tab-memory" data-pane="memory" hidden><span class="ln" style="--hang:0ch"><span class="cmd">sqlload plan -v --memory-limit 600MiB</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:8ch">memory  600 MiB budget (--memory-limit); 36.7 MiB held before loading; DuckDB 488 MiB (memory_limit 244 MiB, 2 threads); 75 MiB per table, <span class="warn">1 at once (concurrency 4 doesn't fit)</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:0ch"><span class="ok">✓ Plan complete  3 selected, 3 to load</span></span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="cmd">sqlload load --memory-limit 512MiB</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:0ch">Errors (1)</span><span class="ln" style="--hang:4ch">└── project</span><span class="ln" style="--hang:16ch">    └── reason  <span class="bad">the 512 MiB memory budget leaves the tables 0 bytes after DuckDB's 488 MiB, under the 64 MiB one table loads in; raise memory_limit to at least 589MiB</span></span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="bad">✗ Plan failed  3 to load, 1 error</span></span></pre><pre class="terminal hv-pane" role="tabpanel" id="pane-state" aria-labelledby="tab-state" data-pane="state" hidden><span class="ln" style="--hang:0ch"><span class="cmd">sqlload plan</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:0ch">Loads (3)  into DuckDB local                                                    sqlload load</span><span class="ln" style="--hang:4ch">├── app postgres  into raw</span><span class="ln" style="--hang:20ch">│   ├── customers   merge on customer_id   updated_at ≥ 2026-10-19 22:57:03+00 <span class="ok">(max)</span></span><span class="ln" style="--hang:20ch">│   └── orders      merge on order_id      updated_at ≥ 2026-11-18 09:04:03+00 <span class="ok">(max)</span></span><span class="ln" style="--hang:18ch">│       └── note  reads over 2 connections, in one snapshot</span><span class="ln" style="--hang:4ch">└── events lake/events/  into raw</span><span class="ln" style="--hang:20ch">    └── events      delete_insert on dt    dt ≥ 2026-11-16 <span class="ok">(max)</span> · 1 new of 3 files</span><span class="ln" style="--hang:19ch">        └── route  DuckDB reads directly from lake/events/ (nothing through the loader)</span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="cmd">sqlload load</span></span><span class="ln" style="--hang:0ch"><span class="dim">…</span></span><span class="ln" style="--hang:8ch">loaded  raw.app__customers         42 rows 0.1s</span><span class="ln" style="--hang:8ch">loaded  raw.app__orders         4,007 rows 0.4s</span><span class="ln" style="--hang:8ch">loaded  raw.events          1,000,000 rows 0.8s</span><span class="ln" style="--hang:0ch"> </span><span class="ln" style="--hang:0ch"><span class="ok">✓ Completed  3 loaded, 1,004,049 rows, 1.0s</span></span><span class="ln" style="--hang:4ch">├── slowest      raw.events 0.8s</span><span class="ln" style="--hang:4ch">└── peak memory  <span class="ok">358 MiB</span></span></pre></div></div>
 			</div>
 
 			<section class="speed" aria-labelledby="speed-title">
@@ -130,15 +118,15 @@ loaded   SQLLOAD_RAW.ORDERS                              10,000,000 rows  12.0s
 						</div>
 						<div class="card">
 							<h3>Types quietly change</h3>
-							<p>Decimals lose digits, JSON turns into strings, and a stray value becomes a second column.</p>
+							<p>Decimals lose digits, JSON turns into strings, a column that's all NULL never gets created, and a stray value becomes a second column.</p>
 						</div>
 						<div class="card">
-							<h3>Rows go the long way round</h3>
-							<p>Files already in a bucket are downloaded, parsed and uploaded again, when the warehouse could copy them itself.</p>
+							<h3>Big tables take the server down</h3>
+							<p>A large first load buffers everything in memory, and the run dies with no report.</p>
 						</div>
 						<div class="card">
-							<h3>You find out in production</h3>
-							<p>Nothing shows which tables, columns and routes a run will touch until it has touched them.</p>
+							<h3>Nothing says no</h3>
+							<p>No step shows what a run will change, or stops when something's wrong.</p>
 						</div>
 					</div>
 				</div>
@@ -289,19 +277,19 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 							<tbody>
 								<tr><th scope="row">Postgres</th><td>✓ (incl. <a href="/docs/sources/postgres-cdc/">CDC</a>)</td><td>✓</td></tr>
 								<tr><th scope="row">Snowflake</th><td>✓</td><td>✓</td></tr>
-								<tr><th scope="row">BigQuery</th><td>beta</td><td>beta</td></tr>
-								<tr><th scope="row">Databricks</th><td>beta</td><td>beta</td></tr>
-								<tr><th scope="row">ClickHouse</th><td></td><td>✓¹</td></tr>
+								<tr><th scope="row">BigQuery <span class="beta">Beta</span></th><td>✓</td><td>✓</td></tr>
+								<tr><th scope="row">Databricks <span class="beta">Beta</span></th><td>✓</td><td>✓</td></tr>
+								<tr><th scope="row">ClickHouse</th><td></td><td>✓</td></tr>
 								<tr><th scope="row">DuckDB</th><td></td><td>✓</td></tr>
-								<tr><th scope="row">MotherDuck</th><td></td><td>beta²</td></tr>
-								<tr><th scope="row"><a href="/docs/sources/odbc/">ODBC</a> databases³</th><td>✓ SQL Server, MySQL, MariaDB, OpenEdge and others</td><td></td></tr>
-								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON, NDJSON, Excel, XML; gzip, zstd, ZIP; other names through <code>pattern</code> (S3, local, SFTP)</td><td>✓ Parquet, CSV (S3, local)</td></tr>
+								<tr><th scope="row">MotherDuck <span class="beta">Beta</span></th><td></td><td>✓</td></tr>
+								<tr><th scope="row"><a href="/docs/sources/odbc/">ODBC</a></th><td>✓ SQL Server, MySQL, OpenEdge</td><td></td></tr>
+								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON, Excel, XML</td><td>✓ Parquet, CSV</td></tr>
 								<tr><th scope="row">Google Sheets</th><td>✓</td><td></td></tr>
-								<tr><th scope="row">HTTP APIs and Python</th><td>✓</td><td></td></tr>
-								<tr><th scope="row">Kafka</th><td>✓ into Snowflake, or (beta) Databricks or BigQuery, through the <a href="/docs/kafka/">exporter</a></td><td></td></tr>
+								<tr><th scope="row">APIs, Python</th><td>✓</td><td></td></tr>
+								<tr><th scope="row"><a href="/docs/kafka/">Kafka</a></th><td>✓ to Snowflake, Databricks, BigQuery</td><td></td></tr>
 							</tbody>
 						</table>
-						<p class="systems-notes">¹ Self-hosted, container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² Through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
+						<p class="systems-notes">Every combination, version and write strategy is in the <a href="/docs/supported-systems/">connector matrix</a>.</p>
 						<ul>
 							<li>Linux, macOS and Windows; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>
@@ -374,6 +362,62 @@ loaded  raw.orders  1,000 rows 0.1s
 					});
 				});
 			});
+		</script>
+		<script>
+			// Option D hero tabs. The tabs rotate every 6 s until the reader clicks or uses the arrow keys,
+			// pause while the pointer is over the panel, and don't rotate with prefers-reduced-motion.
+			(function () {
+				var reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+				document.querySelectorAll('[data-tabs]').forEach(function (box) {
+					var tabs = Array.prototype.slice.call(box.querySelectorAll('[role=tab]'));
+					var auto = !reduce;
+					var idx = 0;
+					var timer;
+					function show(k) {
+						tabs.forEach(function (t, i) {
+							var on = t.dataset.tab === k;
+							if (on) idx = i;
+							t.setAttribute('aria-selected', on ? 'true' : 'false');
+							t.tabIndex = on ? 0 : -1;
+							box.querySelector('[data-pane="' + t.dataset.tab + '"]').hidden = !on;
+						});
+					}
+					function tick() {
+						if (!auto) return;
+						timer = setTimeout(function () {
+							show(tabs[(idx + 1) % tabs.length].dataset.tab);
+							tick();
+						}, 6000);
+					}
+					function stop() {
+						auto = false;
+						clearTimeout(timer);
+					}
+					tabs.forEach(function (t, i) {
+						t.addEventListener('click', function () {
+							stop();
+							show(t.dataset.tab);
+						});
+						t.addEventListener('keydown', function (e) {
+							var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+							if (!d) return;
+							stop();
+							var n = tabs[(i + d + tabs.length) % tabs.length];
+							show(n.dataset.tab);
+							n.focus();
+						});
+					});
+					box.addEventListener('mouseenter', function () {
+						clearTimeout(timer);
+					});
+					box.addEventListener('mouseleave', function () {
+						clearTimeout(timer);
+						tick();
+					});
+					show(tabs[0].dataset.tab);
+					tick();
+				});
+			})();
 		</script>
 	</body>
 </html>
