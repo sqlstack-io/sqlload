@@ -46,7 +46,7 @@ impl DuckDbWriter {
                 compat: target.compat,
                 batch: target.batch,
             },
-            (&urls, self.destination.motherduck),
+            &urls,
             (target.load_id, batch.loaded_at),
         );
         open_bucket(&self.destination, &files.folder.store).await?;
@@ -55,7 +55,7 @@ impl DuckDbWriter {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
-        let rows = pull_files(&self.destination, &files.folder.store, insert).await?;
+        let rows = pull_files(&self.destination, insert).await?;
         if rows != files.rows {
             return Err(LoaderError::Invalid(format!(
                 "DuckDB loaded {rows} rows from the unloaded files in {}, but the unload reports {}; the batch is not committed",

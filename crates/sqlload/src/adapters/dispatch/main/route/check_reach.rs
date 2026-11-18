@@ -31,7 +31,7 @@ pub async fn check_reach(
                 .await
                 .map_err(|error| {
                     format!(
-                        "{url} cannot be read by MotherDuck on its servers: {}. Fix: MotherDuck reads the bucket with the keys SQLLoad's S3 reads use (the AWS_* variables, else the connection's profile or AWS_PROFILE, else the AWS credential chain on this machine), so give them s3:GetObject and s3:ListBucket on it",
+                        "{url} cannot be read by MotherDuck on its servers: {}. Fix: MotherDuck's servers read the bucket from their own network, with the keys SQLLoad's S3 reads use (the AWS_* variables, else the connection's profile or AWS_PROFILE, else the AWS credential chain on this machine): give those keys s3:GetObject and s3:ListBucket on it, and kms:Decrypt on its KMS key if it has one, and let the bucket policy allow reads from outside your network or VPC endpoint; a bucket only your network may reach can't load into MotherDuck",
                         first_line(&error.to_string())
                     )
                 })

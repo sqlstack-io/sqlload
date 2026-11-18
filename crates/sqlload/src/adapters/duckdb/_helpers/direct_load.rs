@@ -64,7 +64,7 @@ impl DuckDbWriter {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
             self.open_transaction = true;
         }
-        let rows = pull_files(&self.destination, &source.location.store, insert).await?;
+        let rows = pull_files(&self.destination, insert).await?;
         let expected = footer_rows(batch.footers);
         if rows != expected {
             return Err(LoaderError::Invalid(format!(

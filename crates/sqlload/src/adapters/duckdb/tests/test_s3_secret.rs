@@ -1,6 +1,12 @@
 use crate::adapters::contract::main::_custom_endpoint::custom_endpoint;
-use crate::adapters::duckdb::_helpers::pull_sql::{default_region, s3_secret};
-use crate::adapters::duckdb::tests::test_types::{AwsVariablesTestCase, S3SecretTestCase};
+use std::time::{Duration, Instant};
+
+use crate::adapters::duckdb::_helpers::pull_sql::{
+    BucketAccess, default_region, s3_secret, secret_current,
+};
+use crate::adapters::duckdb::tests::test_types::{
+    AwsVariablesTestCase, S3SecretTestCase, SecretCurrentTestCase,
+};
 use crate::store_paths::models::StoreKind;
 
 #[test]
@@ -98,6 +104,73 @@ fn given_aws_variables_when_duckdb_reads_s3_itself_then_an_empty_one_counts_as_u
                 test_case.expected_custom_endpoint,
                 test_case.expected_region.to_owned()
             ),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_buckets_secret_already_set_when_a_table_opens_the_bucket_then_it_is_set_again_only_when_its_keys_change_or_the_chain_may_have_expired()
+ {
+    let keys: &[&str] = &["AKIAEXAMPLE", "s3cret", "", "eu-west-2", "s3://lake/"];
+    let rotated: &[&str] = &["AKIAEXAMPLE", "s3cret2", "", "eu-west-2", "s3://lake/"];
+    let chain: &[&str] = &["eu-west-2", "s3://lake/"];
+    let test_cases = [
+        SecretCurrentTestCase {
+            description: "nothing set yet",
+            set: None,
+            wanted: (keys, false),
+            expected_current: false,
+        },
+        SecretCurrentTestCase {
+            description: "the same static keys stay current however long ago they were set",
+            set: Some((keys, false, 3_600)),
+            wanted: (keys, false),
+            expected_current: true,
+        },
+        SecretCurrentTestCase {
+            description: "changed keys are set again",
+            set: Some((keys, false, 1)),
+            wanted: (rotated, false),
+            expected_current: false,
+        },
+        SecretCurrentTestCase {
+            description: "a chain secret set just under ten minutes ago is current",
+            set: Some((chain, true, 599)),
+            wanted: (chain, true),
+            expected_current: true,
+        },
+        SecretCurrentTestCase {
+            description: "a chain secret set ten minutes ago is set again, as its keys may expire",
+            set: Some((chain, true, 600)),
+            wanted: (chain, true),
+            expected_current: false,
+        },
+        SecretCurrentTestCase {
+            description: "keys appearing in the environment replace the chain secret",
+            set: Some((chain, true, 1)),
+            wanted: (keys, false),
+            expected_current: false,
+        },
+    ];
+    let now = Instant::now() + Duration::from_secs(7_200);
+    let access = |parameters: &[&str], chain: bool| BucketAccess {
+        bucket: "lake".to_owned(),
+        extensions: "",
+        statement: "CREATE OR REPLACE TEMPORARY SECRET sqlload_s3_6c616b65".to_owned(),
+        parameters: parameters.iter().map(|value| (*value).to_owned()).collect(),
+        chain,
+    };
+    for test_case in test_cases {
+        let set = test_case.set.map(|(parameters, chain, age)| {
+            access(parameters, chain).set_at(now - Duration::from_secs(age))
+        });
+        let (parameters, chain) = test_case.wanted;
+        let wanted = access(parameters, chain).set_at(now);
+        assert_eq!(
+            secret_current(set.as_ref(), &wanted, now),
+            test_case.expected_current,
             "{}",
             test_case.description
         );

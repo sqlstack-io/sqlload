@@ -1,12 +1,15 @@
 //! The statement that has DuckDB load Parquet files itself.
 
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::time::Instant;
+
 use crate::adapters::contract::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS};
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
-use crate::adapters::duckdb::constants::UTC_OFFSET;
+use crate::adapters::duckdb::constants::{CHAIN_SECRET_REFRESH, UTC_OFFSET};
 use crate::adapters::duckdb::errors::DuckDbError;
-use crate::adapters::duckdb::models::DuckDbSql;
+use crate::adapters::duckdb::models::{DuckDbSql, SetSecret};
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::s3_keys::s3_keys;
@@ -131,7 +134,7 @@ pub(crate) struct UnloadedColumns<'a> {
     pub batch: u64,
 }
 
-/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL. Into MotherDuck (`remote`) the files are read on its servers.
+/// `INSERT INTO into` every one of `columns` from a warehouse's unloaded Parquet files at `urls`: a column of `read` from the files, turned back from whole microseconds where it is read as a time or timestamp, then cast to its type, exactly whatever the session's time zone; a column of `constants` from its value; the load id and load time are the batch's; any other column is NULL.
 pub(crate) fn unloaded_insert(
     into: &TableName,
     UnloadedColumns {
@@ -141,7 +144,7 @@ pub(crate) fn unloaded_insert(
         compat,
         batch,
     }: UnloadedColumns<'_>,
-    (urls, remote): (&[String], bool),
+    urls: &[String],
     (load_id, loaded_at): (&str, &str),
 ) -> String {
     let literal = |text: &str| DuckDbSql.render_loader_value_literal(text);
@@ -175,12 +178,11 @@ pub(crate) fn unloaded_insert(
         false => "",
     };
     format!(
-        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false{numbered}{}) AS f",
+        "INSERT INTO {} ({}) SELECT {} FROM read_parquet([{}], hive_partitioning = false{numbered}) AS f",
         DuckDbSql.render_qualified_name(into),
         targets.join(", "),
         values.join(", "),
-        urls.join(", "),
-        on_servers(remote)
+        urls.join(", ")
     )
 }
 
@@ -262,10 +264,38 @@ pub(crate) fn default_region(variable: &dyn Fn(&str) -> Option<String>) -> Strin
         .unwrap_or_else(|| "us-east-1".to_owned())
 }
 
-/// For files in S3, the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, for the bucket: in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved on this machine. `None` for files elsewhere.
-pub(crate) fn bucket_access(
-    store: &StoreKind,
-) -> Result<Option<(&'static str, (String, Vec<String>))>, DuckDbError> {
+/// What DuckDB needs to read files in an S3 bucket itself: the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, whose keys come from the AWS credential chain when `chain`.
+pub(crate) struct BucketAccess {
+    pub bucket: String,
+    pub extensions: &'static str,
+    pub statement: String,
+    pub parameters: Vec<String>,
+    pub chain: bool,
+}
+
+impl BucketAccess {
+    /// The secret as it is set `at`, with a hash of its statement and parameters in place of the keys.
+    pub(crate) fn set_at(&self, at: Instant) -> SetSecret {
+        let mut hasher = DefaultHasher::new();
+        (&self.statement, &self.parameters).hash(&mut hasher);
+        SetSecret {
+            hash: hasher.finish(),
+            chain: self.chain,
+            at,
+        }
+    }
+}
+
+/// Whether the secret `set` on the database for a bucket still serves `wanted`, the one a table would set `now`: the same statement and parameters, and, for keys DuckDB resolved through the AWS credential chain when it was set, set less than [`CHAIN_SECRET_REFRESH`] ago, as they may expire.
+pub(crate) fn secret_current(set: Option<&SetSecret>, wanted: &SetSecret, now: Instant) -> bool {
+    set.is_some_and(|set| {
+        set.hash == wanted.hash
+            && (!set.chain || now.saturating_duration_since(set.at) < CHAIN_SECRET_REFRESH)
+    })
+}
+
+/// For files in S3, [`BucketAccess`] for their bucket: the secret in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved where DuckDB runs. `None` for files elsewhere.
+pub(crate) fn bucket_access(store: &StoreKind) -> Result<Option<BucketAccess>, DuckDbError> {
     let StoreKind::S3 {
         bucket,
         region,
@@ -285,7 +315,14 @@ pub(crate) fn bucket_access(
     let region = region
         .clone()
         .unwrap_or_else(|| default_region(&environment_variable));
-    Ok(Some((extensions, s3_secret(bucket, region, keys.as_ref()))))
+    let (statement, parameters) = s3_secret(bucket, region, keys.as_ref());
+    Ok(Some(BucketAccess {
+        bucket: bucket.clone(),
+        extensions,
+        statement,
+        parameters,
+        chain: keys.is_none(),
+    }))
 }
 
 /// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.
