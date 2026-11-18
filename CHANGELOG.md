@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.75.0](https://github.com/sqlstack-io/sqlload/compare/v0.74.0...v0.75.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **databricks:** Parquet files in S3 that no Unity Catalog external location covers now fail plan for a Databricks target, naming the folder and the external location and READ FILES grant to add; they no longer load through SQLLoad and the volume.
+
+### Features
+
+* **databricks:** copy Parquet files in S3 where they lie through a Unity Catalog external location ([#341](https://github.com/sqlstack-io/sqlload/issues/341)) ([ba568dd](https://github.com/sqlstack-io/sqlload/commit/ba568dda2eb4b1514ec26965ceb06bc5a31fe9d5))
+
+
+### Documentation
+
+* link the SQLLoad Discord from the README and the website ([#342](https://github.com/sqlstack-io/sqlload/issues/342)) ([4a5c432](https://github.com/sqlstack-io/sqlload/commit/4a5c43289fb3f2e5703f37293d7a2e7151efd62b))
+
 ## [0.74.0](https://github.com/sqlstack-io/sqlload/compare/v0.73.0...v0.74.0) (2026-11-18)
 
 
