@@ -1,0 +1,112 @@
+---
+title: "DuckDB"
+description: "Load tables, views and query results from a DuckDB database file, read as Arrow from a read-only connection: connections, choosing tables, query tables, cursors, types and memory."
+---
+
+A `duckdb` source loads tables, views and query results from a DuckDB database file. SQLLoad opens
+the file read-only for each read and streams the result of one `SELECT` as Arrow, so it never
+writes to the file.
+
+```toml
+[connections.shop_file]
+kind = "duckdb"
+database = "shop.duckdb"
+
+[sources.shop]
+kind = "duckdb"
+connection = "shop_file"
+description = "Tables of the shop's DuckDB file."
+include = ["sales.*"]
+exclude = ["sales.tmp_*"]
+write_strategy = "replace"
+
+[sources.shop.tables."sales.orders"]
+description = "Orders, one row each."
+cursor_column = "updated_at"
+write_strategy = "merge"
+unique_key = "{primary_key}"
+
+[sources.shop.tables.big_orders]
+description = "Orders over 100, with their customer."
+sql = "SELECT o.*, c.name FROM sales.orders o JOIN sales.customers c USING (customer_id) WHERE o.amount > 100"
+cursor_column = "updated_at"
+write_strategy = "append"
+```
+
+## Connection
+
+A source uses a [`duckdb` connection](/docs/configuration/#duckdb), the same kind a DuckDB
+target uses, whose `database` is the file to read. An in-memory database (`:memory:`) holds nothing
+to read and is refused, and so is a MotherDuck database (`md:`).
+
+DuckDB lets one process write a file, or any number read it. While another process has the file
+open for writing, a read fails, naming the lock; run the load when the writer has closed it.
+
+## Choosing tables
+
+`include` and `exclude` are `schema.table` patterns, matched against the names as DuckDB keeps
+them, such as `sales.*` or `main.orders`. SQLLoad lists the file's tables and views, their columns
+and their primary keys from DuckDB's catalog functions. A
+`[sources.shop.tables."schema.table"]` entry sets options for one table; on its own, it doesn't add
+the table.
+
+A source needs at least one `include` pattern or one query table. A table's primary key is its
+`{primary_key}` for `unique_key`, and its comment becomes its description.
+
+## How tables are read
+
+Each read is one `SELECT` of the read columns, with the cursor window and any `where` in its
+`WHERE`. One statement sees one version of the file, so a read is consistent on its own. SQLLoad
+holds at most a few batches ahead of the target, and each connection's DuckDB `memory_limit` is
+half the table's share of the [memory budget](/docs/cli/load/#memory-budget).
+
+## Query tables
+
+A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is
+its name. At `plan`, SQLLoad describes the query's columns without reading its rows.
+
+`cursor_column` names a column of the query's result. SQLLoad wraps the query and filters on the
+cursor outside it, so the query needs no placeholder. Write it in DuckDB SQL.
+
+## Filtering rows
+
+`where` narrows a table to the rows that match a condition, written in DuckDB SQL:
+
+```toml
+[sources.shop.tables."sales.orders"]
+where = "region = 'EU'"
+```
+
+SQLLoad ANDs it into every `SELECT` it reads the table with, and a query table refuses it (put the
+condition in its `sql`).
+
+## Types
+
+| DuckDB type | Loads as |
+|-------------|----------|
+| `TINYINT`, `SMALLINT`, `UTINYINT` | `smallint` |
+| `INTEGER`, `BIGINT`, `USMALLINT`, `UINTEGER` | `int` |
+| `DECIMAL(p,s)`, p up to 38 | `decimal(p,s)` |
+| `FLOAT`, `DOUBLE` | `float` |
+| `BOOLEAN` | `bool` |
+| `VARCHAR`, `ENUM` | `text` |
+| `BLOB` | `binary` |
+| `DATE` | `date` |
+| `TIME` | `time` |
+| `TIMESTAMP`, `TIMESTAMP_S`, `TIMESTAMP_MS` | `timestamp_ntz` |
+| `TIMESTAMP WITH TIME ZONE` | `timestamp_tz` |
+| `UUID` | `uuid` |
+| `JSON`, lists, arrays, `STRUCT`, `MAP` | `json` |
+| `HUGEINT`, `UBIGINT`, `TIMESTAMP_NS`, `INTERVAL`, `BIT`, `UNION` and others | none: pin a type such as `text`, or exclude the column |
+
+Pin a type to load a column another way, such as `columns = { total = "text" }`, or a list as
+`array(T)`. A value that doesn't convert to the pinned type fails the read, naming the column,
+rather than loading as NULL. See [Types](/docs/concepts/types/).
+
+## Tested
+
+Unit tests read a real DuckDB file: tables, a view and a query table found by `include` and
+`exclude`, primary keys and comments, every type above, a pinned `HUGEINT`, reads in several
+batches, a filter applied outside a query that ends in a comment, and the file's bytes unchanged
+after the read. A loader test loads a file into DuckDB twice: tables, a view and a query table,
+with `exclude_columns`, `where`, and a cursor merging only the rows that changed.

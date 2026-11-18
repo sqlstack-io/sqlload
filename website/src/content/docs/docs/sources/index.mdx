@@ -1,9 +1,9 @@
 ---
 title: "Sources"
-description: "Postgres tables, Postgres changes, Snowflake tables and queries, ODBC databases, BigQuery and Databricks tables and queries (beta), files in S3 or a folder, Google Sheets, and Python sources: the kinds of source and the settings they share."
+description: "Postgres tables, Postgres changes, Snowflake tables and queries, ODBC databases, BigQuery and Databricks tables and queries (beta), DuckDB files, files in S3 or a folder, Google Sheets, and Python sources: the kinds of source and the settings they share."
 ---
 
-A source is where data comes from. SQLLoad has nine kinds:
+A source is where data comes from. SQLLoad has ten kinds:
 
 | `kind` | Reads | Tables | Declared in |
 |--------|-------|--------|-------------|
@@ -13,6 +13,7 @@ A source is where data comes from. SQLLoad has nine kinds:
 | [`odbc`](/docs/sources/odbc/) | Tables, views and query results of any database with an ODBC driver, read as Arrow | One per matching table, and one per query | `sqlload.toml` |
 | [`bigquery`](/docs/sources/bigquery/) (beta) | Tables, views and query results of BigQuery, read as Arrow through the Storage Read API | One per matching table, and one per query | `sqlload.toml` |
 | [`databricks`](/docs/sources/databricks/) (beta) | Tables, views and query results of a Databricks SQL warehouse, read as Arrow through the Statement Execution API | One per matching table, and one per query | `sqlload.toml` |
+| [`duckdb`](/docs/sources/duckdb/) | Tables, views and query results of a DuckDB database file, read as Arrow | One per matching table, and one per query | `sqlload.toml` |
 | [`files`](/docs/sources/files/) | Parquet, CSV, JSON or NDJSON files in S3 or a local folder | One per source | `sqlload.toml` |
 | [`google_sheets`](/docs/sources/google-sheets/) | Tabs or ranges of a Google Sheets spreadsheet, typed | One per tab or range | `sqlload.toml` |
 | [Python](/docs/sources/python/) | Whatever a Python function yields: dicts, Arrow data, JSON bytes, HTTP jobs | One per decorated function | Python, under `python_paths` |
@@ -36,6 +37,8 @@ Each kind has its own page:
   tables, types, cost and permissions.
 - [Databricks](/docs/sources/databricks/) (beta): choosing tables, query tables, types,
   cost and permissions.
+- [DuckDB](/docs/sources/duckdb/): choosing tables, query tables, types, and reading a file another
+  process writes.
 - [Files](/docs/sources/files/): formats, partitions, which files load, and files the destination
   reads itself.
 - [Google Sheets](/docs/sources/google-sheets/): tabs and ranges, headers, and how cells are typed.
