@@ -206,6 +206,17 @@ h1#_top {
 	color: var(--sld-muted);
 }
 
+/* A table's numbered notes: small print, close together under the table. */
+.sl-markdown-content p.sld-note {
+	margin-top: 0.75rem;
+	font-size: 13px;
+	line-height: 1.5;
+}
+
+.sl-markdown-content p.sld-note + p.sld-note {
+	margin-top: 0.25rem;
+}
+
 .sl-markdown-content strong {
 	color: var(--sld-fg);
 	font-weight: 600;

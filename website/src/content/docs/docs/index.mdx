@@ -23,14 +23,14 @@ SQLLoad loads data into your warehouse, and shows you how before it changes anyt
 | HTTP APIs and Python | ✓ | |
 | Kafka | ✓ into Snowflake, or (beta) Databricks or BigQuery, through the Kafka exporter | |
 
-¹ Container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or
-distributed tables. ClickHouse Cloud is untested.
+¹ One server (no clusters, replicated or distributed tables), tested on 25.3, 25.8 and 26.10.
+ClickHouse Cloud is untested.
 
 ² Through a separate DuckDB 1.5 process: install `sqlload[motherduck]`.
 
-³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB
-Connector/ODBC and OpenEdge are checked by hand. Another driver works when it describes prepared
-statements and lists tables: `sqlload plan` shows what it reports.
+³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; the MariaDB
+and OpenEdge drivers are checked by hand. Others work if they describe prepared statements and list tables:
+`sqlload plan` shows what they report.
 
 See the [connector matrix](/docs/supported-systems/) for every combination and write strategy.
 To stream Kafka topics into Snowflake, Databricks or BigQuery continuously, use the separate
