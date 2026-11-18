@@ -27,9 +27,6 @@ pub const REPORTED_ERROR_CHARS: usize = 200;
 /// Pages fetched ahead of the parser before a job waits.
 pub const PAGES_AHEAD: usize = 4;
 
-/// Threads of the runtime one job's requests run on.
-pub const JOB_THREADS: usize = 2;
-
 /// The `Link` header parameter naming relations.
 pub const RELATION_PARAMETER: &str = "rel";
 
@@ -65,3 +62,6 @@ pub const SHOWN_KEYS: usize = 5;
 
 /// The most pages `read_ahead` keeps requested at once.
 pub const MAX_READ_AHEAD: u64 = 100;
+
+/// Why a page requested ahead ended without an answer: the paging stopped before it needed the page.
+pub const STOPPED: &str = "the paging stopped before it needed this page";

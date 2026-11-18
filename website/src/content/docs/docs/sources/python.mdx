@@ -391,9 +391,11 @@ api.paginate("/invoices", paginator=sl.offset(limit=50, read_ahead=20))
 ```
 
 The first page is read alone, so a short first page is checked as without `read_ahead`. After a full first page,
-the next `N` pages are requested together, each through the shared `rate_limit` and retries, and their rows load
-strictly in page order. The run ends at the first short (or, for `sl.page_number`, empty) page, and the requests
-already sent past it are dropped, so an API may see up to `N` requests more than the pages loaded.
+the pages after it are requested two at a time, then four, eight and so on up to `N`, the open requests doubling
+each time the pages of the last round have loaded. Each goes through the shared `rate_limit` and retries, and their
+rows load strictly in page order. The run ends at the first short (or, for `sl.page_number`, empty) page, and the
+requests already sent past it are dropped, so a table or cursor window of a few pages sends only a few requests
+more than it loads, and a long one soon has `N` open.
 `sl.cursor`, `sl.next_link` and `sl.link_header` refuse `read_ahead`, as each page's address comes from the page
 before it.
 
@@ -407,6 +409,9 @@ mock API answering each page of 100 rows in 80 ms, 1,000 pages took:
 | `read_ahead=20` | 6 s | 171 |
 
 Raise `read_ahead` until the API's own limits, or a `rate_limit` you set for them, become the bound.
+
+Every job of a load shares one pool of connections, so the cursor windows of a backfill reuse the connections
+the first window opened instead of each opening its own.
 
 ### A missing select path
 

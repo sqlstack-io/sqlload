@@ -10,7 +10,8 @@ use std::collections::VecDeque;
 use reqwest::Url;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
-use tokio_util::task::AbortOnDropHandle;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::http_source::_helpers::cells::pivoted_rows;
 use crate::http_source::_helpers::fetch::fetch;
@@ -48,9 +49,12 @@ pub(crate) async fn paginate(
     let mut previous: Option<u64> = None;
     let mut names: Option<CellNames> = None;
     let ahead = read_ahead(&request.paginator);
-    let mut in_flight: VecDeque<AbortOnDropHandle<AheadPage>> = VecDeque::new();
+    let mut in_flight: VecDeque<JoinHandle<AheadPage>> = VecDeque::new();
+    let stop = CancellationToken::new();
+    let _stopping = stop.clone().drop_guard();
     let mut queued: u64 = 1;
     let mut largest: u64 = 0;
+    let (mut ramp, mut ramped): (u64, u64) = (1, 1);
     for step in 1_u64.. {
         let shown = redacted(
             &format!("{} {}", call.method.as_str(), call.url),
@@ -63,17 +67,27 @@ pub(crate) async fn paginate(
                     (Some(part), largest) if largest > 0 => (part / largest).max(1),
                     _ => ahead,
                 };
-                while queued < step + ahead.min(fitting) - 1 {
+                let grows = step > ramped;
+                if grows {
+                    ramp = ramp.saturating_mul(2).min(ahead);
+                }
+                while queued < step + ramp.min(fitting) - 1 {
                     queued += 1;
                     let ahead_call = counted_call(request, &first, queued)?;
-                    let ahead_calls = calls.clone();
-                    in_flight.push_back(AbortOnDropHandle::new(tokio::spawn(async move {
+                    let ahead_calls = Calls {
+                        stop: stop.clone(),
+                        ..calls.clone()
+                    };
+                    in_flight.push_back(tokio::spawn(async move {
                         let fetched = fetch(&ahead_calls, &ahead_call).await;
                         AheadPage {
                             call: ahead_call,
                             fetched,
                         }
-                    })));
+                    }));
+                }
+                if grows {
+                    ramped = queued;
                 }
                 let next =
                     match in_flight.pop_front() {

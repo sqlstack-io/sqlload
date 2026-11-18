@@ -928,7 +928,7 @@ def test_given_read_ahead_when_later_pages_answer_first_and_one_is_retried_then_
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert [order for (order,) in query(project, 'SELECT order_id FROM "RAW".shop__t')] == expected_orders
 	answered = api.ahead_answered  # type: ignore[attr-defined]
-	assert answered.index(4) < answered.index(2) and answered.index(6) < answered.index(2), answered
+	assert answered.index(4) < answered.index(2), answered
 	assert [start for start, _ in api.ahead].count(4) == 2  # type: ignore[attr-defined]
 	assert 2 <= api.most_open <= 3, api.most_open  # type: ignore[attr-defined]
 
