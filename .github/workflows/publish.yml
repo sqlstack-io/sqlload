@@ -193,12 +193,33 @@ jobs:
       # release build reuses the previous release's work (82 to 99% of compiles were cache hits in
       # 0.71.0's build). Not on Windows, where it made the build about 12 minutes slower. sccache
       # stops before compiling anything when the Actions cache won't answer its startup check (a 503
-      # from the cache service, say), and SCCACHE_IGNORE_SERVER_IO_ERROR doesn't cover that, so a
-      # failed build runs once more without sccache: a cache outage costs time, never a release. A
-      # build that fails for any other reason fails again the same way.
+      # from the cache service, say), which SCCACHE_IGNORE_SERVER_IO_ERROR doesn't cover, so it is
+      # started here first, as the build would start it: when it can't start, the wheels build
+      # without it. A cache outage costs time, never a release.
+      # The cache's URL and token reach only JavaScript actions, such as maturin-action, which passes
+      # them on to the build; the check needs them too.
+      - name: Give the sccache check the Actions cache
+        if: runner.os != 'Windows'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            for (const name of ['ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              if (process.env[name]) core.exportVariable(name, process.env[name])
+            }
+      - name: Check that sccache starts
+        id: sccache
+        if: runner.os != 'Windows'
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          python -m pip install --quiet 'sccache>=0.10.0'
+          if sccache --start-server; then
+            sccache --stop-server > /dev/null || true
+            echo "usable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::sccache unavailable, building without it"
+          fi
       - name: Build CLI wheel
-        id: cli_build
-        continue-on-error: ${{ runner.os != 'Windows' }}
         if: contains(matrix.package.builds, 'cli')
         uses: PyO3/maturin-action@v1
         env:
@@ -211,30 +232,7 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
-          sccache: ${{ runner.os != 'Windows' }}
-          working-directory: packages/sqlload-cli
-          # The vendored OpenSSL build runs Perl's Configure, which needs modules the
-          # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
-          before-script-linux: |
-            dnf install -y perl-IPC-Cmd perl-Time-Piece
-            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
-      - name: Build CLI wheel without sccache
-        if: contains(matrix.package.builds, 'cli') && steps.cli_build.outcome == 'failure'
-        uses: PyO3/maturin-action@v1
-        env:
-          CFLAGS: ${{ matrix.platform.arch_flags }}
-          LDFLAGS: ${{ matrix.platform.arch_flags }}
-          # The first build exported these for every later step; empty RUSTC_WRAPPER turns sccache off.
-          RUSTC_WRAPPER: ""
-          SCCACHE_GHA_ENABLED: "false"
-        with:
-          command: build
-          # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
-          # unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
-          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
-          target: ${{ matrix.platform.target }}
-          manylinux: "2_28"
-          sccache: false
+          sccache: ${{ steps.sccache.outputs.usable == 'true' }}
           working-directory: packages/sqlload-cli
           # The vendored OpenSSL build runs Perl's Configure, which needs modules the
           # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
@@ -242,8 +240,6 @@ jobs:
             dnf install -y perl-IPC-Cmd perl-Time-Piece
             bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
       - name: Build Python extension wheel
-        id: python_build
-        continue-on-error: ${{ runner.os != 'Windows' }}
         if: contains(matrix.package.builds, 'python')
         uses: PyO3/maturin-action@v1
         env:
@@ -254,26 +250,7 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
-          sccache: ${{ runner.os != 'Windows' }}
-          working-directory: packages/sqlload
-          before-script-linux: |
-            dnf install -y perl-IPC-Cmd perl-Time-Piece
-            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
-      - name: Build Python extension wheel without sccache
-        if: contains(matrix.package.builds, 'python') && steps.python_build.outcome == 'failure'
-        uses: PyO3/maturin-action@v1
-        env:
-          CFLAGS: ${{ matrix.platform.arch_flags }}
-          LDFLAGS: ${{ matrix.platform.arch_flags }}
-          # The first build exported these for every later step; empty RUSTC_WRAPPER turns sccache off.
-          RUSTC_WRAPPER: ""
-          SCCACHE_GHA_ENABLED: "false"
-        with:
-          command: build
-          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
-          target: ${{ matrix.platform.target }}
-          manylinux: "2_28"
-          sccache: false
+          sccache: ${{ steps.sccache.outputs.usable == 'true' }}
           working-directory: packages/sqlload
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
