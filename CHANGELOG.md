@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.74.0](https://github.com/sqlstack-io/sqlload/compare/v0.73.0...v0.74.0) (2026-11-18)
+
+
+### Features
+
+* **files:** on_overlapping_files = "last_wins" lets a later file replace values an earlier one holds ([#339](https://github.com/sqlstack-io/sqlload/issues/339)) ([cc0f325](https://github.com/sqlstack-io/sqlload/commit/cc0f32588cf3132a152a1c3ae8489cdc95c5644a))
+
 ## [0.73.0](https://github.com/sqlstack-io/sqlload/compare/v0.72.1...v0.73.0) (2026-11-18)
 
 
