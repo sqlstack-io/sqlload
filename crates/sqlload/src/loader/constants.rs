@@ -108,6 +108,8 @@ pub const RESET: &str = "\x1b[0m";
 /// The host name that always means this machine: plain text to it never crosses a network.
 pub const LOCALHOST: &str = "localhost";
 
+/// Why Snowflake does not read a Snowflake source's unload itself when the source unloads to a stage of its own.
+pub const UNLOADED_OUTSIDE_S3: &str = "Snowflake reads another connection's unload itself only from S3: set the source's stage to an external one (url and storage_integration) inside the target's external stage";
 /// Why a warehouse source's unloaded files go through SQLLoad rather than straight into the destination.
 pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as whole microseconds (its Parquet writer keeps only milliseconds), which SQLLoad turns back into them";
 

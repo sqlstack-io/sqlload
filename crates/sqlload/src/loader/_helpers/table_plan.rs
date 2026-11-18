@@ -1079,16 +1079,17 @@ pub(crate) fn reader_offer(
         })
         | None => Vec::new(),
     };
-    let selected_by_destination = matches!(
-        &spec.warehouse_source,
-        Some(WarehouseSource {
-            route: WarehouseRoute::Unload {
-                same_connection: true,
+    let selected_by_destination = spec.masked.columns.is_empty()
+        && matches!(
+            &spec.warehouse_source,
+            Some(WarehouseSource {
+                route: WarehouseRoute::Unload {
+                    same_connection: true,
+                    ..
+                },
                 ..
-            },
-            ..
-        })
-    );
+            })
+        );
     let direct_blocked = match unload_to.is_empty() {
         true => direct_blocked,
         false => unload_blocked(spec),

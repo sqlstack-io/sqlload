@@ -28,14 +28,14 @@ pub(crate) fn unload_route(
     writer: &WriterAccepts,
     overrides: RouteOverrides,
 ) -> Result<Route, RouteError> {
-    let unblocked = reader.direct_blocked.is_none() && reader.needs_loader.is_none();
-    if unblocked && reader.selected_by_destination {
+    if reader.selected_by_destination && reader.needs_loader.is_none() {
         return Ok(Route {
             steps: vec![Step::DestinationSelects],
             reason: "the destination writes through the source's own connection, so it selects the rows itself; no data leaves the warehouse".to_owned(),
         });
     }
     let stores = ordered_stores(&reader.unload_to, overrides.stage)?;
+    let unblocked = reader.direct_blocked.is_none() && reader.needs_loader.is_none();
     if let Some(store) = stores
         .iter()
         .find(|store| unblocked && destination_pulls(writer, store, FileFormat::Parquet))
