@@ -1,8 +1,9 @@
 use crate::adapters::snowflake::tests::helpers::unload_blocked_for;
 use crate::adapters::snowflake::tests::test_types::UnloadBlockedTestCase;
+use crate::loader::constants::UNLOADED_OUTSIDE_STAGE;
 
-const OUTSIDE: &str =
-    "Snowflake reads another connection's unload itself only through the target's external stage";
+const MASKS: &str = "the table masks columns";
+const OUTSIDE: &str = UNLOADED_OUTSIDE_STAGE;
 
 #[test]
 fn given_a_snowflake_sources_unload_when_routing_into_snowflake_then_snowflake_copies_only_what_the_targets_external_stage_covers()
@@ -69,20 +70,15 @@ fn given_a_snowflake_sources_unload_when_routing_into_snowflake_then_snowflake_c
             unload_to: Some("s3://lake/raw/unload/"),
             external: true,
             masks: true,
-            expected_blocked: Some("the table masks columns"),
+            expected_blocked: Some(MASKS),
         },
     ];
     for test_case in &test_cases {
-        let blocked = unload_blocked_for(test_case);
-        match test_case.expected_blocked {
-            None => assert_eq!(blocked, None, "{}", test_case.description),
-            Some(expected) => assert!(
-                blocked
-                    .as_deref()
-                    .is_some_and(|reason| reason.starts_with(expected)),
-                "{}: {blocked:?}",
-                test_case.description
-            ),
-        }
+        assert_eq!(
+            unload_blocked_for(test_case).as_deref(),
+            test_case.expected_blocked,
+            "{}",
+            test_case.description
+        );
     }
 }

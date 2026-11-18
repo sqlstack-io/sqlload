@@ -1079,14 +1079,12 @@ pub(crate) fn reader_offer(
         })
         | None => Vec::new(),
     };
+    let route = spec.warehouse_source.as_ref().map(|source| &source.route);
     let selected_by_destination = spec.masked.columns.is_empty()
         && matches!(
-            &spec.warehouse_source,
-            Some(WarehouseSource {
-                route: WarehouseRoute::Unload {
-                    same_connection: true,
-                    ..
-                },
+            route,
+            Some(WarehouseRoute::Unload {
+                same_connection: true,
                 ..
             })
         );
@@ -1095,7 +1093,7 @@ pub(crate) fn reader_offer(
         false => unload_blocked(
             spec.warehouse,
             !spec.masked.columns.is_empty(),
-            spec.warehouse_source.as_ref().map(|source| &source.route),
+            route,
             stage,
         ),
     };
@@ -1119,22 +1117,6 @@ pub(crate) fn reader_offer(
             .is_some_and(|files| stage_misses(stage, &files.location)),
         selected_by_destination,
     }
-}
-
-/// Whether `table`, a `delete_insert`, `append` or deduplicating `merge` (a key read in two batches keeps its last or newest row) read in windows or cursor-ordered batches, stages them all and publishes once at the end (see [`publishes_runs_once`](crate::adapters::contract::types::SqlAdapter::publishes_runs_once)); a files source's groups still commit one by one, as their values would not fit one statement, and a merge that fails on repeated keys commits each batch, as a key updated during the read is read twice.
-pub(crate) fn publishes_once(table: &TablePlan) -> bool {
-    matches!(
-        table.mode,
-        WriteMode::DeleteInsert { .. }
-            | WriteMode::Append
-            | WriteMode::Merge {
-                dedupe: Some(_),
-                ..
-            }
-    ) && matches!(
-        table.commits,
-        CommitRule::Windows(_) | CommitRule::Ordered { .. }
-    ) && sql_adapter(table.spec.warehouse).publishes_runs_once()
 }
 
 /// One commit per file, in the order planned: a files source's merge, or `delete_insert` by `replace_key`, applies each file on its own, so a key repeated across files ends with the newest file's value (or rows).

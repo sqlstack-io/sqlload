@@ -114,6 +114,7 @@ pub struct CopyStaged<'a> {
 }
 
 /// One batch of a Snowflake source's rows loaded inside Snowflake: the table they fill and its columns, the source's read columns, the batch's own values, and where the rows come from.
+#[derive(Debug)]
 pub struct UnloadedLoad<'a> {
     pub into: &'a TableName,
     pub columns: &'a [DesiredColumn],
@@ -130,6 +131,7 @@ pub struct UnloadedLoad<'a> {
 }
 
 /// Where a batch loaded inside Snowflake reads the source's rows, each read column under its own name, times and timestamps as whole microseconds.
+#[derive(Debug)]
 pub enum UnloadedFrom<'a> {
     /// The unload's Parquet files.
     Files {
@@ -144,6 +146,13 @@ pub enum UnloadedFrom<'a> {
     },
     /// The query the unload would run, selected in the same session.
     Query(&'a str),
+}
+
+/// Which rows one statement of a batch loaded inside Snowflake reads: the unload's files `keys`, the `first`th file on, or the query.
+#[derive(Debug, Clone, Copy)]
+pub enum UnloadedRows<'a> {
+    Files(usize, &'a [String]),
+    Query,
 }
 
 /// Where one staged file goes on an internal stage.

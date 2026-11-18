@@ -82,7 +82,7 @@ use crate::loader::_helpers::sources::ReadPart;
 use crate::loader::_helpers::sources::files_source_parts;
 use crate::loader::_helpers::sources::read_source;
 use crate::loader::_helpers::sources::unarchived;
-use crate::loader::_helpers::sources::{selected_query, unload_source};
+use crate::loader::_helpers::sources::{unload_request, unload_source};
 use crate::loader::_helpers::specs::checked_key;
 use crate::loader::_helpers::specs::{null_cursor_problem, null_cursor_rows};
 use crate::loader::_helpers::table_plan::{
@@ -144,6 +144,7 @@ use crate::schema_plan::constants::{
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::snowflake_source::main::select_query::select_query;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::take_lease::take_lease;
 use crate::time_text::main::now_utc_text::now_utc_text;
@@ -164,7 +165,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::loader::_helpers::table_plan::{
-    added_constants, is_direct, publishes_once, pulls_unloaded, selects_rows,
+    added_constants, is_direct, pulls_unloaded, selects_rows,
 };
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself).
@@ -1931,4 +1932,29 @@ fn estimated_bytes(estimate: i64) -> Option<u64> {
         Ok(0) | Err(_) => None,
         Ok(bytes) => Some(bytes),
     }
+}
+
+/// Whether `table`, a `delete_insert`, `append` or deduplicating `merge` (a key read in two batches keeps its last or newest row) read in windows or cursor-ordered batches, stages them all and publishes once at the end (see [`publishes_runs_once`](crate::adapters::contract::types::SqlAdapter::publishes_runs_once)); a files source's groups still commit one by one, as their values would not fit one statement, and a merge that fails on repeated keys commits each batch, as a key updated during the read is read twice.
+pub(crate) fn publishes_once(table: &TablePlan) -> bool {
+    matches!(
+        table.mode,
+        WriteMode::DeleteInsert { .. }
+            | WriteMode::Append
+            | WriteMode::Merge {
+                dedupe: Some(_),
+                ..
+            }
+    ) && matches!(
+        table.commits,
+        CommitRule::Windows(_) | CommitRule::Ordered { .. }
+    ) && sql_adapter(table.spec.warehouse).publishes_runs_once()
+}
+
+/// The query an unload of `part` of `table` would run, which a destination writing through the source's own connection runs itself.
+fn selected_query(table: &TablePlan, part: ReadPart) -> Result<String, LoaderError> {
+    let filter = table
+        .spec
+        .read_filter(part.filter.or_else(|| table.source_filter.clone()));
+    select_query(&unload_request(table, filter.as_deref()))
+        .map_err(|error| LoaderError::Invalid(error.to_string()))
 }

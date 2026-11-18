@@ -428,32 +428,29 @@ pub(crate) fn unloaded_sql(
         batch: 3,
         load_id: "L1",
         loaded_at: "2026-11-18T00:00:00Z",
-        from: match files {
-            Some(_) => UnloadedFrom::Files {
-                stage: "@\"DB\".\"RAW\".\"LAKE\"",
-                folder: "unload/run-1/",
-                keys: &keys,
-                filename_prefix: "lake/unload/run-1/",
-            },
-            None => UnloadedFrom::Query("SELECT ..."),
-        },
+        from: files.map_or(UnloadedFrom::Query("SELECT ..."), |_| UnloadedFrom::Files {
+            stage: "@\"DB\".\"RAW\".\"LAKE\"",
+            folder: "unload/run-1/",
+            keys: &keys,
+            filename_prefix: "lake/unload/run-1/",
+        }),
     })
 }
 
 /// Why Snowflake does not load the case's unloaded files itself, or `None` when it does.
 pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<String> {
     let route = WarehouseRoute::Unload {
-        store: match test_case.unload_to {
-            Some(folder) => Store::ObjectStore(folder.to_owned()),
-            None => Store::InternalStage("sqlload_unload".to_owned()),
-        },
+        store: test_case.unload_to.map_or_else(
+            || Store::InternalStage("sqlload_unload".to_owned()),
+            |folder| Store::ObjectStore(folder.to_owned()),
+        ),
         stage: String::new(),
         same_connection: false,
     };
-    let stage = match test_case.external {
-        true => StageRoute::External(Box::new(stage())),
-        false => StageRoute::User,
-    };
+    let stage = test_case
+        .external
+        .then(|| StageRoute::External(Box::new(stage())))
+        .unwrap_or(StageRoute::User);
     unload_blocked(
         Warehouse::Snowflake,
         test_case.masks,
@@ -462,23 +459,26 @@ pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<St
     )
 }
 
-/// The requests the case's statements are sent as, each checked to fit `MAX_COPY_SQL_BYTES`, or the error.
+/// How many requests the case's statements are sent as, each checked to fit `MAX_COPY_SQL_BYTES`, and whether the first commits only when every unloaded row loads; or the error up to its first comma.
 pub(crate) fn unloaded_requests_for(
     test_case: &UnloadedRequestsTestCase,
-) -> Result<Vec<String>, String> {
+) -> Result<(usize, bool), String> {
     use crate::adapters::snowflake::_helpers::write::unloaded_load::unloaded_requests;
     use crate::adapters::snowflake::constants::MAX_COPY_SQL_BYTES;
 
-    let (statements, unloaded) = match test_case.copies {
-        Some((count, length)) => (
-            (0..count)
-                .map(|index| format!("COPY INTO t /* {index} */ {}", "x".repeat(length)))
-                .collect::<Vec<String>>(),
-            Some((10, count * 1_000)),
-        ),
-        None => (vec!["INSERT INTO t SELECT 1".to_owned()], None),
-    };
-    let requests = unloaded_requests(&statements, unloaded, test_case.direct)?;
+    let (statements, unloaded) = test_case.copies.map_or_else(
+        || (vec!["INSERT INTO t SELECT 1".to_owned()], None),
+        |(count, length)| {
+            (
+                (0..count)
+                    .map(|index| format!("COPY INTO t /* {index} */ {}", "x".repeat(length)))
+                    .collect::<Vec<String>>(),
+                Some((10, count * 1_000)),
+            )
+        },
+    );
+    let requests = unloaded_requests(&statements, unloaded, test_case.direct)
+        .map_err(|error| error.split(',').next().unwrap_or_default().to_owned())?;
     assert!(
         requests
             .iter()
@@ -496,5 +496,5 @@ pub(crate) fn unloaded_requests_for(
         "{}: every COPY is sent once",
         test_case.description
     );
-    Ok(requests)
+    Ok((requests.len(), requests[0].contains("IF (loaded = ")))
 }

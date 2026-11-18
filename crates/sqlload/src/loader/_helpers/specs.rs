@@ -693,8 +693,8 @@ fn warehouse_source(
             route: WarehouseRoute::Unload {
                 store,
                 stage,
-                same_connection: context.target.warehouse == Warehouse::Snowflake
-                    && context.target.session_connection.as_ref() == Some(&source.connection)
+                same_connection: context.target.session_connection.as_ref()
+                    == Some(&source.connection)
                     && source.warehouse.is_none(),
             },
         }

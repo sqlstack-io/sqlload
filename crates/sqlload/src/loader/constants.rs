@@ -16,6 +16,10 @@ pub const PLAN_DETAIL_COLUMN: usize = 52;
 /// The width of a plan detail's label and the space after it, as `route   `.
 pub const LABEL_WIDTH: usize = 8;
 
+/// The route of a table a Snowflake target selects from a source on its own connection, after the warehouse's name.
+pub const SELECTED_ROUTE: &str =
+    "INSERT ... SELECT on the source's connection (nothing through the loader)";
+
 /// How a skipped files source's reason ends after `no files to load in <path>`, when `after_load` emptied its folder.
 pub const DRAINED_REASON: &str = ": after_load deleted or moved the ones already loaded";
 
@@ -193,7 +197,7 @@ pub const TOMBSTONE_SUFFIX: &str = "__sqlload_deletes";
 /// Why `--sync-deletes` fails a plan none of whose selected tables sets `deletes`.
 pub const NO_DELETES_TABLES: &str = "--sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes. Fix: set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes";
 
-/// Rows a merge [published once per run](crate::loader::_helpers::table_plan::publishes_once) stages before it commits anyway, at its next cut: matching the staged keys holds them all in one set on the server (about 90 bytes a key on ClickHouse), which this keeps under about 1 GiB.
+/// Rows a merge [published once per run](crate::loader::_helpers::publish::publishes_once) stages before it commits anyway, at its next cut: matching the staged keys holds them all in one set on the server (about 90 bytes a key on ClickHouse), which this keeps under about 1 GiB.
 pub const MERGE_RUN_ROWS: u64 = 10_000_000;
 
 /// How `plan` words a run published in one commit.

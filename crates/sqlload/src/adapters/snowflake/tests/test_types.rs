@@ -140,8 +140,6 @@ pub(crate) struct UnloadedRequestsTestCase {
     pub(crate) copies: Option<(usize, usize)>,
     /// Whether the batch commits into the table itself.
     pub(crate) direct: bool,
-    /// How many requests, or the start of the error.
-    pub(crate) expected_requests: Result<usize, &'static str>,
-    /// Whether the (first) request commits only when every unloaded row loads.
-    pub(crate) expected_checks_count: bool,
+    /// How many requests, and whether the first commits only when every unloaded row loads; or the error up to its first comma.
+    pub(crate) expected_requests: Result<(usize, bool), &'static str>,
 }
