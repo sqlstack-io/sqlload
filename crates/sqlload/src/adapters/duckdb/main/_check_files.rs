@@ -2,6 +2,7 @@
 
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::errors::DuckDbError;
+use crate::adapters::duckdb::main::_open_bucket::open_bucket;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbSql};
 use crate::store_paths::models::StoreKind;
@@ -16,8 +17,9 @@ pub(in crate::adapters) async fn check_files(
         return Ok(());
     }
     let probe = format!(
-        "SELECT count(*) FROM read_parquet({}, MD_RUN = REMOTE)",
+        "SELECT count(*) FROM read_parquet({}, hive_partitioning = false, MD_RUN = REMOTE)",
         DuckDbSql.render_loader_value_literal(url)
     );
-    pull_files(destination, store, probe).await.map(|_| ())
+    open_bucket(destination, store).await?;
+    pull_files(destination, probe).await.map(|_| ())
 }

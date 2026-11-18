@@ -152,3 +152,12 @@ pub(crate) struct MergeDedupeTestCase {
     /// The table's rows after the merge, as `id:name`, sorted.
     pub(crate) expected_rows: &'static [&'static str],
 }
+
+pub(crate) struct SecretCurrentTestCase {
+    pub(crate) description: &'static str,
+    /// The secret set on the database for the bucket: its parameters, whether its keys come from the credential chain, and how many seconds ago it was set.
+    pub(crate) set: Option<(&'static [&'static str], bool, u64)>,
+    /// The secret a table would set now: its parameters, and whether its keys come from the credential chain.
+    pub(crate) wanted: (&'static [&'static str], bool),
+    pub(crate) expected_current: bool,
+}

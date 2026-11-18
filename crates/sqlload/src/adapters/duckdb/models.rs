@@ -21,8 +21,17 @@ pub struct DuckDbDestination {
     pub own_limit: Option<u64>,
     /// The bytes of large values committed to the database since its last checkpoint, which DuckDB holds in memory until then.
     pub unflushed: Arc<std::sync::atomic::AtomicU64>,
-    /// The bucket secrets set on the database, each as its statement and parameters, shared by every table's connection: tables setting one at the same time conflict, so each is set once, before a table opens its transaction, and again only when its keys change.
-    pub secrets: Arc<tokio::sync::Mutex<Vec<(String, Vec<String>)>>>,
+    /// The secret set on the database for each bucket, by bucket, shared by every table's connection: tables setting one at the same time conflict, so each is set before a table opens its transaction, and again only when it [is no longer current](crate::adapters::duckdb::_helpers::pull_sql::secret_current).
+    pub secrets: Arc<tokio::sync::Mutex<std::collections::HashMap<String, SetSecret>>>,
+}
+
+/// A bucket's secret as it was set: a hash of its statement and parameters, never the keys themselves; whether DuckDB resolved its keys through the AWS credential chain, once, when it was set; and when.
+#[cfg(feature = "duckdb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetSecret {
+    pub hash: u64,
+    pub chain: bool,
+    pub at: std::time::Instant,
 }
 
 /// Where a destination's SQL runs.

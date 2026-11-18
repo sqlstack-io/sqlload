@@ -87,7 +87,7 @@ pub(crate) fn unloaded_row_loaded(
             compat: crate::load_naming::models::Compat::Sqlload,
             batch: 1,
         },
-        (&[file], false),
+        &[file],
         ("L1", "2026-11-08T00:00:00Z"),
     );
     connection.execute(&insert, []).map_err(failed)?;
@@ -231,7 +231,7 @@ pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> Str
             compat: crate::load_naming::models::Compat::Sqlload,
             batch: 1,
         },
-        (&["/unloaded/data_0.parquet".to_owned()], false),
+        &["/unloaded/data_0.parquet".to_owned()],
         ("L1", "2026-11-08T00:00:00Z"),
     )
 }
