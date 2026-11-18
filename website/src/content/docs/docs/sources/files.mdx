@@ -523,8 +523,9 @@ must hold all of a value's rows. Before each commit, SQLLoad finds the files the
 the commit's values came from, by `_sqlload_source_file`. When one of them is still in the folder,
 or loaded earlier in the same run, the table fails, naming both files: two files of the folder
 holding one value, such as the parts of an export split into part files, would leave only the
-later one's rows. Put all of a value's rows in one file, or remove the outdated file from the
-folder. A file sent again under the same name, or one whose earlier file has left the folder
+later one's rows. The error names the fixes: put all of a value's rows in one file, or, when a
+newer file restates an older one, remove the older file from the folder, by hand or with
+`after_load = "delete"` or `after_load = { move_to = ... }`. A file sent again under the same name, or one whose earlier file has left the folder
 (deleted, or moved by `after_load`), replaces the value. A file's rows always commit together.
 `plan` refuses a table that excludes `_sqlload_source_file`.
 
