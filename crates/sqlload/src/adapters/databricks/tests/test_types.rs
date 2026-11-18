@@ -34,3 +34,10 @@ pub(crate) struct LocationUrlTestCase {
     pub(crate) url: &'static str,
     pub(crate) expected_url: &'static str,
 }
+
+pub(crate) struct UnloadedCopyTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the batch lands in a build table in its final types, rather than a staging table.
+    pub(crate) builds: bool,
+    pub(crate) expected_statement: &'static str,
+}

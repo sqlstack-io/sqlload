@@ -7,10 +7,11 @@ use crate::adapters::clickhouse::_helpers::dialect::write::typed_literal;
 use crate::adapters::clickhouse::constants::ORDERED_READ_SETTINGS;
 use crate::adapters::clickhouse::models::ClickHouseSql;
 use crate::adapters::contract::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS};
+use crate::adapters::contract::models::WriteTarget;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::main::metadata_role::metadata_role;
-use crate::load_naming::models::{Compat, MetadataRole};
+use crate::load_naming::models::MetadataRole;
 use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
@@ -21,45 +22,26 @@ pub(crate) struct UnloadedFile<'a> {
     pub index: usize,
 }
 
-/// `INSERT INTO into` every one of `columns` (each typed by `sql_type`) from one of a warehouse's unloaded Parquet `file`s, read by [`s3_parquet`] with `credentials`. A column of `read` comes from the file, turned back from whole microseconds where it is read as a timestamp (a time never loads this way); a column of `constants` from its value; a merge's row number from `batch`, the file and the row in it, read in stored order; the load id and load time are the batch's; any other column is NULL.
+/// `INSERT INTO into` every one of `columns` (each typed by `sql_type`) from one of a warehouse's unloaded Parquet `file`s, read by [`s3_parquet`] with `credentials`. A column of `read` comes from the file, turned back from whole microseconds where it is read as a timestamp (a time never loads this way); a column of `target`'s constants from its value; a merge's row number from the batch, the file and the row in it, read in stored order; the load id and load time (`loaded_at`) are the batch's; any other column is NULL.
 pub(crate) fn unloaded_insert(
-    into: &str,
-    (columns, sql_type): (&[DesiredColumn], SqlTypeOf<'_>),
-    (read, constants): (&[ReadColumn], &[(String, ColumnType, String)]),
+    (into, columns, sql_type): (&str, &[DesiredColumn], SqlTypeOf<'_>),
+    target: &WriteTarget<'_>,
+    (read, loaded_at): (&[ReadColumn], &str),
     (file, credentials): (&UnloadedFile<'_>, Option<&PullCredentials>),
-    (compat, batch, load_id, loaded_at): (Compat, u64, &str, &str),
 ) -> String {
-    let identifier = |name: &str| ClickHouseSql.render_identifier(name);
     let values: Vec<String> = columns
         .iter()
         .map(|column| {
-            let constant = constants.iter().find(|(name, _, _)| *name == column.name);
-            let value = match (metadata_role(compat, &column.name), column.name.as_str()) {
-                (Some(MetadataRole::LoadId), _) => typed_literal(load_id, &column.column_type),
-                (Some(MetadataRole::LoadedAt), _) => {
-                    typed_literal(loaded_at, &column.column_type)
-                }
-                (None, MERGE_ROW_COLUMN) => format!(
-                    "{batch} * {UNLOADED_BATCH_ROWS} + {} * {UNLOADED_FILE_ROWS} + rowNumberInAllBlocks()",
-                    file.index
-                ),
-                _ if constant.is_some() => constant
-                    .map(|(_, column_type, value)| typed_literal(value, column_type))
-                    .unwrap_or_default(),
-                (_, name) => read
-                    .iter()
-                    .find(|read| read.name == name)
-                    .map_or_else(
-                        || "NULL".to_owned(),
-                        |read| unloaded_value(&read.output, &identifier(name)),
-                    ),
-            };
-            format!("CAST({value} AS {})", sql_type(&column.column_type))
+            format!(
+                "CAST({} AS {})",
+                column_value(column, target, (read, loaded_at), file),
+                sql_type(&column.column_type)
+            )
         })
         .collect();
     let targets: Vec<String> = columns
         .iter()
-        .map(|column| identifier(&column.name))
+        .map(|column| ClickHouseSql.render_identifier(&column.name))
         .collect();
     let settings = match columns.iter().any(|column| column.name == MERGE_ROW_COLUMN) {
         true => format!(" SETTINGS {ORDERED_READ_SETTINGS}"),
@@ -71,6 +53,33 @@ pub(crate) fn unloaded_insert(
         values.join(", "),
         s3_parquet(file.url, credentials)
     )
+}
+
+/// Where `column`'s value comes from, before its cast: the load id or load time, a merge's row number, a constant's value, the file's column of `read` it is, or NULL when the file lacks it.
+fn column_value(
+    column: &DesiredColumn,
+    target: &WriteTarget<'_>,
+    (read, loaded_at): (&[ReadColumn], &str),
+    file: &UnloadedFile<'_>,
+) -> String {
+    let constant = target
+        .constants
+        .iter()
+        .find(|(name, _, _)| *name == column.name);
+    let held = read.iter().find(|read| read.name == column.name);
+    match (metadata_role(target.compat, &column.name), constant, held) {
+        (Some(MetadataRole::LoadId), _, _) => typed_literal(target.load_id, &column.column_type),
+        (Some(MetadataRole::LoadedAt), _, _) => typed_literal(loaded_at, &column.column_type),
+        _ if column.name == MERGE_ROW_COLUMN => format!(
+            "{} * {UNLOADED_BATCH_ROWS} + {} * {UNLOADED_FILE_ROWS} + rowNumberInAllBlocks()",
+            target.batch, file.index
+        ),
+        (_, Some((_, column_type, value)), _) => typed_literal(value, column_type),
+        (_, None, Some(read)) => {
+            unloaded_value(&read.output, &ClickHouseSql.render_identifier(&read.name))
+        }
+        (_, None, None) => "NULL".to_owned(),
+    }
 }
 
 /// File column `quoted` as the value it was unloaded from: a timestamp, with or without time zone, from its whole microseconds as the UTC instant SQLLoad's reader gives (ClickHouse stores both as an instant); a binary through `substring`, which keeps a fixed-size value's trailing zero bytes; anything else as it is.

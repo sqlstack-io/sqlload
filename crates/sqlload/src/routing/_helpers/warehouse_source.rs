@@ -1,4 +1,5 @@
 use crate::routing::_helpers::deliver::deliver_arrow;
+use crate::routing::_helpers::files_route::must_pull;
 use crate::routing::_helpers::stores::{destination_pulls, ordered_stores};
 use crate::routing::constants::{DOWNLOAD_FOLDER, UNLOAD_THRESHOLD_BYTES};
 use crate::routing::errors::RouteError;
@@ -22,7 +23,7 @@ pub(crate) fn should_unload(reader: &ReaderOffer, read_via: ReadVia) -> Result<b
     }
 }
 
-/// Have the destination select the rows itself where it writes through the source's own connection; otherwise unload the source to Parquet, letting the destination load it directly when it can reach the files, or the files downloaded unchanged from an internal stage, and nothing needs SQLLoad to read them (masking, checks).
+/// Have the destination select the rows itself where it writes through the source's own connection; otherwise unload the source to Parquet, letting the destination load it directly when it can reach the files, or the files downloaded unchanged from an internal stage, and nothing needs SQLLoad to read them (masking, checks). An unload to a store the destination reads only itself ([`WriterAccepts::must_pull`]) but can't reach fails, never read back by SQLLoad.
 pub(crate) fn unload_route(
     reader: &ReaderOffer,
     writer: &WriterAccepts,
@@ -49,6 +50,19 @@ pub(crate) fn unload_route(
             reason: format!(
                 "unloaded to {store}, which the destination reads itself; no data passes through SQLLoad"
             ),
+        });
+    }
+    let refused = stores.first().filter(|_| unblocked).and_then(|store| {
+        let files = FileSet {
+            store: store.clone(),
+            format: FileFormat::Parquet,
+        };
+        must_pull(writer, &files).map(|reason| (store, reason))
+    });
+    if let Some((store, reason)) = refused {
+        return Err(RouteError::Uncovered {
+            location: store.to_string(),
+            reason,
         });
     }
     let downloaded = FileSet {

@@ -137,8 +137,8 @@ pub(crate) struct UnloadReadersTestCase {
     pub(crate) description: &'static str,
     pub(crate) warehouse: crate::column_types::models::Warehouse,
     pub(crate) masks: bool,
-    /// The table has a time column.
-    pub(crate) times: bool,
+    /// The Snowflake type of the table's one column.
+    pub(crate) column_type: &'static str,
     /// How the reason SQLLoad reads the files instead starts, or `None` when the target reads the S3 unload itself.
     pub(crate) expected_blocked: Option<&'static str>,
 }
