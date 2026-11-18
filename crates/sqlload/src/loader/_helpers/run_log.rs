@@ -956,15 +956,15 @@ pub(crate) fn listed_sources(
         .find(|(name, _)| name == this_name)
         .map(|(_, at)| at.clone());
     let last_wins = table.spec.on_overlapping_files == OnOverlappingFiles::LastWins;
-    let held: Vec<&str> = sources
-        .iter()
-        .filter(|name| {
-            listed.iter().any(|(listed, at)| {
-                listed == *name && (!last_wins || this_order.as_ref().is_none_or(|this| at > this))
-            })
-        })
-        .map(|name| name.strip_prefix(location.as_str()).unwrap_or(name))
-        .collect();
+    let mut held: Vec<&str> = Vec::new();
+    for name in sources {
+        let Some((_, at)) = listed.iter().find(|(listed, _)| listed == name) else {
+            continue;
+        };
+        if !last_wins || this_order.as_ref().is_none_or(|this| at > this) {
+            held.push(name.strip_prefix(location.as_str()).unwrap_or(name));
+        }
+    }
     let Some(first) = held.first() else {
         return Ok(());
     };
