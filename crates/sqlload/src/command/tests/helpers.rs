@@ -10,6 +10,14 @@ use crate::command::models::{Cli, Command, LoaderRequest};
 use crate::load_events::main::event_line::event_line;
 use crate::load_events::models::{EventKind, LoadEvent};
 
+/// The help `sqlload` prints for `argv` (after `sqlload`, ending in `--help`), as clap renders it.
+pub(crate) fn help_text(argv: &[&str]) -> String {
+    Cli::try_parse_from(["sqlload"].iter().chain(argv))
+        .err()
+        .map(|error| error.to_string())
+        .unwrap_or_default()
+}
+
 /// `sqlload debug --no-connection` on `project` without a Python host, as the standalone executable runs it; the error text, or `""`.
 pub(crate) fn debug_without_host(project: &str) -> String {
     let request = LoaderRequest {

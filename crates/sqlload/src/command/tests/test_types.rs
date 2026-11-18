@@ -105,3 +105,10 @@ pub(crate) struct PlanProgressTestCase {
     pub(crate) expected_spinner: Option<&'static str>,
     pub(crate) expected_row: Option<&'static str>,
 }
+
+pub(crate) struct HelpTestCase {
+    pub(crate) description: &'static str,
+    /// The command line after `sqlload`, ending in `--help`.
+    pub(crate) argv: &'static [&'static str],
+    pub(crate) expected_text: &'static str,
+}
