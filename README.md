@@ -19,26 +19,29 @@
   <a href="https://sqlload.io/docs/benchmarks/">Benchmarks</a>
 </p>
 
-Load Postgres, files, Snowflake, BigQuery, Google Sheets and Python sources into your warehouse.
-SQLLoad is Rust and Arrow end to end, and when your warehouse reads the files itself, rows never
-pass through SQLLoad, so there's no loader bottleneck as your data grows. It's fast, too: faster
-than ingestr and dlt in every [benchmark](https://sqlload.io/docs/benchmarks/) we publish.
+SQLLoad loads databases, files, APIs and Kafka into your warehouse. `sqlload plan` shows every
+table and how it loads before anything moves, and `plan -v` adds each column's type and the run's
+memory budget. Decimals keep their precision, a load that can't fit a column's values stops with
+the reason and the fix, and each run stays within one memory budget. Incremental tables carry on
+from the warehouse's own maximum, so there's no state to drift.
 
 ```bash
 pip install sqlload        # or: uv tool install sqlload
 ```
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="sqlload plan lists the two tables it will create from Postgres, their column types in DuckDB, and how each loads; sqlload load then creates them and loads 1,050 rows" width="100%">
+  <img src="https://raw.githubusercontent.com/sqlstack-io/sqlload/main/.github/demos/plan-load.gif" alt="In the playground project, sqlload plan lists the two tables it will create in DuckDB and how each loads from CSV files; sqlload load creates them and loads 1,050 rows, reporting the slowest table and peak memory; with cursor_column misspelled as updated, the next load stops before loading anything: did you mean updated_at?" width="100%">
 </p>
 
-`sqlload plan` shows the tables it will create from Postgres, each column's DuckDB type and how
-each table loads. `sqlload load` then creates and fills them.
+In the [playground](https://sqlload.io/docs/cli/playground/) project, `sqlload plan` shows the
+tables it will create and how each loads, and `sqlload load` creates and fills them. With
+`cursor_column` misspelled, the next load stops before it touches a table, and says which column
+was meant.
 
 ## Quick start
 
 ```bash
-sqlload plan     # every table, column type and route, before anything is created
+sqlload plan     # every table and how it loads, before anything is created (-v: column types)
 sqlload apply    # create the tables
 sqlload load     # load them
 ```
@@ -56,7 +59,24 @@ Moving from dlt? [Coming from dlt](https://sqlload.io/docs/guides/from-dlt/) map
 write dispositions, incremental loading, `rest_api` and `filesystem`, and keeps the table and column
 names dlt gave your tables.
 
-## Speed
+## Why SQLLoad
+
+- **Exact types.** A source's `decimal(12,2)` loads as `DECIMAL(12,2)`, timestamps keep their
+  microseconds, and a pinned type narrower than the live column fails `plan` rather than cutting
+  values. See [contracts](https://sqlload.io/docs/concepts/contracts/).
+- **Loud failures.** `plan` names each problem and its fix before anything is created. A table
+  whose [checks](https://sqlload.io/docs/concepts/checks/) fail publishes nothing, every commit
+  lands whole even if a load is killed halfway, and a full refresh swaps in at once, so readers
+  see the old table or the new one, never a mix.
+- **Bounded memory.** A run has one [memory budget](https://sqlload.io/docs/cli/load/#memory-budget),
+  shared out between its tables. A budget too small for even one table is refused before anything
+  loads, and near the limit SQLLoad stops a table, or the run, and rolls back what it was
+  writing, rather than being killed by the operating system.
+- **No hidden state.** Incremental tables carry on from the
+  [warehouse's own maximum](https://sqlload.io/docs/concepts/cursors/) of the cursor column, so a
+  table you fix or reload by hand never disagrees with a state file.
+
+## Speed and memory
 
 Faster, in a fraction of the memory. The same data loaded by each tool on one 4-vCPU, 8 GB machine;
 lower is better:
@@ -77,18 +97,6 @@ peak memory 131 MiB for SQLLoad, 495 MiB for ingestr and 341 MiB for dlt.
 See the [benchmarks](https://sqlload.io/docs/benchmarks/) for every scenario, the method, the
 versions and how to run them yourself.
 
-## Why SQLLoad
-
-- **See the plan before any data moves.** `sqlload plan` shows every table, column type, write
-  strategy and route before anything is created or loaded, so there are no surprises in your
-  warehouse.
-- **Crash-safe loads.** Every commit lands whole, even if a load is killed halfway. A full refresh
-  swaps in one go, so your dashboards see the old table or the new one, never a mix.
-- **Postgres change data capture.** A `postgres_cdc` source copies your tables once, then applies
-  every insert, update and delete from a logical replication slot, in whole source transactions.
-  `sqlload load --follow` keeps streaming. See
-  [Postgres CDC](https://sqlload.io/docs/sources/postgres-cdc/).
-
 ## What it loads
 
 | System | Source | Target |
@@ -98,8 +106,8 @@ versions and how to run them yourself.
 | BigQuery (beta) | ✓ | ✓ |
 | Databricks (beta) | ✓ | ✓ |
 | ClickHouse | | ✓ |
-| DuckDB | | ✓ |
-| MotherDuck (beta) | | ✓ |
+| DuckDB | ✓ | ✓ |
+| MotherDuck (beta) | ✓ | ✓ |
 | ODBC | ✓ SQL Server, MySQL, OpenEdge | |
 | Files | ✓ Parquet, CSV, JSON, Excel, XML | ✓ Parquet, CSV |
 | Google Sheets | ✓ | |
