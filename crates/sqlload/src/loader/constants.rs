@@ -16,6 +16,10 @@ pub const PLAN_DETAIL_COLUMN: usize = 52;
 /// The width of a plan detail's label and the space after it, as `route   `.
 pub const LABEL_WIDTH: usize = 8;
 
+/// The route of a table a Snowflake target selects from a source on its own connection, after the warehouse's name.
+pub const SELECTED_ROUTE: &str =
+    "INSERT ... SELECT on the source's connection (nothing through the loader)";
+
 /// How a skipped files source's reason ends after `no files to load in <path>`, when `after_load` emptied its folder.
 pub const DRAINED_REASON: &str = ": after_load deleted or moved the ones already loaded";
 
@@ -108,6 +112,8 @@ pub const RESET: &str = "\x1b[0m";
 /// The host name that always means this machine: plain text to it never crosses a network.
 pub const LOCALHOST: &str = "localhost";
 
+/// Why Snowflake does not read a Snowflake source's unload itself when no external stage of the target covers it.
+pub const UNLOADED_OUTSIDE_STAGE: &str = "Snowflake reads another connection's unload itself only through the target's external stage: set the source's stage to an external one (url and storage_integration) whose url is inside the target's external stage url";
 /// Why a warehouse source's unloaded files go through SQLLoad rather than straight into the destination.
 pub const UNLOADED_TIMES: &str = "the warehouse writes times and timestamps as whole microseconds (its Parquet writer keeps only milliseconds), which SQLLoad turns back into them";
 
@@ -191,7 +197,7 @@ pub const TOMBSTONE_SUFFIX: &str = "__sqlload_deletes";
 /// Why `--sync-deletes` fails a plan none of whose selected tables sets `deletes`.
 pub const NO_DELETES_TABLES: &str = "--sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes. Fix: set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes";
 
-/// Rows a merge [published once per run](crate::loader::_helpers::table_plan::publishes_once) stages before it commits anyway, at its next cut: matching the staged keys holds them all in one set on the server (about 90 bytes a key on ClickHouse), which this keeps under about 1 GiB.
+/// Rows a merge [published once per run](crate::loader::_helpers::publish::publishes_once) stages before it commits anyway, at its next cut: matching the staged keys holds them all in one set on the server (about 90 bytes a key on ClickHouse), which this keeps under about 1 GiB.
 pub const MERGE_RUN_ROWS: u64 = 10_000_000;
 
 /// How `plan` words a run published in one commit.

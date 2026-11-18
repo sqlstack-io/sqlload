@@ -39,3 +39,8 @@ pub const COMMIT_STATEMENT: &str = "COMMIT";
 
 /// Ends a transaction, undoing it.
 pub const ROLLBACK_STATEMENT: &str = "ROLLBACK";
+
+/// The `_sqlload_row` span of one unloaded batch (2^48): its files' rows number from the batch times this.
+pub const UNLOADED_BATCH_ROWS: i64 = 1 << 48;
+/// The `_sqlload_row` span of one unloaded file in a batch (2^32).
+pub const UNLOADED_FILE_ROWS: i64 = 1 << 32;

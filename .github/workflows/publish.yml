@@ -102,6 +102,10 @@ jobs:
     name: Build ${{ matrix.package.name }} (${{ matrix.platform.name }})
     needs: [release-tag, release-metadata]
     runs-on: ${{ matrix.platform.runner }}
+    # Once sccache is running, a compile its cache can't serve runs uncached instead of failing.
+    # maturin-action passes SCCACHE_* into the manylinux container.
+    env:
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -186,9 +190,35 @@ jobs:
           bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$HOMEBREW/etc" '' "$HOMEBREW/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
       # sccache keeps compiled crates and DuckDB's bundled C++ between runs of the same branch, so a
-      # release build reuses the previous release's work and recompiles little beyond sqlload. Not on
-      # Windows, where it made the build about 12 minutes slower. If the Actions cache is down when
-      # sccache starts, the build fails; rerun it (PyPI skips wheels it already has).
+      # release build reuses the previous release's work (82 to 99% of compiles were cache hits in
+      # 0.71.0's build). Not on Windows, where it made the build about 12 minutes slower. sccache
+      # stops before compiling anything when the Actions cache won't answer its startup check (a 503
+      # from the cache service, say), which SCCACHE_IGNORE_SERVER_IO_ERROR doesn't cover, so it is
+      # started here first, as the build would start it: when it can't start, the wheels build
+      # without it. The build starts its own server a minute or so later, so a cache that fails
+      # only in that gap still fails the build; rerun it (PyPI skips wheels it already has).
+      # The cache's URL and token reach only JavaScript actions, such as maturin-action, which passes
+      # them on to the build; the check needs them too.
+      - name: Give the sccache check the Actions cache
+        if: runner.os != 'Windows'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            for (const name of ['ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
+              if (process.env[name]) core.exportVariable(name, process.env[name])
+            }
+      - name: Check that sccache starts
+        id: sccache
+        if: runner.os != 'Windows'
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          if python -m pip install --quiet 'sccache>=0.10.0' && sccache --start-server; then
+            sccache --stop-server > /dev/null || true
+            echo "usable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::sccache unavailable, building without it"
+          fi
       - name: Build CLI wheel
         if: contains(matrix.package.builds, 'cli')
         uses: PyO3/maturin-action@v1
@@ -202,7 +232,7 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
-          sccache: ${{ runner.os != 'Windows' }}
+          sccache: ${{ steps.sccache.outputs.usable == 'true' }}
           working-directory: packages/sqlload-cli
           # The vendored OpenSSL build runs Perl's Configure, which needs modules the
           # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
@@ -220,7 +250,7 @@ jobs:
           args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
-          sccache: ${{ runner.os != 'Windows' }}
+          sccache: ${{ steps.sccache.outputs.usable == 'true' }}
           working-directory: packages/sqlload
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece

@@ -317,8 +317,12 @@ pub struct WarehouseSource {
 /// How a warehouse source's rows leave the warehouse; each warehouse chooses its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WarehouseRoute {
-    /// The warehouse writes Parquet into `store`, which SQLLoad reads back and removes; `stage` says why there, for `plan`.
-    Unload { store: Store, stage: String },
+    /// The warehouse writes Parquet into `store`, which SQLLoad reads back and removes; `stage` says why there, for `plan`. `same_connection`: the target writes through the source's own connection, so it can select the rows itself instead.
+    Unload {
+        store: Store,
+        stage: String,
+        same_connection: bool,
+    },
     /// SQLLoad runs the query and reads its rows as Arrow.
     Query,
 }

@@ -1746,7 +1746,10 @@ pub(crate) async fn unload_source<T>(
 }
 
 /// What one unload of `table` reads: its table or query, its read columns, and `filter`.
-fn unload_request<'a>(table: &'a TablePlan, filter: Option<&'a str>) -> UnloadRequest<'a> {
+pub(crate) fn unload_request<'a>(
+    table: &'a TablePlan,
+    filter: Option<&'a str>,
+) -> UnloadRequest<'a> {
     UnloadRequest {
         table: &table.spec.source_table,
         sql: table.spec.query_sql(),

@@ -24,17 +24,17 @@ use crate::column_parse::main::parse_lines::parse_lines;
 use crate::column_types::models::ColumnType;
 use crate::files_source::models::{FilesOrder, SourceFormat};
 use crate::load_naming::main::is_load_column::is_load_column;
-use crate::loader::_helpers::publish::{published_once, records_files, send_lines};
+use crate::loader::_helpers::publish::{published_once, publishes_once, records_files, send_lines};
 use crate::loader::_helpers::python::{list_choices, unnested_table};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::run_log::last_wins_note;
 use crate::loader::_helpers::sources::{readers_note, unarchived};
 use crate::loader::_helpers::table_plan::{
-    archived_reason, is_direct, publishes_once, pulls_unloaded,
+    archived_reason, is_direct, pulls_unloaded, selects_rows,
 };
 use crate::loader::constants::{
     CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PLAN_DETAIL_COLUMN,
-    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION,
+    PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION, SELECTED_ROUTE,
 };
 use crate::loader::models::{
     CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
@@ -694,6 +694,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         route: WarehouseRoute::Unload { stage, .. },
         ..
     }) = &spec.warehouse_source
+        && !selects_rows(table.route.as_ref())
     {
         details.push(detail("stage", stage.as_str()));
     }
@@ -846,7 +847,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             )
         }
         (_, true) if pulls_unloaded(table.route.as_ref()) => {
-            "each unload loaded at once into a new table, swapped in once at the end".to_owned()
+            "every row loaded at once into a new table, swapped in once at the end".to_owned()
         }
         (_, true) if sql_adapter(spec.warehouse).keeps_tables() => {
             "about 1 GB at a time into a staging table, then the table emptied and refilled in one transaction".to_owned()
@@ -868,7 +869,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             }
         ),
         (CommitRule::Size, false) if pulls_unloaded(table.route.as_ref()) => {
-            "one commit: the destination loads the whole unload at once".to_owned()
+            "one commit: the destination loads every row at once".to_owned()
         }
         (CommitRule::Size, false) => "about every 1 GB".to_owned(),
         (CommitRule::Whole(reason), false) => {
@@ -1003,6 +1004,7 @@ fn route_text(table: &TablePlan, route: &Route) -> String {
             real.unwrap_or_else(|| files.format.to_string()),
             files.store
         ),
+        [Step::DestinationSelects] => format!("{warehouse} {SELECTED_ROUTE}"),
         [Step::Unload(store), Step::DestinationPulls(_)] => {
             format!("unload Parquet to {store} -> {warehouse} {load} (nothing through the loader)")
         }
