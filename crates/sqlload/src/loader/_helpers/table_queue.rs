@@ -1,37 +1,50 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use tokio::task::{Id, JoinError};
+use tokio::runtime::Handle;
+use tokio::task::{Id, JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::adapters::contract::models::WriteMode;
+use crate::adapters::dispatch::main::session::helper_process::helper_process;
 use crate::cdc::main::follow_cdc::follow_cdc;
 use crate::cdc::main::load_cdc::load_cdc;
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
 use crate::loader::_helpers::run_log::record_numbered;
 use crate::loader::constants::DEFAULT_THREADS;
+use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_table::load_one;
 use crate::loader::models::{LoadRun, ProjectPlan, SharedRun, TableOutcome, TablePlan};
+use crate::memory_budget::main::start_watchdog::start_watchdog;
+use crate::memory_budget::main::watch_table::watch_table;
+use crate::memory_budget::models::MemoryGuard;
 use crate::peak_memory::main::with_table_peak::with_table_peak;
 use crate::project::models::ProjectConfig;
 
-/// The most tables loading at once.
+/// The most tables loading at once: `--concurrency`, else the project's `concurrency`, lowered to as many as the memory budget gives a share.
 pub(crate) fn thread_count(run: &LoadRun<'_>) -> usize {
     if run.options.memory_per_table {
         return 1;
     }
-    run.options
+    let concurrency = run
+        .options
         .concurrency
         .or(run.project.concurrency)
         .unwrap_or(DEFAULT_THREADS)
-        .max(1)
+        .max(1);
+    match run.project.memory.budget {
+        Some(budget) => concurrency.min(budget.tables_at_once.max(1)),
+        None => concurrency,
+    }
 }
 
-/// What every table's thread needs, owned.
-pub(crate) fn shared_run(run: &LoadRun<'_>) -> Arc<SharedRun> {
+/// What every table's thread needs, owned, with the load's memory `guard`.
+pub(crate) fn shared_run(run: &LoadRun<'_>, guard: Option<Arc<MemoryGuard>>) -> Arc<SharedRun> {
+    let mut project = run.project.clone();
+    project.memory.guard = guard;
     Arc::new(SharedRun {
-        project: run.project.clone(),
+        project,
         destinations: run.destinations.clone(),
         host: run.host.clone(),
         options: run.options.clone(),
@@ -47,11 +60,15 @@ pub(crate) async fn load_task(shared: Arc<SharedRun>, table: TablePlan) -> Table
         options: &shared.options,
     };
     let started = std::time::Instant::now();
-    let (loaded, peak_memory_bytes) = with_table_peak(
-        shared.options.memory_per_table,
-        Box::pin(load_one(&run, &table)),
-    )
-    .await;
+    let guard = shared.project.memory.guard.as_ref();
+    let name = table.outcome_name();
+    let watched = watch_table(guard, &name, load_one(&run, &table));
+    let ((loaded, tripped), peak_memory_bytes) =
+        with_table_peak(shared.options.memory_per_table, Box::pin(watched)).await;
+    let loaded = match (loaded, tripped) {
+        (Err(_), Some(tripped)) => Err(LoaderError::Invalid(tripped)),
+        (loaded, _) => loaded,
+    };
     match loaded {
         Ok((name, loaded)) => TableOutcome {
             table: name,
@@ -314,6 +331,37 @@ impl<'a> TableQueue<'a> {
         self.outcomes.push((index, outcome));
     }
 
+    /// Load the queue's tables, `threads` at once, none starting while `guard`, the watchdog, holds the load at 80% of its budget (unless none is loading).
+    pub(crate) async fn load_all(
+        &mut self,
+        threads: usize,
+        (shared, guard): (Arc<SharedRun>, Option<Arc<MemoryGuard>>),
+    ) {
+        let mut running: JoinSet<TableOutcome> = JoinSet::new();
+        loop {
+            while running.len() < threads {
+                if holding(guard.as_ref()) && !running.is_empty() {
+                    break;
+                }
+                let Some((index, table)) = self.next() else {
+                    break;
+                };
+                let (shared, table, handle) = (shared.clone(), table.clone(), Handle::current());
+                let task =
+                    running.spawn_blocking(move || handle.block_on(load_task(shared, table)));
+                self.started(task.id(), index);
+            }
+            let joined = tokio::select! {
+                joined = running.join_next_with_id() => joined,
+                () = released(guard.as_ref()) => continue,
+            };
+            let Some(joined) = joined else {
+                break;
+            };
+            self.finish(joined);
+        }
+    }
+
     /// The outcomes in plan order, a table `--fail-fast` never started among them as skipped.
     pub(crate) fn outcomes(mut self) -> Vec<TableOutcome> {
         if let Some(failed) = &self.stopped {
@@ -328,5 +376,30 @@ impl<'a> TableQueue<'a> {
             .into_iter()
             .map(|(_, outcome)| outcome)
             .collect()
+    }
+}
+
+/// The watchdog over the load's memory budget, counting the MotherDuck bridges' memory with the process's; `None` without a budget.
+pub(crate) fn watch_load(run: &LoadRun<'_>) -> Option<Arc<MemoryGuard>> {
+    let guard = run.project.memory.budget.map(start_watchdog)?;
+    let helpers = run.destinations.values().filter_map(helper_process);
+    guard
+        .children
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(helpers);
+    Some(guard)
+}
+
+/// Whether the watchdog holds the load at 80% of its budget, so no table starts.
+fn holding(guard: Option<&Arc<MemoryGuard>>) -> bool {
+    guard.is_some_and(|guard| guard.holding.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Wait until the watchdog stops holding the load; never, without one.
+async fn released(guard: Option<&Arc<MemoryGuard>>) {
+    match guard {
+        Some(guard) => guard.released.notified().await,
+        None => std::future::pending().await,
     }
 }

@@ -15,5 +15,7 @@ pub(in crate::adapters::duckdb) fn shared_destination(
         ddl: Arc::default(),
         motherduck: false,
         bridge_duckdb: String::new(),
+        memory: None,
+        unflushed: Arc::default(),
     })
 }

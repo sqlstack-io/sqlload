@@ -313,7 +313,7 @@ impl Output {
         let mut failed: Option<String> = None;
         run_http_job(
             definition,
-            &self.context.connections,
+            (&self.context.connections, self.context.source_part),
             self.context.rules(),
             |page| {
                 match self.page_rows(&page, transform.as_ref().zip(crossing.as_ref())) {

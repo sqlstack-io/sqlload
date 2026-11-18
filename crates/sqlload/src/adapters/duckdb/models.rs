@@ -15,6 +15,10 @@ pub struct DuckDbDestination {
     pub motherduck: bool,
     /// The version of Python's duckdb package the MotherDuck bridge runs, such as `1.5.6`; empty for the bundled DuckDB.
     pub bridge_duckdb: String,
+    /// Its part of the run's memory budget, which cuts commits of large values into pieces; `None` without a budget.
+    pub memory: Option<crate::memory_budget::models::DuckDbShare>,
+    /// The bytes of large values committed to the database since its last checkpoint, which DuckDB holds in memory until then.
+    pub unflushed: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// Where a destination's SQL runs.

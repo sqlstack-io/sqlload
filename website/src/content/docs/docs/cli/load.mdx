@@ -157,6 +157,111 @@ tables of one run: the table that uses too much stands out. On other systems, `p
 `load` refuse the flag: `--memory-per-table needs Linux; the run's peak is in every report`. See
 [Finding a source that uses too much memory](/docs/troubleshooting/#finding-a-source-that-uses-too-much-memory).
 
+## Memory budget
+
+From 0.68.0, a run stays under one memory budget, and `plan` shows it first, with where it came
+from and how it's shared:
+
+```console
+$ sqlload plan --memory-limit 1200MB
+Memory  1.1 GiB budget (--memory-limit); 39.8 MiB held before loading; DuckDB 488 MiB (memory_limit 244 MiB, 2 threads); 154 MiB per table, 4 at once
+
+Objects (2)                                                                     sqlload apply
+├── raw.customers  create table, 4 columns
+└── raw.documents  create table, 6 columns
+
+Loads (2)  into DuckDB dev                                                      sqlload load
+└── app postgres  into raw
+    ├── customers   replace
+    └── documents   replace
+
+✓ Plan complete  2 objects to create, 2 to load
+```
+
+- **The budget** is [`memory_limit`](/docs/configuration/) or `--memory-limit`. Without either,
+  it's 80% of the limit of the container (the cgroup's `memory.max`) or the Windows job object
+  SQLLoad runs in, else 50% of the machine's memory, which other programs likely share. Where the
+  memory can't be read, the line says `no budget` and why, and the run has no budget.
+- **Held before loading** is what the process holds once it has connected, which comes off first.
+- **DuckDB** (and MotherDuck) targets take 30% of the rest together. Each one's `memory_limit` is
+  half its part, because DuckDB holds up to about twice its `memory_limit`, and never under 256MB.
+  It runs a statement on one thread per 128 MiB of its `memory_limit`, between two and the
+  machine's cores.
+- **Per table**: the tables share what remains, as many at once as get at least 64 MiB each, up to
+  `concurrency`. When fewer fit, the line says so: `1 at once (concurrency 8 doesn't fit)`. A
+  table's sources keep a quarter of its share each for what they read ahead: an ODBC
+  [fetch buffer](/docs/sources/odbc/#memory), the pages an `sl.http` job requests ahead
+  (`read_ahead` sends fewer at once when its pages are large), and a Postgres source's batches.
+
+`plan` fails when the budget can't hold what SQLLoad holds already, or leaves no table 64 MiB,
+naming the budget the run needs:
+
+```text
+the 600 MiB memory budget leaves the tables 11.7 MiB after DuckDB's 488 MiB, under the 64 MiB one table loads in; raise memory_limit to at least 653MiB
+```
+
+### Large rows in DuckDB
+
+DuckDB keeps values of about 85 KiB and more in memory from their insert until a checkpoint
+writes them to the file. So when the large values of a table's open commit reach a quarter of
+DuckDB's `memory_limit`, SQLLoad commits what it has written as a piece and carries on. Rows that
+go through a staging table first, as a `merge` or `delete_insert` does, count three times. Under
+`send = "at_commit"`, the default on MotherDuck, the rows held for a commit are sent a piece at a
+time as well. How the pieces commit depends on the table:
+
+- A table the load builds and swaps in at the end (a first load, `replace`, `--reload`) commits
+  its pieces into the build table, so nothing changes for readers.
+- `append` and `merge` commit each piece into the table. A `delete_insert` cuts its pieces only
+  between values of its `replace_key`, or of its cursor for a window, so each piece replaces whole
+  keys or a whole part of the window; its deletes keep the rows this load committed in earlier
+  pieces. Until the last piece, a reader may see part of the load, as with commits every
+  `batch_size`.
+- An `append` that stops between its pieces, even by a crash, leaves a marker; the next `load` of
+  that table removes that load's rows before it loads, so it reads them again. See
+  [Unfinished appends](/docs/concepts/cursors/#unfinished-appends).
+
+SQLLoad turns DuckDB's automatic checkpoint off during a load, since one that runs out of memory
+leaves the database unusable. Instead it checkpoints after a piece as needed, and after each table
+that held large values.
+
+Some rows can't be cut small enough. Then only their table fails, naming the fix, while the other
+tables load:
+
+- one `replace_key` value, cursor value or partition whose rows are larger than a piece:
+
+  ```text
+  failed  raw.attachments  attachments: the rows of one k value hold 300 MiB of values over 85 KiB, which a delete_insert replaces in one commit, past the 61 MiB of them DuckDB's 244 MiB memory_limit commits at once (through a staging table, they count three times); raise memory_limit to at least 23.5GiB
+  ```
+
+- a table whose open row group, the rows past its last full 122,880, holds more large values than
+  DuckDB can rewrite at a checkpoint. The message also gives what a full row group of such rows
+  needs. This doesn't apply to MotherDuck, which checkpoints on its own servers:
+
+  ```text
+  failed  raw.documents  documents: its last row group would hold 366 MiB of strings, 366 MiB of them values over 85 KiB from this load (rows of about 1 MiB each), more than DuckDB rewrites at a checkpoint within its 244 MiB memory_limit; raise memory_limit to at least 2GiB (a row group fills at 122,880 rows, and rows this wide need a memory_limit of at least 640.1GiB by then)
+  ```
+
+Unnested child tables, Postgres CDC changes, the key scan of `--sync-deletes`, a `merge` that
+refuses repeated keys (`on_duplicate_keys = "fail"`) and a table with
+[checks](/docs/concepts/checks/) that isn't rebuilt aren't cut into pieces: a refusing merge and
+checks must see every row of a commit before any of it is written. They fail the same way when one
+commit is too large, writing nothing of it. A CDC table then stops at that commit
+until `memory_limit` is raised, and its replication slot keeps the source's write-ahead log
+meanwhile.
+
+### The watchdog
+
+While a run loads, SQLLoad reads the memory of the whole process, and of a MotherDuck target's
+bridge process, every 10 ms. From 80% of the budget, no table starts until it falls again, and
+pieces are cut four times smaller. From 90%, the table holding the most
+[large values](#large-rows-in-duckdb) in memory stops: its running DuckDB statement is interrupted
+and rolled back, and it fails while the other tables carry on. A table holding none isn't stopped,
+and SQLLoad never stops the process itself.
+
+```text
+failed  raw.attachments  raw.attachments stopped: the load held 1.1 GiB of its 1.1 GiB memory budget (95%); from 90% the table holding the most large values in memory stops, here this one with 39 MiB; raise memory_limit, or lower batch_size
+```
+
 ## Following a Postgres CDC source
 
 `sqlload load SOURCE --follow` keeps streaming one `postgres_cdc` source after it catches up,
