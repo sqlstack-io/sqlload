@@ -58,6 +58,7 @@ use crate::project::models::{
     ConnectionConfig, ProjectConfig, RenameSetting, SourceKind, TableSettings,
 };
 use crate::python_sources::types::PythonHost;
+use crate::schema_plan::models::Blocked;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_util::sync::CancellationToken;
 
@@ -497,11 +498,13 @@ async fn run_command(
     if !applies {
         return Ok((lines, exit_code(planned, plan_retryable)));
     }
-    if loads && project.memory.problem.is_some() {
-        return Ok(match json {
-            true => (vec![json_report(&plan, None).0], exit_code(false, false)),
-            false => (lines, exit_code(false, false)),
-        });
+    if let Some(problem) = project.memory.problem.as_ref().filter(|_| loads) {
+        for table in &mut plan.tables {
+            table.schema.blocked = Some(Blocked {
+                reasons: vec![problem.clone()],
+                fix_flag: None,
+            });
+        }
     }
     if follow.is_some() && !render_plan(&plan, verbose).1 {
         return Ok(match json {

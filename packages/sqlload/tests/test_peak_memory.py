@@ -83,8 +83,10 @@ def test_memory_per_table_measures_each_table_from_its_own_start(tmp_path: Path,
 	assert large - small > 300 * MEGABYTE, (first, second, tables)
 
 
-def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_path: Path) -> None:
-	"""A 256MB budget leaves the tables nothing after DuckDB's share: `load` refuses like `plan`, creating and loading no table."""
+
+@pytest.mark.parametrize("json_report", [False, True])
+def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_path: Path, json_report: bool) -> None:
+	"""A 256MB budget leaves the tables nothing after DuckDB's share: `load` refuses like `plan`, creating and loading no table, and still reports as a load."""
 	(tmp_path / "sources").mkdir()
 	(tmp_path / "sqlload.toml").write_text(PROJECT)
 	(tmp_path / "sources" / "shop.py").write_text(textwrap.dedent(MODULE.format(first="small", second="small")))
@@ -92,7 +94,7 @@ def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_pa
 	home.mkdir()
 	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache")}
 	done = subprocess.run(
-		[sys.executable, "-c", "from sqlload._cli import main; main()", "load", "--memory-limit", "256MB"],
+		[sys.executable, "-c", "from sqlload._cli import main; main()", "load", "--memory-limit", "256MB", *(["--json"] if json_report else [])],
 		cwd=tmp_path,
 		env=env,
 		capture_output=True,
@@ -100,8 +102,13 @@ def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_pa
 	)
 	output = done.stdout + done.stderr
 	assert done.returncode == 1, output
-	assert "raise memory_limit to at least" in output, output
-	assert "loaded" not in output and "created" not in output, output
+	if json_report:
+		report = json.loads(done.stdout)
+		assert report["command"] == "load", report
+		assert report["summary"]["loaded"] == 0, report["summary"]
+		assert any("raise memory_limit to at least" in json.dumps(error) for error in report["plan"]["errors"]), report["plan"]["errors"]
+	else:
+		assert "raise memory_limit to at least" in output, output
 	with duckdb.connect(str(tmp_path / "wh.duckdb")) as connection:
-		tables = connection.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'RAW'").fetchall()
+		tables = connection.execute("SELECT table_schema, table_name FROM information_schema.tables").fetchall()
 	assert tables == [], tables
