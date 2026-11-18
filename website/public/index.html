@@ -101,7 +101,7 @@
 							</dl>
 						</div>
 					</div>
-					<p class="caption">Lower is better, on one 4-vCPU, 8 GB machine. S3 Parquet → Snowflake: wall time and peak memory from the same 100M-row runs, median of 3, 18 November 2026, sqlload 0.70.1 and ingestr 1.1.82. On SQLLoad's default route Snowflake copies the files itself, so no row passes through SQLLoad and it uses no disk; ingestr streams every row through its own process and spilled 5.7 GiB to disk. Postgres → Snowflake: median of 5 runs, 6 November 2026, sqlload 0.11.1, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres). dlt was not run in the S3 scenario.</p>
+					<p class="caption">Lower is better, on one 4-vCPU, 8 GB machine. S3 Parquet → Snowflake: wall time and peak memory from the same 100M-row runs, median of 3, 18 November 2026, sqlload 0.70.1 and ingestr 1.1.82. On SQLLoad's default route Snowflake copies the files itself, so no row passes through SQLLoad and it uses no disk; ingestr streams every row through its own process and spilled 5.7 GiB to disk. Postgres → Snowflake: median of 5 runs, 6 November 2026, sqlload 0.11.1, ingestr 1.1.82, dlt 1.32.0 (its connectorx backend for Postgres); peak memory 131 MiB for sqlload, 495 MiB for ingestr and 341 MiB for dlt. dlt was not run in the S3 scenario.</p>
 				</div>
 			</section>
 
