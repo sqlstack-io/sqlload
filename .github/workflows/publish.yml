@@ -102,6 +102,10 @@ jobs:
     name: Build ${{ matrix.package.name }} (${{ matrix.platform.name }})
     needs: [release-tag, release-metadata]
     runs-on: ${{ matrix.platform.runner }}
+    # Once sccache is running, a compile its cache can't serve runs uncached instead of failing.
+    # maturin-action passes SCCACHE_* into the manylinux container.
+    env:
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -186,10 +190,15 @@ jobs:
           bash .github/scripts/build_unixodbc.sh "$RUNNER_TEMP/unixodbc" "$HOMEBREW/etc" '' "$HOMEBREW/lib"
           echo "RUSTFLAGS=-L native=$RUNNER_TEMP/unixodbc/lib" >> "$GITHUB_ENV"
       # sccache keeps compiled crates and DuckDB's bundled C++ between runs of the same branch, so a
-      # release build reuses the previous release's work and recompiles little beyond sqlload. Not on
-      # Windows, where it made the build about 12 minutes slower. If the Actions cache is down when
-      # sccache starts, the build fails; rerun it (PyPI skips wheels it already has).
+      # release build reuses the previous release's work (82 to 99% of compiles were cache hits in
+      # 0.71.0's build). Not on Windows, where it made the build about 12 minutes slower. sccache
+      # stops before compiling anything when the Actions cache won't answer its startup check (a 503
+      # from the cache service, say), and SCCACHE_IGNORE_SERVER_IO_ERROR doesn't cover that, so a
+      # failed build runs once more without sccache: a cache outage costs time, never a release. A
+      # build that fails for any other reason fails again the same way.
       - name: Build CLI wheel
+        id: cli_build
+        continue-on-error: ${{ runner.os != 'Windows' }}
         if: contains(matrix.package.builds, 'cli')
         uses: PyO3/maturin-action@v1
         env:
@@ -209,7 +218,32 @@ jobs:
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
             bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
+      - name: Build CLI wheel without sccache
+        if: contains(matrix.package.builds, 'cli') && steps.cli_build.outcome == 'failure'
+        uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS: ${{ matrix.platform.arch_flags }}
+          LDFLAGS: ${{ matrix.platform.arch_flags }}
+          # The first build exported these for every later step; empty RUSTC_WRAPPER turns sccache off.
+          RUSTC_WRAPPER: ""
+          SCCACHE_GHA_ENABLED: "false"
+        with:
+          command: build
+          # The wheels build ODBC (sdists don't, so building one needs no driver manager); repair copies
+          # unixODBC into the Linux and macOS wheels; Windows uses odbc32.dll.
+          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
+          target: ${{ matrix.platform.target }}
+          manylinux: "2_28"
+          sccache: false
+          working-directory: packages/sqlload-cli
+          # The vendored OpenSSL build runs Perl's Configure, which needs modules the
+          # manylinux image leaves out. unixODBC reads /etc, where distribution drivers register.
+          before-script-linux: |
+            dnf install -y perl-IPC-Cmd perl-Time-Piece
+            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
       - name: Build Python extension wheel
+        id: python_build
+        continue-on-error: ${{ runner.os != 'Windows' }}
         if: contains(matrix.package.builds, 'python')
         uses: PyO3/maturin-action@v1
         env:
@@ -221,6 +255,25 @@ jobs:
           target: ${{ matrix.platform.target }}
           manylinux: "2_28"
           sccache: ${{ runner.os != 'Windows' }}
+          working-directory: packages/sqlload
+          before-script-linux: |
+            dnf install -y perl-IPC-Cmd perl-Time-Piece
+            bash "$GITHUB_WORKSPACE/.github/scripts/build_unixodbc.sh" /usr /etc /usr/lib64 "/usr/lib/$(uname -m)-linux-gnu/odbc:/usr/lib/$(uname -m)-linux-gnu:/usr/lib64/odbc:/usr/lib64"
+      - name: Build Python extension wheel without sccache
+        if: contains(matrix.package.builds, 'python') && steps.python_build.outcome == 'failure'
+        uses: PyO3/maturin-action@v1
+        env:
+          CFLAGS: ${{ matrix.platform.arch_flags }}
+          LDFLAGS: ${{ matrix.platform.arch_flags }}
+          # The first build exported these for every later step; empty RUSTC_WRAPPER turns sccache off.
+          RUSTC_WRAPPER: ""
+          SCCACHE_GHA_ENABLED: "false"
+        with:
+          command: build
+          args: --release --out ../../dist --features odbc ${{ runner.os != 'Windows' && '--auditwheel=repair' || '' }}
+          target: ${{ matrix.platform.target }}
+          manylinux: "2_28"
+          sccache: false
           working-directory: packages/sqlload
           before-script-linux: |
             dnf install -y perl-IPC-Cmd perl-Time-Piece
