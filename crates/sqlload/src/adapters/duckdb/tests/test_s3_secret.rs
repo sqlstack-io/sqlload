@@ -136,14 +136,14 @@ fn given_a_buckets_secret_already_set_when_a_table_opens_the_bucket_then_it_is_s
             expected_current: false,
         },
         SecretCurrentTestCase {
-            description: "a chain secret set just under ten minutes ago is current",
-            set: Some((chain, true, 599)),
+            description: "a chain secret set just under four minutes ago is current",
+            set: Some((chain, true, 239)),
             wanted: (chain, true),
             expected_current: true,
         },
         SecretCurrentTestCase {
-            description: "a chain secret set ten minutes ago is set again, as its keys may expire",
-            set: Some((chain, true, 600)),
+            description: "a chain secret set four minutes ago is set again, as its keys may expire",
+            set: Some((chain, true, 240)),
             wanted: (chain, true),
             expected_current: false,
         },

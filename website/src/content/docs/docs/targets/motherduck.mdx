@@ -79,7 +79,7 @@ Parquet files of a files source in S3 load straight from the bucket: MotherDuck'
 with `read_parquet` (`MD_RUN = REMOTE`), and no row passes through this machine. MotherDuck reads
 the bucket with a secret that lasts only for the load's session, made from the keys SQLLoad finds
 for the [`s3` connection](/docs/configuration/#s3) (the environment, else the shared credentials
-file, else the AWS credential chain resolved on this machine, set again every ten minutes as its
+file, else the AWS credential chain resolved on this machine, set again every four minutes as its
 keys may expire); nothing is stored in your MotherDuck account. A secret of your own in MotherDuck
 scoped to a narrower path of the bucket, such as `s3://example-bucket/events/`, wins over it.
 `plan` reads the first file to load on MotherDuck's servers, and fails the table with the fix when
