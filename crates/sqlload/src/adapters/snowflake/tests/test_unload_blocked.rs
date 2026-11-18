@@ -1,6 +1,7 @@
-use crate::adapters::snowflake::tests::helpers::unload_blocked_for;
-use crate::adapters::snowflake::tests::test_types::UnloadBlockedTestCase;
-use crate::loader::constants::UNLOADED_OUTSIDE_STAGE;
+use crate::adapters::snowflake::tests::helpers::{unload_blocked_for, unload_readers_for};
+use crate::adapters::snowflake::tests::test_types::{UnloadBlockedTestCase, UnloadReadersTestCase};
+use crate::column_types::models::Warehouse;
+use crate::loader::constants::{UNLOADED_OUTSIDE_STAGE, UNLOADED_TIMES};
 
 const MASKS: &str = "the table masks columns";
 const OUTSIDE: &str = UNLOADED_OUTSIDE_STAGE;
@@ -76,6 +77,76 @@ fn given_a_snowflake_sources_unload_when_routing_into_snowflake_then_snowflake_c
     for test_case in &test_cases {
         assert_eq!(
             unload_blocked_for(test_case).as_deref(),
+            test_case.expected_blocked,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_snowflake_sources_s3_unload_when_routing_into_another_warehouse_then_databricks_and_clickhouse_read_it_unless_times_or_masks_need_sqlload()
+ {
+    let test_cases = [
+        UnloadReadersTestCase {
+            description: "Databricks reads the unload itself",
+            warehouse: Warehouse::Databricks,
+            masks: false,
+            times: false,
+            expected_blocked: None,
+        },
+        UnloadReadersTestCase {
+            description: "ClickHouse reads the unload itself",
+            warehouse: Warehouse::ClickHouse,
+            masks: false,
+            times: false,
+            expected_blocked: None,
+        },
+        UnloadReadersTestCase {
+            description: "a time column goes through SQLLoad into Databricks, which keeps times as text",
+            warehouse: Warehouse::Databricks,
+            masks: false,
+            times: true,
+            expected_blocked: Some("the table has a time column"),
+        },
+        UnloadReadersTestCase {
+            description: "a time column goes through SQLLoad into ClickHouse",
+            warehouse: Warehouse::ClickHouse,
+            masks: false,
+            times: true,
+            expected_blocked: Some("the table has a time column"),
+        },
+        UnloadReadersTestCase {
+            description: "masks need SQLLoad to see the rows",
+            warehouse: Warehouse::ClickHouse,
+            masks: true,
+            times: false,
+            expected_blocked: Some(MASKS),
+        },
+        UnloadReadersTestCase {
+            description: "DuckDB turns times back itself",
+            warehouse: Warehouse::DuckDb,
+            masks: false,
+            times: true,
+            expected_blocked: None,
+        },
+        UnloadReadersTestCase {
+            description: "Postgres never reads files itself",
+            warehouse: Warehouse::Postgres,
+            masks: false,
+            times: false,
+            expected_blocked: Some(UNLOADED_TIMES),
+        },
+    ];
+    for test_case in &test_cases {
+        let blocked = unload_readers_for(test_case);
+        assert_eq!(
+            blocked.as_deref().map(|reason| {
+                test_case
+                    .expected_blocked
+                    .filter(|expected| reason.starts_with(expected))
+                    .unwrap_or(reason)
+            }),
             test_case.expected_blocked,
             "{}",
             test_case.description
