@@ -1,6 +1,7 @@
-use crate::command::tests::helpers::{debug_without_host, run_without_host};
+use crate::command::tests::helpers::{debug_without_host, help_text, run_without_host};
 use crate::command::tests::test_types::{
-    ExitCodeTestCase, FolderOverlapTestCase, LoaderCommandTestCase, PlanFailureTestCase,
+    ExitCodeTestCase, FolderOverlapTestCase, HelpTestCase, LoaderCommandTestCase,
+    PlanFailureTestCase,
 };
 
 const TARGET: &str = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n";
@@ -228,4 +229,33 @@ fn given_a_failure_a_rerun_may_pass_when_loading_then_it_exits_75_and_says_so_el
         );
     }
     Ok(())
+}
+
+#[test]
+fn given_tables_help_when_rendered_then_it_names_every_warehouse_the_exporter_writes_to() {
+    let test_cases = [
+        HelpTestCase {
+            description: "Snowflake, the first destination",
+            argv: &["tables", "--help"],
+            expected_text: "Snowflake",
+        },
+        HelpTestCase {
+            description: "Databricks, a destination since the exporter gained it",
+            argv: &["tables", "--help"],
+            expected_text: "Databricks",
+        },
+        HelpTestCase {
+            description: "BigQuery, a destination since the exporter gained it",
+            argv: &["tables", "--help"],
+            expected_text: "BigQuery",
+        },
+    ];
+    for test_case in test_cases {
+        let help = help_text(test_case.argv);
+        assert!(
+            help.contains(test_case.expected_text),
+            "{}: {help}",
+            test_case.description
+        );
+    }
 }
