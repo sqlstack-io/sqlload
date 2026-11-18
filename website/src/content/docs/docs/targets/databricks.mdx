@@ -89,6 +89,12 @@ list, and files on an S3-compatible endpoint (set on the connection or in `AWS_E
 folder or over SFTP always go through SQLLoad. `copy_to_internal_stage` is for Snowflake and is
 refused here.
 
+A Snowflake source with a stage `url` in S3 that an external location covers loads the same way:
+Databricks `COPY`s the files Snowflake unloads, into a staging or build table even for `append`,
+and the batch publishes only when it loads as many rows as Snowflake reported unloading. A `url`
+no external location covers fails `plan`. See
+[Databricks and ClickHouse read the files themselves](/docs/sources/snowflake/#databricks-and-clickhouse-read-the-files-themselves).
+
 ## Write strategies
 
 Databricks' Statement Execution API runs every statement in its own transaction, so each write is

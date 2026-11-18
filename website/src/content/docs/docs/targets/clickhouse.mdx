@@ -116,6 +116,11 @@ SQLLoad reads the files itself and sends Arrow instead when ClickHouse wouldn't 
 - times of day, which ClickHouse reads from Parquet as timestamps;
 - a path that reads as a glob.
 
+A Snowflake source with a stage `url` in S3 skips SQLLoad the same way: ClickHouse reads the files
+Snowflake unloads, one `s3()` insert per file, and the batch publishes only when it loads as many
+rows as Snowflake reported unloading. See
+[Databricks and ClickHouse read the files themselves](/docs/sources/snowflake/#databricks-and-clickhouse-read-the-files-themselves).
+
 ## Write strategies
 
 | Strategy | Publishes |
