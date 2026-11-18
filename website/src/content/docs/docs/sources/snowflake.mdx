@@ -7,7 +7,8 @@ A Snowflake source loads tables and views of one
 database, and the results of queries you write.
 Snowflake unloads each read as Parquet with `COPY INTO`, and SQLLoad reads the files and loads
 them into the source's target. A DuckDB target reads them from S3
-itself.
+itself, and a Snowflake target loads the rows inside Snowflake; see
+[Snowflake loads the rows itself](#snowflake-loads-the-rows-itself).
 
 ```toml
 [connections.warehouse]
@@ -157,6 +158,28 @@ DuckDB uses the same S3 credentials as SQLLoad, and turns times and timestamps b
 whatever its session time zone. A load fails before it commits when DuckDB loads a different number
 of rows than `COPY INTO` reports, and the folder is removed either way. A table without a cursor
 commits once per run rather than about every 1 GB.
+
+### Snowflake loads the rows itself
+
+Into a Snowflake target, no rows pass through SQLLoad in two cases:
+
+- **The target writes through the source's connection**: the same `connection`, with no other
+  `database`. Snowflake selects the rows with one `INSERT ... SELECT`, and nothing is unloaded.
+- **The source's `stage` `url` is inside the target's external stage `url`**, on another connection
+  or account. Snowflake unloads the files there, and the target `COPY`s them through its own stage.
+  The load commits only when it loads as many rows as `COPY INTO` reported unloading.
+
+`plan` shows which:
+
+```text
+route   Snowflake INSERT ... SELECT on the source's connection (nothing through the loader)
+route   unload Parquet to s3://example-bucket/stage/unload/ -> Snowflake COPY (nothing through the loader)
+```
+
+Otherwise SQLLoad reads the files and stages them for the target, as for any other source: with the
+user stage, a named stage, or an S3 folder the target's stage doesn't cover. A table with a `mask`
+always goes through SQLLoad, which masks the values. Times and timestamps come back exactly, as
+with DuckDB.
 
 Without a stage SQLLoad downloads the files from the user stage
 unchanged, 16 at a time, into a temporary folder, and DuckDB reads them from there:
