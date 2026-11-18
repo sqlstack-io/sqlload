@@ -1571,7 +1571,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         removed: &[],
                         loads: true,
                         reload: false,
-                        expected_error: "drop/part-0001.csv: it holds the replace_key (le_version) value (LE-FY27-P01), which part-0000.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each (le_version) value in one file, or remove whichever of the two files is outdated from the folder",
+                        expected_error: "drop/part-0001.csv: it holds the replace_key (le_version) value (LE-FY27-P01), which part-0000.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each (le_version) value in one file; if one restates the other, remove the older of part-0000.csv and part-0001.csv from the folder by hand, and set after_load = { move_to = ... } (or \"delete\") so that each file leaves the folder once it loads and a file sent later replaces its values",
                         expected_plan: "",
                     },
                     MergeStep {
@@ -1580,7 +1580,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         removed: &[],
                         loads: true,
                         reload: false,
-                        expected_error: "drop/part-0001.csv: the table holds rows of its replace_key (le_version) values from part-0000.csv, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by part-0001.csv would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: put all the rows of each (le_version) value in one file, or remove the outdated file, part-0000.csv or part-0001.csv, from the folder",
+                        expected_error: "drop/part-0001.csv: the table holds rows of its replace_key (le_version) values from part-0000.csv, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by part-0001.csv would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each (le_version) value in one file; if one restates the other, remove the older of part-0000.csv and part-0001.csv from the folder by hand, and set after_load = { move_to = ... } (or \"delete\") so that each file leaves the folder once it loads and a file sent later replaces its values",
                         expected_plan: "",
                     },
                 ],
