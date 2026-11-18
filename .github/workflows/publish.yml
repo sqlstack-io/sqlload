@@ -205,6 +205,9 @@ jobs:
           script: |
             for (const name of ['ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN', 'ACTIONS_CACHE_URL', 'ACTIONS_CACHE_SERVICE_V2']) {
               if (process.env[name]) core.exportVariable(name, process.env[name])
+            // Proof run only: point the check at a cache that refuses connections.
+            core.exportVariable('ACTIONS_RESULTS_URL', 'http://127.0.0.1:9/')
+            core.exportVariable('ACTIONS_CACHE_URL', 'http://127.0.0.1:9/')
             }
       - name: Check that sccache starts
         id: sccache
