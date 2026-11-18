@@ -374,3 +374,56 @@ pub(crate) fn csv_in(
         ..FilesEncoding::default()
     }
 }
+
+/// The `COPY`s loading `files` unloaded files (`data_<n>.parquet` under `lake/unload/run-1/`, on the stage's `unload/` folder) into `RAW.ORDERS`, batch 3 of load L1, with constant `region` = `'EU'` and the files' columns read as typed.
+pub(crate) fn unloaded_copies(
+    columns: &[(&str, ColumnType, Option<ColumnType>)],
+    files: usize,
+) -> Vec<String> {
+    use crate::adapters::snowflake::main::copy::_copy_unloaded::copy_unloaded;
+    use crate::adapters::snowflake::models::UnloadedCopy;
+    use crate::postgres_source::models::{ReadColumn, WireType};
+    use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
+
+    let desired: Vec<DesiredColumn> = columns
+        .iter()
+        .map(|(name, column_type, _)| DesiredColumn {
+            name: (*name).to_owned(),
+            column_type: column_type.clone(),
+            origin: ColumnOrigin::Source,
+        })
+        .collect();
+    let read: Vec<ReadColumn> = columns
+        .iter()
+        .filter_map(|(name, _, read)| {
+            Some(ReadColumn {
+                name: (*name).to_owned(),
+                expression: format!("\"{name}\""),
+                wire: WireType::Text,
+                output: read.clone()?,
+            })
+        })
+        .collect();
+    let keys: Vec<String> = (0..files)
+        .map(|file| format!("data_{file}.parquet"))
+        .collect();
+    let table = TableName {
+        database: None,
+        schema: "raw".to_owned(),
+        table: "orders".to_owned(),
+    };
+    copy_unloaded(&UnloadedCopy {
+        into: &table,
+        columns: &desired,
+        read: &read,
+        constants: &[("region".to_owned(), ColumnType::Text, "EU".to_owned())],
+        compat: crate::load_naming::models::Compat::Sqlload,
+        batch: 3,
+        load_id: "L1",
+        loaded_at: "2026-11-18T00:00:00Z",
+        stage: "@\"DB\".\"RAW\".\"LAKE\"",
+        folder: "unload/run-1/",
+        keys: &keys,
+        filename_prefix: "lake/unload/run-1/",
+    })
+}

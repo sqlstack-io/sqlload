@@ -1,8 +1,9 @@
 //! The statement that has DuckDB load Parquet files itself.
 
+use crate::adapters::contract::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS};
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
-use crate::adapters::duckdb::constants::{UNLOADED_BATCH_ROWS, UNLOADED_FILE_ROWS, UTC_OFFSET};
+use crate::adapters::duckdb::constants::UTC_OFFSET;
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::ColumnType;
