@@ -17,6 +17,7 @@ import psutil
 
 from sqlload_bench import datagen, postgres, snowflake
 from sqlload_bench.competitors import BENCH_ROOT, DLT_PYTHON, HIDDEN, INGESTR, SQLLOAD, Competitor, Context, Dlt, Invocation, all_competitors
+from sqlload_bench.measure import MIN_FREE_DISK_BYTES
 from sqlload_bench.measure import run as measure
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import SCENARIOS, Scenario
@@ -48,8 +49,10 @@ def check(competitor: Competitor, scenario: Scenario, context: Context, run_dir:
 	return True, ""
 
 
-def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path, timeout_s: float = 3600) -> dict[str, Any]:
-	"""One fresh destination; for the incremental scenario, the second load is the measured one. A loader that runs past `timeout_s`, crashes or is killed (as the out-of-memory killer does) is a failed run that keeps its time, peak memory and how it ended."""
+def one_run(
+	competitor: Competitor, scenario: Scenario, context: Context, run_dir: Path, timeout_s: float = 3600, min_free_bytes: int = MIN_FREE_DISK_BYTES
+) -> dict[str, Any]:
+	"""One fresh destination; for the incremental scenario, the second load is the measured one. A loader that runs past `timeout_s`, crashes or is killed (as the out-of-memory killer does) is a failed run that keeps its time, peak memory and how it ended. One stopped because free disk fell below `min_free_bytes` is aborted for the environment instead."""
 	shutil.rmtree(run_dir, ignore_errors=True)
 	run_dir.mkdir(parents=True)
 	run_dir.mkdir(parents=True, exist_ok=True)
@@ -73,12 +76,16 @@ def one_run(competitor: Competitor, scenario: Scenario, context: Context, run_di
 				return {**record, "valid": False, "returncode": done.returncode, "error": f"first load {done.failure()}: {last_line(done.output)}", "output": done.output[-1500:]}
 			postgres.append_rows(context.postgres, context.dataset)
 		invocation = competitor.invocation(scenario, context, run_dir, second=incremental)
-		done = measure(invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s, disk=home_of(invocation))
+		done = measure(
+			invocation.argv, cwd=invocation.cwd, env=invocation.env, log=run_dir / "load.log", timeout_s=timeout_s, disk=home_of(invocation), min_free_bytes=min_free_bytes
+		)
 		record.update(
 			wall_s=done.wall_s, user_s=done.user_s, sys_s=done.sys_s, cpu_s=done.cpu_s, peak_rss_mb=done.peak_rss_mb, peak_disk_mb=done.peak_disk_mb, returncode=done.returncode,
-			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills,
+			signal=done.signal, timed_out=done.timed_out, oom_kills=done.oom_kills, aborted=done.aborted,
 		)
-		if done.returncode != 0:
+		if done.aborted:
+			record.update(valid=False, error=done.failure())
+		elif done.returncode != 0:
 			record.update(valid=False, error=f"{done.failure()}: {last_line(done.output)}", output=done.output[-1500:])
 		else:
 			valid, reason = check(competitor, scenario, context, run_dir)
@@ -100,11 +107,13 @@ def last_line(output: str) -> str:
 
 
 def record_run(result: Result, record: dict[str, Any]) -> None:
-	"""Add one run to its loader's result: a warm-up only when it went wrong, and every measured run. A run that exited badly marks the loader failed, and its later runs are skipped; one that finished with the wrong rows marks it invalid."""
+	"""Add one run to its loader's result: a warm-up only when it went wrong, and every measured run. A run that exited badly marks the loader failed, and its later runs are skipped; one that finished with the wrong rows marks it invalid; one the harness stopped for low disk marks it aborted, the environment's failure, and its later runs are skipped too."""
 	if record["warmup"] and record["valid"]:
 		return
 	result.runs.append(record)
-	if not record["valid"]:
+	if record.get("aborted"):
+		result.status, result.note = "aborted", record["error"][:300]
+	elif not record["valid"]:
 		result.status = "invalid" if record.get("returncode", 0) == 0 else "failed"
 		result.note = record["error"][:300]
 
@@ -252,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
 			for attempt in range(args.warmup + args.runs):
 				shift = attempt % len(active) if active else 0
 				for competitor, result in active[shift:] + active[:shift]:
-					if result.status == "failed":
+					if result.status in ("failed", "aborted"):
 						continue
 					run_dir = work / scenario.name / competitor.name.replace(" ", "_").replace("(", "").replace(")", "")
 					if args.wait_for_builds:

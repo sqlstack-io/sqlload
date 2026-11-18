@@ -2,6 +2,7 @@
 
 import os
 import resource
+import shutil
 import signal
 import subprocess
 import threading
@@ -14,6 +15,8 @@ import psutil
 SAMPLE_SECONDS = 0.05
 #: How often the run's own folders are measured: walking them costs more than reading RSS.
 DISK_SAMPLE_SECONDS = 0.5
+#: The free disk below which a run is stopped and recorded as aborted for the environment: a full disk fails whichever loader is running, so it says nothing about that loader.
+MIN_FREE_DISK_BYTES = 2_000_000_000
 
 
 @dataclass
@@ -32,6 +35,8 @@ class Measurement:
 	oom_kills: int | None = None
 	#: The most the run's own folder (its HOME, caches and TMPDIR, where a loader spills) held at once; None when it wasn't measured.
 	peak_disk_mb: float | None = None
+	#: The harness stopped it because the machine's free disk fell below its floor: the environment's failure, not the loader's.
+	aborted: bool = False
 
 	@property
 	def cpu_s(self) -> float:
@@ -49,6 +54,8 @@ class Measurement:
 
 	def failure(self) -> str:
 		"""How a run that didn't succeed ended: its exit code or signal, how long it ran, and its peak memory."""
+		if self.aborted:
+			return f"free disk fell below {MIN_FREE_DISK_BYTES / 1e9:.0f} GB after {self.wall_s:.1f} s, so the run says nothing about the loader"
 		if self.timed_out:
 			how = "timed out"
 		elif self.signal:
@@ -97,8 +104,34 @@ def _folder_bytes(folder: Path) -> int:
 	return total
 
 
-def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s: float = 3600, disk: Path | None = None) -> Measurement:
+def _stop(pid: int) -> None:
+	"""Kill the process `pid` and every descendant."""
+	try:
+		process = psutil.Process(pid)
+		members = [*process.children(recursive=True), process]
+	except psutil.Error:
+		return
+	for member in members:
+		try:
+			member.kill()
+		except psutil.Error:
+			continue
+
+
+def run(
+	argv: list[str],
+	*,
+	cwd: Path,
+	env: dict[str, str],
+	log: Path,
+	timeout_s: float = 3600,
+	disk: Path | None = None,
+	min_free_bytes: int = MIN_FREE_DISK_BYTES,
+) -> Measurement:
 	"""Run `argv` to completion, sampling the summed RSS of it and its descendants, and the size of `disk` (the run's own folder) when given.
+
+	When `disk` is given, the free space of its filesystem is checked as often as its size; once it falls below
+	`min_free_bytes`, the process tree is killed and the run is marked aborted, so a full disk never reads as a loader failing.
 
 	CPU comes from `RUSAGE_CHILDREN`, which covers every descendant that was waited for, so loaders
 	that start helper processes (ingestr's wrapper and binary) count in full.
@@ -111,6 +144,7 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 		peak = 0
 		peak_disk = 0
 		done = threading.Event()
+		aborted = threading.Event()
 
 		def sample() -> None:
 			nonlocal peak, peak_disk
@@ -124,6 +158,10 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 				if disk is not None and time.perf_counter() >= next_disk:
 					peak_disk = max(peak_disk, _folder_bytes(disk))
 					next_disk = time.perf_counter() + DISK_SAMPLE_SECONDS
+					if shutil.disk_usage(disk).free < min_free_bytes:
+						aborted.set()
+						_stop(child.pid)
+						return
 				done.wait(SAMPLE_SECONDS)
 
 		sampler = threading.Thread(target=sample, daemon=True)
@@ -133,12 +171,7 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 			returncode = child.wait(timeout=timeout_s)
 		except subprocess.TimeoutExpired:
 			timed_out = True
-			try:
-				for grandchild in psutil.Process(child.pid).children(recursive=True):
-					grandchild.kill()
-			except psutil.Error:
-				pass
-			child.kill()
+			_stop(child.pid)
 			returncode = child.wait()
 		wall = time.perf_counter() - start
 		done.set()
@@ -156,6 +189,7 @@ def run(argv: list[str], *, cwd: Path, env: dict[str, str], log: Path, timeout_s
 		timed_out=timed_out,
 		oom_kills=None if oom_before is None or oom_after is None else oom_after - oom_before,
 		peak_disk_mb=None if disk is None else peak_disk / (1 << 20),
+		aborted=aborted.is_set(),
 	)
 
 
