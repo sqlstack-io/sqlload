@@ -1,7 +1,13 @@
 ---
 title: "Databricks"
-description: "Load into a Databricks SQL warehouse with Unity Catalog: Parquet staged in a volume, then COPY INTO, one statement per write."
+description: "Load into Databricks (beta), a SQL warehouse with Unity Catalog: Parquet staged in a volume, then COPY INTO, one statement per write."
+sidebar:
+  badge:
+    text: Beta
+    variant: caution
 ---
+
+This target is in beta: it is tested, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
 
 A Databricks target loads into a Unity Catalog SQL warehouse. SQLLoad writes each batch as Parquet
 to a Unity Catalog volume and loads it with `COPY INTO`. That is the only route: there is no
