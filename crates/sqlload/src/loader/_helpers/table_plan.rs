@@ -1094,7 +1094,7 @@ pub(crate) fn reader_offer(
         true => direct_blocked,
         false => unload_blocked(
             spec.warehouse,
-            !spec.masked.columns.is_empty(),
+            (!spec.masked.columns.is_empty(), &spec.source_table.columns),
             route,
             stage,
         ),
