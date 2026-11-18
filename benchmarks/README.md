@@ -68,17 +68,20 @@ Differences a reader should know:
   `pydata.py`, standard library only, generates the Python rows in every environment.
 - Postgres runs in its own `postgres:17` container on a free port, started and stopped by
   the harness, with durability off and tables vacuumed before any run.
-- Every run gets a new destination, `HOME` and XDG folders. A warm-up comes first, then the median of 3.
+- Every run gets a new destination, `HOME`, XDG folders and `TMPDIR`. A warm-up comes first, then the median of 3.
   Runs go round-robin across loaders, so drift in machine load spreads over all of them.
 - Metrics: wall time, user and system CPU of the loader's process tree (`RUSAGE_CHILDREN`), peak
-  summed RSS of the tree (sampled every 50 ms) and rows/s. Postgres's own CPU and memory are not counted.
+  summed RSS of the tree (sampled every 50 ms), peak disk use of the run's own folder (its `HOME`,
+  caches and `TMPDIR`, where a loader spills; sampled every 0.5 s) and rows/s. Postgres's own CPU
+  and memory are not counted.
 - Correctness: after each run the destination's row count and an order-independent checksum over
   key columns must match the source, or the run is marked invalid and has no figures.
 - A loader that crashes, is killed (by the out-of-memory killer, for example) or runs past
   `--timeout-min` (default 60) is marked failed. The run keeps how it ended (exit code or signal,
   and whether the cgroup counted an out-of-memory kill), how long it ran and its peak RSS, and
   that loader's later runs of the scenario are skipped.
-- The 1-minute load average before each run is recorded. On a shared machine, prefer CPU seconds,
+- The CPUs and memory the harness may use, and the free disk before each run, are recorded in the
+  results' header. The 1-minute load average before each run is recorded too. On a shared machine, prefer CPU seconds,
   and pass `--wait-for-builds` to start runs only while no compiler is running.
 
 ## Results

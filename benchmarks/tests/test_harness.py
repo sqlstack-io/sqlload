@@ -13,7 +13,7 @@ from perf import compare
 from sqlload_bench import datagen, pydata, snowflake
 from sqlload_bench.cli import one_run, record_run
 from sqlload_bench.competitors import HIDDEN, SQLLOAD, Competitor, Context, Invocation, SqlLoad, all_competitors
-from sqlload_bench.measure import run
+from sqlload_bench.measure import clean_env, run
 from sqlload_bench.report import Result, markdown
 from sqlload_bench.scenarios import BY_NAME
 
@@ -108,6 +108,20 @@ def test_given_a_loader_killed_mid_run_when_measured_then_the_run_is_kept_as_fai
 	assert result.note.startswith("killed by SIGKILL after "), result.note
 	assert " MiB peak RSS" in result.note
 	assert "| failed: killed by SIGKILL after " in markdown([result.summary()], "## t")
+
+
+def test_given_a_loader_that_spills_to_its_tmpdir_when_measured_then_its_peak_disk_use_is_kept(tmp_path: Path) -> None:
+	home = tmp_path / "home"
+	env = clean_env(home, {})
+	assert Path(env["TMPDIR"]).is_relative_to(home), "each run spills inside its own folder"
+	script = "import os, tempfile, time; p = os.path.join(tempfile.gettempdir(), 'spill'); open(p, 'wb').write(os.urandom(64 << 20)); time.sleep(2.5); os.remove(p)"
+	done = run([sys.executable, "-c", script], cwd=tmp_path, env=env, log=tmp_path / "load.log", disk=home)
+	assert done.returncode == 0, done.output
+	assert 60 <= done.peak_disk_mb < 80, done.peak_disk_mb
+	result = Result("pg_narrow", "spilling", 1000, runs=[{"valid": True, "wall_s": 1.0, "cpu_s": 1.0, "user_s": 1.0, "sys_s": 0.0, "peak_rss_mb": 10.0, "peak_disk_mb": done.peak_disk_mb}])
+	table = markdown([result.summary()], "## t")
+	assert "| Peak disk MiB |" in table
+	assert f"| {done.peak_disk_mb:,.0f} |" in table
 
 
 class _FailingLoader(Competitor):
