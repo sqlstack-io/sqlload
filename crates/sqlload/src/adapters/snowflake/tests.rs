@@ -1,7 +1,5 @@
 #[path = "tests/test_copy_staged.rs"]
 mod copy_staged;
-#[path = "tests/test_copy_unloaded.rs"]
-mod copy_unloaded;
 #[path = "tests/test_direct_copies.rs"]
 mod direct_copies;
 #[path = "tests/test_direct_problem.rs"]
@@ -22,3 +20,5 @@ mod stale_folders;
 mod step_failure;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_unloaded_sql.rs"]
+mod unloaded_sql;

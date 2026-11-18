@@ -126,6 +126,7 @@ use crate::sheets_source::models::{Grid, HeaderRule, KeySource, SheetsClient};
 use crate::snowflake_source::constants::SESSION_SCHEMA;
 use crate::snowflake_source::main::connect_snowflake_source::connect_snowflake_source;
 use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_catalog;
+use crate::snowflake_source::main::select_query::select_query;
 use crate::snowflake_source::main::unload_files::unload_files;
 use crate::snowflake_source::main::unload_rows::unload_rows;
 use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
@@ -1743,6 +1744,15 @@ pub(crate) async fn unload_source<T>(
         .spec
         .read_filter(part.filter.or_else(|| table.source_filter.clone()));
     unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
+}
+
+/// The query an unload of `part` of `table` would run, which a destination writing through the source's own connection runs itself.
+pub(crate) fn selected_query(table: &TablePlan, part: ReadPart) -> Result<String, LoaderError> {
+    let filter = table
+        .spec
+        .read_filter(part.filter.or_else(|| table.source_filter.clone()));
+    select_query(&unload_request(table, filter.as_deref()))
+        .map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
 /// What one unload of `table` reads: its table or query, its read columns, and `filter`.
