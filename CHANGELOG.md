@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.71.1](https://github.com/sqlstack-io/sqlload/compare/v0.71.0...v0.71.1) (2026-11-18)
+
+
+### Documentation
+
+* **bench:** publish Parquet in S3 into Snowflake at 100M rows, with peak memory on the home page ([#328](https://github.com/sqlstack-io/sqlload/issues/328)) ([9e98514](https://github.com/sqlstack-io/sqlload/commit/9e985147dab8cd266225262a0d2edeeb0ad611a1))
+
 ## [0.71.0](https://github.com/sqlstack-io/sqlload/compare/v0.70.4...v0.71.0) (2026-11-18)
 
 
