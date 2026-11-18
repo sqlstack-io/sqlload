@@ -33,3 +33,10 @@ pub(crate) struct LowerLimitTestCase {
     pub(crate) physical: Option<u64>,
     pub(crate) expected_limit: Option<(u64, LimitOrigin)>,
 }
+
+/// Watchdog readings, each a percent of the budget and whether a table stopped at 90% is still ending, and the reading at which the run stops.
+pub(crate) struct RunStopTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) readings: Vec<(u128, bool)>,
+    pub(crate) expected_stop: Option<usize>,
+}

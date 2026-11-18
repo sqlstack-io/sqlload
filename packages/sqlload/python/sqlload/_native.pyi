@@ -7,6 +7,9 @@ def run_cli(argv: list[str]) -> int:
 def run_cli_captured(argv: list[str]) -> tuple[int, str]:
 	"""`run_cli`, returning what the command would write to stdout along with its exit code."""
 
+def run_stopped() -> bool:
+	"""Whether the memory watchdog stopped the last run at 95% of its budget."""
+
 def cross(
 	source: Iterable[Any],
 	*,

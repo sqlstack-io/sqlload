@@ -47,6 +47,7 @@ use crate::loader::models::{
     TableOutcome, TablePlan, TypedCursors,
 };
 use crate::memory_budget::main::run_memory::run_memory;
+use crate::memory_budget::main::run_stopped::run_stopped;
 use crate::memory_budget::models::BudgetOrigin;
 use crate::number_text::main::thousands::thousands;
 use crate::peak_memory::constants::MEMORY_PER_TABLE_NEEDS_LINUX;
@@ -333,7 +334,8 @@ pub(crate) async fn run_loader(
             outcome
         }
     };
-    if let Some(host) = request.host {
+    // After the watchdog stopped the run, a Python table may still be busy in its function, which finishing would wait for.
+    if let Some(host) = request.host.filter(|_| !run_stopped()) {
         let _ = tokio::task::spawn_blocking(move || host.finish()).await;
     }
     match (outcome, json) {

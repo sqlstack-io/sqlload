@@ -14,6 +14,7 @@ use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest, LogFormat};
+use crate::memory_budget::main::run_stopped::run_stopped;
 use crate::playground::main::run_playground::run_playground;
 use crate::project::main::is_project::is_project;
 use crate::python_sources::types::PythonHost;
@@ -102,6 +103,10 @@ fn run_parsed(cli: Cli, host: Option<Arc<dyn PythonHost>>) -> (Vec<String>, u8) 
                 .map_err(CommandError::from)
         })
     });
+    // Tables the memory watchdog's run stop left running end with the process: shutting down doesn't wait for their threads.
+    if run_stopped() {
+        runtime.shutdown_background();
+    }
     let outcome = match outcome {
         Ok(outcome) => outcome,
         Err(error) => {

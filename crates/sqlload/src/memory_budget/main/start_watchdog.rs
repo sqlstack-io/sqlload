@@ -3,11 +3,11 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 
-use crate::memory_budget::_helpers::watch::{process_held, stop_largest};
+use crate::memory_budget::_helpers::watch::{process_held, run_stop_due, stop_largest, stop_run};
 use crate::memory_budget::constants::{HOLD_PERCENT, STOP_PERCENT, WATCH_INTERVAL};
 use crate::memory_budget::models::{MemoryBudget, MemoryGuard};
 
-/// A guard over `budget`, read by a thread of its own every 10 ms until the guard is dropped: what the process and its MotherDuck bridges hold, against the budget. From 80% of it no table starts and pieces are cut smaller; from 90% the table holding the most large values is stopped, one at a time: its DuckDB statements are interrupted (rolling back) and it fails, naming the fix, while the other tables load on. The process is never stopped.
+/// A guard over `budget`, read by a thread of its own every 10 ms until the guard is dropped: what the process and its MotherDuck bridges hold, against the budget. From 80% of it no table starts and pieces are cut smaller; from 90% the table holding the most large values is stopped, one at a time: its DuckDB statements are interrupted (rolling back) and it fails, naming the fix, while the other tables load on. From 95%, when no table holds large values to stop, or the stopped one didn't bring memory back under 90% within half a second, the whole run stops (see [`stop_run`]).
 pub fn start_watchdog(budget: MemoryBudget) -> Arc<MemoryGuard> {
     let guard = Arc::new(MemoryGuard {
         budget,
@@ -16,6 +16,8 @@ pub fn start_watchdog(budget: MemoryBudget) -> Arc<MemoryGuard> {
         holding: std::sync::atomic::AtomicBool::new(false),
         released: tokio::sync::Notify::new(),
         peak: std::sync::atomic::AtomicU64::new(0),
+        run_stop: std::sync::Mutex::default(),
+        run_stopped: tokio_util::sync::CancellationToken::new(),
     });
     let watched = Arc::downgrade(&guard);
     let started = std::thread::Builder::new()
@@ -27,8 +29,9 @@ pub fn start_watchdog(budget: MemoryBudget) -> Arc<MemoryGuard> {
     guard
 }
 
-/// Read the memory every interval until the guard is gone.
+/// Read the memory every interval until the guard is gone. `over` counts the readings since memory reached 95% without coming back under 90%.
 fn watch(watched: &Weak<MemoryGuard>) {
+    let mut over: u32 = 0;
     loop {
         std::thread::sleep(WATCH_INTERVAL);
         let Some(guard) = watched.upgrade() else {
@@ -49,8 +52,11 @@ fn watch(watched: &Weak<MemoryGuard>) {
         if guard.holding.swap(holding, Ordering::Relaxed) && !holding {
             guard.released.notify_waiters();
         }
-        if percent >= u128::from(STOP_PERCENT) {
-            stop_largest(&guard, held);
+        let stopping = percent >= u128::from(STOP_PERCENT) && stop_largest(&guard, held);
+        let stops;
+        (over, stops) = run_stop_due(percent, over, stopping);
+        if stops {
+            stop_run(&guard, held);
         }
     }
 }

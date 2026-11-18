@@ -106,6 +106,10 @@ pub struct MemoryGuard {
     pub released: tokio::sync::Notify,
     /// The most the process (and its bridges) held at a reading.
     pub peak: std::sync::atomic::AtomicU64,
+    /// Why the watchdog stopped the whole run, once it did (see [`RUN_STOP_PERCENT`](crate::memory_budget::constants::RUN_STOP_PERCENT)).
+    pub run_stop: std::sync::Mutex<Option<String>>,
+    /// Cancelled when the watchdog stops the whole run.
+    pub run_stopped: tokio_util::sync::CancellationToken,
 }
 
 /// One loading table, as the watchdog sees it.

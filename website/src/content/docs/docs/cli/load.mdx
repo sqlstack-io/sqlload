@@ -255,12 +255,28 @@ While a run loads, SQLLoad reads the memory of the whole process, and of a Mothe
 bridge process, every 10 ms. From 80% of the budget, no table starts until it falls again, and
 pieces are cut four times smaller. From 90%, the table holding the most
 [large values](#large-rows-in-duckdb) in memory stops: its running DuckDB statement is interrupted
-and rolled back, and it fails while the other tables carry on. A table holding none isn't stopped,
-and SQLLoad never stops the process itself.
+and rolled back, and it fails while the other tables carry on. A table holding none isn't stopped.
 
 ```text
-failed  raw.attachments  raw.attachments stopped: the load held 1.1 GiB of its 1.1 GiB memory budget (95%); from 90% the table holding the most large values in memory stops, here this one with 39 MiB; raise memory_limit, or lower batch_size
+failed  raw.attachments  raw.attachments stopped: the load held 1 GiB of its 1.1 GiB memory budget (90%); from 90% the table holding the most large values in memory stops, here this one with 39 MiB; raise memory_limit, or lower batch_size
 ```
+
+From 95%, when no table holds large values to stop (memory taken by a Python function building a
+list, or an ODBC driver's own buffers), or the table stopped at 90% didn't bring memory back under
+90% within half a second, the whole run stops. Every running DuckDB and MotherDuck statement is
+interrupted and rolled back, the running tables fail with the reason below, and the others don't
+start. Tables that committed before stay committed, and an append stopped between its pieces is
+cleaned up by the next load. SQLLoad then writes its summary, the `--json` report and the
+`run_finished` event, and exits with 1 (`retryable: false`, since the same run would likely run
+out again) without waiting for a table busy in its source, such as a Python function that hasn't
+yielded. A MotherDuck bridge ends with the process.
+
+```text
+failed  raw.events  stopped: the run held 3.9 GiB of its 4 GiB memory budget (97%), and from 95% it stops when no table can be stopped to free memory; raise memory_limit, or lower concurrency
+```
+
+The watchdog reads memory every 10 ms, so an allocation that grows past the limit the OS or a
+service manager sets within one reading is only caught by that limit.
 
 ## Following a Postgres CDC source
 

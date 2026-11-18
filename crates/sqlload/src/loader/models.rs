@@ -904,6 +904,19 @@ impl TableOutcome {
         }
     }
 
+    /// A table the memory watchdog's run stop kept from starting.
+    pub fn run_stopped(table: &TablePlan) -> Self {
+        Self {
+            table: table.outcome_name(),
+            origin: Some(table.origin()),
+            loaded: Err("not started: the memory watchdog stopped the run".to_owned()),
+            retryable: false,
+            elapsed: std::time::Duration::ZERO,
+            skipped: true,
+            peak_memory_bytes: None,
+        }
+    }
+
     /// Whether this table needs nothing a rerun cannot give it: it loaded, or its failure is retryable.
     pub fn passes_on_rerun(&self) -> bool {
         match &self.loaded {
