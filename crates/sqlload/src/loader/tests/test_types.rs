@@ -250,3 +250,13 @@ pub(crate) struct PlanLinesTestCase {
     pub(crate) skipped: &'static [(&'static str, &'static str)],
     pub(crate) expected_output: &'static str,
 }
+
+pub(crate) struct GcsReaderTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the gcs connection sets an HMAC key.
+    pub(crate) hmac: bool,
+    /// The gcs connection's custom endpoint, if any.
+    pub(crate) endpoint: Option<&'static str>,
+    /// Why SQLLoad must read the files instead of DuckDB, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}

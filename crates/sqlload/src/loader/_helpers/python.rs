@@ -538,7 +538,7 @@ pub(crate) async fn refuse_emptying(
     }
 }
 
-/// Whether a target's connection `name` may also be a Python source's own: only an s3 or filesystem one (project checks refuse the rest).
+/// Whether a target's connection `name` may also be a Python source's own: only an s3, gcs or filesystem one (project checks refuse the rest).
 pub(crate) fn shareable_connection(project: &ProjectConfig, name: &str) -> bool {
     project
         .connections
@@ -1225,7 +1225,7 @@ async fn replan(
     })
 }
 
-/// What the table function is called with: the window to read (`ctx.cursor_value` / `ctx.cursor_end`) and the latest `ctx.state`; connections that targets write to are withheld, except the source's own s3 or filesystem connection.
+/// What the table function is called with: the window to read (`ctx.cursor_value` / `ctx.cursor_end`) and the latest `ctx.state`; connections that targets write to are withheld, except the source's own s3, gcs or filesystem connection.
 fn table_read(
     load: &PythonLoad<'_>,
     window: Option<&CursorWindow>,

@@ -15,6 +15,8 @@ pub enum StoreKind {
         service_account_key: Option<crate::auth::models::Secret>,
         /// A custom endpoint (tests).
         endpoint: Option<String>,
+        /// The connection's HMAC key, with which DuckDB and MotherDuck read the bucket themselves.
+        hmac: Option<HmacKey>,
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
@@ -50,4 +52,11 @@ impl std::fmt::Display for Location {
             },
         }
     }
+}
+
+/// An HMAC key for a GCS bucket's S3-compatible API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HmacKey {
+    pub key_id: String,
+    pub secret: crate::auth::models::Secret,
 }

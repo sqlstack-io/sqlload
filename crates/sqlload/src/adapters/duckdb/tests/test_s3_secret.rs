@@ -2,12 +2,13 @@ use crate::adapters::contract::main::_custom_endpoint::custom_endpoint;
 use std::time::{Duration, Instant};
 
 use crate::adapters::duckdb::_helpers::pull_sql::{
-    BucketAccess, default_region, s3_secret, secret_current,
+    BucketAccess, bucket_access, default_region, s3_secret, secret_current,
 };
 use crate::adapters::duckdb::tests::test_types::{
-    AwsVariablesTestCase, S3SecretTestCase, SecretCurrentTestCase,
+    AwsVariablesTestCase, GcsAccessTestCase, S3SecretTestCase, SecretCurrentTestCase,
 };
-use crate::store_paths::models::StoreKind;
+use crate::auth::models::Secret;
+use crate::store_paths::models::{HmacKey, StoreKind};
 
 #[test]
 fn given_an_s3_bucket_when_duckdb_reads_its_files_itself_then_its_secret_carries_sqlloads_keys_only_as_parameters()
@@ -175,4 +176,62 @@ fn given_a_buckets_secret_already_set_when_a_table_opens_the_bucket_then_it_is_s
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_a_gcs_bucket_when_duckdb_reads_its_files_itself_then_its_secret_carries_the_connections_hmac_key_only_as_parameters()
+-> Result<(), String> {
+    let test_cases = [
+        GcsAccessTestCase {
+            description: "an HMAC key becomes a GCS secret scoped to the bucket, named apart from an S3 bucket of the same name",
+            hmac: Some(("GOOG1EXAMPLE", "hm4c")),
+            expected_access: Some((
+                "gs://lake",
+                "CREATE OR REPLACE TEMPORARY SECRET sqlload_gcs_6c616b65 (TYPE gcs, KEY_ID ?, SECRET ?, SCOPE ?)",
+                &["GOOG1EXAMPLE", "hm4c", "gs://lake/"],
+            )),
+        },
+        GcsAccessTestCase {
+            description: "without one DuckDB has no way into the bucket, as it takes no service-account key",
+            hmac: None,
+            expected_access: None,
+        },
+    ];
+    for test_case in test_cases {
+        let store = StoreKind::Gcs {
+            bucket: "lake".to_owned(),
+            service_account_key: Some(Secret("{}".to_owned())),
+            endpoint: None,
+            hmac: test_case.hmac.map(|(key_id, secret)| HmacKey {
+                key_id: key_id.to_owned(),
+                secret: Secret(secret.to_owned()),
+            }),
+        };
+        let access = bucket_access(&store).map_err(|error| error.to_string())?;
+        let found = access.map(|access| {
+            (
+                access.bucket,
+                access.extensions,
+                access.statement,
+                access.parameters,
+                access.chain,
+            )
+        });
+        let expected = test_case
+            .expected_access
+            .map(|(bucket, statement, parameters)| {
+                (
+                    bucket.to_owned(),
+                    "INSTALL httpfs; LOAD httpfs;",
+                    statement.to_owned(),
+                    parameters
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect::<Vec<_>>(),
+                    false,
+                )
+            });
+        assert_eq!(found, expected, "{}", test_case.description);
+    }
+    Ok(())
 }

@@ -47,6 +47,7 @@ pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
             bucket,
             service_account_key,
             endpoint,
+            ..
         } => Arc::new(
             gcs_builder(
                 bucket,

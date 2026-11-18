@@ -52,6 +52,17 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
                 "[connections.{name}] profile is empty; omit it to use AWS_PROFILE, else default"
             ));
         }
+        if let ConnectionConfig::Gcs {
+            hmac_key_id,
+            hmac_secret,
+            ..
+        } = connection
+            && hmac_key_id.is_some() != hmac_secret.is_some()
+        {
+            problems.push(format!(
+                "[connections.{name}] hmac_key_id and hmac_secret go together: set both for DuckDB and MotherDuck to read the bucket themselves, or neither"
+            ));
+        }
     }
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
@@ -178,7 +189,7 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     problems
 }
 
-/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection may be shared).
+/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3, gcs or filesystem connection may be shared).
 fn shared_warehouse_problems(
     project: &ProjectConfig,
     name: &str,

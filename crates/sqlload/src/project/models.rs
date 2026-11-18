@@ -233,6 +233,12 @@ pub enum ConnectionConfig {
         /// A custom endpoint, for tests.
         #[serde(default)]
         endpoint: Option<String>,
+        /// The access ID of an HMAC key for the bucket, which DuckDB and MotherDuck need to read its Parquet files themselves (they take no service-account key).
+        #[serde(default)]
+        hmac_key_id: Option<String>,
+        /// That HMAC key's secret, such as `${ENV:GCS_HMAC_SECRET}`.
+        #[serde(default)]
+        hmac_secret: Option<crate::auth::models::Secret>,
     },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
@@ -350,7 +356,7 @@ impl ConnectionConfig {
     }
 }
 
-/// Where loaded tables go in one environment: a warehouse, or files in an s3 or filesystem connection.
+/// Where loaded tables go in one environment: a warehouse, or files in an s3, gcs or filesystem connection.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetConfig {

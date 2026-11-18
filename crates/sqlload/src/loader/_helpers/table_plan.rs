@@ -1218,7 +1218,7 @@ pub(crate) async fn table_route(
     reader.direct_blocked = reader.direct_blocked.or(refused);
     let in_place = reader.needs_loader.is_none() && reader.direct_blocked.is_none();
     if let Some(files) = spec.files.as_ref().filter(|_| in_place)
-        && let StoreKind::S3 { .. } = files.location.store
+        && let StoreKind::S3 { .. } | StoreKind::Gcs { .. } = files.location.store
     {
         check_reach(destination, files, read).await?;
     }

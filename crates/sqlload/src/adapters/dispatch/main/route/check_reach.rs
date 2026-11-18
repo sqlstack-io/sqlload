@@ -8,8 +8,10 @@ use crate::adapters::dispatch::models::Destination;
 use crate::adapters::duckdb::main::_check_files::check_files;
 use crate::files_source::models::FilesRead;
 use crate::loader::models::FilesSource;
+#[cfg(feature = "duckdb")]
+use crate::store_paths::models::StoreKind;
 
-/// Check, at plan, that `destination` reads the files of `source` in S3 where they lie, for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers. The error says why it can't, with the fix.
+/// Check, at plan, that `destination` reads the files of `source` in S3 or GCS where they lie, for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers, and DuckDB reads it from GCS. The error says why it can't, with the fix.
 pub async fn check_reach(
     destination: &Destination,
     source: &FilesSource,
@@ -27,13 +29,23 @@ pub async fn check_reach(
                 return Ok(());
             };
             let url = format!("{folder}{}", data.file.relative_key);
+            let gcs = matches!(source.location.store, StoreKind::Gcs { .. });
             check_files(duckdb, &source.location.store, &url)
                 .await
                 .map_err(|error| {
-                    format!(
-                        "{url} cannot be read by MotherDuck on its servers: {}. Fix: MotherDuck's servers read the bucket from their own network, with the keys SQLLoad's S3 reads use (the AWS_* variables, else the connection's profile or AWS_PROFILE, else the AWS credential chain on this machine): give those keys s3:GetObject and s3:ListBucket on it, and kms:Decrypt on its KMS key if it has one, and let the bucket policy allow reads from outside your network or VPC endpoint; a bucket only your network may reach can't load into MotherDuck",
-                        first_line(&error.to_string())
-                    )
+                    let text = error.to_string();
+                    let error = first_line(&text);
+                    match (gcs, duckdb.motherduck) {
+                        (true, true) => format!(
+                            "{url} cannot be read by MotherDuck on its servers: {error}. Fix: MotherDuck's servers read the bucket from their own network with the gcs connection's HMAC key (hmac_key_id and hmac_secret): give the key's service account roles/storage.objectViewer on the bucket, and let no VPC Service Controls perimeter keep MotherDuck out"
+                        ),
+                        (true, false) => format!(
+                            "{url} cannot be read by DuckDB: {error}. Fix: DuckDB reads GCS with the gcs connection's HMAC key (hmac_key_id and hmac_secret), not its service_account_key: give the key's service account roles/storage.objectViewer on the bucket"
+                        ),
+                        (false, _) => format!(
+                            "{url} cannot be read by MotherDuck on its servers: {error}. Fix: MotherDuck's servers read the bucket from their own network, with the keys SQLLoad's S3 reads use (the AWS_* variables, else the connection's profile or AWS_PROFILE, else the AWS credential chain on this machine): give those keys s3:GetObject and s3:ListBucket on it, and kms:Decrypt on its KMS key if it has one, and let the bucket policy allow reads from outside your network or VPC endpoint; a bucket only your network may reach can't load into MotherDuck"
+                        ),
+                    }
                 })
         }
         _ => Ok(()),
