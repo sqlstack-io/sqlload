@@ -322,19 +322,16 @@ pub(crate) fn build_spec(
     {
         problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
     }
-    let on_overlapping_files = layered(
+    let own_strategy = strategy_origin == SettingOrigin::Table && !keyed;
+    let overlapping = layered(
         &settings.on_overlapping_files,
         &defaults.on_overlapping_files,
-    )
-    .filter(|(_, origin)| {
-        *origin == SettingOrigin::Table || keyed || strategy_origin != SettingOrigin::Table
-    })
-    .map(|(value, _)| value);
-    if let Some(problem) = on_overlapping_files.and_then(|_| {
-        overlapping_files_problem(context.source.kind == SourceKind::Files, strategy, keyed)
-    }) {
-        problems.push(problem);
-    }
+    );
+    let overlapping = overlapping
+        .filter(|(_, origin)| !own_strategy || *origin == SettingOrigin::Table)
+        .map(|(value, _)| value);
+    let files = context.source.kind == SourceKind::Files;
+    problems.extend(overlapping.and_then(|_| overlapping_files_problem(files, strategy, keyed)));
     let matched_key = match keyed {
         true => &replace_key,
         false => &unique_key,
@@ -459,7 +456,7 @@ pub(crate) fn build_spec(
         null_keys,
         not_null_keys,
         replace_key,
-        on_overlapping_files: on_overlapping_files.unwrap_or_default(),
+        on_overlapping_files: overlapping.unwrap_or_default(),
         newest_by,
         cursor,
         batch,

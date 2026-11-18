@@ -1015,14 +1015,23 @@ pub(crate) fn overlapping_files_problem(
     }
 }
 
-/// What `plan` adds to a files table's commits under `on_overlapping_files = "last_wins"`.
-pub(crate) fn last_wins_note(on_overlapping_files: OnOverlappingFiles) -> &'static str {
-    match on_overlapping_files {
+/// How `plan` describes the commits of a files table whose `groups` files are each recorded in the run log: their order, and what `on_overlapping_files = "last_wins"` adds.
+pub(crate) fn recorded_commits(groups: usize, spec: &TableSpec) -> String {
+    let files = match groups {
+        1 => "1 file".to_owned(),
+        count => format!("{count} files"),
+    };
+    let order = match spec.files_order {
+        FilesOrder::Modified => "oldest modified first (ties by path)",
+        FilesOrder::Path => "in path order",
+    };
+    let last_wins = match spec.on_overlapping_files {
         OnOverlappingFiles::LastWins => {
             "; the last file holding a replace_key value replaces it (on_overlapping_files = \"last_wins\")"
         }
         OnOverlappingFiles::Fail => "",
-    }
+    };
+    format!("{files}, one commit each, {order}, each recorded in the run log{last_wins}")
 }
 
 /// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), and under `--reload` none, with every file the table's merges recorded instead (oldest first), whose order the reload keeps; or why a files source cannot load into it: only into a DuckDB or Postgres table, never with `state = "logged"`, nor `--reload` with `unnest` or of a `delete_insert` (one commit would lose the files' order); none while the table does not exist.
