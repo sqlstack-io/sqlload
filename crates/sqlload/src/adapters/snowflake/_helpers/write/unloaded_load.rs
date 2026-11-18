@@ -3,6 +3,7 @@
 use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::direct_load::staged_as_text;
+use crate::adapters::snowflake::constants::MAX_SCRIPT_BYTES;
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
 use crate::adapters::snowflake::main::copy::_unloaded_sql::unloaded_statements;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
@@ -77,19 +78,26 @@ impl SnowflakeWriter {
             loaded_at: batch.loaded_at,
             from,
         });
-        let expected = unloaded.map(|files| files.rows);
-        let answer =
-            execute_sql(&self.destination.sql, &counted_block(&statements, expected)).await?;
-        let returned = answer
-            .rows
-            .first()
-            .and_then(|row| row.first().cloned().flatten())
-            .unwrap_or_default();
-        let rows: u64 = returned.parse().map_err(|error| {
-            LoaderError::Invalid(format!(
-                "loading the source's rows inside Snowflake returned {returned:?}, not a row count: {error}"
-            ))
-        })?;
+        let requests = unloaded_requests(
+            &statements,
+            unloaded.map(|files| (files.rows, files.keys.len())),
+            target.direct,
+        )
+        .map_err(LoaderError::Invalid)?;
+        let mut rows: u64 = 0;
+        for request in &requests {
+            let answer = execute_sql(&self.destination.sql, request).await?;
+            let returned = answer
+                .rows
+                .first()
+                .and_then(|row| row.first().cloned().flatten())
+                .unwrap_or_default();
+            rows += returned.parse::<u64>().map_err(|error| {
+                LoaderError::Invalid(format!(
+                    "loading the source's rows inside Snowflake returned {returned:?}, not a row count: {error}"
+                ))
+            })?;
+        }
         if let Some(files) = unloaded.filter(|files| files.rows != rows) {
             return Err(LoaderError::Invalid(format!(
                 "Snowflake loaded {rows} rows from the unloaded files in {}, but the unload reports {}; the batch is not committed",
@@ -100,8 +108,44 @@ impl SnowflakeWriter {
     }
 }
 
-/// One Snowflake Scripting block running `statements` in a transaction and returning the rows they loaded: `COPY`s, which commit only when they load `expected` rows and roll back otherwise, or an `INSERT ... SELECT` (`expected` `None`), which commits.
-pub(in crate::adapters) fn counted_block(statements: &[String], expected: Option<u64>) -> String {
+/// The requests loading `statements`, each a [`counted_block`]: one, whose `COPY`s commit only when they load all of the unload's rows (`unloaded`: its rows and files), when it fits `MAX_SCRIPT_BYTES`, as does an `INSERT ... SELECT` (`unloaded` `None`); otherwise several, each committing its `COPY`s into the staging or build table, which publishes only once their rows add up to the unload's, as the caller checks. A `direct` batch commits into the table itself, so it fails instead, before loading anything, as a part committed alone could not be taken back.
+pub(in crate::adapters) fn unloaded_requests(
+    statements: &[String],
+    unloaded: Option<(u64, usize)>,
+    direct: bool,
+) -> Result<Vec<String>, String> {
+    let Some((rows, files)) = unloaded else {
+        return Ok(vec![counted_block(statements, false, None)]);
+    };
+    let whole = counted_block(statements, true, Some(rows));
+    if whole.len() <= MAX_SCRIPT_BYTES {
+        return Ok(vec![whole]);
+    }
+    if direct {
+        return Err(format!(
+            "the unload wrote {files} files, more than one transaction of Snowflake COPYs can name, and this append commits into the table itself. Fix: set cursor_column and batch_size, so each read unloads fewer files"
+        ));
+    }
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    for statement in statements {
+        let fits = groups.last().is_some_and(|group| {
+            let mut grown = group.clone();
+            grown.push(statement.clone());
+            counted_block(&grown, true, None).len() <= MAX_SCRIPT_BYTES
+        });
+        match (fits, groups.last_mut()) {
+            (true, Some(group)) => group.push(statement.clone()),
+            _ => groups.push(vec![statement.clone()]),
+        }
+    }
+    Ok(groups
+        .iter()
+        .map(|group| counted_block(group, true, None))
+        .collect())
+}
+
+/// One Snowflake Scripting block running `statements` in a transaction and returning the rows they loaded: `COPY`s (`copies`), counted from their results, which commit only when they load `expected` rows (when given) and roll back otherwise, or an `INSERT ... SELECT`, which commits.
+fn counted_block(statements: &[String], copies: bool, expected: Option<u64>) -> String {
     let mut body = vec![
         "DECLARE loaded INTEGER DEFAULT 0; copied INTEGER;".to_owned(),
         "BEGIN".to_owned(),
@@ -109,9 +153,9 @@ pub(in crate::adapters) fn counted_block(statements: &[String], expected: Option
     ];
     for statement in statements {
         body.push(format!("{statement};"));
-        body.push(match expected {
-            Some(_) => "SELECT COALESCE(SUM(\"rows_loaded\"), 0) INTO :copied FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));".to_owned(),
-            None => "copied := SQLROWCOUNT;".to_owned(),
+        body.push(match copies {
+            true => "SELECT COALESCE(SUM(\"rows_loaded\"), 0) INTO :copied FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));".to_owned(),
+            false => "copied := SQLROWCOUNT;".to_owned(),
         });
         body.push("loaded := loaded + copied;".to_owned());
     }

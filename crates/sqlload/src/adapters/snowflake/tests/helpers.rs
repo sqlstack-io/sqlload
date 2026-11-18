@@ -9,7 +9,9 @@ use crate::adapters::snowflake::models::CopyStaged;
 use crate::adapters::snowflake::models::StageRoute;
 use crate::adapters::snowflake::models::{CopyColumn, CopyValue};
 use crate::adapters::snowflake::models::{ExternalStage, StageObject};
-use crate::adapters::snowflake::tests::test_types::{CopyFrom, UnloadBlockedTestCase};
+use crate::adapters::snowflake::tests::test_types::{
+    CopyFrom, UnloadBlockedTestCase, UnloadedRequestsTestCase,
+};
 use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::file_store::models::StoredFile;
@@ -458,4 +460,41 @@ pub(crate) fn unload_blocked_for(test_case: &UnloadBlockedTestCase) -> Option<St
         Some(&route),
         Some(&stage),
     )
+}
+
+/// The requests the case's statements are sent as, each checked to fit `MAX_SCRIPT_BYTES`, or the error.
+pub(crate) fn unloaded_requests_for(
+    test_case: &UnloadedRequestsTestCase,
+) -> Result<Vec<String>, String> {
+    use crate::adapters::snowflake::_helpers::write::unloaded_load::unloaded_requests;
+    use crate::adapters::snowflake::constants::MAX_SCRIPT_BYTES;
+
+    let (statements, unloaded) = match test_case.copies {
+        Some((count, length)) => (
+            (0..count)
+                .map(|index| format!("COPY INTO t /* {index} */ {}", "x".repeat(length)))
+                .collect::<Vec<String>>(),
+            Some((10, count * 1_000)),
+        ),
+        None => (vec!["INSERT INTO t SELECT 1".to_owned()], None),
+    };
+    let requests = unloaded_requests(&statements, unloaded, test_case.direct)?;
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.len() <= MAX_SCRIPT_BYTES),
+        "{}: a request is longer than the limit",
+        test_case.description
+    );
+    let sent: usize = requests
+        .iter()
+        .map(|request| request.matches("COPY INTO t /*").count())
+        .sum();
+    assert_eq!(
+        sent,
+        test_case.copies.map_or(0, |(count, _)| count),
+        "{}: every COPY is sent once",
+        test_case.description
+    );
+    Ok(requests)
 }

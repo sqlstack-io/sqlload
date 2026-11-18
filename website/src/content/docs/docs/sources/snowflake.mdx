@@ -164,7 +164,8 @@ commits once per run rather than about every 1 GB.
 Into a Snowflake target, no rows pass through SQLLoad in two cases:
 
 - **The target writes through the source's connection**: the same `connection`, with no other
-  `database`. Snowflake selects the rows with one `INSERT ... SELECT`, and nothing is unloaded.
+  `database`, and the source sets no `warehouse` of its own. Snowflake selects the rows with one
+  `INSERT ... SELECT` on the connection's warehouse, and nothing is unloaded.
 - **The source's `stage` `url` is inside the target's external stage `url`**, on another connection
   or account. Snowflake unloads the files there, and the target `COPY`s them through its own stage.
   The load commits only when it loads as many rows as `COPY INTO` reported unloading.

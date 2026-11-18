@@ -58,9 +58,9 @@ fn given_a_snowflake_sources_rows_when_loading_them_inside_snowflake_then_their_
             expected_statements: 2,
             expected_first: &[
                 "3 * 281474976710656 + (CASE METADATA$FILENAME WHEN 'lake/unload/run-1/data_0.parquet' THEN 0 WHEN ",
-                "WHEN 'lake/unload/run-1/data_999.parquet' THEN 999 END) * 4294967296 + METADATA$FILE_ROW_NUMBER",
+                "WHEN 'lake/unload/run-1/data_999.parquet' THEN 999 ELSE TO_NUMBER('sqlload: unexpected unloaded file ' || METADATA$FILENAME) END) * 4294967296 + METADATA$FILE_ROW_NUMBER",
             ],
-            expected_last: "(CASE METADATA$FILENAME WHEN 'lake/unload/run-1/data_1000.parquet' THEN 1000 END) * 4294967296 + METADATA$FILE_ROW_NUMBER FROM @\"DB\".\"RAW\".\"LAKE\"/unload/run-1/) FILES = ('data_1000.parquet')",
+            expected_last: "(CASE METADATA$FILENAME WHEN 'lake/unload/run-1/data_1000.parquet' THEN 1000 ELSE TO_NUMBER('sqlload: unexpected unloaded file ' || METADATA$FILENAME) END) * 4294967296 + METADATA$FILE_ROW_NUMBER FROM @\"DB\".\"RAW\".\"LAKE\"/unload/run-1/) FILES = ('data_1000.parquet')",
         },
         UnloadedSqlTestCase {
             description: "selected in the source's session: one INSERT reading the query's columns by name, turned back the same way; a merge numbers rows in the order the query gives them",

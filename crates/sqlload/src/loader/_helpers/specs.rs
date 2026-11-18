@@ -656,7 +656,7 @@ fn constant_type_problem(
     }
 }
 
-/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none; a Snowflake target writing through the source's own connection may select the rows itself.
+/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none; a Snowflake target writing through the source's own connection, on its warehouse (the source sets no `warehouse` of its own), may select the rows itself.
 fn warehouse_source(
     context: &SourceContext<'_>,
     overrides: &TableOverride,
@@ -694,7 +694,8 @@ fn warehouse_source(
                 store,
                 stage,
                 same_connection: context.target.warehouse == Warehouse::Snowflake
-                    && context.target.session_connection.as_ref() == Some(&source.connection),
+                    && context.target.session_connection.as_ref() == Some(&source.connection)
+                    && source.warehouse.is_none(),
             },
         }
     })
