@@ -264,3 +264,13 @@ pub(crate) struct MostWindowsTestCase {
     pub(crate) spec: fn() -> Result<crate::loader::models::TableSpec, String>,
     pub(crate) expected_most: Result<u64, &'static str>,
 }
+
+pub(crate) struct GcsReaderTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the gcs connection sets an HMAC key.
+    pub(crate) hmac: bool,
+    /// The gcs connection's custom endpoint, if any.
+    pub(crate) endpoint: Option<&'static str>,
+    /// Why SQLLoad must read the files instead of DuckDB, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}

@@ -7,13 +7,16 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::routing::models::WriterAccepts;
 use crate::routing::models::{FileFormat, Store};
 
-/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3 or on this machine itself, MotherDuck Parquet in S3 on its servers, and ClickHouse Parquet in S3), or what its stage route takes.
+/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself, MotherDuck Parquet in S3 or GCS on its servers, and ClickHouse Parquet in S3), or what its stage route takes.
 pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) if duckdb.motherduck => WriterAccepts {
             arrow: true,
-            pulls_from: vec![Store::ObjectStore("s3://".to_owned())],
+            pulls_from: vec![
+                Store::ObjectStore("s3://".to_owned()),
+                Store::ObjectStore("gs://".to_owned()),
+            ],
             pull_formats: vec![FileFormat::Parquet],
             ..WriterAccepts::default()
         },
@@ -22,6 +25,7 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
             arrow: true,
             pulls_from: vec![
                 Store::ObjectStore("s3://".to_owned()),
+                Store::ObjectStore("gs://".to_owned()),
                 Store::Local(String::new()),
             ],
             pull_formats: vec![FileFormat::Parquet],

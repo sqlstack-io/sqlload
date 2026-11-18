@@ -17,6 +17,7 @@ pub(crate) fn gcs_bucket(name: &str) -> Option<StoreKind> {
         bucket: name.to_owned(),
         service_account_key: None,
         endpoint: None,
+        hmac: None,
     })
 }
 

@@ -6,14 +6,19 @@ use crate::adapters::duckdb::_helpers::direct_checks::reserved_name;
 use crate::adapters::duckdb::_helpers::motherduck_connection::environment_variable;
 use crate::files_source::models::{FilesRead, SourceFormat};
 use crate::loader::models::TableSpec;
+use crate::store_paths::models::StoreKind;
 
-/// Why DuckDB cannot load the planned `read` of a files table exactly by reading its Parquet files itself, so SQLLoad reads them instead; `None` when it can. DuckDB's casts differ from SQLLoad's (it rounds where SQLLoad truncates, and promotes files that disagree), so every column must load as the type the files hold it as; masks, custom S3 endpoints and names DuckDB would read as patterns also need SQLLoad's reader.
+/// Why DuckDB cannot load the planned `read` of a files table exactly by reading its Parquet files itself, so SQLLoad reads them instead; `None` when it can. DuckDB's casts differ from SQLLoad's (it rounds where SQLLoad truncates, and promotes files that disagree), so every column must load as the type the files hold it as; masks, custom S3 and GCS endpoints, GCS without an HMAC key (DuckDB takes no service-account key) and names DuckDB would read as patterns also need SQLLoad's reader.
 pub(in crate::adapters) fn direct_problem(spec: &TableSpec, read: &FilesRead) -> Option<String> {
     let files = spec.files.as_ref()?;
     let problems = [
         (files.encoding.format != SourceFormat::Parquet)
             .then(|| "only Parquet files are read by DuckDB itself".to_owned()),
         custom_endpoint(&files.location.store, &environment_variable),
+        matches!(files.location.store, StoreKind::Gcs { hmac: None, .. }).then(|| {
+            "the gcs connection sets no hmac_key_id, which DuckDB and MotherDuck read GCS with"
+                .to_owned()
+        }),
         files.table.columns.iter().find_map(reserved_name),
         (!spec.masked.columns.is_empty()).then(|| "the table masks columns".to_owned()),
         files_direct_problem(files, read),

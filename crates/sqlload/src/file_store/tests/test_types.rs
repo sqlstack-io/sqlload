@@ -27,3 +27,15 @@ pub(crate) struct KeyedBuilderTestCase {
     /// The client's key ID, session token and region.
     pub(crate) expected_config: [Option<&'static str>; 3],
 }
+
+pub(crate) struct GcsCredentialsTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the connection sets `service_account_key`.
+    pub(crate) has_key: bool,
+    /// `GOOGLE_APPLICATION_CREDENTIALS`, in the test's folder: `sa.json` exists, `gone.json` doesn't.
+    pub(crate) named: Option<&'static str>,
+    /// The home folder, in the test's folder: `home` holds gcloud's file, `nobody` doesn't exist.
+    pub(crate) home: Option<&'static str>,
+    /// Text where the credentials come from, or the error, must contain.
+    pub(crate) expected_text: &'static str,
+}

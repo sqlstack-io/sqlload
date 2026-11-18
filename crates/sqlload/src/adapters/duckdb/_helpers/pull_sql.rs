@@ -20,7 +20,7 @@ use crate::postgres_source::models::ReadColumn;
 use crate::schema_plan::constants::MERGE_ROW_COLUMN;
 use crate::schema_plan::models::DesiredColumn;
 use crate::stage_api::models::AwsCredentials;
-use crate::store_paths::models::StoreKind;
+use crate::store_paths::models::{HmacKey, StoreKind};
 
 /// One file DuckDB reads: where it reads it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values), by column (`None` for a partition folder the file lacks).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,7 +264,7 @@ pub(crate) fn default_region(variable: &dyn Fn(&str) -> Option<String>) -> Strin
         .unwrap_or_else(|| "us-east-1".to_owned())
 }
 
-/// What DuckDB needs to read files in an S3 bucket itself: the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, whose keys come from the AWS credential chain when `chain`.
+/// What DuckDB needs to read files in an S3 or GCS bucket itself: the extensions to load (installing them on first use) and the [temporary secret](s3_secret), with its parameters, whose keys come from the AWS credential chain when `chain`.
 pub(crate) struct BucketAccess {
     pub bucket: String,
     pub extensions: &'static str,
@@ -294,16 +294,23 @@ pub(crate) fn secret_current(set: Option<&SetSecret>, wanted: &SetSecret, now: I
     })
 }
 
-/// For files in S3, [`BucketAccess`] for their bucket: the secret in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved where DuckDB runs. `None` for files elsewhere.
+/// For files in S3, [`BucketAccess`] for their bucket: the secret in the connection's region, else `AWS_REGION` / `AWS_DEFAULT_REGION` (unset when empty), else us-east-1 as SQLLoad's reader does; with the keys SQLLoad's own S3 reads use (the `AWS_*` variables, else the shared credentials file under the connection's `profile` or `AWS_PROFILE`), passed as parameters and never in SQL, otherwise the AWS credential chain, resolved where DuckDB runs. For files in GCS, [`gcs_access`] when the connection has an HMAC key. `None` for files elsewhere.
 pub(crate) fn bucket_access(store: &StoreKind) -> Result<Option<BucketAccess>, DuckDbError> {
-    let StoreKind::S3 {
-        bucket,
-        region,
-        profile,
-        ..
-    } = store
-    else {
-        return Ok(None);
+    let (bucket, region, profile) = match store {
+        StoreKind::S3 {
+            bucket,
+            region,
+            profile,
+            ..
+        } => (bucket, region, profile),
+        StoreKind::Gcs {
+            bucket,
+            hmac: Some(key),
+            ..
+        } => return Ok(Some(gcs_access(bucket, key))),
+        StoreKind::Gcs { .. } | StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => {
+            return Ok(None);
+        }
     };
     let keys = s3_keys(profile.as_deref())
         .map_err(DuckDbError::Task)?
@@ -323,6 +330,24 @@ pub(crate) fn bucket_access(store: &StoreKind) -> Result<Option<BucketAccess>, D
         parameters,
         chain: keys.is_none(),
     }))
+}
+
+/// For files in a GCS bucket, [`BucketAccess`] with the connection's HMAC key `key`, the only credential DuckDB reads GCS with: a temporary `gcs` secret scoped to the bucket and named after it (hex, as for S3), its key passed as parameters and never in SQL, kept apart from an S3 bucket of the same name.
+fn gcs_access(bucket: &str, key: &HmacKey) -> BucketAccess {
+    let name: String = bucket.bytes().map(|byte| format!("{byte:02x}")).collect();
+    BucketAccess {
+        bucket: format!("gs://{bucket}"),
+        extensions: "INSTALL httpfs; LOAD httpfs;",
+        statement: format!(
+            "CREATE OR REPLACE TEMPORARY SECRET sqlload_gcs_{name} (TYPE gcs, KEY_ID ?, SECRET ?, SCOPE ?)"
+        ),
+        parameters: vec![
+            key.key_id.clone(),
+            key.secret.expose().to_owned(),
+            format!("gs://{bucket}/"),
+        ],
+        chain: false,
+    }
 }
 
 /// `keys` as the `KEY_ID`, `SECRET` and `SESSION_TOKEN` parameters of a DuckDB secret.

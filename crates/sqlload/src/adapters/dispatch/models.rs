@@ -17,7 +17,7 @@ pub enum Destination {
     BigQuery(Box<BigQueryDestination>),
     Postgres(Box<PostgresDestination>),
     ClickHouse(Box<ClickHouseDestination>),
-    /// Parquet files in an s3 or filesystem connection.
+    /// Parquet files in an s3, gcs or filesystem connection.
     Files(Box<FilesDestination>),
 }
 

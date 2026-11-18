@@ -155,7 +155,7 @@ pub const WAREHOUSE_CONNECTION_KINDS: &[&str] = &[
 pub const CLICKHOUSE_CONNECTION_KIND: &str = "clickhouse";
 
 /// The connection kinds a target writes files into.
-pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];
+pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "gcs", "filesystem"];
 
 /// The table folder template of a files target that sets no `path`.
 pub const DEFAULT_DESTINATION_PATH: &str = "{source}/{table}/";
