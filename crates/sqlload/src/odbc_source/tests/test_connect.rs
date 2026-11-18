@@ -1,6 +1,6 @@
 use crate::auth::models::Secret;
 use crate::odbc_source::_helpers::connect::connect;
-use crate::odbc_source::main::odbc_reader::odbc_reader;
+use crate::odbc_source::main::_odbc_reader::odbc_reader;
 use crate::odbc_source::tests::helpers::elf_with_flags;
 use crate::odbc_source::tests::test_types::ConnectErrorTestCase;
 

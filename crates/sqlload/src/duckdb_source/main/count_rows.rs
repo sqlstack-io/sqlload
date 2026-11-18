@@ -16,8 +16,9 @@ pub async fn count_rows(
     tokio::task::spawn_blocking(move || {
         let connection = open_read_only(&reader)?;
         let count: i64 = connection.query_row(&query, [], |row| row.get(0))?;
-        u64::try_from(count)
-            .map_err(|error| DuckDbSourceError::Invalid(format!("{query} returned {count}: {error}")))
+        u64::try_from(count).map_err(|error| {
+            DuckDbSourceError::Invalid(format!("{query} returned {count}: {error}"))
+        })
     })
     .await
     .map_err(|error| DuckDbSourceError::Invalid(format!("counting rows stopped: {error}")))?

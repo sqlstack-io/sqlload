@@ -1864,7 +1864,8 @@ pub(crate) async fn block_refused_bounds(
     (source_name, source): (&str, &crate::project::models::SourceConfig),
     planned: &mut [TablePlan],
 ) -> Result<(), LoaderError> {
-    let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
+    let reader = crate::odbc_source::main::source_reader::source_reader(project, source)
+        .map_err(LoaderError::Invalid)?;
     for table in planned
         .iter_mut()
         .filter(|table| table.schema.blocked.is_none())

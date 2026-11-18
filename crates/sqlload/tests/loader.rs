@@ -14,6 +14,9 @@ mod clickhouse_helpers;
 mod cursor_helpers;
 #[path = "loader/databricks/helpers.rs"]
 mod databricks_helpers;
+#[cfg(feature = "duckdb")]
+#[path = "loader/duckdb/helpers.rs"]
+mod duckdb_helpers;
 #[path = "loader/files/helpers.rs"]
 mod files_helpers;
 #[path = "loader/files_target/helpers.rs"]
@@ -47,11 +50,11 @@ mod test_column_names;
 mod test_databricks_loads;
 #[path = "loader/test_databricks_source.rs"]
 mod test_databricks_source;
+#[path = "loader/test_debug_project.rs"]
+mod test_debug_project;
 #[cfg(feature = "duckdb")]
 #[path = "loader/test_duckdb_source.rs"]
 mod test_duckdb_source;
-#[path = "loader/test_debug_project.rs"]
-mod test_debug_project;
 #[path = "loader/test_file_store.rs"]
 mod test_file_store;
 #[path = "loader/test_files_round_trip.rs"]

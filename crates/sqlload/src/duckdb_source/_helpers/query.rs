@@ -12,7 +12,9 @@ pub(crate) fn quote_identifier(name: &str) -> String {
 fn from_item((table, sql): (&SourceTable, Option<&str>)) -> String {
     match sql {
         Some(sql) => subquery(sql),
-        None => [&table.schema, &table.name].map(|name| quote_identifier(name)).join("."),
+        None => [&table.schema, &table.name]
+            .map(|name| quote_identifier(name))
+            .join("."),
     }
 }
 

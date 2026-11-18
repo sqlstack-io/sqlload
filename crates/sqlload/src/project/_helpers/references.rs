@@ -318,9 +318,7 @@ fn kind_problems(place: &str, source: &SourceConfig) -> Vec<String> {
                     | SourceKind::Odbc
                     | SourceKind::BigQuery
                     | SourceKind::Databricks
-                    | SourceKind::DuckDb => {
-                        "; list tables in include, or give a table a sql query"
-                    }
+                    | SourceKind::DuckDb => "; list tables in include, or give a table a sql query",
                     _ => "",
                 };
                 problems.push(format!(

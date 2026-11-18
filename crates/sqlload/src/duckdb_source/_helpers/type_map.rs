@@ -46,7 +46,8 @@ fn scalar_type(shown: &str) -> Option<ColumnType> {
             let (Some(Ok(precision)), Some(Ok(scale))) = (parts.next(), parts.next()) else {
                 return None;
             };
-            (precision <= MAX_DECIMAL_PRECISION).then_some(ColumnType::Decimal { precision, scale })?
+            (precision <= MAX_DECIMAL_PRECISION)
+                .then_some(ColumnType::Decimal { precision, scale })?
         }
         "VARCHAR" | "ENUM" => ColumnType::Text,
         "BLOB" => ColumnType::Binary,

@@ -32,13 +32,13 @@ pub async fn read_rows(
                 held_rows += chunk.num_rows();
                 held.push(chunk);
                 if held_rows >= batch_rows {
-                    if !send(&sender, &mut held)? {
+                    if !send(&sender, &std::mem::take(&mut held))? {
                         return Ok(());
                     }
                     held_rows = 0;
                 }
             }
-            send(&sender, &mut held)?;
+            send(&sender, &held)?;
             Ok(())
         };
         if let Err(error) = read() {
@@ -59,16 +59,18 @@ pub async fn read_rows(
     Ok(rows)
 }
 
-/// Send the held chunks as one batch, emptying `held`; `false` when the consumer has gone.
+/// Send the `held` chunks as one batch; `false` when the consumer has gone.
 fn send(
     sender: &tokio::sync::mpsc::Sender<Result<RecordBatch, DuckDbSourceError>>,
-    held: &mut Vec<RecordBatch>,
+    held: &[RecordBatch],
 ) -> Result<bool, DuckDbSourceError> {
     let Some(first) = held.first() else {
         return Ok(true);
     };
     let batch = arrow_select::concat::concat_batches(&first.schema(), held.iter())
         .map_err(|error| DuckDbSourceError::Invalid(error.to_string()))?;
-    held.clear();
-    Ok(sender.blocking_send(Ok(batch)).is_ok())
+    Ok(match sender.blocking_send(Ok(batch)) {
+        Ok(()) => true,
+        Err(tokio::sync::mpsc::error::SendError(_)) => false,
+    })
 }

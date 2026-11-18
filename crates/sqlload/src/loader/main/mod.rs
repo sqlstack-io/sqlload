@@ -1,6 +1,4 @@
 pub(in crate::loader) mod _check_source;
-pub(in crate::loader) mod _count_rows;
-pub(in crate::loader) mod _duckdb_source;
 pub(in crate::loader) mod _files_repair;
 pub(in crate::loader) mod _files_schema;
 pub(in crate::loader) mod _files_window;

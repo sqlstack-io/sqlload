@@ -109,4 +109,5 @@ Unit tests read a real DuckDB file: tables, a view and a query table found by `i
 `exclude`, primary keys and comments, every type above, a pinned `HUGEINT`, reads in several
 batches, a filter applied outside a query that ends in a comment, and the file's bytes unchanged
 after the read. A loader test loads a file into DuckDB twice: tables, a view and a query table,
-with `exclude_columns`, `where`, and a cursor merging only the rows that changed.
+with `exclude_columns`, `where`, a cursor merging only the rows that changed, and `--sync-deletes`
+removing a row the file no longer holds.
