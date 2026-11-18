@@ -4,6 +4,7 @@ use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
+use crate::adapters::duckdb::main::_open_bucket::open_bucket;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::loader::errors::LoaderError;
@@ -45,10 +46,10 @@ impl DuckDbWriter {
                 compat: target.compat,
                 batch: target.batch,
             },
-            &urls,
+            (&urls, self.destination.motherduck),
             (target.load_id, batch.loaded_at),
-            self.destination.motherduck,
         );
+        open_bucket(&self.destination, &files.folder.store).await?;
         let transaction = target.direct || target.builds;
         if transaction && !self.open_transaction {
             execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;

@@ -87,9 +87,8 @@ pub(crate) fn unloaded_row_loaded(
             compat: crate::load_naming::models::Compat::Sqlload,
             batch: 1,
         },
-        &[file],
+        (&[file], false),
         ("L1", "2026-11-08T00:00:00Z"),
-        false,
     );
     connection.execute(&insert, []).map_err(failed)?;
     connection
@@ -129,6 +128,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             memory: None,
             own_limit: None,
             unflushed: Arc::default(),
+            secrets: Arc::default(),
         },
         open_transaction: false,
     };
@@ -231,9 +231,8 @@ pub(crate) fn unloaded_insert_sql(constants: &[(&str, ColumnType, &str)]) -> Str
             compat: crate::load_naming::models::Compat::Sqlload,
             batch: 1,
         },
-        &["/unloaded/data_0.parquet".to_owned()],
+        (&["/unloaded/data_0.parquet".to_owned()], false),
         ("L1", "2026-11-08T00:00:00Z"),
-        false,
     )
 }
 
