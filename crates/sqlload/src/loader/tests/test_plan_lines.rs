@@ -2,9 +2,9 @@ use crate::loader::_helpers::table_plan::blocked_table;
 use crate::loader::main::render_plan::render_plan;
 use crate::loader::models::{ProjectPlan, PythonTable, SkippedTable};
 use crate::loader::tests::helpers::{
-    merge_failing_repeats, merge_newest, python_spec, replace_mode, streamed_route,
+    merge_failing_repeats, merge_newest, python_spec, replace_mode, streamed_route, unload_store,
 };
-use crate::loader::tests::test_types::{ModedTable, PlanLinesTestCase};
+use crate::loader::tests::test_types::{ModedTable, PlanLinesTestCase, UnloadStoreTestCase};
 
 #[test]
 fn given_tables_when_printing_the_plan_without_verbose_then_only_their_own_lines_show_grouped_by_source()
@@ -91,6 +91,31 @@ fn given_tables_when_printing_the_plan_without_verbose_then_only_their_own_lines
         assert_eq!(
             render_plan(&plan, false).0.join("\n"),
             test_case.expected_output,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_snowflake_stage_url_when_resolving_its_table_then_the_unload_store_is_a_folder_ending_in_a_slash()
+ {
+    let test_cases = [
+        UnloadStoreTestCase {
+            description: "a url without a trailing slash is the folder, so an external location of that folder covers it",
+            url: "s3://lake/unload",
+            expected_store: "Ok(\"ObjectStore(\\\"s3://lake/unload/\\\")\")",
+        },
+        UnloadStoreTestCase {
+            description: "a url with a trailing slash keeps it",
+            url: "s3://lake/unload/",
+            expected_store: "Ok(\"ObjectStore(\\\"s3://lake/unload/\\\")\")",
+        },
+    ];
+    for test_case in test_cases {
+        assert_eq!(
+            format!("{:?}", unload_store(test_case.url)),
+            test_case.expected_store,
             "{}",
             test_case.description
         );

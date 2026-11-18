@@ -1077,7 +1077,7 @@ impl Publisher {
         }
     }
 
-    /// Load one unload's files, or the rows its query selects, by having the destination read them itself, where the plan chose that; the destination must load them so.
+    /// Load one unload's files, or the rows its query selects, by having the destination read them itself, where the plan chose that; the destination must load them so. Each unload is a batch of its own, so its rows' merge ordinals follow every earlier window's even when they wait in one staging table.
     pub(crate) async fn load_unloaded(
         &mut self,
         source: UnloadedSource<'_>,
@@ -1104,6 +1104,7 @@ impl Publisher {
                 ))
             })?;
         self.note_direct(&loaded);
+        self.batch += 1;
         Ok(loaded)
     }
 

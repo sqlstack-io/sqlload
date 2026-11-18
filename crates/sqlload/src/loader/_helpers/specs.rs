@@ -681,7 +681,7 @@ fn warehouse_source(
                 storage_integration: Some(integration),
                 ..
             }) => (
-                Store::ObjectStore(url.clone()),
+                Store::ObjectStore(format!("{}/", url.trim_end_matches('/'))),
                 format!(
                     "external: Snowflake writes to {url} through storage integration {integration}; the files are read there and removed after the read"
                 ),
