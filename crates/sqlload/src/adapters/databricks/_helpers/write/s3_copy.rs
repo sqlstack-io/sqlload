@@ -37,41 +37,18 @@ pub(crate) fn s3_copy_statement(
     loaded_at: &str,
 ) -> String {
     let literal = |text: &str| DatabricksSql.render_loader_value_literal(text);
-    let values: Vec<String> = columns
-        .iter()
-        .map(|column| {
-            let given: Vec<(&S3File, Option<&String>)> = batch
-                .files
-                .iter()
-                .filter_map(|file| {
-                    let (_, value) = file
-                        .constants
-                        .iter()
-                        .find(|(name, _)| *name == column.name)?;
-                    Some((file, value.as_ref()))
-                })
-                .collect();
-            let value = match metadata_role(target.compat, &column.name) {
-                _ if !given.is_empty() => per_file(batch, &given),
-                Some(MetadataRole::LoadId) => literal(target.load_id),
-                Some(MetadataRole::LoadedAt) => literal(loaded_at),
-                _ if column.name == SOURCE_ROW_COLUMN => "_metadata.row_index + 1".to_owned(),
-                _ => batch
-                    .in_files
-                    .iter()
-                    .find(|(name, _)| *name == column.name)
-                    .map_or_else(
-                        || "NULL".to_owned(),
-                        |(_, held)| DatabricksSql.render_identifier(held),
-                    ),
-            };
-            format!(
-                "{} AS {}",
-                typed_value(target, column, &value),
-                DatabricksSql.render_identifier(&column.name)
-            )
-        })
-        .collect();
+    let mut values: Vec<String> = Vec::with_capacity(columns.len());
+    for column in columns {
+        values.push(format!(
+            "{} AS {}",
+            typed_value(
+                target,
+                column,
+                &column_value(target, batch, column, loaded_at)
+            ),
+            DatabricksSql.render_identifier(&column.name)
+        ));
+    }
     let keys: Vec<String> = batch.files.iter().map(|file| literal(&file.key)).collect();
     format!(
         "COPY INTO {into} FROM (SELECT {} FROM {}) FILEFORMAT = PARQUET FILES = ({}) {S3_COPY_OPTIONS}",
@@ -79,6 +56,31 @@ pub(crate) fn s3_copy_statement(
         literal(&batch.folder),
         keys.join(", ")
     )
+}
+
+/// Where `column`'s value comes from in `batch`, before it is typed: the value SQLLoad gives each file, the load id or load time, the row's position in its file, the files' own column, or NULL when no file holds it.
+fn column_value(
+    target: &WriteTarget<'_>,
+    batch: &S3Batch,
+    column: &DesiredColumn,
+    loaded_at: &str,
+) -> String {
+    let literal = |text: &str| DatabricksSql.render_loader_value_literal(text);
+    let mut given: Vec<(&S3File, Option<&String>)> = Vec::new();
+    for file in &batch.files {
+        if let Some((_, value)) = file.constants.iter().find(|(name, _)| *name == column.name) {
+            given.push((file, value.as_ref()));
+        }
+    }
+    let held = batch.in_files.iter().find(|(name, _)| *name == column.name);
+    match (metadata_role(target.compat, &column.name), held) {
+        _ if !given.is_empty() => per_file(batch, &given),
+        (Some(MetadataRole::LoadId), _) => literal(target.load_id),
+        (Some(MetadataRole::LoadedAt), _) => literal(loaded_at),
+        _ if column.name == SOURCE_ROW_COLUMN => "_metadata.row_index + 1".to_owned(),
+        (_, Some((_, held))) => DatabricksSql.render_exact_identifier(held),
+        (_, None) => "NULL".to_owned(),
+    }
 }
 
 /// The value each of `given`'s files gives a column, picked by the path a row was read from; a path not in the batch fails the statement rather than load a row without it.

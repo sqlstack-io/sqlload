@@ -893,15 +893,9 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(truncated_nanoseconds(spec, live.as_deref()));
-    let in_s3 = spec.files.as_ref().map(|files| &files.location.store);
-    if let (None, Some(StoreKind::S3 { .. })) = (&schema.blocked, in_s3)
-        && let Err(problem) = list_reach(destination).await
-    {
-        schema = blocked_plan(vec![problem]);
-    }
     let route = match schema.blocked {
         Some(_) => None,
-        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {
+        None => match table_route(spec, files.as_ref(), stage.as_ref(), destination).await {
             Ok(route) => Some(route),
             Err(problem) => {
                 schema = blocked_plan(vec![problem]);
@@ -1206,13 +1200,16 @@ fn copy_warning(route: Option<&Route>) -> Option<String> {
     ))
 }
 
-/// The route a table's data takes into `destination`; `read` is a files table's planned read.
-pub(crate) fn table_route(
+/// The route a table's data takes into `destination`; `read` is a files table's planned read. For files in S3 it first looks up where the destination reads files itself (Databricks' external locations).
+pub(crate) async fn table_route(
     spec: &TableSpec,
     read: Option<&FilesRead>,
     stage: Option<&StageRoute>,
     destination: &Destination,
 ) -> Result<Route, String> {
+    if let Some(StoreKind::S3 { .. }) = spec.files.as_ref().map(|files| &files.location.store) {
+        list_reach(destination).await?;
+    }
     let reader = reader_offer(spec, read, stage);
     plan_route(
         &reader,

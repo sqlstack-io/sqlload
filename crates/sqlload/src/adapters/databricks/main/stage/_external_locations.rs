@@ -1,6 +1,6 @@
 //! The Unity Catalog external locations a Databricks destination reads files through.
 
-use crate::adapters::databricks::constants::LIST_LOCATIONS;
+use crate::adapters::databricks::constants::{LIST_LOCATIONS, LOCATION_URL_COLUMN};
 use crate::adapters::databricks::models::DatabricksDestination;
 use crate::databricks_api::main::execute_statement::execute_statement;
 use crate::http::errors::ApiError;
@@ -16,7 +16,7 @@ pub(in crate::adapters) async fn external_locations(
             let url = rows
                 .columns
                 .iter()
-                .position(|column| column == "url")
+                .position(|column| column == LOCATION_URL_COLUMN)
                 .ok_or_else(|| {
                     ApiError::Protocol(format!("{LIST_LOCATIONS} returned no url column"))
                 })?;

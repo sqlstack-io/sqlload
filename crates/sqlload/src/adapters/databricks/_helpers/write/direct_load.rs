@@ -5,6 +5,7 @@ use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::_helpers::write::s3_copy::{S3Batch, S3File, s3_copy_statement};
+use crate::adapters::databricks::constants::INSERTED_ROWS_COLUMN;
 use crate::adapters::databricks::main::stage::_direct_problem::direct_problem;
 use crate::adapters::databricks::models::{DatabricksSql, DatabricksWriter};
 use crate::databricks_api::main::execute_statement::execute_statement;
@@ -13,9 +14,10 @@ use crate::files_source::main::normal_value::normal_value;
 use crate::files_source::models::DataFile;
 use crate::loader::errors::LoaderError;
 use crate::schema_plan::models::DesiredColumn;
+use crate::sql_api::models::SqlRows;
 
 impl DatabricksWriter {
-    /// Load `batch` by having Databricks `COPY` its Parquet files where they lie in S3, through the external location that covers them, in one `COPY INTO` (one transaction) into the staging or build table the load publishes from, or into the table itself. A batch whose own footers hold a column a cast would not keep exactly fails, and so does one whose loaded rows differ from its footers' (an append into the table itself has then already committed them); files never fall back to SQLLoad mid-load. `None` when the table's files aren't in S3 under an external location.
+    /// Load `batch` by having Databricks `COPY` its Parquet files where they lie in S3, through the external location that covers them, in one `COPY INTO` (one transaction) into the staging or build table the load publishes from, or into the table itself. A batch whose own footers hold a column a cast would not keep exactly fails, and so does one whose inserted rows, as `COPY INTO` reports them, differ from its footers' (an append into the table itself has then already committed them); files never fall back to SQLLoad mid-load. `None` when the table's files aren't in S3 under an external location.
     pub(in crate::adapters) async fn copy_files(
         &mut self,
         batch: &DirectBatch<'_>,
@@ -68,27 +70,11 @@ impl DatabricksWriter {
             batch.loaded_at,
         );
         let result = execute_statement(&self.destination.api, &statement).await?;
-        let inserted = result
-            .columns
-            .iter()
-            .position(|column| column == "num_inserted_rows")
-            .and_then(|index| {
-                result
-                    .rows
-                    .first()?
-                    .get(index)?
-                    .as_deref()?
-                    .parse::<u64>()
-                    .ok()
-            });
+        let inserted = inserted_rows(&result)?;
         let expected = footer_rows(batch.footers);
-        if inserted != Some(expected) {
+        if inserted != expected {
             return Err(LoaderError::Invalid(format!(
-                "Databricks loaded {} rows from this batch's files, but their footers hold {expected}",
-                inserted.map_or_else(
-                    || "an unreported number of".to_owned(),
-                    |rows| rows.to_string()
-                )
+                "Databricks loaded {inserted} rows from this batch's files, but their footers hold {expected}"
             )));
         }
         Ok(Some(match target.staging {
@@ -96,6 +82,25 @@ impl DatabricksWriter {
             None => DirectLoaded::Committed(expected),
         }))
     }
+}
+
+/// The rows a `COPY INTO`'s `result` reports it inserted.
+fn inserted_rows(result: &SqlRows) -> Result<u64, LoaderError> {
+    let reported = result
+        .columns
+        .iter()
+        .position(|column| column == INSERTED_ROWS_COLUMN)
+        .and_then(|index| result.rows.first()?.get(index)?.clone());
+    let Some(text) = reported else {
+        return Err(LoaderError::Invalid(format!(
+            "COPY INTO reported no {INSERTED_ROWS_COLUMN}"
+        )));
+    };
+    text.parse::<u64>().map_err(|error| {
+        LoaderError::Invalid(format!(
+            "COPY INTO reported {INSERTED_ROWS_COLUMN} = {text:?}: {error}"
+        ))
+    })
 }
 
 /// The values SQLLoad gives every row of `data`: its name and version as the files source records them, and its partition values (constants among them), each converted to its column's type as SQLLoad's reader would, so a value that does not convert fails here rather than in Databricks' cast.

@@ -1,8 +1,8 @@
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::{FileFormat, ReadVia, ReaderOffer, RouteOverrides, StagePreference};
 use crate::routing::tests::helpers::{
-    LAKE, clickhouse_destination, database_destination, duckdb_destination, files_source,
-    internal_stage, local_destination, object_store, streaming_source, user_stage,
+    LAKE, clickhouse_destination, database_destination, databricks_destination, duckdb_destination,
+    files_source, internal_stage, local_destination, object_store, streaming_source, user_stage,
     warehouse_destination, warehouse_source,
 };
 use crate::routing::tests::test_types::{PlanRouteErrorTestCase, PlanRouteTestCase};
@@ -62,6 +62,43 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             expected_steps: &[
                 "use parquet files in s3://lake/scores/date=2026-11-04/",
                 "destination loads parquet files from s3://lake/scores/date=2026-11-04/",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "Parquet in S3 under Databricks' external location is copied where it lies",
+            reader: files_source("s3://lake/scores/", FileFormat::Parquet),
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "use parquet files in s3://lake/scores/",
+                "destination loads parquet files from s3://lake/scores/",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "CSV in S3 under Databricks' external location goes through SQLLoad into the volume",
+            reader: files_source("s3://lake/scores/", FileFormat::Csv),
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "use csv files in s3://lake/scores/",
+                "read csv into Arrow",
+                "write Parquet to internal stage /Volumes/main/raw/stage",
+                "destination loads parquet files from internal stage /Volumes/main/raw/stage",
+            ],
+        },
+        PlanRouteTestCase {
+            description: "Parquet in S3 Databricks can't load exactly goes through SQLLoad, covered or not",
+            reader: ReaderOffer {
+                direct_blocked: Some("at is a time".to_owned()),
+                ..files_source("s3://other/scores/", FileFormat::Parquet)
+            },
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &[
+                "use parquet files in s3://other/scores/",
+                "read parquet into Arrow",
+                "write Parquet to internal stage /Volumes/main/raw/stage",
+                "destination loads parquet files from internal stage /Volumes/main/raw/stage",
             ],
         },
         PlanRouteTestCase {
@@ -304,6 +341,13 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
             writer: warehouse_destination(vec![object_store(LAKE)]),
             overrides: RouteOverrides::default(),
             expected_message: "the destination cannot load these files exactly by reading them itself: half is Float16 in the files",
+        },
+        PlanRouteErrorTestCase {
+            description: "Parquet in S3 outside every external location fails Databricks, never going through SQLLoad",
+            reader: files_source("s3://other/events/", FileFormat::Parquet),
+            writer: databricks_destination(),
+            overrides: RouteOverrides::default(),
+            expected_message: "s3://other/events/ cannot be read by Databricks: no Unity Catalog external location covers it",
         },
         PlanRouteErrorTestCase {
             description: "a source with nothing to offer",
