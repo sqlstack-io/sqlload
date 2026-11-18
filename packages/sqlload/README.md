@@ -68,7 +68,7 @@ names dlt gave your tables.
 - **Loud failures.** `plan` names each problem it can find, such as a misspelled column, a
   narrowing type or a budget too small, and its fix, before anything is created. A commit whose
   [checks](https://sqlload.io/docs/concepts/checks/) fail publishes none of its rows, every commit
-  lands whole even if a load is killed halfway, and in a warehouse a full refresh swaps in at once,
+  lands whole even if a load is killed halfway, and in a warehouse (except a ClickHouse `Ordinary` database) a full refresh swaps in at once,
   so readers see the old table or the new one, never a mix.
 - **Bounded memory.** A run has one [memory budget](https://sqlload.io/docs/cli/load/#memory-budget),
   shared out between its tables. A budget too small for even one table is refused before anything

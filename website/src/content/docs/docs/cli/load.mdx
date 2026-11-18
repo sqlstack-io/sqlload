@@ -198,7 +198,7 @@ loads with no watchdog, no pieces (each commit is whole), DuckDB with its own
 `memory_limit` (80% of the machine's memory) and threads and its own checkpoints, and an ODBC
 [fetch buffer](/docs/sources/odbc/#memory) of 512 MiB per table. Only the
 [row-group check](#large-rows-in-duckdb) stays, against DuckDB's own `memory_limit`, since a
-checkpoint that can't rewrite a row group fails whatever the budget. `plan -v` always shows the line,
+checkpoint that can't rewrite a row group fails whatever the budget. `plan` always shows the line,
 and `load` still reports its peak memory:
 
 ```text
