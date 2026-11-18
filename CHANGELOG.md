@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.71.0](https://github.com/sqlstack-io/sqlload/compare/v0.70.4...v0.71.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **plan:** a project that pins a type narrower than a loaded table's column, or a widening type that doesn't hold every value of the column, now fails `plan` and `load` for that table until the pin is changed or the table rebuilt.
+
+### Bug Fixes
+
+* **plan:** refuse a column pin narrower than the table's column ([#325](https://github.com/sqlstack-io/sqlload/issues/325)) ([885ad93](https://github.com/sqlstack-io/sqlload/commit/885ad93b45908719b4b919c64a342d8e8429188a))
+
+
+### Documentation
+
+* **site:** retitle the home page's problem section ([#326](https://github.com/sqlstack-io/sqlload/issues/326)) ([f39a757](https://github.com/sqlstack-io/sqlload/commit/f39a75739ae78b4c5e8f9121c38e0c8a9f8787e4))
+
 ## [0.70.4](https://github.com/sqlstack-io/sqlload/compare/v0.70.3...v0.70.4) (2026-11-18)
 
 
