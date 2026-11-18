@@ -27,7 +27,9 @@ pub(in crate::adapters) async fn pull_files(
                 .map_err(DuckDbError::Task)?
                 .map(secret_parameters),
         ),
-        StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => (None, None),
+        StoreKind::Gcs { .. } | StoreKind::Filesystem { .. } | StoreKind::Sftp { .. } => {
+            (None, None)
+        }
     };
     let region = default_region(&environment_variable);
     with_connection(destination, move |connection| {

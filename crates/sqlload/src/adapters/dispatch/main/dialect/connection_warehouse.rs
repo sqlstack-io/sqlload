@@ -26,6 +26,7 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::Odbc { .. }
         | ConnectionConfig::GoogleSheets { .. }
         | ConnectionConfig::Http { .. }
+        | ConnectionConfig::Gcs { .. }
         | ConnectionConfig::Sftp { .. } => None,
     }
 }

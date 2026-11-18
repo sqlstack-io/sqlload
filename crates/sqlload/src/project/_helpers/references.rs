@@ -108,7 +108,10 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         SourceKind::Databricks => (&["databricks"], "databricks"),
         SourceKind::DuckDb => (&["duckdb"], "duckdb"),
         SourceKind::MotherDuck => (&["motherduck"], "motherduck"),
-        SourceKind::Files => (&["s3", "filesystem", "sftp"], "s3, filesystem or sftp"),
+        SourceKind::Files => (
+            &["s3", "gcs", "filesystem", "sftp"],
+            "s3, gcs, filesystem or sftp",
+        ),
         SourceKind::Python => (&[], "any"),
         SourceKind::GoogleSheets => (&["google_sheets"], "google_sheets"),
     };

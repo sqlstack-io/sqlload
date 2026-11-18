@@ -1,6 +1,6 @@
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::StoreKind;
-use crate::store_paths::tests::helpers::bucket;
+use crate::store_paths::tests::helpers::{bucket, gcs_bucket};
 use crate::store_paths::tests::test_types::ResolveLocationTestCase;
 
 #[test]
@@ -31,6 +31,38 @@ fn given_a_path_when_resolving_then_the_store_and_folder_are_found() {
             connection: None,
             path: "s3://example-bucket-test/a//b",
             expected_location: Ok("s3://example-bucket-test/a/b/"),
+        },
+        ResolveLocationTestCase {
+            description: "a relative path is inside a gcs connection's bucket",
+            connection: gcs_bucket("example-bucket-prod"),
+            path: "events",
+            expected_location: Ok("gs://example-bucket-prod/events/"),
+        },
+        ResolveLocationTestCase {
+            description: "a gs:// URL to a gcs connection's bucket is accepted",
+            connection: gcs_bucket("example-bucket-prod"),
+            path: "gs://example-bucket-prod/events/",
+            expected_location: Ok("gs://example-bucket-prod/events/"),
+        },
+        ResolveLocationTestCase {
+            description: "a gs:// URL is not in an s3 connection's bucket of the same name",
+            connection: bucket("example-bucket-prod"),
+            path: "gs://example-bucket-prod/events/",
+            expected_location: Err(
+                "points at GCS bucket example-bucket-prod, but connection \"lake\" is S3 bucket example-bucket-prod",
+            ),
+        },
+        ResolveLocationTestCase {
+            description: "without a connection gs:// picks GCS",
+            connection: None,
+            path: "gs://example-bucket-test/a//b",
+            expected_location: Ok("gs://example-bucket-test/a/b/"),
+        },
+        ResolveLocationTestCase {
+            description: "a whole GCS bucket is rejected",
+            connection: None,
+            path: "gs:///x",
+            expected_location: Err("is empty"),
         },
         ResolveLocationTestCase {
             description: "an absolute path is the local filesystem",
