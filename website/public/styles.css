@@ -51,6 +51,9 @@
 
 /* Tokens shared with the docs theme in src/styles/sqlload.css. */
 :root {
+	--beta-bg: #73520d;
+	--beta-border: #f5bb3d;
+	--beta-fg: #fff;
 	color-scheme: light;
 	--radius: 2px;
 	--background: #ffffff;
@@ -75,6 +78,9 @@
 }
 
 :root[data-theme='dark'] {
+	--beta-bg: #4e4022;
+	--beta-border: #eebd53;
+	--beta-fg: #fff;
 	color-scheme: dark;
 	--background: #0d0f12;
 	--foreground: #e9ebef;
@@ -641,6 +647,21 @@ h3 {
 	color: var(--foreground);
 }
 
+/* The docs' Beta badge (Starlight's small caution badge), beside a system that is in beta. */
+.start .systems .beta {
+	display: inline-block;
+	margin-left: 6px;
+	padding: 0 6px;
+	border: 1px solid var(--beta-border);
+	border-radius: 4px;
+	background: var(--beta-bg);
+	color: var(--beta-fg);
+	font-size: 11px;
+	font-weight: 500;
+	line-height: 18px;
+	vertical-align: 1px;
+}
+
 .start .systems-notes {
 	margin: 10px 0 0;
 	color: var(--muted-foreground);
@@ -846,150 +867,138 @@ footer a {
 	margin-top: 0;
 }
 
-/* Hero visual: sqlload fix turns a messy query into a clean one. */
+/* Hero: the headline beside tabs of real sqlload output. */
 .hero {
 	display: grid;
-	/* Wide enough at 1280 for the hero terminal's 107-column route line at 11px. */
 	grid-template-columns: minmax(0, 1fr) minmax(0, 760px);
 	gap: 48px;
-	align-items: center;
-}
-
-.hero-visual.terminal {
-	font-size: 11px;
-	border: 1px solid var(--panel-border);
-	border-left: 1px solid var(--inner-line);
-	border-radius: var(--radius);
-	min-height: 300px;
+	align-items: start;
 }
 
 .hero-visual {
 	font-family: var(--font-mono);
 }
 
-.hero-visual .tree {
-	display: inline;
+.hero h1 {
+	text-wrap: balance;
 }
 
-.hero-visual .hv-stack {
-	display: grid;
+/* The panel starts level with the headline and ends level with the buttons. */
+.hero .hero-visual {
+	align-self: stretch;
+	margin-top: 42px;
 }
 
-.hero-visual .hv-stack > * {
-	grid-area: 1 / 1;
-}
-
-.hero-visual .hv-l {
+/* One span per terminal line. Long lines wrap under their label (`reason  `, `memory  `) instead
+   of scrolling sideways; --hang is that label's offset in ch, set per line in the markup. */
+.terminal .ln {
 	display: block;
+	white-space: pre-wrap;
+	padding-left: var(--hang);
+	text-indent: calc(-1 * var(--hang));
+	min-height: 1lh;
 }
 
-.hero-visual .hv-a,
-.hero-visual .hv-b,
-.hero-visual .hv-l {
-	animation-duration: 10s;
-	animation-iteration-count: infinite;
-	animation-fill-mode: both;
-	animation-timing-function: ease-out;
+/* Tabs */
+.hv-tabs {
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--panel-border);
+	border-left: 1px solid var(--inner-line);
+	border-radius: var(--radius);
+	background: var(--code-bg);
 }
 
-.hero-visual .hv-a {
-	animation-name: hv-a;
+.hv-tablist {
+	display: flex;
+	gap: 2px;
+	padding: 0 12px;
+	border-bottom: 1px solid var(--inner-line);
+	overflow-x: auto;
+	scrollbar-width: none;
 }
 
-.hero-visual .hv-b {
-	animation-name: hv-b;
+.hv-tablist button {
+	position: relative;
+	flex: none;
+	padding: 12px 12px 11px;
+	border: 0;
+	background: none;
+	color: var(--muted-foreground);
+	font: 500 12px/1 var(--font-mono);
+	cursor: pointer;
 }
 
-@keyframes hv-a {
-	0%,
-	15% {
-		opacity: 1;
-	}
-	18%,
-	96% {
-		opacity: 0;
-	}
-	100% {
-		opacity: 1;
-	}
+.hv-tablist button:hover,
+.hv-tablist button[aria-selected='true'] {
+	color: var(--foreground);
 }
 
-@keyframes hv-b {
-	0%,
-	15% {
-		opacity: 0;
-	}
-	18%,
-	92% {
-		opacity: 1;
-	}
-	96%,
-	100% {
-		opacity: 0;
-	}
+.hv-tablist button[aria-selected='true']::after {
+	content: '';
+	position: absolute;
+	left: 12px;
+	right: 12px;
+	bottom: -1px;
+	height: 2px;
+	background: var(--primary);
 }
 
-@keyframes hv-l0 {
-	0%,
-	6% {
-		opacity: 0;
-		transform: translateY(3px);
-	}
-	9%,
-	92% {
-		opacity: 1;
-		transform: none;
-	}
-	96%,
-	100% {
-		opacity: 0;
-	}
+/* All panes share one grid cell, so the panel is as tall as the tallest tab and never jumps.
+   Hidden panes keep their space (visibility, not display). */
+.hv-panes {
+	display: grid;
+	flex: 1;
 }
 
-.hv-l0 {
-	animation-name: hv-l0;
+.hv-panes > pre {
+	grid-area: 1 / 1;
+	border: 0;
+	white-space: normal;
+	font-size: 10.5px;
+	line-height: 1.9;
+	padding: 22px 16px 22px 20px;
+	background: transparent;
 }
 
-@keyframes hv-l1 {
-	0%,
-	24% {
-		opacity: 0;
-		transform: translateY(3px);
-	}
-	27%,
-	92% {
-		opacity: 1;
-		transform: none;
-	}
-	96%,
-	100% {
-		opacity: 0;
-	}
+.hv-panes > pre[hidden] {
+	display: block;
+	visibility: hidden;
 }
 
-.hv-l1 {
-	animation-name: hv-l1;
-}
+/* Below 1200px the text column grows taller than the output, so the panel moves under it. */
+@media (max-width: 1199px) {
+	.hero {
+		grid-template-columns: minmax(0, 1fr);
+	}
 
-@keyframes hv-l2 {
-	0%,
-	30% {
-		opacity: 0;
-		transform: translateY(3px);
-	}
-	33%,
-	92% {
-		opacity: 1;
-		transform: none;
-	}
-	96%,
-	100% {
-		opacity: 0;
+	.hero .hero-visual {
+		margin-top: 8px;
+		width: 100%;
 	}
 }
 
-.hv-l2 {
-	animation-name: hv-l2;
+@media (max-width: 620px) {
+	/* Every tab stays visible: they wrap onto a second row instead of scrolling. */
+	.hv-tablist {
+		flex-wrap: wrap;
+		padding: 0 8px;
+	}
+
+	.hv-tablist button {
+		padding: 11px 8px 10px;
+	}
+
+	.hv-tablist button[aria-selected='true']::after {
+		left: 8px;
+		right: 8px;
+	}
+
+	.hv-panes > pre {
+		font-size: 10px;
+		line-height: 1.6;
+		padding: 16px;
+	}
 }
 
 /* Benchmark race: real elapsed time; the script drives it, the markup shows final results. */
@@ -1073,41 +1082,7 @@ footer a {
 	}
 }
 
-@media (prefers-reduced-motion: reduce) {
-	.hero-visual .hv-a,
-	.hero-visual .hv-b,
-	.hero-visual .hv-l {
-		animation: none;
-	}
 
-	.hero-visual .hv-a {
-		opacity: 0;
-	}
-}
-
-@media (max-width: 1060px) {
-	.hero {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
-	.hero-visual {
-		justify-self: start;
-	}
-}
-
-@media (max-width: 620px) {
-	.hero-visual {
-		justify-self: stretch;
-	}
-
-	.hero-visual .hv-wide {
-		display: none;
-	}
-
-	.hero-visual .hv-break::after {
-		content: '\\\A     ';
-	}
-}
 
 /* Speed strip under the hero: one row per benchmark scenario, bars scaled within the row. */
 .speed {
