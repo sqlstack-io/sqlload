@@ -1,7 +1,7 @@
 //! A warehouse source's unloaded files loaded by DuckDB reading them itself.
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
-use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch};
+use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::duckdb::_helpers::pull_sql::{UnloadedColumns, unloaded_insert};
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::duckdb::main::_pull_files::pull_files;
@@ -19,7 +19,11 @@ impl DuckDbWriter {
             true => DirectLoaded::Committed(rows),
             false => DirectLoaded::Staged(rows),
         };
-        let files = batch.files;
+        let UnloadedSource::Files(files) = batch.source else {
+            return Err(LoaderError::Invalid(
+                "DuckDB reads a warehouse source's rows only from its unloaded files".to_owned(),
+            ));
+        };
         if files.keys.is_empty() {
             return Ok(loaded(0));
         }

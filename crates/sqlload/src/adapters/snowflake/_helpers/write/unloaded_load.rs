@@ -1,17 +1,19 @@
-//! A Snowflake source's unloaded files loaded by Snowflake `COPY`ing them itself.
+//! A Snowflake source's rows loaded by Snowflake itself: `COPY`ing its unloaded files, or selecting them in the source's own session.
 
-use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch};
+use crate::adapters::contract::models::{DirectLoaded, UnloadedBatch, UnloadedSource};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::write::direct_load::staged_as_text;
-use crate::adapters::snowflake::main::copy::_copy_unloaded::copy_unloaded;
 use crate::adapters::snowflake::main::copy::_stage_covers::stage_covers;
+use crate::adapters::snowflake::main::copy::_unloaded_sql::unloaded_statements;
 use crate::adapters::snowflake::main::stage::_stage_reference::stage_reference;
-use crate::adapters::snowflake::models::{SnowflakeSql, SnowflakeWriter, StageRoute, UnloadedCopy};
+use crate::adapters::snowflake::models::{
+    SnowflakeSql, SnowflakeWriter, StageRoute, UnloadedFrom, UnloadedLoad,
+};
 use crate::loader::errors::LoaderError;
 use crate::sql_api::main::execute_sql::execute_sql;
 
 impl SnowflakeWriter {
-    /// Load `batch` by having Snowflake `COPY` the unloaded files from the external stage it loads through, which covers them, where Arrow batches would go: the load's staging table, the build table, or the table itself. The `COPY`s run in one block, in one transaction, that commits only when they load as many rows as the unload reports; otherwise it rolls back and the batch fails.
+    /// Load `batch` inside Snowflake, where Arrow batches would go: the load's staging table, the build table, or the table itself. Unloaded files are `COPY`d from the external stage the writer loads through, which must cover them, in one transaction that commits only when they load as many rows as the unload reports; a query's rows are selected by one `INSERT ... SELECT`.
     pub(in crate::adapters) async fn pull_unloaded(
         &mut self,
         batch: &UnloadedBatch<'_>,
@@ -21,26 +23,6 @@ impl SnowflakeWriter {
             true => DirectLoaded::Committed(rows),
             false => DirectLoaded::Staged(rows),
         };
-        let files = batch.files;
-        if files.keys.is_empty() {
-            return Ok(loaded(0));
-        }
-        let covering = match &self.route {
-            Some(StageRoute::External(stage)) if stage_covers(&stage.location, &files.folder) => {
-                files
-                    .folder
-                    .prefix
-                    .strip_prefix(&stage.location.prefix)
-                    .map(|folder| (stage_reference(stage), folder.to_owned()))
-            }
-            _ => None,
-        };
-        let Some((stage, folder)) = covering else {
-            return Err(LoaderError::Invalid(format!(
-                "Snowflake cannot read the unloaded files in {}: the target's external stage does not cover them",
-                files.folder
-            )));
-        };
         let staged;
         let columns = match (target.staging, target.builds) {
             (Some(_), false) => {
@@ -49,7 +31,42 @@ impl SnowflakeWriter {
             }
             _ => batch.write_columns,
         };
-        let copies = copy_unloaded(&UnloadedCopy {
+        let place: (String, String);
+        let (from, unloaded) = match batch.source {
+            UnloadedSource::Files(files) if files.keys.is_empty() => return Ok(loaded(0)),
+            UnloadedSource::Files(files) => {
+                let covering = match &self.route {
+                    Some(StageRoute::External(stage))
+                        if stage_covers(&stage.location, &files.folder) =>
+                    {
+                        files
+                            .folder
+                            .prefix
+                            .strip_prefix(&stage.location.prefix)
+                            .map(|folder| (stage_reference(stage), folder.to_owned()))
+                    }
+                    _ => None,
+                };
+                let Some(covering) = covering else {
+                    return Err(LoaderError::Invalid(format!(
+                        "Snowflake cannot read the unloaded files in {}: the target's external stage does not cover them",
+                        files.folder
+                    )));
+                };
+                place = covering;
+                (
+                    UnloadedFrom::Files {
+                        stage: &place.0,
+                        folder: &place.1,
+                        keys: &files.keys,
+                        filename_prefix: &files.folder.prefix,
+                    },
+                    Some(files),
+                )
+            }
+            UnloadedSource::Query(query) => (UnloadedFrom::Query(query), None),
+        };
+        let statements = unloaded_statements(&UnloadedLoad {
             into: target.staging.unwrap_or(target.table),
             columns,
             read: batch.read,
@@ -58,13 +75,11 @@ impl SnowflakeWriter {
             batch: target.batch,
             load_id: target.load_id,
             loaded_at: batch.loaded_at,
-            stage: &stage,
-            folder: &folder,
-            keys: &files.keys,
-            filename_prefix: &files.folder.prefix,
+            from,
         });
-        let block = checked_block(&copies, files.rows);
-        let answer = execute_sql(&self.destination.sql, &block).await?;
+        let expected = unloaded.map(|files| files.rows);
+        let answer =
+            execute_sql(&self.destination.sql, &counted_block(&statements, expected)).await?;
         let returned = answer
             .rows
             .first()
@@ -72,10 +87,10 @@ impl SnowflakeWriter {
             .unwrap_or_default();
         let rows: u64 = returned.parse().map_err(|error| {
             LoaderError::Invalid(format!(
-                "the unloaded files' COPY returned {returned:?}, not a row count: {error}"
+                "loading the source's rows inside Snowflake returned {returned:?}, not a row count: {error}"
             ))
         })?;
-        if rows != files.rows {
+        if let Some(files) = unloaded.filter(|files| files.rows != rows) {
             return Err(LoaderError::Invalid(format!(
                 "Snowflake loaded {rows} rows from the unloaded files in {}, but the unload reports {}; the batch is not committed",
                 files.folder, files.rows
@@ -85,8 +100,8 @@ impl SnowflakeWriter {
     }
 }
 
-/// One Snowflake Scripting block running `statements` (`COPY`s) in a transaction and returning the rows they loaded, committed only when that is `expected` and rolled back otherwise.
-pub(in crate::adapters) fn checked_block(statements: &[String], expected: u64) -> String {
+/// One Snowflake Scripting block running `statements` in a transaction and returning the rows they loaded: `COPY`s, which commit only when they load `expected` rows and roll back otherwise, or an `INSERT ... SELECT` (`expected` `None`), which commits.
+pub(in crate::adapters) fn counted_block(statements: &[String], expected: Option<u64>) -> String {
     let mut body = vec![
         "DECLARE loaded INTEGER DEFAULT 0; copied INTEGER;".to_owned(),
         "BEGIN".to_owned(),
@@ -94,12 +109,16 @@ pub(in crate::adapters) fn checked_block(statements: &[String], expected: u64) -
     ];
     for statement in statements {
         body.push(format!("{statement};"));
-        body.push("SELECT COALESCE(SUM(\"rows_loaded\"), 0) INTO :copied FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));".to_owned());
+        body.push(match expected {
+            Some(_) => "SELECT COALESCE(SUM(\"rows_loaded\"), 0) INTO :copied FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()));".to_owned(),
+            None => "copied := SQLROWCOUNT;".to_owned(),
+        });
         body.push("loaded := loaded + copied;".to_owned());
     }
-    body.push(format!(
-        "IF (loaded = {expected}) THEN COMMIT; ELSE ROLLBACK; END IF;"
-    ));
+    body.push(match expected {
+        Some(expected) => format!("IF (loaded = {expected}) THEN COMMIT; ELSE ROLLBACK; END IF;"),
+        None => "COMMIT;".to_owned(),
+    });
     body.push("RETURN loaded;".to_owned());
     body.push("END;".to_owned());
     format!(

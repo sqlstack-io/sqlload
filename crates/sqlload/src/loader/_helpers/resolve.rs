@@ -746,6 +746,8 @@ fn setting_name(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedTarget {
     pub(crate) name: String,
+    /// The connection it writes through, when it writes in that connection's own database (a target `database` naming another leaves it `None`): a source on that connection reads in the same database, so the target can select its rows itself.
+    pub(crate) session_connection: Option<String>,
     pub(crate) warehouse: Warehouse,
     pub(crate) database: Option<String>,
     pub(crate) schema: String,
@@ -831,6 +833,7 @@ pub(crate) fn source_target(
     if !sql_adapter(warehouse).runs_sql() {
         return Ok(ResolvedTarget {
             name,
+            session_connection: None,
             warehouse,
             database: None,
             schema: String::new(),
@@ -850,6 +853,11 @@ pub(crate) fn source_target(
         .ok_or_else(|| format!("target {name:?} has no loader_schema"))?;
     Ok(ResolvedTarget {
         name,
+        session_connection: target
+            .database
+            .as_ref()
+            .is_none_or(|own| Some(own) == database.as_ref())
+            .then(|| target.connection.clone()),
         warehouse,
         database: match connection {
             ConnectionConfig::MotherDuck { database, .. } => target

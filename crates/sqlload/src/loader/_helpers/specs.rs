@@ -543,7 +543,7 @@ pub(crate) fn build_spec(
                     route: WarehouseRoute::Query,
                 })
             }
-            _ => warehouse_source(context.source, overrides),
+            _ => warehouse_source(context, overrides),
         },
         row_filter: layered(&settings.row_filter, &defaults.row_filter)
             .filter(|_| overrides.sql.is_none() && overrides.tombstones_of.is_none())
@@ -655,8 +655,12 @@ fn constant_type_problem(
     }
 }
 
-/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none.
-fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<WarehouseSource> {
+/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none; a Snowflake target writing through the source's own connection may select the rows itself.
+fn warehouse_source(
+    context: &SourceContext<'_>,
+    overrides: &TableOverride,
+) -> Option<WarehouseSource> {
+    let source = context.source;
     (source.kind == SourceKind::Snowflake).then(|| {
         let (store, stage) = match &source.stage {
             Some(UnloadStage {
@@ -685,7 +689,12 @@ fn warehouse_source(source: &SourceConfig, overrides: &TableOverride) -> Option<
         WarehouseSource {
             system: SNOWFLAKE_SOURCE,
             sql: overrides.sql.clone(),
-            route: WarehouseRoute::Unload { store, stage },
+            route: WarehouseRoute::Unload {
+                store,
+                stage,
+                same_connection: context.target.warehouse == Warehouse::Snowflake
+                    && context.target.session_connection.as_ref() == Some(&source.connection),
+            },
         }
     })
 }
