@@ -99,8 +99,8 @@ pub(crate) fn run_stop_due(percent: u128, over: u32, stopping: bool) -> (u32, bo
     (over, past_run_stop && (!stopping || over > RUN_STOP_GRACE))
 }
 
-/// Stop the whole run, once: say why, interrupt every table's statements (rolling them back), and wake the queue, which fails the tables running and starts no other; the command then reports and exits, so a table busy in its source (a Python function building a list) doesn't hold the run. A MotherDuck bridge ends with the process, rolling back what it had open.
-pub(crate) fn stop_run(guard: &MemoryGuard, held: u64) {
+/// Stop the whole run, once: say why, mark every table stopped so none writes or commits again, interrupt their statements (rolling them back), and wake the queue, which fails the tables running and starts no other; the command then reports and exits, so a table busy in its source (a Python function building a list) doesn't hold the run. A MotherDuck bridge ends with the process, rolling back what it had open.
+pub(crate) fn stop_run(guard: &MemoryGuard, held: u64, stopping: bool) {
     let mut reason = guard
         .run_stop
         .lock()
@@ -110,15 +110,27 @@ pub(crate) fn stop_run(guard: &MemoryGuard, held: u64) {
     }
     let budget = guard.budget.bytes;
     let percent = u128::from(held) * 100 / u128::from(budget.max(1));
-    *reason = Some(format!(
-        "stopped: the run held {} of its {} memory budget ({percent}%), and from {RUN_STOP_PERCENT}% it stops when no table can be stopped to free memory; raise memory_limit, or lower concurrency",
+    let why = match stopping {
+        true => format!(
+            "the table stopped at {STOP_PERCENT}% didn't bring it back under {STOP_PERCENT}%"
+        ),
+        false => "no table held large values to stop".to_owned(),
+    };
+    let text = format!(
+        "stopped: the run held {} of its {} memory budget ({percent}%), and from {RUN_STOP_PERCENT}% it stops as {why}; raise memory_limit, or lower concurrency",
         memory_text(held),
         memory_text(budget)
-    ));
+    );
+    *reason = Some(text.clone());
     drop(reason);
     RUN_STOPPED.store(true, Ordering::Relaxed);
     let tables = guard.tables.lock().unwrap_or_else(PoisonError::into_inner);
     for table in tables.iter() {
+        table
+            .tripped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(|| text.clone());
         let interrupts = table
             .interrupts
             .lock()

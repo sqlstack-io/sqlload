@@ -40,3 +40,10 @@ pub(crate) struct RunStopTestCase {
     pub(crate) readings: Vec<(u128, bool)>,
     pub(crate) expected_stop: Option<usize>,
 }
+
+/// A `memory_limit` as written, or as DuckDB's `current_setting('memory_limit')` prints it, and the setting read from it.
+pub(crate) struct MemorySettingTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) expected_setting: Result<crate::memory_budget::models::MemorySetting, &'static str>,
+}

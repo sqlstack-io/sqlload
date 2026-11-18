@@ -339,6 +339,13 @@ impl<'a> TableQueue<'a> {
     ) {
         let mut running: JoinSet<TableOutcome> = JoinSet::new();
         loop {
+            if guard
+                .as_ref()
+                .is_some_and(|guard| guard.run_stopped.is_cancelled())
+            {
+                self.stop_run(guard.as_ref(), &mut running);
+                return;
+            }
             while running.len() < threads {
                 if holding(guard.as_ref()) && !running.is_empty() {
                     break;
@@ -352,12 +359,10 @@ impl<'a> TableQueue<'a> {
                 self.started(task.id(), index);
             }
             let joined = tokio::select! {
+                biased;
+                () = run_stopped(guard.as_ref()) => continue,
                 joined = running.join_next_with_id() => joined,
                 () = released(guard.as_ref()) => continue,
-                () = run_stopped(guard.as_ref()) => {
-                    self.stop_run(guard.as_ref());
-                    return;
-                }
             };
             let Some(joined) = joined else {
                 break;
@@ -366,8 +371,11 @@ impl<'a> TableQueue<'a> {
         }
     }
 
-    /// The watchdog stopped the run: each running table fails with its reason, left to end with the process, and none of the waiting ones starts.
-    fn stop_run(&mut self, guard: Option<&Arc<MemoryGuard>>) {
+    /// The watchdog stopped the run: a table whose thread already ended keeps its outcome, each one still running fails with the reason, left to end with the process, and none of the waiting ones starts.
+    fn stop_run(&mut self, guard: Option<&Arc<MemoryGuard>>, running: &mut JoinSet<TableOutcome>) {
+        while let Some(joined) = running.try_join_next_with_id() {
+            self.finish(joined);
+        }
         let reason = (guard.and_then(|guard| {
             guard
                 .run_stop

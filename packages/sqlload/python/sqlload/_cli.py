@@ -83,13 +83,19 @@ def main() -> None:
 		for stream in (sys.stderr, sys.__stdout__):
 			with contextlib.suppress(Exception):
 				stream.flush()
+	# After the memory watchdog stopped the run, a Python table may still be busy in its function and print: file
+	# descriptor 1 stays stderr, and the document goes straight to the saved stdout before the process ends.
+	stopped = _native.run_stopped()
+	if not stopped:
 		os.dup2(saved, 1)
-		os.close(saved)
 	# A reader that has gone keeps the command's exit code, as the native command ignores a closed stdout (on Windows
 	# that can be an OSError other than BrokenPipeError).
-	with contextlib.suppress(OSError), open(1, "wb", closefd=False) as stdout:
+	with contextlib.suppress(OSError), open(saved if stopped else 1, "wb", closefd=False) as stdout:
 		stdout.write(document.encode())
-	exit_with(code)
+	if stopped:
+		os._exit(code)
+	os.close(saved)
+	sys.exit(code)
 
 
 def exit_with(code: int) -> None:

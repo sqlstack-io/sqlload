@@ -1,6 +1,8 @@
 use crate::memory_budget::_helpers::limit::{cgroup_limit, lower_limit};
-use crate::memory_budget::models::{LimitOrigin, MemoryLimit};
-use crate::memory_budget::tests::test_types::{CgroupLimitTestCase, LowerLimitTestCase};
+use crate::memory_budget::models::{LimitOrigin, MemoryLimit, MemorySetting};
+use crate::memory_budget::tests::test_types::{
+    CgroupLimitTestCase, LowerLimitTestCase, MemorySettingTestCase,
+};
 
 #[test]
 fn given_cgroup_v2_folders_when_reading_the_memory_limit_then_the_lowest_memory_max_from_the_process_group_up_is_taken()
@@ -96,4 +98,50 @@ fn given_a_container_or_job_limit_and_the_machines_memory_when_choosing_the_limi
             test_case.description
         );
     }
+}
+
+#[test]
+fn given_a_memory_limit_as_written_or_as_duckdb_prints_it_when_reading_it_then_off_and_every_unit_duckdb_uses_are_read()
+-> Result<(), String> {
+    let test_cases = [
+        MemorySettingTestCase {
+            description: "off, in any case and spacing",
+            text: " Off ",
+            expected_setting: Ok(MemorySetting::Off),
+        },
+        MemorySettingTestCase {
+            description: "DuckDB's MiB",
+            text: "244.1 MiB",
+            expected_setting: Ok(MemorySetting::Limit(255_957_402)),
+        },
+        MemorySettingTestCase {
+            description: "DuckDB's TiB, on a machine with 1.25 TiB of memory or more",
+            text: "1.8 TiB",
+            expected_setting: Ok(MemorySetting::Limit(1_979_120_929_997)),
+        },
+        MemorySettingTestCase {
+            description: "DuckDB's PiB",
+            text: "1.0 PiB",
+            expected_setting: Ok(MemorySetting::Limit(1_125_899_906_842_624)),
+        },
+        MemorySettingTestCase {
+            description: "DuckDB's bytes",
+            text: "512.0 bytes",
+            expected_setting: Ok(MemorySetting::Limit(512)),
+        },
+        MemorySettingTestCase {
+            description: "a unit no one uses",
+            text: "4 quarts",
+            expected_setting: Err("unknown size unit \"quarts\" in \"4 quarts\", or off"),
+        },
+    ];
+    for test_case in &test_cases {
+        assert_eq!(
+            test_case.text.parse::<MemorySetting>(),
+            test_case.expected_setting.map_err(str::to_owned),
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

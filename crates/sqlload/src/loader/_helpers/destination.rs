@@ -1546,7 +1546,7 @@ impl Publisher {
         let fix = |bytes: u64| match own {
             false => needed_budget(bytes),
             true => format!(
-                "DuckDB's own memory_limit, kept as memory_limit is off, would have to be at least {}",
+                "DuckDB's own memory_limit (the run has no memory budget) would have to be at least {}",
                 memory_text(bytes)
             ),
         };

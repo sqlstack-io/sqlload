@@ -56,7 +56,7 @@ fn watch(watched: &Weak<MemoryGuard>) {
         let stops;
         (over, stops) = run_stop_due(percent, over, stopping);
         if stops {
-            stop_run(&guard, held);
+            stop_run(&guard, held, stopping);
         }
     }
 }

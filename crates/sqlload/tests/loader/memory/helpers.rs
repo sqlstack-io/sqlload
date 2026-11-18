@@ -109,6 +109,12 @@ pub(crate) const OFF_DUCKDB_256MB: WideStep = WideStep {
     ..OFF
 };
 
+/// [`OFF`] with DuckDB's own `memory_limit` set to 2TB, which DuckDB reports in TiB (test builds only).
+pub(crate) const OFF_DUCKDB_2TB: WideStep = WideStep {
+    environment: &[("SQLLOAD_TEST_DUCKDB_MEMORY_LIMIT", "2TB")],
+    ..OFF
+};
+
 /// The bytes of each source row's `body`: 32 hex digits repeated 32,768 times.
 const BODY_REPEATS: u32 = 32_768;
 

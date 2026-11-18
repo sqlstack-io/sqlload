@@ -284,7 +284,7 @@ out again) without waiting for a table busy in its source, such as a Python func
 yielded. A MotherDuck bridge ends with the process.
 
 ```text
-failed  raw.events  stopped: the run held 3.9 GiB of its 4 GiB memory budget (97%), and from 95% it stops when no table can be stopped to free memory; raise memory_limit, or lower concurrency
+failed  raw.events  stopped: the run held 3.9 GiB of its 4 GiB memory budget (97%), and from 95% it stops as no table held large values to stop; raise memory_limit, or lower concurrency
 ```
 
 The watchdog reads memory every 10 ms, so an allocation that grows past the limit the OS or a

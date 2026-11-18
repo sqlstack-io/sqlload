@@ -3,8 +3,8 @@
 use crate::helpers::run_async;
 use crate::memory_helpers::{
     FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OFF,
-    OFF_DUCKDB_256MB, OFF_PLAN, OFF_TRIPPED, OLDER_MARKER, PLAN, REPEATED_KEY, SMALL_ROWS,
-    WIDE_THEN_SMALL, expected_loads, missing_phrases, run_wide_load, wide_postgres,
+    OFF_DUCKDB_2TB, OFF_DUCKDB_256MB, OFF_PLAN, OFF_TRIPPED, OLDER_MARKER, PLAN, REPEATED_KEY,
+    SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases, run_wide_load, wide_postgres,
 };
 use crate::test_types::WideLoadTestCase;
 
@@ -463,8 +463,19 @@ fn given_memory_limit_off_when_loading_1_mib_rows_then_they_commit_whole_without
             expected_output: &[
                 "{table}",
                 "row group",
-                "DuckDB's own memory_limit, kept as memory_limit is off",
+                "DuckDB's own memory_limit (the run has no memory budget)",
             ],
+        },
+        WideLoadTestCase {
+            description: "DuckDB's own memory_limit reported in TiB is read, and the load runs with memory_limit off",
+            table: "wide_off_tib",
+            settings: "write_strategy = \"replace\"",
+            rows: 4,
+            key_rows: 1,
+            beside: &["small"],
+            steps: &[OFF_DUCKDB_2TB],
+            expected_results: &[(true, "4:4:0|2:2:0|none")],
+            expected_output: &["2 loaded"],
         },
     ];
     run_async(|| async move {

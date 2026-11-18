@@ -50,6 +50,10 @@ pub const SIZE_UNITS: &[(&str, f64)] = &[
     ("kib", 1024.0),
     ("mib", 1_048_576.0),
     ("gib", 1_073_741_824.0),
+    ("tib", 1_099_511_627_776.0),
+    ("pib", 1_125_899_906_842_624.0),
+    ("byte", 1.0),
+    ("bytes", 1.0),
 ];
 /// `{topic}`, `{table}`, `{stream}`, `{date}` (UTC `YYYY-MM-DD`) and `{hour}` (UTC `HH`).
 pub const DEFAULT_S3_PATH: &str = "{topic}/date={date}/";

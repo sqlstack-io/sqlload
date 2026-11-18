@@ -14,6 +14,7 @@ use crate::command::_helpers::logging::init_logging;
 use crate::command::_helpers::output::{config_text, print_lines};
 use crate::command::errors::CommandError;
 use crate::command::models::{Cli, Command, LoaderRequest, LogFormat};
+use crate::memory_budget::main::clear_run_stop::clear_run_stop;
 use crate::memory_budget::main::run_stopped::run_stopped;
 use crate::playground::main::run_playground::run_playground;
 use crate::project::main::is_project::is_project;
@@ -37,6 +38,7 @@ where
         }
     };
     init_logging(cli.log_format);
+    clear_run_stop();
     let no_color = cli.no_color;
     let (lines, code) = run_parsed(cli, host);
     match captures {
