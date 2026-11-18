@@ -901,6 +901,9 @@ pub struct TableSettings {
     /// The columns whose values `delete_insert` replaces whole: each commit first deletes the rows holding a value of them that its rows hold.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub replace_key: Option<Vec<String>>,
+    /// What a files source's `delete_insert` by `replace_key` does when two files of its folder hold one key value: fail (default) or let the file last in `order` replace it.
+    #[serde(default)]
+    pub on_overlapping_files: Option<OnOverlappingFiles>,
     /// The column, or columns compared in order, whose higher value is the newer version of a row: of the rows sharing a `unique_key` a merge keeps the newest, and never overwrites a loaded row with an older one.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub newest_by: Option<Vec<String>>,
@@ -953,6 +956,17 @@ pub enum OnDuplicateKeys {
     Dedupe,
     /// Fail the commit, naming some of the repeated keys.
     Fail,
+}
+
+/// What a files source's `delete_insert` by `replace_key` does when two files of its folder hold one key value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnOverlappingFiles {
+    /// Fail the file's commit, naming both files: they may be parts of one export.
+    #[default]
+    Fail,
+    /// The file's commit replaces the value's rows, whichever file loaded them: the file last in `order` wins.
+    LastWins,
 }
 
 /// What a merge does with a row whose key the source no longer holds, found by `load --sync-deletes`, or a captured delete does to a merged row.
