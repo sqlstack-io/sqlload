@@ -43,6 +43,9 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             ),
             _ => None,
         };
+        if calls.stop.is_cancelled() {
+            return Err(STOPPED.to_owned().into());
+        }
         match once(calls, call, access.as_deref(), !renewed).await? {
             Attempt::Done(fetched) => return Ok(fetched),
             Attempt::Refused => {

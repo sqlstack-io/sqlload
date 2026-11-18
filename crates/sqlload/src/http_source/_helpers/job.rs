@@ -608,23 +608,24 @@ struct Jobs {
     post: reqwest::Client,
 }
 
-/// The process's [`Jobs`], made by the first job and kept: each job of a table read in cursor windows (one per window) finds the connections the jobs before it opened still in the pool, instead of a new runtime's empty one, so it opens no new connection, nor repeats a TLS handshake, to a host it already reached.
+/// The process's [`Jobs`], made by the first job and kept: each job of a table read in cursor windows (one per window) finds the connections the jobs before it opened still in the pool, instead of a new runtime's empty one, so it opens no new connection, nor repeats a TLS handshake, to a host it already reached; a failure to make them is not kept, so the next job tries again.
 fn jobs() -> Result<&'static Jobs, String> {
-    static JOBS: std::sync::OnceLock<Result<Jobs, String>> = std::sync::OnceLock::new();
-    JOBS.get_or_init(|| {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
+    static JOBS: std::sync::OnceLock<Jobs> = std::sync::OnceLock::new();
+    if let Some(jobs) = JOBS.get() {
+        return Ok(jobs);
+    }
+    let threads = std::thread::available_parallelism().map_or(2, |count| count.get().max(2));
+    let made = Jobs {
+        runtime: tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(threads)
             .thread_name("sqlload-http")
             .enable_all()
             .build()
-            .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?;
-        Ok(Jobs {
-            runtime,
-            get: job_client(false)?,
-            post: job_client(true)?,
-        })
-    })
-    .as_ref()
-    .map_err(Clone::clone)
+            .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?,
+        get: job_client(false)?,
+        post: job_client(true)?,
+    };
+    Ok(JOBS.get_or_init(|| made))
 }
 
 /// Whether any request of `job` sends a `POST`.

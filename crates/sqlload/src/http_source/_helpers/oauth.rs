@@ -24,7 +24,7 @@ use crate::python_sources::errors::ReadError;
 /// Every token source of this process, by connection and auth key.
 static SOURCES: OnceLock<Mutex<HashMap<String, Arc<TokenSource>>>> = OnceLock::new();
 
-/// The runtime token requests run on, and its HTTP client: one for the process, outliving any job's runtime, so a token request a cancelled page started still finishes and keeps what the server sent, such as a rotated refresh token.
+/// The runtime token requests run on, and its HTTP client: one for the process, apart from the jobs' runtime, so a token request a cancelled page started still finishes and keeps what the server sent, such as a rotated refresh token.
 static RENEWALS: OnceLock<Result<(tokio::runtime::Runtime, reqwest::Client), String>> =
     OnceLock::new();
 
@@ -192,7 +192,7 @@ impl TokenSource {
             .map_err(|error| format!("the OAuth2 token request stopped: {error}"))?
     }
 
-    /// A new access token from the token URL, kept in `state` with any rotated refresh token. It runs on the process's token runtime, so a request cut short while it waits, such as a page read ahead past the last one, or the end of its job's runtime, can't drop a refresh token the server has already replaced.
+    /// A new access token from the token URL, kept in `state` with any rotated refresh token. It runs on the process's token runtime, so a request cut short while it waits, such as a page read ahead past the last one or an aborted job, can't drop a refresh token the server has already replaced.
     async fn renewed(
         &self,
         http: &reqwest::Client,
