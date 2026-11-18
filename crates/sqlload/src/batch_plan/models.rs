@@ -25,6 +25,8 @@ pub struct WindowSplit<'a> {
     pub now: DateTime<Utc>,
     /// The table's `timezone`, which a bound without an offset is read in while the cursor's type is unknown.
     pub zone: chrono_tz::Tz,
+    /// The most windows the read may be split into (see [`crate::loader::models::TableSpec::most_windows`]).
+    pub most: u64,
 }
 
 /// Files that commit together, in key order, and the cursor values their rows carry when they replace whole partitions.

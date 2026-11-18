@@ -257,3 +257,10 @@ pub(crate) struct UnloadStoreTestCase {
     pub(crate) url: &'static str,
     pub(crate) expected_store: &'static str,
 }
+
+/// A table's spec, and the most cursor windows its read may be split into.
+pub(crate) struct MostWindowsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) spec: fn() -> Result<crate::loader::models::TableSpec, String>,
+    pub(crate) expected_most: Result<u64, &'static str>,
+}

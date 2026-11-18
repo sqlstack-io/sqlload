@@ -229,7 +229,7 @@ and `merge` publish once per run (last row below). `plan -v` of one table shows 
 
 | Table | Commits |
 |-------|---------|
-| `batch_size = "1d"` (date or timestamp cursor) or `batch_size = 1000` (integer cursor) | One cursor window at a time, up to 100,000 windows. |
+| `batch_size = "1d"` (date or timestamp cursor) or `batch_size = 1000` (integer cursor) | One cursor window at a time, up to 100,000 windows (32,767 for a Snowflake table read through an unload). |
 | A Postgres table whose `cursor_column` leads an index, without `batch_size` | About every 1 GB, reading in cursor order (NULLs first), only between distinct cursor values. `batch_size = "none"` opts out. |
 | Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
 | Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |

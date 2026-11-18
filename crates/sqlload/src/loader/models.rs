@@ -1,5 +1,7 @@
+use crate::adapters::contract::constants::UNLOADED_BATCH_ROWS;
 use crate::adapters::contract::models::BoundParameter;
 use crate::adapters::contract::models::ChangeApply;
+use crate::batch_plan::constants::MAX_WINDOWS;
 use crate::column_parse::models::ColumnParse;
 use crate::load_events::models::PhaseTiming;
 use crate::load_naming::models::{Compat, LoadedNames, NameMemo, NameRules, Naming};
@@ -255,6 +257,14 @@ impl TableSpec {
         self.deletes
             .as_ref()
             .is_some_and(|deletes| deletes.apply == Deletes::Soft)
+    }
+
+    /// The most cursor windows the table's read may be split into: fewer for a warehouse table unloaded to files, whose merge row numbers start at the window's number times [`UNLOADED_BATCH_ROWS`] in a 64-bit integer.
+    pub fn most_windows(&self) -> u64 {
+        match self.warehouse_source.as_ref().map(|source| &source.route) {
+            Some(WarehouseRoute::Unload { .. }) => (i64::MAX / UNLOADED_BATCH_ROWS).unsigned_abs(),
+            _ => MAX_WINDOWS,
+        }
     }
 
     /// The query whose rows are the table, for a warehouse source's query table.

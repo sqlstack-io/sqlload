@@ -638,8 +638,8 @@ pub(crate) fn merge_newest() -> WriteMode {
     }
 }
 
-/// The store a `snowflake` source with stage `url` unloads table `current` to, as Debug prints it (the whole route when it is no unload).
-pub(crate) fn unload_store(url: &str) -> Result<String, String> {
+/// The spec of table `current` of a `snowflake` source with stage `url`, loading into DuckDB.
+pub(crate) fn unload_spec(url: &str) -> Result<TableSpec, String> {
     let text = format!(
         "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nuser = \"u\"\nauth = {{ method = \"pat\", token = \"t\" }}\ndatabase = \"D\"\n[sources.marts]\nkind = \"snowflake\"\nconnection = \"sf\"\nwrite_strategy = \"replace\"\nstage = {{ url = \"{url}\", storage_integration = \"I\" }}\n[sources.marts.tables.current]\ndescription = \"d\"\nsql = \"SELECT 1 AS id\"\n"
     );
@@ -666,12 +666,21 @@ pub(crate) fn unload_store(url: &str) -> Result<String, String> {
         listed_keys: Vec::new(),
     };
     let resolved = resolve_tables(&project, "marts", &[table]);
-    let route = resolved
+    resolved
         .specs
-        .first()
-        .and_then(|spec| spec.warehouse_source.as_ref())
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("no spec: {:?}", resolved.problems))
+}
+
+/// The store a `snowflake` source with stage `url` unloads table `current` to, as Debug prints it (the whole route when it is no unload).
+pub(crate) fn unload_store(url: &str) -> Result<String, String> {
+    let spec = unload_spec(url)?;
+    let route = spec
+        .warehouse_source
+        .as_ref()
         .map(|source| format!("{:?}", source.route))
-        .ok_or_else(|| format!("no warehouse source: {:?}", resolved.problems))?;
+        .ok_or("no warehouse source")?;
     Ok(route
         .split(", stage: ")
         .next()

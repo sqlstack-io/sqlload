@@ -1749,6 +1749,7 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
                 .filter(|known| spec.python.is_none() || **known != ColumnType::Text),
             now: chrono::Utc::now(),
             zone: spec.zone(),
+            most: spec.most_windows(),
         })?;
         return Ok(CommitRule::Windows(windows));
     }
