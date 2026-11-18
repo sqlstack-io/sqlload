@@ -8,6 +8,7 @@ pub const ELISION: &str = "…";
 pub const VOLATILE: &[(&str, &str)] = &[
     (r"\b\d+\.\d+s\b", "_s"),
     (r"\d+(\.\d+)? [KMG]iB", "_ MiB"),
+    (r"slowest\s+\S+", "slowest _"),
     (r"PostgreSQL [\d.]+ \([^)]*\)", "PostgreSQL _"),
     (r"DuckDB v[\d.]+", "DuckDB v_"),
     (r"\s+", " "),

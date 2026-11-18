@@ -24,6 +24,19 @@ pub const DEFAULT_PIPE_TEMPLATE: &str = "{table}_SQLLOAD_PIPE";
 pub const DEFAULT_STREAMING_PIPE_TEMPLATE: &str = "{table}-STREAMING";
 pub const STREAMING_REQUEST_LIMIT: u64 = 4 * 1024 * 1024;
 pub const MAX_NAME_LENGTH: usize = 255;
+/// The BigQuery column types the exporter writes: text, integers under any of their names, instants and dates.
+pub const BIGQUERY_COLUMN_TYPES: &[&str] = &[
+    "STRING",
+    "INT64",
+    "INT",
+    "INTEGER",
+    "BIGINT",
+    "SMALLINT",
+    "TINYINT",
+    "BYTEINT",
+    "TIMESTAMP",
+    "DATE",
+];
 /// Size units and their byte multipliers.
 pub const SIZE_UNITS: &[(&str, f64)] = &[
     ("", 1.0),
@@ -56,6 +69,18 @@ pub const SNOWFLAKE_COLUMNS: &[(&str, &str, &str)] = &[
     ("VALUE", "value", "VARCHAR"),
     ("EXPORTED_AT", "exported_at", "TIMESTAMP_TZ"),
     ("DATE", "date", "DATE"),
+];
+/// BigQuery's envelope columns: name, record field, type.
+pub const BIGQUERY_COLUMNS: &[(&str, &str, &str)] = &[
+    ("topic", "topic", "STRING"),
+    ("kafka_timestamp", "timestamp", "INT64"),
+    ("kafka_timestamp_type", "timestamp_type", "INT64"),
+    ("kafka_offset", "offset", "INT64"),
+    ("kafka_partition", "partition", "INT64"),
+    ("key", "key", "STRING"),
+    ("value", "value", "STRING"),
+    ("exported_at", "exported_at", "TIMESTAMP"),
+    ("date", "date", "DATE"),
 ];
 /// Databricks' envelope columns: name, record field, type.
 pub const DATABRICKS_COLUMNS: &[(&str, &str, &str)] = &[

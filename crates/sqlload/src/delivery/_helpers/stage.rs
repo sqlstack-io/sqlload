@@ -484,7 +484,12 @@ impl StageDelivery {
                 let prefix = self.s3.as_ref().map_or("", |target| target.prefix.as_str());
                 format!("@{}/{prefix}", self.external_stage())
             }
-            LoadPath::Streaming | LoadPath::Zerobus | LoadPath::VolumeCopy => {
+            LoadPath::Streaming
+            | LoadPath::Zerobus
+            | LoadPath::VolumeCopy
+            | LoadPath::WriteApi
+            | LoadPath::UploadLoad
+            | LoadPath::GcsLoad => {
                 return Err(DeliveryError::Fatal(format!(
                     "{:?} is not a Snowflake stage load",
                     self.path

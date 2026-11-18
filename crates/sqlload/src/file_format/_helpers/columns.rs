@@ -18,6 +18,19 @@ pub(crate) fn parquet_kind(column: &ColumnConfig) -> ParquetKind {
     }
 }
 
+/// How a BigQuery column is built, by its type: `INT64` and its aliases as integers, `TIMESTAMP` and `DATE` typed, everything else (`STRING`, `JSON`) text.
+pub(crate) fn bigquery_kind(column: &ColumnConfig) -> ParquetKind {
+    let upper = column.sql_type.trim().to_ascii_uppercase();
+    match upper.split(['(', '<', ' ']).next().unwrap_or_default() {
+        "INT64" | "INT" | "INTEGER" | "BIGINT" | "SMALLINT" | "TINYINT" | "BYTEINT" => {
+            ParquetKind::Int64
+        }
+        "TIMESTAMP" => ParquetKind::Timestamp,
+        "DATE" => ParquetKind::Date,
+        _ => ParquetKind::Text,
+    }
+}
+
 /// True for column types that hold parsed JSON rather than text.
 pub(crate) fn is_semi_structured(sql_type: &str) -> bool {
     let upper = sql_type.trim().to_ascii_uppercase();

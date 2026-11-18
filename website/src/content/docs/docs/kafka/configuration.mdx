@@ -34,7 +34,7 @@ every section.
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `snowflake` or, from 0.66.0, `databricks`. |
+| `kind` | required | `snowflake`, `databricks` (from 0.66.0) or `bigquery` (from 0.69.0). |
 
 Snowflake:
 
@@ -56,13 +56,22 @@ Databricks:
 | `catalog`, `schema` | required | Where the tables and volumes go; stored in lower case. |
 | `zerobus_endpoint` | none | `https://<workspace-id>.zerobus.<region>.cloud.databricks.com`; needed for `staging.kind = "none"`. |
 
+BigQuery:
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `project` | required | The project the dataset is in; load jobs and queries run there too. |
+| `dataset` | required | Where the tables go. It must exist; `apply` creates tables, not datasets. |
+| `location` | required | The dataset's location, such as `EU` or `europe-west2`. |
+| `service_account_key` | required | The service-account key file's JSON text, such as `"${ENV:BIGQUERY_KEY}"`. |
+
 ## `[staging]`
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `kind` | required | `none` (Snowpipe Streaming, or Zerobus Ingest on Databricks), `internal` (files on a table stage, or in a volume on Databricks) or `s3` (files in your bucket). See [How rows reach the warehouse](/docs/kafka/run/#how-rows-reach-the-warehouse). |
+| `kind` | required | `none` (Snowpipe Streaming, Zerobus Ingest on Databricks, the Storage Write API on BigQuery), `internal` (files on a table stage, in a volume on Databricks, or sent with each load job on BigQuery), `s3` (files in your bucket; not on BigQuery) or `gcs` (BigQuery only, from 0.69.0: files in your Cloud Storage bucket). See [How rows reach the warehouse](/docs/kafka/run/#how-rows-reach-the-warehouse). |
 | `load` | `auto` | Snowflake staged files: `snowpipe`, `copy`, or `auto`, which picks Snowpipe with a key pair and `COPY` otherwise. Databricks always uses `COPY INTO`. |
-| `format` | `json`; `parquet` on Databricks | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). Databricks loads Parquet only. |
+| `format` | `json`; `parquet` on Databricks and BigQuery | Staged files: `json` (gzip NDJSON) or `parquet` (zstd). Databricks and BigQuery load Parquet only. |
 | `retain` | `7d` | `internal`: how long dated stage or volume folders are kept. |
 | `max_in_flight` | `32` | Uploads, and separately loads, in flight at once across all streams. |
 | `max_pending_files` | `32` | Snowpipe loads: files per stream sent but not committed yet. A full stream pauses its partitions. |
@@ -84,6 +93,16 @@ reports. Pipes that `sqlload apply` creates are owned by it.
 | `endpoint`, `path_style` | none, `false` | For S3-compatible stores. |
 | `auto_ingest` | `false` | Snowflake: load with an auto-ingest pipe on bucket notifications. Needs `destination.warehouse`; see [Auto-ingest](/docs/kafka/run/#auto-ingest). |
 
+`[staging.gcs]`, for `kind = "gcs"` (BigQuery):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `bucket` | required | The Cloud Storage bucket, in or near the dataset's location. |
+| `prefix` | `""` | The folder under the bucket. |
+| `path` | `{topic}/date={date}/` | Each file's folder under `prefix`, with the placeholders of `[staging.s3]`. |
+
+The exporter doesn't delete files from the bucket; set a lifecycle rule on it.
+
 ## `[batching]`
 
 A stream's records become one batch when any limit is reached.
@@ -92,9 +111,9 @@ A stream's records become one batch when any limit is reached.
 |-----|---------|---------|
 | `max_bytes` | 32 MiB | Bytes per batch. |
 | `max_rows` | `100000` | Rows per batch. |
-| `max_age` | `60s` | Age of the oldest record in the batch. |
+| `max_age` | `60s` | Age of the oldest record in the batch. BigQuery load jobs start at most once a minute per table, so a shorter `max_age` there doesn't load sooner; see [BigQuery](/docs/kafka/run/#bigquery). |
 | `max_total_bytes` | 2 GiB | Across every stream; any stream flushes early when it's reached. |
-| `max_request_bytes` | 3,500,000 bytes | Streaming: bytes per request; compressed for Snowpipe Streaming, below its 4 MiB limit, and JSON for Zerobus Ingest. |
+| `max_request_bytes` | 3,500,000 bytes | Streaming: bytes per request; compressed for Snowpipe Streaming, below its 4 MiB limit, JSON for Zerobus Ingest, and Arrow for the BigQuery Storage Write API, below its 10 MB limit. |
 | `oversized` | `fail` | Streaming: a record larger than one request, `fail` or `skip`. |
 
 ## `[[topics]]`
@@ -138,6 +157,15 @@ timestamp is milliseconds since the epoch, so its column must stay `BIGINT`. Wit
 `TIMESTAMP` column taken from the record (`key`, `value` or an unwrapped member) needs RFC 3339 text
 or a date and time without a zone, read as UTC; any other value stops the stream with its topic,
 partition and offset.
+
+On BigQuery the names are lower case and the types are `STRING` for `topic`, `key` and `value`,
+`INT64` for the Kafka timestamp, timestamp type, offset and partition, `TIMESTAMP` for
+`exported_at` and `DATE` for `date`. Columns can only take these types, or another name for
+`INT64` such as `INTEGER`; a config with any other type is refused. A `TIMESTAMP` column can also
+hold the Kafka timestamp, which
+is read as milliseconds. A `TIMESTAMP` or `DATE` column taken from the record needs RFC 3339 text or
+a date and time without a zone, read as UTC; any other value stops the stream, naming the column
+and the value.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

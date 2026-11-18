@@ -17,7 +17,7 @@ use crate::file_format::main::databricks_copy::databricks_copy;
 use crate::file_format::main::encode_file::encode_file;
 use crate::file_format::main::file_extension::file_extension;
 use crate::http::errors::ApiError;
-use crate::naming::main::databricks_table::databricks_table;
+use crate::naming::main::quoted_table::quoted_table;
 use crate::stage_api::main::put_object::put_object;
 use crate::stage_api::models::{ObjectUpload, PutOutcome};
 use crate::time_text::main::now_ms::now_ms;
@@ -142,7 +142,7 @@ impl CopyDelivery {
             let (folder, file) = key.rsplit_once('/').unwrap_or(("", key));
             folders.entry(folder).or_default().push(file);
         }
-        let table = databricks_table(&self.config, &self.stream.table);
+        let table = quoted_table(&self.config, &self.stream.table);
         for (folder, files) in folders {
             let location = match &self.s3 {
                 Some(target) => format!("s3://{}/{}{folder}/", target.bucket, target.prefix),

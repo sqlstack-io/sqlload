@@ -5,7 +5,7 @@ use crate::delivery::models::{Delivery, DeliveryInputs, StageClients, Warehouse}
 use crate::naming::models::Stream;
 use crate::planning::models::LoadPath;
 
-/// Snowpipe Streaming or Zerobus Ingest for the streaming paths, staged files for every other path.
+/// Snowpipe Streaming, Zerobus Ingest or BigQuery's default stream for the streaming paths, staged files or load jobs for every other path.
 pub fn build_delivery(inputs: &DeliveryInputs, stream: &Stream) -> Result<Delivery, DeliveryError> {
     let max_request_bytes = inputs.config.batching.max_request_bytes.0;
     match (&inputs.warehouse, inputs.path) {
@@ -40,5 +40,6 @@ pub fn build_delivery(inputs: &DeliveryInputs, stream: &Stream) -> Result<Delive
             ))
         }
         (Warehouse::Databricks(databricks), _) => Delivery::copy(inputs, &databricks.api, stream),
+        (Warehouse::BigQuery(api), _) => Ok(Delivery::bigquery(inputs, api, stream)),
     }
 }

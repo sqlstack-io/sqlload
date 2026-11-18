@@ -13,6 +13,7 @@ use crate::naming::models::{NameSource, TopicTable};
 use crate::planning::main::apply_plan::apply_plan;
 use crate::planning::main::build_plan::build_plan;
 use crate::planning::main::load_note::load_note;
+use crate::planning::main::load_pacing::load_pacing;
 use crate::planning::main::load_path::load_path;
 use crate::planning::main::read_existing::read_existing;
 use crate::planning::models::{ObjectState, Plan, PlannedObject, StreamPlan};
@@ -56,15 +57,16 @@ pub(crate) async fn plan(config: &Config) -> Result<Vec<String>, String> {
     let tables = resolve_tables(&config.naming, &topics).map_err(|problems| problems.join("\n"))?;
     let plan = current_plan(config, &clients).await?;
     let mut lines: Vec<String> = vec![format!("Topics ({}):", tables.len())];
-    lines.extend(tables.iter().map(topic_line));
+    let lower_case = !config.destination.is_snowflake();
+    lines.extend(tables.iter().map(|entry| topic_line(entry, lower_case)));
     lines.push(String::new());
     lines.push("Objects:".to_owned());
     let shards = config.source.shards;
-    lines.extend(
-        plan.streams
-            .iter()
-            .flat_map(|stream| stream_lines(stream, shards)),
-    );
+    lines.extend(plan.streams.iter().flat_map(|stream| {
+        stream_lines(stream, shards)
+            .into_iter()
+            .chain(load_pacing(config, stream))
+    }));
     if let Some(note) = load_note(config, load_path(config, clients.warehouse.uses_key_pair())) {
         lines.push(String::new());
         lines.push(note);
@@ -85,14 +87,19 @@ pub(crate) async fn plan(config: &Config) -> Result<Vec<String>, String> {
     }
 }
 
-fn topic_line(entry: &TopicTable) -> String {
+/// One topic and its table, lower case on Databricks and BigQuery, as the table is created.
+fn topic_line(entry: &TopicTable, lower_case: bool) -> String {
     let source = match &entry.source {
         NameSource::Map => "map".to_owned(),
         NameSource::Rule(template) => format!("rule {template}"),
         NameSource::Default => "default".to_owned(),
         NameSource::Fallback => "fallback".to_owned(),
     };
-    format!("  {} -> {} ({source})", entry.topic, entry.table)
+    let table = match lower_case {
+        true => entry.table.to_ascii_lowercase(),
+        false => entry.table.clone(),
+    };
+    format!("  {} -> {table} ({source})", entry.topic)
 }
 
 fn stream_lines(stream: &StreamPlan, shards: u32) -> Vec<String> {

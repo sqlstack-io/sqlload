@@ -1,4 +1,4 @@
-//! Read the tables, stages, pipes and volumes already in the destination schema.
+//! Read the tables, stages, pipes and volumes already in the destination schema or dataset.
 
 use std::collections::BTreeMap;
 
@@ -31,6 +31,23 @@ pub async fn read_existing(
             .iter()
             .filter_map(|row| row.first().cloned().flatten())
             .collect();
+        return Ok(existing);
+    }
+    if let Destination::BigQuery(bigquery) = &config.destination {
+        let dataset = format!("`{}`.`{}`", bigquery.project, bigquery.dataset);
+        let columns = warehouse
+            .execute(&format!(
+                "SELECT table_name, column_name, data_type FROM {dataset}.INFORMATION_SCHEMA.COLUMNS"
+            ))
+            .await
+            .map_err(|error| match error.status() {
+                Some(404) => ApiError::Protocol(format!(
+                    "BigQuery dataset {}.{} was not found in {}; create it there first",
+                    bigquery.project, bigquery.dataset, bigquery.location
+                )),
+                _ => error,
+            })?;
+        existing.tables = tables(&columns);
         return Ok(existing);
     }
     let database = quote_name(config.destination.database());

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::config::constants::{DATABRICKS_COLUMNS, SNOWFLAKE_COLUMNS};
+use crate::config::constants::{BIGQUERY_COLUMNS, DATABRICKS_COLUMNS, SNOWFLAKE_COLUMNS};
 use crate::config::constants::{
     DEFAULT_CONSUMER_GROUP, DEFAULT_DISCOVERY_INTERVAL_SECS, DEFAULT_MAX_AGE_SECS,
     DEFAULT_MAX_BYTES, DEFAULT_MAX_IN_FLIGHT, DEFAULT_MAX_PENDING_FILES, DEFAULT_MAX_REQUEST_BYTES,
@@ -103,18 +103,19 @@ pub(crate) fn streaming_pipe_template() -> String {
     DEFAULT_STREAMING_PIPE_TEMPLATE.to_owned()
 }
 
-/// Fill what defaults by destination before the TOML becomes a [`crate::config::models::Config`]: the envelope columns, and Parquet files on Databricks.
+/// Fill what defaults by destination before the TOML becomes a [`crate::config::models::Config`]: the envelope columns, and Parquet files on Databricks and BigQuery.
 pub(crate) fn destination_defaults(value: &mut toml::Value) {
-    let databricks = value
+    let kind = value
         .get("destination")
         .and_then(|destination| destination.get("kind"))
         .and_then(toml::Value::as_str)
-        == Some("databricks");
+        .unwrap_or_default()
+        .to_owned();
     let Some(root) = value.as_table_mut() else {
         return;
     };
-    if databricks && let Some(staging) = root.get_mut("staging").and_then(toml::Value::as_table_mut)
-    {
+    let parquet = matches!(kind.as_str(), "databricks" | "bigquery");
+    if parquet && let Some(staging) = root.get_mut("staging").and_then(toml::Value::as_table_mut) {
         staging
             .entry("format")
             .or_insert_with(|| toml::Value::from("parquet"));
@@ -124,9 +125,10 @@ pub(crate) fn destination_defaults(value: &mut toml::Value) {
         .or_insert_with(|| toml::Value::Table(toml::Table::new()));
     if let Some(envelope) = envelope.as_table_mut() {
         envelope.entry("columns").or_insert_with(|| {
-            let columns = match databricks {
-                true => DATABRICKS_COLUMNS,
-                false => SNOWFLAKE_COLUMNS,
+            let columns = match kind.as_str() {
+                "databricks" => DATABRICKS_COLUMNS,
+                "bigquery" => BIGQUERY_COLUMNS,
+                _ => SNOWFLAKE_COLUMNS,
             };
             toml::Value::Array(columns.iter().map(column_value).collect())
         });

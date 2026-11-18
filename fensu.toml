@@ -43,32 +43,22 @@ reason = "SftpLink holds russh-sftp's session and russh's session handle, which 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/config/_helpers/validate.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/config/main/parse_config.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/delivery/main/build_delivery.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/exporter/main/build_clients.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
-
-[[targets.rust.rule_exceptions]]
-rule = "XSL001"
-path = "crates/sqlload/src/naming/_helpers/streams.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
-
-[[targets.rust.rule_exceptions]]
-rule = "XSL001"
-path = "crates/sqlload/src/planning/_helpers/objects.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
@@ -78,22 +68,22 @@ reason = "The Kafka exporter (sqlload run) predates the adapter contract: its de
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/planning/main/load_path.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/planning/main/read_existing.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/status/main/check_connections.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "XSL001"
 path = "crates/sqlload/src/status/main/collect_status.rs"
-reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest) and staged-file routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake or Databricks route itself."
+reason = "The Kafka exporter (sqlload run) predates the adapter contract: its destinations are streaming routes (Snowpipe Streaming, Zerobus Ingest, the BigQuery Storage Write API) and staged-file or load-job routes with their own offset bookkeeping, not loader TableWriters, so it picks its Snowflake, Databricks or BigQuery route itself."
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSS201"
