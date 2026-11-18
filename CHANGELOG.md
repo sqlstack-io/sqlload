@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.68.0](https://github.com/sqlstack-io/sqlload/compare/v0.67.0...v0.68.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** a run stays under one memory budget (memory_limit or --memory-limit, else 80% of a container's or Windows job object's limit, else 50% of the machine's memory), and plan fails when the budget can't hold one table; plan -v shows the budget on a memory line, which plain plan shows only when it asks for something, and plan no longer prints DuckDB's memory note per table. DuckDB and MotherDuck targets open with a memory_limit and thread count from the budget and without automatic checkpoints, and commit large rows in pieces. An ODBC source's default fetch buffer is at most a quarter of each table's share of the budget, and its plan warning compares each fetch with that share. A merge with newest_by cut into pieces counts the older rows it skips per piece, so the "older rows skipped" count can differ from one whole commit's. A merge that refuses repeated keys (on_duplicate_keys = "fail") and a table with checks it doesn't rebuild aren't cut into pieces, and stop, naming the memory_limit they need, when one commit's large values don't fit DuckDB's share. Every append into DuckDB or MotherDuck under a budget creates an _sqlload_unfinished table beside _sqlload_runs.
+
+### Features
+
+* **loader:** one memory budget per run, DuckDB commits in pieces, and a memory watchdog ([3437106](https://github.com/sqlstack-io/sqlload/commit/3437106088227628a9c025ebc05d2c832dc9f013))
+
 ## [0.67.0](https://github.com/sqlstack-io/sqlload/compare/v0.66.0...v0.67.0) (2026-11-17)
 
 
