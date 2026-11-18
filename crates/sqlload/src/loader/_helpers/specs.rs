@@ -30,6 +30,7 @@ use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
 use crate::loader::_helpers::destination::read_as_text;
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
+use crate::loader::_helpers::run_log::overlapping_files_problem;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
@@ -321,6 +322,16 @@ pub(crate) fn build_spec(
     {
         problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
     }
+    let own_strategy = strategy_origin == SettingOrigin::Table && !keyed;
+    let overlapping = layered(
+        &settings.on_overlapping_files,
+        &defaults.on_overlapping_files,
+    );
+    let overlapping = overlapping
+        .filter(|(_, origin)| !own_strategy || *origin == SettingOrigin::Table)
+        .map(|(value, _)| value);
+    let files = context.source.kind == SourceKind::Files;
+    problems.extend(overlapping.and_then(|_| overlapping_files_problem(files, strategy, keyed)));
     let matched_key = match keyed {
         true => &replace_key,
         false => &unique_key,
@@ -445,6 +456,7 @@ pub(crate) fn build_spec(
         null_keys,
         not_null_keys,
         replace_key,
+        on_overlapping_files: overlapping.unwrap_or_default(),
         newest_by,
         cursor,
         batch,

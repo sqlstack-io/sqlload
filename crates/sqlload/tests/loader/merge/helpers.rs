@@ -16,8 +16,8 @@ use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
 use crate::helpers::{described_project, load_selected, words};
 use crate::test_types::{
-    DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, NullKeyTargetTestCase,
-    ReplaceKeyTargetTestCase, SyncDeletesTestCase,
+    DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, MergeFile, MergeStep,
+    NullKeyTargetTestCase, ReplaceKeyTargetTestCase, SyncDeletesTestCase,
 };
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
@@ -778,4 +778,21 @@ pub(crate) fn hard_tombstone_steps() -> Vec<String> {
     ]
     .map(str::to_owned)
     .to_vec()
+}
+
+/// One load of a files merge case with `files` written first, no SQL before it and nothing removed, expecting `expected_error` (empty for none) and `expected_plan` in its plan.
+pub(crate) const fn load_step(
+    files: &'static [MergeFile],
+    expected_error: &'static str,
+    expected_plan: &'static str,
+) -> MergeStep {
+    MergeStep {
+        before: &[],
+        files,
+        removed: &[],
+        loads: true,
+        reload: false,
+        expected_error,
+        expected_plan,
+    }
 }

@@ -28,8 +28,8 @@ use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{ReadColumn, SourceTable};
 use crate::project::models::{
     BatchStep, Contract, Deletes, NewTables, NullCursor, NullKeys, OnCursorOutOfRange,
-    OnDuplicateKeys, OnSchemaChange, OutputEncoding, Policy, ProjectConfig, SendMode, TableChecks,
-    WriteStrategy,
+    OnDuplicateKeys, OnOverlappingFiles, OnSchemaChange, OutputEncoding, Policy, ProjectConfig,
+    SendMode, TableChecks, WriteStrategy,
 };
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::{Route, Store};
@@ -145,6 +145,8 @@ pub struct TableSpec {
     pub not_null_keys: Vec<String>,
     /// Under `delete_insert`, the columns whose values each commit replaces whole: the rows holding a value of them that the commit's rows hold are deleted first. Empty otherwise.
     pub replace_key: Vec<String>,
+    /// What a files source's `delete_insert` by `replace_key` does when two files of its folder hold one key value.
+    pub on_overlapping_files: OnOverlappingFiles,
     /// The columns, compared in order, whose higher values are a row's newer version (`newest_by`): a merge keeps the newest of the rows sharing a key and never overwrites a loaded row with an older one; empty, the last row read wins.
     pub newest_by: Vec<String>,
     pub cursor: Option<CursorSpec>,

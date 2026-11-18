@@ -33,7 +33,7 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     MergeRebuild, ProjectPlan, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
 };
-use crate::project::models::WriteStrategy;
+use crate::project::models::{OnOverlappingFiles, WriteStrategy};
 use crate::row_batches::models::Unnest;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
@@ -837,7 +837,7 @@ pub(crate) fn in_file(merged: &str, error: LoaderError) -> LoaderError {
     }
 }
 
-/// `earlier` (each `replace_key` value this run's commits of a files source's `delete_insert` into `table` inserted, with the file it came from, named below the source's location) with the key `values` of the commit of `file` (`name|version`) added; or why that commit cannot replace them: one of them came in an earlier commit of the same run, so this commit would delete that file's rows. A value must come whole in one file; [`listed_sources`] checks the files of earlier runs.
+/// `earlier` (each `replace_key` value this run's commits of a files source's `delete_insert` into `table` inserted, with the file it came from, named below the source's location) with the key `values` of the commit of `file` (`name|version`) added; or why that commit cannot replace them: one of them came in an earlier commit of the same run, so this commit would delete that file's rows. A value must come whole in one file, unless `on_overlapping_files = "last_wins"`, where the later file replaces it; [`listed_sources`] checks the files of earlier runs.
 pub(crate) fn with_file_keys(
     table: &TablePlan,
     (file, values): (&str, &[String]),
@@ -851,7 +851,9 @@ pub(crate) fn with_file_keys(
         .unwrap_or_default();
     let mut split: Vec<(&String, &String)> = Vec::new();
     for value in values {
-        if let Some(first) = earlier.get(value) {
+        if let Some(first) = earlier.get(value)
+            && table.spec.on_overlapping_files == OnOverlappingFiles::Fail
+        {
             split.push((value, first));
         }
     }
@@ -864,7 +866,7 @@ pub(crate) fn with_file_keys(
             count => format!(" (and {} more)", count - 1),
         };
         return Err(format!(
-            "it holds the replace_key ({columns}) value ({value}){more}, which {first} also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if one restates the other, remove the older of {first} and {this} from the folder by hand, and set after_load = {{ move_to = ... }} (or \"delete\") so that each file leaves the folder once it loads and a file sent later replaces its values"
+            "it holds the replace_key ({columns}) value ({value}){more}, which {first} also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if newer files restate older ones, set on_overlapping_files = \"last_wins\", so the file last in order replaces the values, or remove the older of {first} and {this} from the folder by hand and set after_load = {{ move_to = ... }} (or \"delete\"), so that each file leaves the folder once it loads"
         ));
     }
     earlier.extend(values.iter().map(|value| (value.clone(), this.to_owned())));
@@ -928,7 +930,7 @@ pub(crate) fn file_column_problem(
     None
 }
 
-/// Why the commit of `file` (`name|version`), a files source's `delete_insert` by `replace_key` into `table`, cannot replace the rows of its key values: some of them come from `sources` (other files the table's rows of those values came from, by name) that are still listed in the source's folder, so two files of the folder hold one value and which is current can't be told. A file that has left the folder (deleted, or moved by `after_load`) is replaced.
+/// Why the commit of `file` (`name|version`), a files source's `delete_insert` by `replace_key` into `table`, cannot replace the rows of its key values: some of them come from `sources` (other files the table's rows of those values came from, by name) that are still listed in the source's folder, so two files of the folder hold one value and which is current can't be told. A file that has left the folder (deleted, or moved by `after_load`) is replaced; under `on_overlapping_files = "last_wins"` so is one still listed that comes before `file` in the source's `order`, or that this run reads again (it loads in order, replacing the values back), but never another after it, whose values a file sent late or rewritten would otherwise take back.
 pub(crate) fn listed_sources(
     table: &TablePlan,
     file: &str,
@@ -938,17 +940,38 @@ pub(crate) fn listed_sources(
         return Ok(());
     };
     let location = source.location.to_string();
-    let listed: Vec<String> = source
+    let order = |data: &DataFile| match table.spec.files_order {
+        FilesOrder::Modified => (data.file.modified_ms, data.file.relative_key.clone()),
+        FilesOrder::Path => (0, data.file.relative_key.clone()),
+    };
+    let listed: Vec<(String, (i64, String))> = source
         .table
         .files
         .iter()
+        .map(|data| (format!("{location}{}", data.file.relative_key), order(data)))
+        .collect();
+    let read: Vec<String> = table
+        .files
+        .iter()
+        .flat_map(|read| &read.files)
         .map(|data| format!("{location}{}", data.file.relative_key))
         .collect();
-    let held: Vec<&str> = sources
+    let this_name = merged_name(file);
+    let this_order = listed
         .iter()
-        .filter(|name| listed.contains(name))
-        .map(|name| name.strip_prefix(location.as_str()).unwrap_or(name))
-        .collect();
+        .find(|(name, _)| name == this_name)
+        .map(|(_, at)| at.clone());
+    let last_wins = table.spec.on_overlapping_files == OnOverlappingFiles::LastWins;
+    let mut held: Vec<&str> = Vec::new();
+    for name in sources {
+        let Some((_, at)) = listed.iter().find(|(listed, _)| listed == name) else {
+            continue;
+        };
+        if !last_wins || (!read.contains(name) && this_order.as_ref().is_none_or(|this| at > this))
+        {
+            held.push(name.strip_prefix(location.as_str()).unwrap_or(name));
+        }
+    }
     let Some(first) = held.first() else {
         return Ok(());
     };
@@ -956,12 +979,59 @@ pub(crate) fn listed_sources(
         1 => String::new(),
         count => format!(" (and {} more)", count - 1),
     };
-    let this = merged_name(file);
-    let this = this.strip_prefix(location.as_str()).unwrap_or(this);
+    let this = this_name
+        .strip_prefix(location.as_str())
+        .unwrap_or(this_name);
     let columns = table.spec.replace_key.join(", ");
+    if last_wins {
+        return Err(format!(
+            "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder and comes after {this} in order; with on_overlapping_files = \"last_wins\" the file last in order keeps a value, so {this} would take back values a later file replaced. Fix: if {this} is a correction, give it a name (or, by modified time, a time) that sorts after {first}, or remove {first} from the folder"
+        ));
+    }
     Err(format!(
-        "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if one restates the other, remove the older of {first} and {this} from the folder by hand, and set after_load = {{ move_to = ... }} (or \"delete\") so that each file leaves the folder once it loads and a file sent later replaces its values"
+        "the table holds rows of its replace_key ({columns}) values from {first}{more}, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by {this} would delete the rows {first} loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each ({columns}) value in one file; if newer files restate older ones, set on_overlapping_files = \"last_wins\", so the file last in order replaces the values, or remove the older of {first} and {this} from the folder by hand and set after_load = {{ move_to = ... }} (or \"delete\"), so that each file leaves the folder once it loads"
     ))
+}
+
+/// Why `on_overlapping_files` does not apply to a table loaded by `strategy`: it is for a `delete_insert` by `replace_key` (`keyed`) of a source of `files`, where two files of the folder can hold one key value.
+pub(crate) fn overlapping_files_problem(
+    files: bool,
+    strategy: WriteStrategy,
+    keyed: bool,
+) -> Option<String> {
+    const FOR: &str = "on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value";
+    match (files, strategy, keyed) {
+        (true, _, true) => None,
+        (false, _, _) => Some(format!("{FOR}; this source reads no files, so remove it")),
+        (true, WriteStrategy::Merge, _) => Some(format!(
+            "{FOR}; a merge applies the files one at a time, so the last file already wins each unique_key; remove it"
+        )),
+        (true, WriteStrategy::DeleteInsert, false) => Some(format!(
+            "{FOR}; this delete_insert replaces a cursor range, not key values, so remove it, or set replace_key"
+        )),
+        (true, strategy, false) => Some(format!(
+            "{FOR}; {strategy} replaces no key values, so remove it"
+        )),
+    }
+}
+
+/// How `plan` describes the commits of a files table whose `groups` files are each recorded in the run log: their order, and what `on_overlapping_files = "last_wins"` adds.
+pub(crate) fn recorded_commits(groups: usize, spec: &TableSpec) -> String {
+    let files = match groups {
+        1 => "1 file".to_owned(),
+        count => format!("{count} files"),
+    };
+    let order = match spec.files_order {
+        FilesOrder::Modified => "oldest modified first (ties by path)",
+        FilesOrder::Path => "in path order",
+    };
+    let last_wins = match spec.on_overlapping_files {
+        OnOverlappingFiles::LastWins => {
+            "; the last file holding a replace_key value replaces it (on_overlapping_files = \"last_wins\")"
+        }
+        OnOverlappingFiles::Fail => "",
+    };
+    format!("{files}, one commit each, {order}, each recorded in the run log{last_wins}")
 }
 
 /// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), and under `--reload` none, with every file the table's merges recorded instead (oldest first), whose order the reload keeps; or why a files source cannot load into it: only into a DuckDB or Postgres table, never with `state = "logged"`, nor `--reload` with `unnest` or of a `delete_insert` (one commit would lose the files' order); none while the table does not exist.
