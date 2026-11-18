@@ -36,3 +36,13 @@ pub(crate) struct RefusedReaderTestCase {
     /// Part of the refusal.
     pub(crate) expected_error: &'static str,
 }
+
+/// Reads of a database file open in this process, some of them ended, while another process tries to write the file.
+pub(crate) struct LockedFileTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) reads: usize,
+    /// How many of the reads have ended when the other process writes.
+    pub(crate) ended: usize,
+    /// What the other process says.
+    pub(crate) expected_said: &'static str,
+}

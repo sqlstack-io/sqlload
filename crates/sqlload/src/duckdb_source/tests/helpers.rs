@@ -40,3 +40,35 @@ pub(crate) fn shop_project(database: &str, source_lines: &str) -> Result<Project
     )
     .map_err(|error| error.to_string())
 }
+
+/// Set to a database file in the process [`write_from_another_process`] starts, which then tries to write that file.
+const WRITE_FROM_ANOTHER_PROCESS: &str = "SQLLOAD_TEST_DUCKDB_WRITE_FILE";
+
+/// The test that calls [`write_when_asked`] first, run again in a process of its own, says whether it could write the file at `path`.
+pub(crate) fn write_from_another_process(path: &std::path::Path) -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+    let test = "duckdb_source::tests::read_source::given_open_reads_of_a_file_when_another_process_writes_it_then_it_is_locked_until_the_last_read_ends";
+    let output = std::process::Command::new(exe)
+        .args(["--exact", test, "--nocapture"])
+        .env(WRITE_FROM_ANOTHER_PROCESS, path)
+        .output()
+        .map_err(|error| error.to_string())?;
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// In the process [`write_from_another_process`] starts: try to write the file it names, say whether that worked, and end the process.
+pub(crate) fn write_when_asked() {
+    let Some(path) = std::env::var_os(WRITE_FROM_ANOTHER_PROCESS) else {
+        return;
+    };
+    let written = duckdb::Connection::open(path)
+        .and_then(|connection| connection.execute_batch("CREATE TABLE written (x INTEGER)"));
+    println!(
+        "{}",
+        written.map_or_else(
+            |error| format!("the file was locked: {error}"),
+            |()| "the file was written".to_owned()
+        )
+    );
+    std::process::exit(0);
+}

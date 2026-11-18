@@ -47,3 +47,11 @@ pub(crate) struct MemorySettingTestCase {
     pub(crate) text: &'static str,
     pub(crate) expected_setting: Result<crate::memory_budget::models::MemorySetting, &'static str>,
 }
+
+/// Helper processes a guard watches, the first `dropped` of them ended, and the ids it still counts.
+pub(crate) struct WatchedChildTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) pids: &'static [u32],
+    pub(crate) dropped: usize,
+    pub(crate) expected_counted: &'static [u32],
+}

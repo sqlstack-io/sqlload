@@ -1,5 +1,8 @@
 use crate::memory_budget::_helpers::watch::run_stop_due;
-use crate::memory_budget::tests::test_types::RunStopTestCase;
+use crate::memory_budget::main::start_watchdog::start_watchdog;
+use crate::memory_budget::main::watch_child::watch_child;
+use crate::memory_budget::models::{BudgetOrigin, MemoryBudget};
+use crate::memory_budget::tests::test_types::{RunStopTestCase, WatchedChildTestCase};
 
 #[test]
 fn given_readings_past_95_percent_when_watching_then_the_run_stops_only_when_no_table_stopping_frees_memory_in_time()
@@ -58,6 +61,58 @@ fn given_readings_past_95_percent_when_watching_then_the_run_stops_only_when_no_
             .position(|stops| stops);
         assert_eq!(
             stopped, test_case.expected_stop,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_watched_children_when_some_handles_drop_then_the_guard_counts_only_the_others() {
+    let test_cases = [
+        WatchedChildTestCase {
+            description: "both children count while open",
+            pids: &[41, 42],
+            dropped: 0,
+            expected_counted: &[41, 42],
+        },
+        WatchedChildTestCase {
+            description: "an ended child's id stops counting",
+            pids: &[41, 42],
+            dropped: 1,
+            expected_counted: &[42],
+        },
+        WatchedChildTestCase {
+            description: "no child counts once all have ended",
+            pids: &[41, 42],
+            dropped: 2,
+            expected_counted: &[],
+        },
+    ];
+    for test_case in test_cases {
+        let guard = start_watchdog(MemoryBudget {
+            bytes: u64::MAX,
+            origin: BudgetOrigin::Setting,
+            limit: None,
+            overhead: 0,
+            duckdb: None,
+            duckdb_targets: 0,
+            table_share: 0,
+            tables_at_once: 1,
+        });
+        let mut handles: Vec<_> = test_case
+            .pids
+            .iter()
+            .map(|pid| watch_child(&guard, *pid))
+            .collect();
+        handles.drain(..test_case.dropped);
+        let counted = guard
+            .children
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            counted, test_case.expected_counted,
             "{}",
             test_case.description
         );

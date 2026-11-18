@@ -169,3 +169,23 @@ pub struct WatchedTable {
     pub guard: std::sync::Arc<MemoryGuard>,
     pub table: std::sync::Arc<TableWatch>,
 }
+
+/// A helper process whose memory a guard counts with SQLLoad's, until this is dropped.
+#[derive(Debug)]
+pub struct WatchedChild {
+    pub guard: std::sync::Arc<MemoryGuard>,
+    pub pid: u32,
+}
+
+impl Drop for WatchedChild {
+    fn drop(&mut self) {
+        let mut children = self
+            .guard
+            .children
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(index) = children.iter().position(|pid| *pid == self.pid) {
+            children.swap_remove(index);
+        }
+    }
+}

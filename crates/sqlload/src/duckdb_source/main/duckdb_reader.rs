@@ -29,6 +29,7 @@ pub fn duckdb_reader(
                 memory_limit,
                 motherduck: Some(connection.clone()),
                 bridge: std::sync::Arc::default(),
+                guard: project.memory.guard.clone(),
             });
         }
         _ => {
@@ -53,5 +54,6 @@ pub fn duckdb_reader(
         memory_limit,
         motherduck: None,
         bridge: std::sync::Arc::default(),
+        guard: project.memory.guard.clone(),
     })
 }

@@ -41,7 +41,7 @@ pub async fn read_rows(
     let streaming = tokio::task::spawn_blocking(move || {
         let read = || -> Result<(), DuckDbSourceError> {
             let connection = open_read_only(&reader)?;
-            let mut statement = connection.prepare(&query)?;
+            let mut statement = connection.connection.prepare(&query)?;
             let mut held: Vec<RecordBatch> = Vec::new();
             let mut held_rows = 0;
             for chunk in statement.stream_arrow([])? {

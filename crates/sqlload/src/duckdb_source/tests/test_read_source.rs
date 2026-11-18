@@ -4,14 +4,17 @@ use arrow_cast::display::array_value_to_string;
 use arrow_select::concat::concat_batches;
 
 use crate::column_types::models::ColumnType;
+use crate::duckdb_source::_helpers::connection::open_read_only;
 use crate::duckdb_source::main::duckdb_reader::duckdb_reader;
 use crate::duckdb_source::main::read_catalog::read_catalog;
 use crate::duckdb_source::main::read_columns::read_columns;
 use crate::duckdb_source::main::read_rows::read_rows;
 use crate::duckdb_source::models::DuckDbReadRequest;
-use crate::duckdb_source::tests::helpers::{SHOP, runtime, shop_project};
+use crate::duckdb_source::tests::helpers::{
+    SHOP, runtime, shop_project, write_from_another_process, write_when_asked,
+};
 use crate::duckdb_source::tests::test_types::{
-    ReadCatalogTestCase, ReadRowsTestCase, RefusedReaderTestCase,
+    LockedFileTestCase, ReadCatalogTestCase, ReadRowsTestCase, RefusedReaderTestCase,
 };
 
 #[test]
@@ -184,6 +187,49 @@ fn given_a_memory_or_motherduck_database_when_making_a_reader_then_it_is_refused
         assert!(
             refused.contains(test_case.expected_error),
             "{}: {refused}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_open_reads_of_a_file_when_another_process_writes_it_then_it_is_locked_until_the_last_read_ends()
+-> Result<(), String> {
+    write_when_asked();
+    let test_cases = [
+        LockedFileTestCase {
+            description: "one of two reads ended: the other's lock still holds",
+            reads: 2,
+            ended: 1,
+            expected_said: "the file was locked",
+        },
+        LockedFileTestCase {
+            description: "every read ended: the file is free to write",
+            reads: 1,
+            ended: 1,
+            expected_said: "the file was written",
+        },
+    ];
+    for test_case in test_cases {
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = folder.path().join("shop.duckdb");
+        duckdb::Connection::open(&path)
+            .and_then(|connection| connection.execute_batch(SHOP))
+            .map_err(|error| error.to_string())?;
+        let project = shop_project(&path.display().to_string(), "")?;
+        let reader =
+            duckdb_reader(&project, &project.sources["shop"]).map_err(|error| error.to_string())?;
+        let mut reads = (0..test_case.reads)
+            .map(|_| open_read_only(&reader))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        reads.drain(..test_case.ended);
+        let said = write_from_another_process(&path)?;
+        drop(reads);
+        assert!(
+            said.contains(test_case.expected_said),
+            "{}: {said}",
             test_case.description
         );
     }

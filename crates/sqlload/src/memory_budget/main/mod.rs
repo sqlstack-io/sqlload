@@ -5,4 +5,5 @@ pub mod run_memory;
 pub mod run_stopped;
 pub mod start_watchdog;
 pub mod table_memory;
+pub mod watch_child;
 pub mod watch_table;

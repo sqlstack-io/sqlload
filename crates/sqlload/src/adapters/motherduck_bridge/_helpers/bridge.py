@@ -46,15 +46,18 @@ def plain(value):
 
 
 def write_next(batches, path):
-	"""The next batch `batches` holds, written to `path` as an Arrow IPC file; its row count, 0 once every batch is read."""
+	"""The next batch `batches` holds, written to the existing file `path` as an Arrow IPC file; its row count, 0 once every batch is read. A missing `path` fails."""
 	import pyarrow.ipc
 
 	try:
 		batch = batches.read_next_batch()
 	except StopIteration:
 		return 0
-	with pyarrow.ipc.new_file(path, batch.schema) as writer:
-		writer.write_batch(batch)
+	# SQLLoad created the file, readable by its user only; opening it rather than creating it means a file SQLLoad has already removed (its read stopped) is never written again.
+	with open(path, "r+b") as sink:
+		sink.truncate()
+		with pyarrow.ipc.new_file(sink, batch.schema) as writer:
+			writer.write_batch(batch)
 	return batch.num_rows
 
 
