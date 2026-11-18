@@ -217,11 +217,11 @@ jobs:
       - name: Install gdb for stall dumps
         continue-on-error: true
         run: command -v gdb || (sudo apt-get update -qq && sudo apt-get install -y -qq gdb)
-      # A run of the tests takes about five minutes. When the tests print nothing for seven minutes
+      # A run of the tests takes 16 to 20 minutes. When the tests print nothing for seven minutes
       # (libtest marks each finished test, and notes one running past 60 seconds), the wrapper
       # prints every thread's stack in the test process, so a hang names the stuck call.
       - name: Run container tests
-        timeout-minutes: 20
+        timeout-minutes: 40
         run: python3 .github/scripts/run_with_stall_dump.py 420 make test-containers
       - name: Run ClickHouse container tests on ClickHouse 26.10
         timeout-minutes: 10
