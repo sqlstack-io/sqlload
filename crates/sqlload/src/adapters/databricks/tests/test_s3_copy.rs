@@ -56,6 +56,15 @@ fn given_a_batchs_parquet_files_when_databricks_copies_them_then_each_copy_holds
             expected_groups: vec![vec!["a", "c"], vec!["b", "d"]],
         },
         CopyGroupsTestCase {
+            description: "one column named in different cases is one column to Databricks, so different types still split",
+            files: vec![
+                ("a", vec![("ID", DataType::Int32)]),
+                ("b", vec![("id", DataType::Int64)]),
+            ],
+            limit: 1000,
+            expected_groups: vec![vec!["a"], vec!["b"]],
+        },
+        CopyGroupsTestCase {
             description: "no copy holds more files than the limit",
             files: vec![
                 ("a", vec![("id", DataType::Int64)]),

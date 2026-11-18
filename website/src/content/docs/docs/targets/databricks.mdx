@@ -68,15 +68,16 @@ GRANT READ FILES ON EXTERNAL LOCATION lake TO `<service principal application id
 route   Databricks COPYs directly from s3://example-bucket/events/ (nothing through the loader)
 ```
 
-Each batch is one `COPY INTO` over its files, so a batch lands whole or not at all. A batch needs
+Each batch is one `COPY INTO` over its files, and each `COPY` is one transaction. A batch needs
 more than one only when it holds over 1,000 files (the most `FILES` takes, as one partition of a
 `delete_insert` on a partition cursor can) or files holding one column as different types, such as
 a 32-bit integer in one file and a 64-bit one in another, which Databricks won't merge in one
-`COPY`. Such a batch lands in a staging table first, or, for an `append` straight into the table,
-takes back the rows it loaded when a later `COPY` fails. The columns SQLLoad adds
-(`_sqlload_source_file`, `_sqlload_source_version`, `_sqlload_source_row`, the load id and time)
-and partition values from the path are filled in the same statement, and the batch fails when
-Databricks reports inserting a different number of rows than the files' footers hold.
+`COPY`. Every strategy but `append` lands its batches in a staging or build table, so a batch
+publishes whole. An `append` copies straight into the table and commits each `COPY`; when a later
+one fails, or the rows Databricks reports inserting differ from what the files' footers hold, it
+deletes the rows this load wrote from the batch's files before the load fails. The columns SQLLoad
+adds (`_sqlload_source_file`, `_sqlload_source_version`, `_sqlload_source_row`, the load id and
+time) and partition values from the path are filled in the same statement.
 
 Parquet in S3 that no external location covers fails `plan`, naming the folder and the fix; such
 files never go through SQLLoad instead. Files go through SQLLoad, staged in the volume as below,

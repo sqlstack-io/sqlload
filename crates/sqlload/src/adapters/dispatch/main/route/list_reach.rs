@@ -25,7 +25,7 @@ pub async fn list_reach(destination: &Destination, folder: Option<&str>) -> Resu
         let error = error.to_string();
         let first_line = error.lines().next().unwrap_or_default();
         format!(
-            "{folder} cannot be read by Databricks through the external location at {url}: {}. Fix: grant the service principal READ FILES on that external location",
+            "{folder} cannot be read by Databricks through the external location at {url}: {}. Fix: when Databricks refuses access, grant the service principal READ FILES on that external location",
             first_line.trim_end_matches([':', ' '])
         )
     })

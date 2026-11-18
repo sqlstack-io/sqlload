@@ -117,7 +117,10 @@ pub(crate) fn copy_groups<T>(files: Vec<(T, &Schema)>, limit: usize) -> Vec<Vec<
         let (members, held) = &mut groups[index];
         members.push(file);
         for field in schema.fields() {
-            if !held.iter().any(|other| other.name() == field.name()) {
+            if !held
+                .iter()
+                .any(|other| other.name().eq_ignore_ascii_case(field.name()))
+            {
                 held.push(field);
             }
         }
@@ -125,11 +128,13 @@ pub(crate) fn copy_groups<T>(files: Vec<(T, &Schema)>, limit: usize) -> Vec<Vec<
     groups.into_iter().map(|(members, _)| members).collect()
 }
 
-/// Whether `schema` holds every column it shares with `held` as the same type.
+/// Whether `schema` holds every column it shares with `held` as the same type, matching names in any case as Databricks does.
 fn agrees(held: &[&Field], schema: &Schema) -> bool {
     for field in schema.fields() {
         for other in held {
-            if other.name() == field.name() && other.data_type() != field.data_type() {
+            if other.name().eq_ignore_ascii_case(field.name())
+                && other.data_type() != field.data_type()
+            {
                 return false;
             }
         }

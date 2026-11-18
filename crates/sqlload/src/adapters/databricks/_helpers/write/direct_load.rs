@@ -69,7 +69,10 @@ impl DatabricksWriter {
         for group in copy_groups(schemas, MAX_FILES_PER_COPY) {
             let statement = group_statement(batch, &group, (into, columns), folder.clone())?;
             let result = match execute_statement(&self.destination.api, &statement).await {
-                Ok(result) => inserted_rows(&result),
+                Ok(result) => {
+                    copied = true;
+                    inserted_rows(&result)
+                }
                 Err(error) => Err(error.into()),
             };
             match result {
@@ -77,7 +80,6 @@ impl DatabricksWriter {
                 Err(error) if copied => return Err(self.undo(batch, error).await),
                 Err(error) => return Err(error),
             }
-            copied = true;
         }
         let expected = footer_rows(batch.footers);
         if inserted != expected {
