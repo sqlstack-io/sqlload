@@ -14,6 +14,7 @@ pub(in crate::adapters) fn writer_accepts(stage: Option<&StageRoute>) -> WriterA
         rows_into: None,
         reads_files_itself: Some(SNOWFLAKE),
         copies_files_to: Some(user_stage()),
+        must_pull: None,
     };
     match stage {
         Some(StageRoute::External(stage)) => WriterAccepts {

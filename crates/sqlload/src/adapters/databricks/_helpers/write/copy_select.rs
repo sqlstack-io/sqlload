@@ -9,28 +9,18 @@ use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::databricks::constants::COPY_OPTIONS;
 use crate::adapters::databricks::models::DatabricksSql;
 use crate::column_types::models::ColumnType;
+use crate::schema_plan::models::DesiredColumn;
 
-/// `COPY INTO` the batch's table (the staging or build table, or the table itself) from `folder`, each column cast to the type it lands as: the table's own types straight into it or a build table, JSON parsed; text for JSON and UUIDs in a staging table.
+/// `COPY INTO` the batch's table (the staging or build table, or the table itself) from `folder`, each column cast to the type it lands as (see [`typed_value`]).
 pub(crate) fn copy_statement(target: &WriteTarget<'_>, folder: &str) -> String {
     let adapter = DatabricksSql;
     let table = target.staging.unwrap_or(target.table);
-    let final_types = target.direct || target.builds;
     let selected: Vec<String> = target
         .columns
         .iter()
         .map(|column| {
             let name = adapter.render_identifier(&column.name);
-            match (final_types, &column.column_type) {
-                (true, ColumnType::Json) => format!("parse_json({name}) AS {name}"),
-                (true, column_type) => format!(
-                    "CAST({name} AS {}) AS {name}",
-                    adapter.render_loader_logical_type(column_type).sql
-                ),
-                (false, column_type) => format!(
-                    "CAST({name} AS {}) AS {name}",
-                    adapter.render_staging_type(column_type)
-                ),
-            }
+            format!("{} AS {name}", typed_value(target, column, &name))
         })
         .collect();
     format!(
@@ -39,6 +29,22 @@ pub(crate) fn copy_statement(target: &WriteTarget<'_>, folder: &str) -> String {
         selected.join(", "),
         adapter.render_loader_value_literal(&format!("{folder}/"))
     )
+}
+
+/// `value` as `column` lands in `target`'s batch table: in the table's own type straight into it or a build table, JSON parsed; in a staging table, text for JSON and UUIDs.
+pub(crate) fn typed_value(target: &WriteTarget<'_>, column: &DesiredColumn, value: &str) -> String {
+    let adapter = DatabricksSql;
+    match (target.direct || target.builds, &column.column_type) {
+        (true, ColumnType::Json) => format!("parse_json({value})"),
+        (true, column_type) => format!(
+            "CAST({value} AS {})",
+            adapter.render_loader_logical_type(column_type).sql
+        ),
+        (false, column_type) => format!(
+            "CAST({value} AS {})",
+            adapter.render_staging_type(column_type)
+        ),
+    }
 }
 
 /// `batch` with its time-of-day columns as text, since Databricks reads no Parquet `TIME` and stores times as text.

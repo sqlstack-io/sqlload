@@ -19,6 +19,7 @@ use crate::adapters::dispatch::main::dialect::source_dialect::source_dialect;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::dispatch::main::route::choose_stage::choose_stage;
 use crate::adapters::dispatch::main::route::direct_blocked::direct_blocked;
+use crate::adapters::dispatch::main::route::list_reach::list_reach;
 use crate::adapters::dispatch::main::route::route_warning::route_warning;
 use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
@@ -892,6 +893,12 @@ async fn plan_table_once(
     schema
         .warnings
         .extend(truncated_nanoseconds(spec, live.as_deref()));
+    let in_s3 = spec.files.as_ref().map(|files| &files.location.store);
+    if let (None, Some(StoreKind::S3 { .. })) = (&schema.blocked, in_s3)
+        && let Err(problem) = list_reach(destination).await
+    {
+        schema = blocked_plan(vec![problem]);
+    }
     let route = match schema.blocked {
         Some(_) => None,
         None => match table_route(spec, files.as_ref(), stage.as_ref(), destination) {

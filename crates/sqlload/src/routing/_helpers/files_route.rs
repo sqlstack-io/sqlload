@@ -49,7 +49,7 @@ pub(crate) fn warehouse_reads(
     }
 }
 
-/// Files for a destination that does not read them itself: in place where it can, otherwise read by SQLLoad.
+/// Files for a destination that does not read them itself: in place where it can, otherwise read by SQLLoad, except files it reads only itself ([`WriterAccepts::must_pull`]), which fail.
 pub(crate) fn other_reads(
     reader: &ReaderOffer,
     writer: &WriterAccepts,
@@ -71,6 +71,10 @@ pub(crate) fn other_reads(
             overrides,
             &format!("{LOADER_READS_BECAUSE} {reason}"),
         ),
+        (false, None, None) if must_pull(writer, files).is_some() => Err(RouteError::Uncovered {
+            location: files.store.to_string(),
+            reason: must_pull(writer, files).unwrap_or_default(),
+        }),
         (false, None, _) => loader_reads(
             files,
             writer,
@@ -78,6 +82,17 @@ pub(crate) fn other_reads(
             "the destination cannot read the files where they are, so SQLLoad reads them",
         ),
     }
+}
+
+/// Why `writer` refuses `files` it cannot read where they lie, when it reads such files only itself.
+fn must_pull(writer: &WriterAccepts, files: &FileSet) -> Option<String> {
+    writer
+        .must_pull
+        .as_ref()
+        .filter(|(store, _)| {
+            files.store.is_within(store) && writer.pull_formats.contains(&files.format)
+        })
+        .map(|(_, reason)| reason.clone())
 }
 
 /// SQLLoad reads the files into Arrow and hands them over: the only route on which file data passes through SQLLoad.
