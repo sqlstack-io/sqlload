@@ -48,47 +48,7 @@ impl ClickHouseWriter {
             )));
         }
         self.settle_rows().await?;
-        let builder = s3_builder(
-            bucket,
-            region.as_deref(),
-            endpoint.as_deref(),
-            profile.as_deref(),
-        )
-        .map_err(|error| {
-            LoaderError::Invalid(format!(
-                "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
-            ))
-        })?;
-        let setting = |key: AmazonS3ConfigKey| builder.get_config_value(&key);
-        let region = setting(AmazonS3ConfigKey::Region);
-        let endpoint =
-            setting(AmazonS3ConfigKey::S3Endpoint).or(setting(AmazonS3ConfigKey::Endpoint));
-        let in_endpoint = endpoint.is_some()
-            && switched_on(setting(AmazonS3ConfigKey::VirtualHostedStyleRequest));
-        let unsigned = switched_on(setting(AmazonS3ConfigKey::SkipSignature));
-        let unreadable = |error: String| {
-            LoaderError::Invalid(format!(
-                "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
-            ))
-        };
-        let credentials = match unsigned {
-            true => None,
-            false => {
-                let store = builder
-                    .build()
-                    .map_err(|error| unreadable(error.to_string()))?;
-                let credential = store
-                    .credentials()
-                    .get_credential()
-                    .await
-                    .map_err(|error| unreadable(error.to_string()))?;
-                Some(PullCredentials {
-                    key_id: credential.key_id.clone(),
-                    secret: credential.secret_key.clone(),
-                    token: credential.token.clone(),
-                })
-            }
-        };
+        let (region, endpoint, credentials) = s3_reads(bucket, (region, endpoint, profile)).await?;
         let parameters = credential_parameters(credentials.as_ref());
         let target = &batch.target;
         let (into, columns) = match (target.staging, target.builds) {
@@ -107,7 +67,7 @@ impl ClickHouseWriter {
             let url = object_url(
                 (bucket, &key),
                 region.as_deref(),
-                (endpoint.as_deref(), in_endpoint),
+                (endpoint.0.as_deref(), endpoint.1),
             )
             .map_err(LoaderError::Invalid)?;
             let file = pulled_file(source, data, url, (batch, columns))?;
@@ -129,6 +89,54 @@ impl ClickHouseWriter {
         }
         Ok(Some(DirectLoaded::Staged(rows)))
     }
+}
+
+/// How ClickHouse reads objects of `bucket`, as SQLLoad's own S3 reads would (`region`, `endpoint` and `profile` from the connection): the region, the endpoint with whether the bucket is already in it (virtual-hosted requests to a custom endpoint), and the credentials SQLLoad resolves to sign `s3()` with, `None` for unsigned reads.
+pub(in crate::adapters) async fn s3_reads(
+    bucket: &str,
+    (region, endpoint, profile): (&Option<String>, &Option<String>, &Option<String>),
+) -> Result<
+    (
+        Option<String>,
+        (Option<String>, bool),
+        Option<PullCredentials>,
+    ),
+    LoaderError,
+> {
+    let unreadable = |error: String| {
+        LoaderError::Invalid(format!(
+            "cannot sign ClickHouse's reads of s3://{bucket}/: {error}"
+        ))
+    };
+    let builder = s3_builder(
+        bucket,
+        region.as_deref(),
+        endpoint.as_deref(),
+        profile.as_deref(),
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
+    let setting = |key: AmazonS3ConfigKey| builder.get_config_value(&key);
+    let region = setting(AmazonS3ConfigKey::Region);
+    let endpoint = setting(AmazonS3ConfigKey::S3Endpoint).or(setting(AmazonS3ConfigKey::Endpoint));
+    let in_endpoint =
+        endpoint.is_some() && switched_on(setting(AmazonS3ConfigKey::VirtualHostedStyleRequest));
+    if switched_on(setting(AmazonS3ConfigKey::SkipSignature)) {
+        return Ok((region, (endpoint, in_endpoint), None));
+    }
+    let store = builder
+        .build()
+        .map_err(|error| unreadable(error.to_string()))?;
+    let credential = store
+        .credentials()
+        .get_credential()
+        .await
+        .map_err(|error| unreadable(error.to_string()))?;
+    let credentials = PullCredentials {
+        key_id: credential.key_id.clone(),
+        secret: credential.secret_key.clone(),
+        token: credential.token.clone(),
+    };
+    Ok((region, (endpoint, in_endpoint), Some(credentials)))
 }
 
 /// Whether an S3 switch is on, read as object_store reads it from the environment (`true`, `1`, `yes`, `on` or `y`, in any case).
