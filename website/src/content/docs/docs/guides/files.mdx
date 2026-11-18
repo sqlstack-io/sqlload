@@ -47,8 +47,9 @@ $ sqlload plan -v
 …
 └── raw.events_log                                  append
     ├── source  files  lake/events/  parquet
-    ├── files   1 new of 4 listed
     ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+    ├── columns 2
+    ├── files   1 new of 4 listed
     └── batch   1 batch, up to 1,000 files or about 1 GB per commit
 
 ✓ Plan complete  1 selected, 1 to load
@@ -85,10 +86,11 @@ $ sqlload plan -v
 …
 └── raw.events                                      delete_insert (cursor: dt)
     ├── source  files  lake/events/  parquet
+    ├── route   DuckDB reads directly from lake/events/ (nothing through the loader)
     ├── reads   dt >= 2026-11-08 (warehouse maximum)
+    ├── columns 2
     ├── files   2 new of 3 listed
-    ├── commits 1 batch, up to 1,000 files or about 1 GB per commit
-    └── route   DuckDB reads directly from lake/events/ (nothing through the loader)
+    └── commits 1 batch, up to 1,000 files or about 1 GB per commit
 
 ✓ Plan complete  1 selected, 1 to load
 $ sqlload load
@@ -129,7 +131,7 @@ the instance or container role. See the [`s3` connection](/docs/configuration/#s
 
 ## Load files from an SFTP server
 
-From 0.32.0. An `sftp` connection reads files from an SFTP server, such as a partner's daily drop:
+An `sftp` connection reads files from an SFTP server, such as a partner's daily drop:
 
 ```toml
 [connections.partner]

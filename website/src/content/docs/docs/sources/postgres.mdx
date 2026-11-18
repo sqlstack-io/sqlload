@@ -63,7 +63,7 @@ one a problem blocked, counts as new afterwards, so name it exactly in `include`
 
 ## Filtering rows
 
-From 0.54.0, `where` narrows a table to the rows that match a condition, written in Postgres SQL:
+`where` narrows a table to the rows that match a condition, written in Postgres SQL:
 
 ```toml
 [sources.app]
@@ -159,7 +159,7 @@ it can still see. Use a larger `batch_size` or a narrower range if either matter
 
 ## TLS
 
-A Postgres connection takes libpq's TLS settings, from 0.25.0. They apply to `postgres` and
+A Postgres connection takes libpq's TLS settings. They apply to `postgres` and
 [`postgres_cdc`](/docs/sources/postgres-cdc/) sources alike, replication included, and to
 [Postgres targets](/docs/targets/postgres/). To set them up and check them, see
 [Connect over TLS](/docs/guides/postgres/#connect-over-tls).
@@ -213,7 +213,7 @@ only connect over TCP, so the relay listens on a random port on 127.0.0.1, for a
 
 ## SSH tunnels
 
-From 0.27.0. A connection with an `ssh` table reaches the database through a bastion host. `host`
+A connection with an `ssh` table reaches the database through a bastion host. `host`
 and `port` are then the database as the bastion sees it. To set one up, see
 [Connect through an SSH tunnel](/docs/guides/postgres/#connect-through-an-ssh-tunnel).
 
@@ -223,8 +223,8 @@ and `port` are then the database as the bastion sees it. To set one up, see
   socket in a folder only your user can enter, or on Windows through a loopback port guarded by a
   secret (see [Replication sessions on Windows](#replication-sessions-on-windows)).
 - It signs in with `private_key_file` (with `private_key_passphrase` if the key has one), or with
-  each key ssh-agent holds when no file is set. From 0.32.0, `password` signs in when no key file
-  is set; before, passwords aren't supported.
+  each key ssh-agent holds when no file is set. `password` signs in when no key file
+  is set.
 - On Windows, ssh-agent is the pipe `SSH_AUTH_SOCK` names, or else the OpenSSH agent service's
   (`\\.\pipe\openssh-ssh-agent`). Windows ssh-agent (OpenSSH agent pipe): compiles and
   unit-tested, not live-tested. Key-file and password sign-in run the same code as on Linux and

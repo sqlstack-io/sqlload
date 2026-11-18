@@ -3,7 +3,7 @@ title: "Nested data"
 description: "List fields as child tables with unnest, objects as columns with flatten: how child rows link to their parents, what each write strategy does with them, what unnest = \"all\" and flatten = \"all\" choose, and how names load."
 ---
 
-From 0.40.0, `unnest` turns list fields into child tables, the way dlt does. A
+`unnest` turns list fields into child tables, the way dlt does. A
 field that isn't unnested stays a JSON column.
 
 ```toml
@@ -31,7 +31,7 @@ Set in a table entry:
   before `items.parts`). Or `"all"`, described below.
 - `max_depth`: how many levels of child tables to make at most, 1000 by default. A list deeper than
   that stays JSON in its parent. It limits [`flatten`](#flattening-objects) too.
-- `columns` (added in 0.42.0): a child table's column is named by its dotted path, such as
+- `columns`: a child table's column is named by its dotted path, such as
   `"items.sku" = "text"`, to pin its type. Under `contract = "enforced"`, each child table loads
   only the columns named so, with its id and link columns, and leaves out the rest. These keys
   aren't checked against the data, since a field may be missing from the first rows: a misspelled
@@ -48,34 +48,34 @@ Set in a table entry:
   it in `_sqlload_root_id`. At each commit, the merged rows' items are deleted from every child
   table, then their new items are inserted. A row whose list shrank, emptied or went missing keeps
   only what it holds now. When a commit repeats a key, only the kept row's items load (see
-  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)). From 0.41.1, a merged row
+  [Repeated keys](/docs/concepts/write-strategies/#repeated-keys)). A merged row
   whose id didn't come from its key, as one dlt loaded with its `delete-insert` merge, also
   loses the items its child rows tie to its old id in `_sqlload_root_id` (`_dlt_root_id`). Child
   rows an `append` loaded hold no root id, so they stay when the table later switches to `merge`.
-- `delete_insert` (added in 0.42.0): each row's items carry its id in `_sqlload_root_id`. Before a
+- `delete_insert`: each row's items carry its id in `_sqlload_root_id`. Before a
   commit deletes its window or partitions from the parent, the items of the rows it deletes leave
   every child table, then the commit's new items are inserted. As under `merge`, a failure between
   the two leaves those rows without items until a rerun loads the window again.
 
-Child tables load into DuckDB, MotherDuck, Postgres, BigQuery and Snowflake targets, and from
-0.41.0 ClickHouse targets, and from 0.42.0 Databricks targets. Databricks child
+Child tables load into DuckDB, MotherDuck, Postgres, BigQuery, Snowflake, ClickHouse and
+Databricks targets. Databricks child
 tables are staged and copied in as their parent is; so far they are tested against a stand-in for
 the Databricks API, not a live warehouse.
-`state = "logged"` and `contract = "enforced"` tables write child tables from 0.42.0. A logged
+`state = "logged"` and `contract = "enforced"` tables write child tables. A logged
 table's child rows commit just before the commit that records its state. When that commit fails, a
 rerun reads from the state last recorded and loads those rows and their items again. Under
 `append` and `delete_insert`, whose row ids are random, the failed commit's child rows stay behind
 with a parent id no row holds, so a join on the parent id never shows them. Under `merge` a row's
 id comes from its key, so the rerun clears those items and loads them once.
 
-Files targets write child tables from 0.42.0, each in a folder of its own beside its parent's
+Files targets write child tables, each in a folder of its own beside its parent's
 (`orders__items/` beside `orders/`), under `append` and `replace` with the paths to unnest listed.
 The target's `path` names the folder by `{table}` and is not partitioned by the cursor. `"all"`,
 `merge` and `delete_insert` are refused on files targets. Each commit stores the child tables'
 files before its parent's, so a failure between the two leaves files whose parent rows are not
 there, which a join by `_sqlload_parent_id` leaves out.
 
-`postgres_cdc` sources write child tables from 0.42.0, except into files targets, from a `json` or
+`postgres_cdc` sources write child tables, except into files targets, from a `json` or
 `jsonb` column whose values are lists. Each row's id is the hash of its key (in a
 changelog, of the change's `_sqlload_lsn`, `_sqlload_seq` and key), in the snapshot as in the
 changes. Each captured insert or update replaces its row's items, and a delete removes them under
@@ -115,9 +115,8 @@ warehouse read the files directly. Loads with `unnest` are slower than without i
 - A field with a child table from an earlier load stays one. A table counts as one only when it is
   named `<table>__<field>` and has a parent-id column (`_sqlload_parent_id` or `_dlt_parent_id`,
   whatever the `compat`), and is not another table's child table (`orders__notes__items` when a
-  table `orders__notes` holds no parent-id column). From 0.41.1, other tables
-  named so, such as a plain `orders__notes` beside `orders`, are left as they are. Before that, a
-  `replace` emptied them and a `merge` could delete rows from them.
+  table `orders__notes` holds no parent-id column). Other tables
+  named so, such as a plain `orders__notes` beside `orders`, are left as they are.
 - A list field first seen after a table's first load is a new child table, which
   `on_schema_change` decides: `append_new_columns` creates it, `ignore` leaves its items out with a
   warning, and `fail` stops the load.
@@ -193,7 +192,7 @@ NULL from then on, next to the new key columns.
 
 ## Naming
 
-From 0.53.0, every table and column loads under a name the warehouse takes without quoting.
+Every table and column loads under a name the warehouse takes without quoting.
 `naming` chooses the case, `rename` names columns yourself, `on_duplicate_names` decides what
 happens when two columns end up with one name, and `compat` chooses the names of the columns a load
 adds. Each is set on a source or a table, and `naming` and `compat` also on the target; the closest

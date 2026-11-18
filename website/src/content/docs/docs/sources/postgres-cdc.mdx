@@ -8,16 +8,10 @@ every table under a snapshot. Each later load reads the inserts, updates and del
 since the last one from a logical replication slot, applies them, and stops. It loads into
 DuckDB, Snowflake and Databricks targets, and into files targets as a changelog.
 
-Use sqlload 0.17.0 or later for `postgres_cdc`. In 0.16.0, a transaction that changed a table's
-columns after writing to it could put values in the wrong columns. Schema changes while streaming
-load from 0.18.0; in 0.17.0, any change to a table's columns stops the load until you re-snapshot.
-From 0.19.0, a table that joins the source is copied on its own, and a first snapshot that
-stopped part-way resumes; in 0.18.0, both needed `--resnapshot`. `load --follow`, which keeps
-streaming, is in 0.20.0 and later, and files targets in 0.21.0 and later. From 0.22.0,
-`--reload` refuses captured tables on every target (see
-[Reloading](/docs/guides/postgres-cdc/#reloading)); before, a warehouse target accepted it but
-didn't rebuild the tables. Databricks targets are in 0.23.0 and later. From 0.24.0, a load into a
-files target names each table by its folder.
+Most changes to a table's columns carry through while streaming; see [Schema changes](#schema-changes). A table that joins the source is copied on its own, and a
+first snapshot that stopped part-way resumes. `load --follow` keeps streaming. `--reload` refuses
+captured tables on every target (see [Reloading](/docs/guides/postgres-cdc/#reloading)). A load
+into a files target names each table by its folder.
 
 To set one up, and for what the server, user and tables need, follow
 [Capture Postgres changes](/docs/guides/postgres-cdc/).
@@ -30,12 +24,12 @@ A `postgres_cdc` source takes a `postgres` connection, `include` and `exclude` p
 as for other sources. A captured table takes no `write_strategy`, `cursor_column`, `batch_size` or
 `state`, and `merge` matches rows on the primary key.
 
-From 0.42.0, a table's `unnest` turns the lists in its `json` and `jsonb` columns into child
+A table's `unnest` turns the lists in its `json` and `jsonb` columns into child
 tables, except into files targets; see [Nested data](/docs/concepts/nested-data/).
 
 ## Into Databricks
 
-From sqlload 0.23.0, a `postgres_cdc` source loads into a
+A `postgres_cdc` source loads into a
 [Databricks target](/docs/targets/databricks/), under `merge` (soft or hard deletes) or
 `changelog`. The snapshot copy, schema changes while streaming, tables joining the source and
 `load --follow` work as for DuckDB and Snowflake. With the setup from
@@ -113,7 +107,7 @@ then relies on Delta's conflict detection between the two statements.
 
 ## Into Parquet files
 
-From sqlload 0.21.0, a `postgres_cdc` source loads into a [files target](/docs/targets/files/),
+A `postgres_cdc` source loads into a [files target](/docs/targets/files/),
 local or S3, as a changelog. Set `cdc_mode = "changelog"`; `merge` is refused at `plan`, since
 Parquet files can't be updated in place. With the setup from
 [the guide](/docs/guides/postgres-cdc/#set-up-a-source) and a local folder:
@@ -281,7 +275,7 @@ DROP PUBLICATION app_changes;
 
 ## Schema changes
 
-From sqlload 0.18.0, changes to a source table's columns carry through when the stream carries
+Changes to a source table's columns carry through when the stream carries
 their values. `plan` and `apply` add new columns to the destination, as for other sources (see
 [`on_schema_change`](/docs/concepts/contracts/)).
 
@@ -368,10 +362,10 @@ release, live rounds loaded into DuckDB and into Snowflake (through an S3 extern
 both `merge` and `changelog`, with every table checked against Postgres afterwards. They covered
 the snapshot, inserts, updates that left a TOASTed value out, deletes, a truncate and reinsert in
 one transaction, a slot advancing past changes to unpublished tables, a 30,000-change
-transaction spilled to disk (with the spill limit lowered), and, from 0.18.0, the schema changes
+transaction spilled to disk (with the spill limit lowered), and the schema changes
 above.
 
-Before 0.23.0 was released, live rounds loaded into a Databricks SQL warehouse (2X-Small,
+Live rounds loaded into a Databricks SQL warehouse (2X-Small,
 serverless) and into DuckDB from the same Postgres, and both matched Postgres exactly. They covered
 the snapshot, inserts, an update that left a TOASTed value out, deletes, and a truncate and reinsert
 in one transaction, under `merge` with soft and with hard deletes and under `changelog`. They also

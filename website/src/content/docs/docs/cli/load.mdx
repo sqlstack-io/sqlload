@@ -27,7 +27,7 @@ loaded  raw.app__orders     1,000 rows 0.0s
 
 Each table prints `created`, `altered`, `loaded` or `failed`; a `loaded` line ends with the
 table's new cursor position when it keeps one. A failed table doesn't stop the others. The summary
-counts them, names the slowest table, from 0.52.0 gives the run's [peak memory](#peak-memory), and
+counts them, names the slowest table, gives the run's [peak memory](#peak-memory), and
 after failures says what a rerun does. The command exits
 1, or 75 when every failure may pass on a rerun (see
 [Retrying failed runs](/docs/cli/#retrying-failed-runs)). A table the plan skips, such as a files
@@ -39,7 +39,7 @@ cleared at the end. See [Events](#events) for `--progress`.
 
 ### Stopping at the first failure
 
-From 0.43.0, `--fail-fast` stops the load once a table fails: no other table starts, and tables
+`--fail-fast` stops the load once a table fails: no other table starts, and tables
 already loading finish and keep what they committed. The summary names the tables that never
 started under `not started`, and the command exits as it would have otherwise: 1, or 75 when every
 table that failed, including any still loading when the first failed, may pass on a rerun. A rerun
@@ -66,7 +66,7 @@ Large loads commit along the way, so a failure keeps what committed and the next
 there; a `delete_insert`, `append` or `merge` into ClickHouse read in windows or cursor order
 publishes once per run instead (a merge also every 10 million rows). See
 [Batches](/docs/concepts/cursors/#batches). To read a range instead of continuing from the
-destination's maximum, give `--start-cursor` and `--end-cursor`, or from 0.52.0 their typed forms
+destination's maximum, give `--start-cursor` and `--end-cursor`, or their typed forms
 `--start-cursor-ts`/`--end-cursor-ts` and `--start-cursor-int`/`--end-cursor-int`; see [Backfilling a
 range](/docs/concepts/cursors/#backfilling-a-range).
 
@@ -86,7 +86,7 @@ loaded  raw.app__customers     50 rows 0.0s
 └── peak memory  75.1 MiB
 ```
 
-From 0.51.0, `--reload` takes `--start-cursor` and `--end-cursor`, and rebuilds the table with only
+`--reload` takes `--start-cursor` and `--end-cursor`, and rebuilds the table with only
 the rows in that range, as SQLBuild's
 [`--full-refresh`](https://sqlbuild.com/docs/concepts/incremental/) does with an interval. Rows
 outside the range are dropped, and `plan` warns which:
@@ -111,13 +111,13 @@ A `postgres_cdc` table is copied again with `--resnapshot` instead; `--reload` r
 [Reloading](/docs/guides/postgres-cdc/#reloading). `--reload` is also refused on
 [Postgres targets](/docs/targets/postgres/).
 
-On a files source, `--reload` reads every file again; from 0.52.0 a `merge` table merges them one
+On a files source, `--reload` reads every file again; a `merge` table merges them one
 at a time into the new table, and `after_load = { move_to = ... }` reads the moved files too. See
 [Reloading a files table](/docs/sources/files/#reloading-a-files-table).
 
 ## Peak memory
 
-From 0.52.0, every load reports the most memory the process held at once: under `peak memory` in
+Every load reports the most memory the process held at once: under `peak memory` in
 the summary, as `peak_memory_bytes` in the [JSON report](#results-as-json) and in the
 `run_finished` [event](#events). It's the peak for the whole run, all tables together: ODBC
 drivers, DuckDB and Python sources count too. Under the [Python package](/docs/guides/python/),
@@ -159,7 +159,7 @@ tables of one run: the table that uses too much stands out. On other systems, `p
 
 ## Memory budget
 
-From 0.68.0, a run stays under one memory budget, and `plan` shows it first, with where it came
+A run stays under one memory budget, and `plan` shows it first, with where it came
 from and how it's shared:
 
 ```console
@@ -193,8 +193,8 @@ Loads (2)  into DuckDB dev                                                      
   [fetch buffer](/docs/sources/odbc/#memory), the pages an `sl.http` job requests ahead
   (`read_ahead` sends fewer at once when its pages are large), and a Postgres source's batches.
 
-From 0.70.0, `memory_limit = "off"` (or `--memory-limit off`) turns the budget off. The run then
-loads as it did before 0.68.0: no watchdog, no pieces (each commit is whole), DuckDB with its own
+`memory_limit = "off"` (or `--memory-limit off`) turns the budget off. The run then
+loads with no watchdog, no pieces (each commit is whole), DuckDB with its own
 `memory_limit` (80% of the machine's memory) and threads and its own checkpoints, and an ODBC
 [fetch buffer](/docs/sources/odbc/#memory) of 512 MiB per table. Only the
 [row-group check](#large-rows-in-duckdb) stays, against DuckDB's own `memory_limit`, since a
@@ -273,7 +273,7 @@ and rolled back, and it fails while the other tables carry on. A table holding n
 failed  raw.attachments  raw.attachments stopped: the load held 1 GiB of its 1.1 GiB memory budget (90%); from 90% the table holding the most large values in memory stops, here this one with 39 MiB; raise memory_limit, or lower batch_size
 ```
 
-From 0.70.0, from 95%, when no table holds large values to stop (memory taken by a Python function building a
+From 95%, when no table holds large values to stop (memory taken by a Python function building a
 list, or an ODBC driver's own buffers), or the table stopped at 90% didn't bring memory back under
 90% within half a second, the whole run stops. Every running DuckDB and MotherDuck statement is
 interrupted and rolled back, the running tables fail with the reason below, and the others don't
@@ -301,13 +301,13 @@ SIGTERM. A second Ctrl-C or SIGTERM stops it at once, with exit code 130. See
 sqlload load app --follow --max-duration 10m
 ```
 
-From 0.52.0 it prints the same plan line, table lines and summary as `load`, with a
+It prints the same plan line, table lines and summary as `load`, with a
 `written` line for each table in each batch, giving its rows and how far it is behind the server.
 On a terminal, a live block shows the rows and batches written so far.
 
 ## Results as JSON
 
-From 0.27.0, `apply --json` and `load --json` print one JSON document on
+`apply --json` and `load --json` print one JSON document on
 standard output when they finish, for scripts and orchestrators. Logs stay on standard error. The
 exit code is the same as without `--json`.
 
@@ -368,29 +368,30 @@ $ sqlload load --json
 |-------|---------|
 | `schema_version` | `1`. New fields can appear without a change; it changes only when a field changes meaning or goes away. |
 | `command` | `apply` or `load`. |
+| `started_at`, `finished_at`, `duration_seconds` | When the command started and finished, as RFC 3339 UTC timestamps, and the seconds between. |
 | `ok` | Whether every selected table planned and loaded: `true` exactly when the exit code is 0. |
-| `retryable` | From 0.34.0. Whether running the command again unchanged may fix every failure: `true` exactly when the exit code is 75. It's `false` when `ok` is `true`, whenever a table failed for good, and whenever a plan error other than an unreachable source left one out. See [Retrying failed runs](/docs/cli/#retrying-failed-runs). |
-| `summary` | How many objects were `created`, `altered` (each table once, however many changes it had) and `recreated`; tables `loaded` and `failed`, and from 0.43.0 `skipped`; `rows` loaded. From 0.52.0, `peak_memory_bytes`: the most memory the whole process held at once during the run, in bytes; see [Peak memory](#peak-memory). |
-| `plan` | The same document `plan --json` prints, with its own `ok` and, from 0.34.0, `retryable`. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. From 0.53.0, its `phases` give each connection's and discovery's time: see [Connecting and discovering](/docs/cli/plan/#connecting-and-discovering). |
+| `retryable` | Whether running the command again unchanged may fix every failure: `true` exactly when the exit code is 75. It's `false` when `ok` is `true`, whenever a table failed for good, and whenever a plan error other than an unreachable source left one out. See [Retrying failed runs](/docs/cli/#retrying-failed-runs). |
+| `summary` | How many objects were `created`, `altered` (each table once, however many changes it had) and `recreated`; tables `loaded` and `failed`, and `skipped`; `rows` loaded. `peak_memory_bytes`: the most memory the whole process held at once during the run, in bytes; see [Peak memory](#peak-memory). |
+| `plan` | The same document `plan --json` prints, with its own `ok` and `retryable`. Tables a plan error left out are in its `errors`, and tables with nothing to load in `skipped`. Its `phases` give each connection's and discovery's time: see [Connecting and discovering](/docs/cli/plan/#connecting-and-discovering). Its `memory` is the plan's memory line, such as `"4 GiB budget (memory_limit); …"`, or `"off (memory_limit): …"` with the budget off; see [Memory budget](#memory-budget). |
 | `objects` | One entry per change to a table or stage, by `apply` or during a load: its `action` (`created`, `altered` or `recreated`), its `name` and the `detail`. A table that gains two columns has two `altered` entries. |
-| `tables` | Each table loaded: its `status` (`loaded` or `failed`, or from 0.43.0 `skipped` for a table [`--fail-fast`](#stopping-at-the-first-failure) didn't start, its `error` naming the table that stopped the run and `retryable` `true`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. From 0.34.0, `retryable` says whether that failure may pass on a rerun. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. From 0.39.0, a files source with `after_load` also has `after_load`: its `action` (`delete` or `move`), `status` (`done`, or `failed` when any file stayed), `files` handled, and `failed`, each file left with its `error`. A table that keeps its files has no such field. From 0.51.0, a `delete_insert` table with a `replace_key` also has `replaced_keys`: its `columns`, the `values` its commits replaced (sorted, each as its columns' text joined by `, `, `NULL` for a NULL, at most 1,000) and `truncated`, `true` when there were more. From 0.52.0, under [`--memory-per-table`](#peak-memory) each table has `peak_memory_bytes`, the most memory the process held while it loaded. From 0.52.0, a table with a [`transform`](/docs/sources/files/#transforming-each-file) also has `transforms`: for each file or range, its `file`, the `milliseconds` the function took, the `rows` it was given and `dicts`, whether it returned dicts. From 0.53.0, a table with a column [`rename`](/docs/concepts/nested-data/#rename) named or numbering numbered also has `names`: a line for each, as `plan` shows them, such as `"Qty (column 4) -> qty_1 (numbered)"`. `apply` loads nothing, so its list is empty. |
+| `tables` | Each table loaded: its `status` (`loaded` or `failed`, or `skipped` for a table [`--fail-fast`](#stopping-at-the-first-failure) didn't start, its `error` naming the table that stopped the run and `retryable` `true`; also for a table the [watchdog's run stop](#the-watchdog) didn't start, with `retryable` `false`), `rows`, `duration_seconds`, a `note` (the cursor window it read, or that its table waits for first data), and the `error` when it failed. `retryable` says whether that failure may pass on a rerun. `source`, `target` and `write_strategy` are `null` only for a `load --follow` that failed before any table. A files source with `after_load` also has `after_load`: its `action` (`delete` or `move`), `status` (`done`, or `failed` when any file stayed), `files` handled, and `failed`, each file left with its `error`. A table that keeps its files has no such field. A `delete_insert` table with a `replace_key` also has `replaced_keys`: its `columns`, the `values` its commits replaced (sorted, each as its columns' text joined by `, `, `NULL` for a NULL, at most 1,000) and `truncated`, `true` when there were more. Under [`--memory-per-table`](#peak-memory) each table has `peak_memory_bytes`, the most memory the process held while it loaded. A table with a [`transform`](/docs/sources/files/#transforming-each-file) also has `transforms`: for each file or range, its `file`, the `milliseconds` the function took, the `rows` it was given and `dicts`, whether it returned dicts. A table with a column [`rename`](/docs/concepts/nested-data/#rename) named or numbering numbered also has `names`: a line for each, as `plan` shows them, such as `"Qty (column 4) -> qty_1 (numbered)"`. A table whose load warned, such as of rows outside a cursor window, has `warnings`, one line each. `apply` loads nothing, so its list is empty. |
 
 When the run can't start (the configuration doesn't parse, a connection fails), standard output
 holds one error document instead, the same as `plan --json`'s:
 `{"error": {"code": "config", "message": "…", "help": "…", "retryable": false}}`. `code` is
-`config` for the configuration, else the command's name. From 0.34.0,
+`config` for the configuration, else the command's name.
 `retryable` is `true`, and the exit code 75, when the run couldn't start for a reason a rerun may
 fix, such as a target that refused the connection or timed out.
 
 `--reload` and `--resnapshot` need `--yes` with `--json`, as there is no prompt to answer.
 
-Under `--json`, standard output holds only the document. From 0.56.0, everything a project with
+Under `--json`, standard output holds only the document. Everything a project with
 Python sources writes to standard output while it runs goes to standard error instead: a source's
 `print()`, a child process that inherits standard output, and `os.write(1, …)`.
 
 ## Events
 
-From 0.51.0, `--events jsonl` writes each load event to standard error as one line of JSON, next to
+`--events jsonl` writes each load event to standard error as one line of JSON, next to
 the logs, while it happens. `--events-file PATH` writes them to a file instead. Neither combines with
 `--follow`. [Prefect and Dagster](/docs/guides/orchestrators/) shows how to send them to an
 orchestrator's log.
@@ -411,17 +412,17 @@ The events are version 0: names and fields can still change in a minor release u
 
 | `event` | Fields |
 |---------|--------|
-| `connected` | From 0.53.0, before `run_started`: a target's or source's connection opened, or failed. `role` (`target` or `source`), `name`, `label` (what it reached, such as `OPENEDGE through ODBC`), `ok` and `elapsed_ms`. No `table`. |
-| `discovered` | From 0.53.0, before `run_started`: a source's tables were found, or that failed. `source`, `tables` (how many), `ok` and `elapsed_ms`, timed from its connection when it has one. No `table`. |
+| `connected` | Before `run_started`: a target's or source's connection opened, or failed. `role` (`target` or `source`), `name`, `label` (what it reached, such as `OPENEDGE through ODBC`), `ok` and `elapsed_ms`. No `table`. |
+| `discovered` | Before `run_started`: a source's tables were found, or that failed. `source`, `tables` (how many), `ok` and `elapsed_ms`, timed from its connection when it has one. No `table`. |
 | `run_started` | `selected`, `to_load`: the tables selected and the tables the load starts. |
 | `table_started` | `strategy`: the write strategy, as `plan` shows it. |
 | `table_progress` | `unit` (`page`, `batch`, `window` or `file`), `count` of them read so far, `rows` so far. |
 | `rate_limited` | `connection`, its `rate_limit` as `rate`, and `wait_ms`, how long a request waited. No `table`. |
 | `table_committing` | `rows`: the table's rows are read and its last commit starts. |
-| `table_done` | `rows`, `elapsed_ms`, and `position`, the cursor value it reached, when it keeps one. `changes` lists the `created` and `altered` lines of a table that made or widened its columns while loading. From 0.52.0, `transforms` lists each file or range a [`transform`](/docs/sources/files/#transforming-each-file) ran on, as in the JSON report, and under [`--memory-per-table`](#peak-memory) `peak_memory_bytes` gives the table's peak memory. |
-| `table_failed` | `reason`, `retryable` (whether a rerun may pass), `elapsed_ms`, and from 0.52.0 `peak_memory_bytes` under `--memory-per-table`. |
+| `table_done` | `rows`, `elapsed_ms`, and `position`, the cursor value it reached, when it keeps one. `changes` lists the `created` and `altered` lines of a table that made or widened its columns while loading. `transforms` lists each file or range a [`transform`](/docs/sources/files/#transforming-each-file) ran on, as in the JSON report, and under [`--memory-per-table`](#peak-memory) `peak_memory_bytes` gives the table's peak memory. `names` gives a line per column [`rename`](/docs/concepts/nested-data/#rename) named or numbering numbered, as in the JSON report, and `warnings` what the load warns of, such as rows outside a cursor window. |
+| `table_failed` | `reason`, `retryable` (whether a rerun may pass), `elapsed_ms`, and `peak_memory_bytes` under `--memory-per-table`. |
 | `table_not_started` | `reason`, such as the table that stopped a [`--fail-fast`](#stopping-at-the-first-failure) load. |
-| `run_finished` | `loaded`, `failed`, `not_started`, `rows`, `elapsed_ms` and `exit_code`; from 0.52.0, `peak_memory_bytes`, the run's [peak memory](#peak-memory). |
+| `run_finished` | `loaded`, `failed`, `not_started`, `rows`, `elapsed_ms` and `exit_code`; `peak_memory_bytes`, the run's [peak memory](#peak-memory). |
 
 On a terminal, `load` also draws a live block of running tables on standard error. The default,
 `--progress auto`, leaves it out under `--json` or `--log-format json`; `--progress always` draws it

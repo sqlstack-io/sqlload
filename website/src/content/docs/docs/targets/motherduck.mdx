@@ -1,9 +1,14 @@
 ---
 title: "MotherDuck"
 description: "Load into MotherDuck (beta) through a separate DuckDB 1.5 process, with the same SQL and write strategies as DuckDB."
+sidebar:
+  badge:
+    text: Beta
+    variant: caution
 ---
 
-Available as a beta from 0.33.0; working against a live MotherDuck account from 0.34.0.
+This target is in beta: it is tested, but gets less everyday use than the other connectors, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
+
 A MotherDuck target loads into a MotherDuck database with the same SQL, types and write strategies as a
 [DuckDB target](/docs/targets/duckdb/).
 
@@ -68,8 +73,8 @@ inserts it with `read_parquet` inside the batch's transaction, then the file is 
 never reads your source files itself: files sources, including Parquet in S3 or a local folder, and a
 Snowflake source's unloaded files are read by SQLLoad. `plan` names that route for every table.
 
-`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB, and so, from
-0.57.0, do [`deletes` and `deletes_from`](/docs/concepts/write-strategies/#rows-deleted-at-the-source)
+`append`, `merge`, `delete_insert` and `replace` run the same statements as on DuckDB, and so do
+[`deletes` and `deletes_from`](/docs/concepts/write-strategies/#rows-deleted-at-the-source)
 on a `merge` table. Each table
 loads on its own connection in the separate process, so one table's transaction never mixes with
 another's. If the process ends mid-load, the open batch isn't committed, the table fails, and the next

@@ -1,10 +1,10 @@
 ---
 title: "Run the Kafka exporter"
-description: "Stream Kafka topics into Snowflake, Databricks or BigQuery tables continuously, with a streaming route, staged files or load jobs."
+description: "Stream Kafka topics into Snowflake, Databricks (beta) or BigQuery (beta) tables continuously, with a streaming route, staged files or load jobs."
 ---
 
 The [Kafka exporter](/docs/kafka/) reads Kafka topics continuously and writes each one into a
-Snowflake, Databricks or BigQuery table, through a streaming route, staged files or load jobs. Its `sqlload.toml` is described in
+Snowflake, Databricks (beta) or BigQuery (beta) table, through a streaming route, staged files or load jobs. Its `sqlload.toml` is described in
 [Kafka exporter configuration](/docs/kafka/configuration/); the repository's
 [`sqlload.example.toml`](https://github.com/sqlstack-io/sqlload/blob/main/sqlload.example.toml)
 is a complete example.
@@ -27,7 +27,7 @@ configuration.
 
 `[staging] kind` chooses the route:
 
-| `kind` | Snowflake | Databricks (from 0.66.0) | BigQuery (from 0.69.0) |
+| `kind` | Snowflake | Databricks (beta) | BigQuery (beta) |
 |--------|-----------|--------------------------|------------------------|
 | `none` | Snowpipe Streaming. | Zerobus Ingest: rows sent as JSON records; a batch counts as written once the stream's flush says it's durable. | The Storage Write API's default stream: rows sent as Arrow; each acknowledged append is committed. |
 | `internal` | Files on a table stage, loaded with Snowpipe or `COPY`. | Parquet files uploaded to the stream's Unity Catalog volume (`naming.stage`), then one `COPY INTO` per batch. `apply` creates the volume; `retain` prunes its dated folders. | One load job per batch, with its Parquet file sent along with the job, so no bucket is needed. |
@@ -77,6 +77,8 @@ shows as loaded. That query needs a warehouse, so `destination.warehouse` is req
 
 ### Databricks
 
+The Databricks destination is in beta: it is tested, but gets less everyday use than Snowflake, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
+
 - Sign in with an OAuth machine-to-machine client (a service principal): `client_id` and
   `client_secret`. Zerobus Ingest doesn't take personal access tokens.
 - The SQL warehouse in `warehouse_id` runs `plan`, `apply` and `COPY INTO`. Zerobus Ingest writes
@@ -96,6 +98,8 @@ shows as loaded. That query needs a warehouse, so `destination.warehouse` is req
   Databricks types; see [Envelope columns](/docs/kafka/configuration/#envelope).
 
 ### BigQuery
+
+The BigQuery destination is in beta: it is tested, but gets less everyday use than Snowflake, so expect rough edges, and please report them in [GitHub issues](https://github.com/sqlstack-io/sqlload/issues).
 
 - Sign in with a service account's key (`service_account_key`). It needs `roles/bigquery.dataEditor`
   on the dataset and `roles/bigquery.jobUser` on the project; for `gcs`, also

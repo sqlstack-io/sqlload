@@ -3,8 +3,8 @@ title: "Files"
 description: "The files source: settings, which files load, columns, columns from paths, whole records, SFTP servers and the files a destination reads itself."
 ---
 
-A files source is one table built from every file under a folder, in S3, a local folder or, from
-0.32.0, an SFTP server. To set one up, see [Load files](/docs/guides/files/).
+A files source is one table built from every file under a folder, in S3, a local folder or an
+SFTP server. To set one up, see [Load files](/docs/guides/files/).
 
 ```toml
 [connections.lake]
@@ -25,21 +25,21 @@ cursor_column = "dt"
 
 | Setting | Meaning |
 |---------|---------|
-| `connection` | An `s3` or `filesystem` connection, or from 0.32.0 an `sftp` connection. |
+| `connection` | An `s3` or `filesystem` connection, or an `sftp` connection. |
 | `path` | The folder holding the files, relative to the connection. |
-| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; from 0.35.0, also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
-| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; from 0.35.0, also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
-| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … From 0.35.0, also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). From 0.49.0, `column_names` names the columns of files without a header; see [Naming headerless columns](#naming-headerless-columns). From 0.54.0, also `escape`, `quote = false` and `encoding_check = true`; see [Quotes and escapes](#quotes-and-escapes) and [CSV encodings](#csv-encodings). |
-| `xlsx` | From 0.35.0. `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. From 0.49.0, also `range` and `header_row`; see [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
-| `xml` | From 0.35.0. `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
-| `members` | From 0.35.0. With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
-| `pattern` | From 0.54.0. A glob each file's path below `path` must match, such as `"file_*.txt"` or `"**/*.dat"`, in place of the format's name suffix. See [Choosing files](#choosing-files). |
-| `shape` | From 0.27.0. `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
-| `record_column` | From 0.27.0. The column `shape = "record"` loads into; `record` when omitted. |
+| `format` | `parquet` (default), `ndjson` (one object per line), `json` (objects one after another, or one top-level array) or `csv`; also `xlsx` and `xml`. See [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
+| `compression` | For text formats: `auto` (default, by file name: `.gz` is gzip, `.zst` is zstd), `none`, `gzip` or `zstd`; also `zip`, which reads the `format`'s files inside `.zip` archives. Parquet compresses inside the file. |
+| `csv` | `{ delimiter = ",", header = true, quote = '"', null_values = [""] }`, the defaults. Without a header, columns are `column_1`, `column_2`, … Also `encoding = "utf-8"` and `skip_rows = 0`; see [CSV encodings](#csv-encodings). `column_names` names the columns of files without a header; see [Naming headerless columns](#naming-headerless-columns). Also `escape`, `quote = false` and `encoding_check = true`; see [Quotes and escapes](#quotes-and-escapes) and [CSV encodings](#csv-encodings). |
+| `xlsx` | `{ sheet = "...", header = true, skip_rows = 0 }`: the worksheet (the first when omitted), whether its first row read names the columns, and rows skipped above it. Also `range` and `header_row`; see [Excel, XML and ZIP files](#excel-xml-and-zip-files). |
+| `xml` | `{ record_path = "orders/order", lists = [] }`: the elements from the root to each row's element (required), and child elements always loaded as a JSON array. |
+| `members` | With `compression = "zip"`, a pattern the members' names must match, such as `"exports/*.csv"`. |
+| `pattern` | A glob each file's path below `path` must match, such as `"file_*.txt"` or `"**/*.dat"`, in place of the format's name suffix. See [Choosing files](#choosing-files). |
+| `shape` | `columns` (default) loads typed columns; `record` loads each JSON object or CSV line whole into one `json` column. See [Whole records](#whole-records). |
+| `record_column` | The column `shape = "record"` loads into; `record` when omitted. |
 | `partition_columns` | Hive `key=value` folders loaded as typed columns, such as `{ dt = "date" }`. |
-| `path_columns` | From 0.26.0. A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
-| `unmatched_paths` | From 0.26.0. What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
-| `constant_columns` | From 0.26.0. Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. From 0.37.0, a [table setting](/docs/configuration/#table-settings), so the source's table entry can set its own. See [Columns from paths](#columns-from-paths). |
+| `path_columns` | A template over each file's path whose captures load as typed columns, such as `"{region}/{order_date:date}/*"`. See [Columns from paths](#columns-from-paths). |
+| `unmatched_paths` | What a file whose path doesn't match `path_columns` does: `fail` (default) fails `plan` and names it, `skip` leaves it out. |
+| `constant_columns` | Columns with the same value in every row, such as `{ region = "eu", as_of = 2026-11-08 }`. A [table setting](/docs/configuration/#table-settings), so the source's table entry can set its own. See [Columns from paths](#columns-from-paths). |
 | `copy_to_internal_stage` | Snowflake only: upload files no external stage covers to the user stage. See [Load methods](/docs/targets/snowflake/#files-into-snowflake). |
 
 ## Quotes and escapes
@@ -48,7 +48,6 @@ A field that starts with `quote` (`"` by default) is quoted: it may hold the del
 breaks, and a quote inside it is written twice (`"say ""hi"""`), as Excel, Python's `csv` module,
 pandas and Postgres write CSV. A quote inside an unquoted field (`12" pipe`) is plain text.
 
-From 0.54.0:
 
 - `csv = { escape = "\\" }` also reads a backslash inside a quoted field as making the next
   character plain text, so `"said \"hi\""` reads as `said "hi"`. A doubled quote still works. There
@@ -65,7 +64,7 @@ without an error. Snowflake reading the files itself takes both settings in its 
 
 ## CSV encodings
 
-From 0.35.0. `csv.encoding` names the files' character encoding: `utf-8` (the
+`csv.encoding` names the files' character encoding: `utf-8` (the
 default), `cp1252` (Windows Western European), `latin-1` (ISO-8859-1, each byte read as the code
 point of the same number), `ascii`, `utf-16le`, `utf-16be`, or any other label of the
 [Encoding Standard](https://encoding.spec.whatwg.org/#names-and-labels), such as `windows-1250`,
@@ -87,7 +86,7 @@ have, is usually `iso-8859-15` (common on European Unix) or `cp1252` (Windows). 
 one, `BŒUF bœuf €5` loads as `B¼UF b½uf ¤5`. To tell them apart, look at the bytes of a word you know,
 such as `grep -a 'B.UF' a.csv | xxd`: `BC` is iso-8859-15, `8C` is cp1252, and `C5 92` is UTF-8.
 
-From 0.54.0, a file read as `latin-1`, `cp1252` or `iso-8859-15` fails at its end, with the line and
+A file read as `latin-1`, `cp1252` or `iso-8859-15` fails at its end, with the line and
 byte, when its bytes say it is in another encoding:
 
 - Bytes `0x80` to `0x9F` read as `latin-1` or `iso-8859-15` are control characters no text holds:
@@ -112,7 +111,7 @@ failing; `plan` finds one only in the rows it samples.
 
 ## Excel, XML and ZIP files
 
-From 0.35.0. SQLLoad reads these itself on every destination, as no warehouse
+SQLLoad reads these itself on every destination, as no warehouse
 does; `copy_to_internal_stage` and `shape = "record"` don't apply.
 
 **Excel (`format = "xlsx"`).** One worksheet loads per source: `xlsx.sheet`, or the first sheet.
@@ -126,7 +125,7 @@ row; pin a type in `columns` to convert instead. Formulas load their cached valu
 workbooks aren't read. A headerless column whose `column_N` name the header already uses fails, and
 so does a sheet holding over 20 million values.
 
-From 0.49.0, `xlsx.range` reads an A1 range, as [Google Sheets `ranges`](/docs/sources/google-sheets/)
+`xlsx.range` reads an A1 range, as [Google Sheets `ranges`](/docs/sources/google-sheets/)
 do: an optional sheet (in single quotes when its name has spaces, as in `'Q4 Report'!B3:H`), the
 columns, and optional rows; an open-ended range such as `A3:C` runs to the last row. It replaces
 `sheet` and `skip_rows`, and setting it with either fails `plan`. Cells outside the range don't load,
@@ -143,7 +142,7 @@ column_names = ["metric", "category", "value"]
 
 ### Naming headerless columns
 
-From 0.49.0, `column_names` names the columns of CSV or Excel files without a header row, in order;
+`column_names` names the columns of CSV or Excel files without a header row, in order;
 types, keys and other settings then use those names:
 
 ```toml
@@ -226,7 +225,7 @@ or an archive naming two members alike, fails.
 
 ## Transforming each file
 
-From 0.52.0. A transform is a Python function that makes a file loadable: it fixes headers, drops
+A transform is a Python function that makes a file loadable: it fixes headers, drops
 title and totals rows, or unpivots a sheet. Keep business logic downstream, in SQL, where it can
 change without reloading files. Decorate the function with `@sl.transform` in a module under
 [`python_paths`](/docs/configuration/#top-level), and name it in `transform`: `@sl.transform`
@@ -383,7 +382,7 @@ old one in one commit at the end; until then readers see the old table.
 
 - `append`, `replace` and `delete_insert` tables read the files in batches, as a first load does. A
   `delete_insert` with a [`replace_key`](#replacing-rows-by-a-key) refuses `--reload`.
-- From 0.52.0, `merge` tables reload too, on DuckDB targets (Postgres targets refuse `--reload` for
+- `merge` tables reload too, on DuckDB targets (Postgres targets refuse `--reload` for
   every table). Each file merges into the new table on its own, as a load merges them: files merged
   before go in the order they merged, matched by name and version, or for a file under `move_to`
   by name, so a file `after_load` moved keeps its place; files never merged follow, oldest
@@ -394,7 +393,7 @@ old one in one commit at the end; until then readers see the old table.
   a reload, the next load reads only files added since. `plan` shows
   `merge (unique_key: …) into a new table, swapped in at the end (--reload)`. A `merge` table with `unnest` is refused, since its child tables aren't rebuilt:
   drop the table and its child tables and load again.
-- From 0.52.0, with `after_load = { move_to = ... }` the reload also lists the files under
+- With `after_load = { move_to = ... }` the reload also lists the files under
   `move_to`, which keep the names they loaded under (`_sqlload_source_file` names the file under
   `path`). `plan` shows both folders and how many files it reads from each:
 
@@ -417,7 +416,7 @@ old one in one commit at the end; until then readers see the old table.
 ## Choosing files
 
 Without `pattern`, a files source reads the files whose names end in its format's suffix: `.csv`,
-`.csv.gz` and `.csv.zst` for `format = "csv"`, and so on. From 0.54.0, `pattern` chooses them
+`.csv.gz` and `.csv.zst` for `format = "csv"`, and so on. `pattern` chooses them
 instead, by a glob over each file's path below `path`, so files of any name load as the source's
 `format`, such as the pipe-delimited `.txt` exports an ERP drops beside other files:
 
@@ -452,15 +451,14 @@ Without `pattern`, a folder of `.txt` files fails `plan` with the suffixes it lo
 
 | Strategy | Reads |
 |----------|-------|
-| `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. From 0.45.0, so does a listed file loaded without its version (an empty `_sqlload_source_version`, as in rows loaded before SQLLoad recorded it), since whether it was rewritten can't be told: `--reload` loads the table again and records every file's version. Before 0.45.0 such a file was taken as loaded. From 0.45.0, `plan` refuses an `append` table that excludes `_sqlload_source_version`, as it refuses one excluding `_sqlload_source_file`. |
-| `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. From 0.51.0, a file that changed since it loaded whose partition lies below that range fails the table, as does a new file below it in a partition the table holds; see below. |
-| `delete_insert` with a `replace_key` (from 0.51.0) | Only files not loaded yet, or changed since, one at a time, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
+| `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. So does a listed file loaded without its version (an empty `_sqlload_source_version`, as in rows loaded before SQLLoad recorded it), since whether it was rewritten can't be told: `--reload` loads the table again and records every file's version. `plan` refuses an `append` table that excludes `_sqlload_source_version`, as it refuses one excluding `_sqlload_source_file`. |
+| `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. A file that changed since it loaded whose partition lies below that range fails the table, as does a new file below it in a partition the table holds; see below. |
+| `delete_insert` with a `replace_key` | Only files not loaded yet, or changed since, one at a time, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
 | `replace` | Every file, swapped in as a new table. |
-| `merge` with a `unique_key` (from 0.38.0) | Only files not merged yet, one at a time, oldest modified first. Under `--reload` (from 0.52.0, DuckDB), every file again, one at a time, into a new table swapped in at the end; see [Reloading a files table](#reloading-a-files-table). |
+| `merge` with a `unique_key` | Only files not merged yet, one at a time, oldest modified first. Under `--reload` (DuckDB), every file again, one at a time, into a new table swapped in at the end; see [Reloading a files table](#reloading-a-files-table). |
 
 A files source needs a `write_strategy`, from the source or its table entry: `plan` refuses it
-otherwise. Before 0.46.0 it took `replace` without a `cursor_column`, and before 0.44.0
-`delete_insert` with one. Files report no primary key, so a `merge` names its `unique_key` columns.
+otherwise. Files report no primary key, so a `merge` names its `unique_key` columns.
 
 ```console
 $ sqlload plan -v
@@ -479,13 +477,13 @@ loaded  raw.events_log      1 row  0.0s
 Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
 across commits.
 
-From 0.51.0, `delete_insert` on a partition cursor fails the table when a listed file changed since
+`delete_insert` on a partition cursor fails the table when a listed file changed since
 it loaded but its partition lies below the range the load reads, such as a monthly file sent again
 corrected after the next month's loaded. Skipping it would keep its old rows. A new file below the
 range fails it too when the table holds other files of its partition, such as a part file added to
 a loaded month, which would otherwise never load. The error names the file and the fixes.
 
-From 0.54.0, such a new file fails it even when every file the table holds of its partition has
+Such a new file fails it even when every file the table holds of its partition has
 left the folder, as `plan` reads the partitions from the files the table holds. A file below the
 range that the table holds without a version (an empty `_sqlload_source_version`, as in rows loaded
 before SQLLoad recorded it) fails it too, as whether it changed can't be told; rebuild the table
@@ -517,7 +515,7 @@ again as a matter of course, use a [`replace_key`](#replacing-rows-by-a-key).
 
 ### Replacing rows by a key
 
-From 0.51.0, `delete_insert` with a `replace_key` and no `cursor_column` loads each new or changed
+`delete_insert` with a `replace_key` and no `cursor_column` loads each new or changed
 file in its own commit, oldest modified first, then path. Each commit deletes the rows holding a
 `replace_key` value the file holds, then inserts the file's rows. A file sent again corrected
 replaces its version whole, lines it dropped included, and leaves other versions alone. One file
@@ -557,7 +555,7 @@ and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 
 ### Merging files
 
-From 0.38.0, `merge` upserts each new file on its `unique_key`. A load merges
+`merge` upserts each new file on its `unique_key`. A load merges
 its files in order of their modified time, then path, one commit each, so a key that several of them
 carry ends with the value from the file modified last. A file that turns up after others merged, even
 with an older modified time, merges after them. Each commit also records that file and its version in
@@ -577,9 +575,9 @@ unique_key = ["sku"]
 ```
 
 - A merged file whose version changed, even back to one merged before, is merged again, as the
-  newest file. From 0.54.0, with `newest_by`, its rows still only replace rows they aren't older
+  newest file. With `newest_by`, its rows still only replace rows they aren't older
   than, so Monday's file coming back after Tuesday's leaves Tuesday's rows.
-- From 0.54.0, `order = "path"` orders files by their path below `path` instead (a ZIP member's
+- `order = "path"` orders files by their path below `path` instead (a ZIP member's
   as `<archive>.zip/<member>`), in code point order as text cursors compare, so the file whose name
   sorts last wins a repeated key whatever the modified times. Landing steps often rewrite modified
   times: unzipping (Python's `zipfile` stamps the time it extracts), `cp`, `gsutil` and sync tools
@@ -588,26 +586,25 @@ unique_key = ["sku"]
   each, in path order`. It applies to `delete_insert` by `replace_key` too, and to `--reload`.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
-- From 0.39.0, a file that holds one `unique_key` value in more than one row
+- A file that holds one `unique_key` value in more than one row
   merges the last of those rows, or the newest by `newest_by`; see
   [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). With
-  `on_duplicate_keys = "fail"`, as in 0.38.0, such a file fails instead, naming the key's columns
-  and examples, before anything of it merges. From 0.51.0 rows whose key holds NULLs are
-  collapsed too, a NULL matching a NULL; before, they were never collapsed. The
+  `on_duplicate_keys = "fail"`, such a file fails instead, naming the key's columns
+  and examples, before anything of it merges. Rows whose key holds NULLs are
+  collapsed too, a NULL matching a NULL. The
   order of a file's rows comes from `_sqlload_source_row`: when `exclude_columns` drops it, a file
-  repeating a key fails as in 0.38.0, `plan` says so, and `newest_by` is refused. From 0.51.0
-  that includes a file repeating a key with NULLs in it, even under the default
+  repeating a key fails instead, `plan` says so, and `newest_by` is refused. That
+  includes a file repeating a key with NULLs in it, even under the default
   `on_duplicate_keys`.
 - Merging files loads into DuckDB and Postgres targets so far, and MotherDuck through its DuckDB
   connection, which isn't tested live. `state = "logged"` and a `cursor_column` are refused: the
   run log, not a cursor, picks the files. To merge every file again, drop the table (a table
-  created anew starts a new record), or from 0.52.0 run `--reload` on DuckDB, which keeps the old
-  table until every file merged; see [Reloading a files table](#reloading-a-files-table). Before
-  0.52.0 `--reload` was refused.
+  created anew starts a new record), or run `--reload` on DuckDB, which keeps the old
+  table until every file merged; see [Reloading a files table](#reloading-a-files-table).
 
 ### Deleting or moving loaded files
 
-From 0.39.0, `after_load` says what happens to each file once its rows are
+`after_load` says what happens to each file once its rows are
 committed: `"keep"` (the default), `"delete"`, or `{ move_to = "<folder>" }`.
 
 ```toml
@@ -639,13 +636,13 @@ after_load = { move_to = "loaded" }
 - If a delete or move fails, the load still counts and isn't run again. `load --json` reports
   `after_load` on the table, with `status` `"failed"` and each file left in `failed`, and a
   warning is logged. Its `status` is `"done"` when every file was handled.
-- It needs `write_strategy = "append"` or `"merge"`, or from 0.51.0 `"delete_insert"` with a
+- It needs `write_strategy = "append"` or `"merge"`, or `"delete_insert"` with a
   `replace_key`, which never read a loaded file again. A file
   that reappears under a loaded name is a new file when its version differs; an identical copy,
-  such as the same bytes on S3, is skipped as loaded and stays. From 0.52.0, `--reload` with
+  such as the same bytes on S3, is skipped as loaded and stays. `--reload` with
   `move_to` reads the moved files too, and with `"delete"` it's refused; see
-  [Reloading a files table](#reloading-a-files-table). Before 0.52.0 both were refused.
-- From 0.39.1, a run that finds the folder empty skips the table and exits 0,
+  [Reloading a files table](#reloading-a-files-table).
+- A run that finds the folder empty skips the table and exits 0,
   since `after_load` handled every file loaded before: `plan` lists it under skipped, as does
   `load --json` in `plan.skipped`. That needs an existing folder holding no file at all (hidden
   ones aside) and a table that has loaded before. A folder on a local disk that is missing or can't
@@ -655,7 +652,7 @@ after_load = { move_to = "loaded" }
   still can't replace or `delete_insert` into it, even when it runs alone. On S3 a prefix exists only while it holds files, and an unmounted share is an
   empty folder, so after the first load those look empty: watch the `skipped` reason. Without
   `after_load`, an empty folder fails unless `on_empty = "skip"`; see [Empty folders](#empty-folders).
-- From 0.54.0, it works on ZIP archives (`compression = "zip"`): an archive is deleted or moved
+- It works on ZIP archives (`compression = "zip"`): an archive is deleted or moved
   once, after every member the load read from it (those matching `members` and the format) has
   committed, and only if it's still the version read. If a member fails, the load fails and the
   archive stays where it is. `plan` refuses it while another files source on the same connection
@@ -667,7 +664,7 @@ after_load = { move_to = "loaded" }
 
 By default a folder that exists but holds no files fails the load, as it can mean a broken mount or
 a wrong `path`: `no .csv, .csv.gz, .csv.zst files found; ... where an empty folder is normal, set
-on_empty = "skip"`. From 0.54.0, a pipeline that clears its landing folder itself, so some days
+on_empty = "skip"`. A pipeline that clears its landing folder itself, so some days
 bring no files, sets `on_empty = "skip"`:
 
 ```toml
@@ -690,24 +687,23 @@ on_empty = "skip"
   folder, one that can't be read, and one holding files of another format or that don't match
   `path_columns` still fail.
 - S3 and SFTP list a folder that doesn't exist as empty, so SQLLoad can't tell a mistyped `path`
-  from an empty one there. From 0.55.0, on those connections `on_empty = "skip"` skips an empty
+  from an empty one there. On those connections `on_empty = "skip"` skips an empty
   folder only once its table exists; before its first load it fails, naming the path.
 - `after_load` already skips a folder it emptied once its table exists, without `on_empty`.
 
 ## Columns
 
 Parquet columns come from the files' footers. CSV and JSON columns are inferred from a sample of
-records, unless you pin them with `columns`. From 0.54.0, `infer_types = false` loads every
+records, unless you pin them with `columns`. `infer_types = false` loads every
 column not pinned as `text`, CSV fields exactly as written; see [Loading every column as
 text](/docs/concepts/types/#loading-every-column-as-text). Each row also gets `_sqlload_source_file`,
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
 adds](/docs/concepts/projects/#columns-sqlload-adds)).
 
-From sqlload 0.27.0, Parquet list, struct and map columns load as `json`.
+Parquet list, struct and map columns load as `json`.
 A list becomes an array, a struct becomes an object with its fields in order, and a map becomes an
 object keyed by its keys' text. Decimals, dates, times and timestamps inside them are strings, such
-as `"1.50"` or `"2026-11-08T10:00:00.123456"`. Before 0.27.0 these columns fail `plan`, and
-`exclude_columns` leaves them out. A destination never reads these files itself, because its own
+as `"1.50"` or `"2026-11-08T10:00:00.123456"`. A destination never reads these files itself, because its own
 conversion differs. In Snowflake, where files under an external stage or copied with
 `copy_to_internal_stage` only load directly, such a column still fails `plan`, so leave it out with
 `exclude_columns`.
@@ -718,13 +714,13 @@ A JSON or NDJSON object loads as one `json` column unless the table's `flatten` 
 A table's `parse` reads text columns as times, in a list of formats such as ISO and `%m/%d/%Y`, and
 in a time zone. See [Parsing text into times](/docs/concepts/types/#parsing-text-into-times).
 
-From 0.27.0, pin a list column, or a JSON array in a CSV or JSON file, as
+Pin a list column, or a JSON array in a CSV or JSON file, as
 [`array(T)`](/docs/concepts/types/#arrays) to load it as an array instead, such as
 `columns = { tags = "array(text)" }`.
 
 ## Columns from paths
 
-From sqlload 0.26.0, values can come from folder and file names that
+Values can come from folder and file names that
 aren't `key=value` folders. `path_columns` is a template over each file's path below `path`:
 
 ```toml
@@ -762,7 +758,7 @@ fails `plan`.
 integer as `int`, a float as `float` and `true` or `false` as `bool`. An unquoted TOML date
 (`2026-11-08`) loads as `date`, and a date and time as `timestamp_tz` with an offset or
 `timestamp_ntz` without. For any other type, write `{ value = "12.50", type = "decimal(10,2)" }`.
-From 0.37.0, `constant_columns` is a [table setting](/docs/configuration/#table-settings)
+`constant_columns` is a [table setting](/docs/configuration/#table-settings)
 that every source takes: set on `[sources.NAME.tables.NAME]`, its map replaces the source's.
 
 Captured and typed values load the same in every destination: a boolean as `true` or `false`, an
@@ -779,7 +775,7 @@ read the files themselves still do: SQLLoad writes each file's values into the `
 
 ## Whole records
 
-From sqlload 0.27.0, `shape = "record"` loads each record whole into one
+`shape = "record"` loads each record whole into one
 `json` column instead of typed columns, to land data as it is and parse it in the destination:
 
 ```toml
@@ -809,7 +805,7 @@ files itself, also from `copy_to_internal_stage`. Parquet files already have typ
 
 ## Files on an SFTP server
 
-From 0.32.0. An [`sftp` connection](/docs/configuration/#sftp) reads files from an SFTP server. To
+An [`sftp` connection](/docs/configuration/#sftp) reads files from an SFTP server. To
 set one up, see [Load files from an SFTP server](/docs/guides/files/#load-files-from-an-sftp-server).
 
 - `path` is a folder below the user's login folder (`~/` may start it), or from `/` when it starts

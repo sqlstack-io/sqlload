@@ -3,12 +3,12 @@ title: "ODBC"
 description: "Load tables and query results from any database with an ODBC driver: connections, choosing tables, query tables, value sizes, memory and types."
 ---
 
-From sqlload 0.27.0, an `odbc` source loads tables, views and query
+An `odbc` source loads tables, views and query
 results from any database that has an ODBC driver. SQLLoad reads the rows as Arrow through the
 driver and loads them into the source's target.
 
-From 0.39.0, the `sqlload` and `sqlload-cli` wheels include ODBC on every
-platform. Before that, and in a build from source (`cargo install`, or pip building an sdist where
+The `sqlload` and `sqlload-cli` wheels include ODBC on every
+platform. In a build from source (`cargo install`, or pip building an sdist where
 no wheel fits), ODBC is built only with the `odbc` feature (`cargo install sqlload --features odbc`);
 without it, `plan` refuses an `odbc` source.
 
@@ -80,7 +80,7 @@ SQLLoad runs on; SQLLoad reaches it through a driver manager:
 
 - **Windows:** the driver manager built into Windows; register drivers and DSNs as usual (ODBC Data
   Sources).
-- **Linux and macOS wheels** (from 0.39.0): the unixODBC 2.3.14 driver manager,
+- **Linux and macOS wheels**: the unixODBC 2.3.14 driver manager,
   bundled as a separate shared library, so no system unixODBC is needed. It reads drivers and
   system DSNs from `odbcinst.ini` and `odbc.ini` in `/etc` on Linux, where distribution driver
   packages register, and in Homebrew's `etc` on macOS (`/opt/homebrew/etc` on Apple silicon,
@@ -103,7 +103,7 @@ as names is refused when the source is read; switch it to ANSI quoting. For MySQ
 |--------|--------|
 | psqlODBC (`PostgreSQL Unicode`) | Yes, against Postgres 17 in containers on Linux and on Windows. Add `BoolsAsChar=0` to the connection string so `boolean` columns load as `bool` rather than text. |
 | Microsoft ODBC Driver 18 for SQL Server | Yes, against SQL Server 2022 in containers on Linux and against SQL Server LocalDB on Windows, `datetime2` and legacy `datetime` cursors included. |
-| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. From 0.43.0, each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel's `sqlload` with nothing set; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
+| MySQL Connector/ODBC (`MySQL ODBC Unicode Driver`) | Yes, against MySQL 8.4 in an `ANSI_QUOTES` session (above): the driver tests run the `sqlload` executable on Ubuntu 24.04 with MySQL's Ubuntu 24.04 package of Connector/ODBC 26.10, and on Windows with MySQL's Windows installer. Each release's Linux x86_64 wheels also load a MySQL 8.4 table on Debian 13 through MySQL's Debian 13 package of Connector/ODBC 9.7, the `sqlload-cli` wheel as is and the `sqlload` wheel's `sqlload` with nothing set; see [MySQL Connector/ODBC on Linux](#mysql-connectorodbc-on-linux). On Linux, install MySQL's package for your distribution rather than the generic glibc tarball: the tarball's own OpenSSL fails to load once another driver, such as SQL Server's or psqlODBC, has loaded the system one in the same run. |
 | MariaDB Connector/ODBC 3.1 | Against MySQL 8.4 by hand, not in the driver tests: it reports no primary keys there, so name each `merge` table's `unique_key` columns instead of `"{primary_key}"`; see [MariaDB Connector/ODBC 3.1](#mariadb-connectorodbc-31). |
 | OpenEdge (Progress) | Tested for timestamp handling (parsing `{ts}` values, binding timestamp bounds and writing them as `{ts}` escapes), not against a live server. Run `sqlload plan` first: it checks that the driver takes the cursor's bounds, and names `cursor_bounds = "literals"` when the driver only takes escapes; see [Cursor bounds](#cursor-bounds). |
 | Others | Not yet. A driver needs to describe prepared statements and list tables; run `sqlload plan` to see the types it reports. |
@@ -120,7 +120,7 @@ SQLLoad's included, has. unixODBC then reports the driver as missing, even thoug
 [unixODBC][Driver Manager]Can't open lib '/usr/lib/x86_64-linux-gnu/odbc/libmyodbc9w.so' : file not found
 ```
 
-From 0.51.0, on Linux, the `sqlload` command of the `sqlload` package starts itself again once with
+On Linux, the `sqlload` command of the `sqlload` package starts itself again once with
 libstdc++ in `LD_PRELOAD`, so the driver loads with nothing set. Processes it starts, such as a
 Python source's subprocesses, inherit that `LD_PRELOAD`. When libstdc++ isn't installed, it runs
 as it is. `SQLLOAD_NO_PRELOAD=1` turns the preload off. The `sqlload-cli` package's `sqlload`
@@ -133,12 +133,12 @@ its start, as does any ODBC program in such a process, pyodbc included:
 LD_PRELOAD=libstdc++.so.6 python load.py
 ```
 
-From 0.43.0, SQLLoad adds what to check under unixODBC's message: that the driver library doesn't
+SQLLoad adds what to check under unixODBC's message: that the driver library doesn't
 exist, that it is built for static thread-local storage and needs the preload above, or else that a
 library it needs doesn't load (`ldd` on the driver lists them).
 
 MySQL's Debian 13 package of Connector/ODBC 9.7 also registers its drivers under `/usr/lib//odbc/`,
-where they aren't, so every driver manager, `isql` included, reports `file not found`. From 0.51.0,
+where they aren't, so every driver manager, `isql` included, reports `file not found`.
 SQLLoad's message names the installed file and the fix. Point the registration at the installed
 files in `/etc/odbcinst.ini`:
 
@@ -146,20 +146,17 @@ files in `/etc/odbcinst.ini`:
 sudo sed -i 's#/usr/lib//odbc/#/usr/lib/x86_64-linux-gnu/odbc/#' /etc/odbcinst.ini
 ```
 
-From 0.39.0, a timestamp column is read in at least microseconds whatever precision
-the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none, and its fractional
-seconds were dropped before.
+A timestamp column is read in at least microseconds whatever precision
+the driver describes: MySQL Connector/ODBC describes every `DATETIME(n)` with none.
 
 ### MariaDB Connector/ODBC 3.1
 
 MariaDB Connector/ODBC 3.1, the `odbc-mariadb` package of Debian 13 (3.1.15) among others, reports
 no primary key for MySQL 8.4 tables: its `SQLPrimaryKeys` looks for `COLUMN_KEY = 'pri'` in
 `INFORMATION_SCHEMA.COLUMNS`, and MySQL 8.4 compares that column case-sensitively with its value
-`PRI` (checked with 3.1.15 against MySQL 8.4.13). Before 0.44.0 a table with a `cursor_column`
-then took `delete_insert`, so a row updated after it was loaded was loaded again beside its old
-version.
+`PRI` (checked with 3.1.15 against MySQL 8.4.13).
 
-From 0.46.0 SQLLoad never takes a key the driver reports unless the table asks for it with
+SQLLoad never takes a key the driver reports unless the table asks for it with
 `unique_key = "{primary_key}"`. A table that does, through this driver, fails `plan`, and when the
 database's `INFORMATION_SCHEMA` lists a key the driver didn't report, the error names it:
 
@@ -181,7 +178,7 @@ Name the key columns on each such table, or use MySQL Connector/ODBC, which repo
 
 ## Cursor bounds
 
-From 0.39.0, a cursor filter compares the cursor column with bound parameters,
+A cursor filter compares the cursor column with bound parameters,
 such as `"updated_at" > ?`, each passed as the cursor's own type: a timestamp without a time zone as
 an ODBC `TIMESTAMP`; a date as a `DATE`; text as text. No database's literal rules can change a
 bound, and a millisecond maximum such as `23:59:59.997` resumes exactly.
@@ -194,14 +191,12 @@ For a timestamp or date cursor, `--start-cursor`, `--end-cursor` and `cursor_sta
 escape values, such as
 `{ts '2026-01-31 23:59:59.997'}` or `{d '2026-01-31'}`.
 
-From 0.47.0, a timestamp bound has the fractional digits the driver describes for its column: three
-for milliseconds (1 to 3 digits), six for microseconds (4 to 6). Before, it always had seven, which
-a driver may refuse for a column with fewer. A bound with more digits than that, such as a
+A timestamp bound has the fractional digits the driver describes for its column: three
+for milliseconds (1 to 3 digits), six for microseconds (4 to 6). A bound with more digits than that, such as a
 `--start-cursor` of `10:00:00.1235` on a millisecond column, or a maximum from a driver that
 describes fewer digits than its values hold, keeps every digit and is never rounded, so it selects
-exactly the rows it did before. When the driver describes the column with no digits, as MySQL
-Connector/ODBC describes every `DATETIME(n)`, or with seven or more, the bound keeps every digit,
-as before. SQL Server keeps its own handling: a timestamp binds with seven
+exactly the rows the value names. When the driver describes the column with no digits, as MySQL
+Connector/ODBC describes every `DATETIME(n)`, or with seven or more, the bound keeps every digit. SQL Server keeps its own handling: a timestamp binds with seven
 digits, compared as `datetime2(7)`, except against a legacy `datetime`, which stores 1/300 s ticks
 that its driver reads rounded to milliseconds, so its bounds go as ISO 8601 text
 (`2026-01-31T23:59:59.997`) in the column's own precision, which SQL Server converts to the
@@ -210,7 +205,7 @@ column's type alike under every login language.
 ### Literal bounds
 
 Some drivers refuse a bound value; OpenEdge's, by one report, takes no timestamp parameter there.
-From 0.47.0, `cursor_bounds = "literals"` on an ODBC source, or on one of its table entries, writes
+`cursor_bounds = "literals"` on an ODBC source, or on one of its table entries, writes
 the bounds into the query as ODBC escapes instead (the default is `"parameters"`):
 
 ```toml
@@ -235,7 +230,7 @@ escape, MySQL by default, would read it as another value; bind it as a parameter
 
 ### Checked at plan
 
-From 0.47.0, `plan` (and `load`, which plans first) checks each ODBC table whose text, date or
+`plan` (and `load`, which plans first) checks each ODBC table whose text, date or
 timestamp cursor binds: it runs the table's query once with bounds that select no rows,
 `"updated_at" > v AND "updated_at" < v AND 1 = 0`, with `v` the planned lower bound (else the upper
 bound, else a fixed value of the cursor's type), and fetches nothing. When the driver refuses the
@@ -265,7 +260,7 @@ columns.
 
 ### How the driver is asked
 
-From 0.53.0, SQLLoad asks the driver only for the tables `include` names, with one `SQLTables`
+SQLLoad asks the driver only for the tables `include` names, with one `SQLTables`
 lookup per pattern, rather than for every table and view in the database. On a large catalog over
 a slow network, that listing can take most of `plan`'s time, and every `load` plans first.
 
@@ -303,7 +298,7 @@ doesn't also find a table whose name differs from it only in case, such as `erp.
 
 ### When keys are read
 
-From 0.53.0, SQLLoad reads a table's primary key (`SQLPrimaryKeys`) only when the table uses it:
+SQLLoad reads a table's primary key (`SQLPrimaryKeys`) only when the table uses it:
 
 - a `merge` table with `unique_key = "{primary_key}"`, which merges on it;
 - a `merge` table that names its `unique_key` columns, for which `plan` says whether the source
@@ -314,7 +309,7 @@ From 0.53.0, SQLLoad reads a table's primary key (`SQLPrimaryKeys`) only when th
 Other tables, such as `replace`, `append` and `delete_insert` tables, skip it. When the driver
 reports no primary key for a table set to `"{primary_key}"`, SQLLoad also asks the database's
 `INFORMATION_SCHEMA` for the table's primary key and unique constraints, so that the error can name
-them; a database without `INFORMATION_SCHEMA` gets the error without them. From 0.53.0, SQLLoad
+them; a database without `INFORMATION_SCHEMA` gets the error without them. SQLLoad
 asks it only for such a table.
 
 ## Query tables
@@ -327,7 +322,7 @@ cursor outside it, so the query needs no placeholder. Write the query in the dat
 
 ## Filtering rows
 
-From 0.54.0, `where` narrows a table to the rows that match a condition, written in the database's own SQL:
+`where` narrows a table to the rows that match a condition, written in the database's own SQL:
 
 ```toml
 [sources.erp]
@@ -354,7 +349,7 @@ A query table refuses `where`: put the condition in its `sql`.
 ## Value sizes
 
 Drivers read values into buffers of a fixed size per column, from the length the driver reports.
-From 0.52.0, a text or binary column whose buffer would be over `long_column_threshold` (4 KiB when
+A text or binary column whose buffer would be over `long_column_threshold` (4 KiB when
 omitted), or that the driver gives no length for, such as `TEXT`, `LONGTEXT` or `VARCHAR(MAX)`, is a
 long column. A table with a long column is read value by value: each value at its own size, in
 pieces for a long one, and never cut. A table without one is read in bulk, many rows per fetch. See
@@ -367,13 +362,13 @@ to raise; it's never cut short. In a long column, the read stops as soon as the 
 value's length or the pieces read pass the cap, so a 2 GB value over the cap isn't read first. Text
 is compared as UTF-8 bytes, on Windows too, where drivers send it as UTF-16.
 
-From 0.47.0, the driver's own notes on the buffer size it chose for each column are no longer
-logged; set `RUST_LOG=info` to see them again.
+The driver's own notes on the buffer size it chose for each column aren't
+logged; set `RUST_LOG=info` to see them.
 
 ## Memory
 
 Each ODBC table has a fetch buffer: the most the rows of one fetch hold. It's 512 MiB per table by
-default. From 0.68.0, under a [memory budget](/docs/cli/load/#memory-budget) it's at most a
+default. Under a [memory budget](/docs/cli/load/#memory-budget) it's at most a
 quarter of each table's share of the budget, when that is less; the rest of the share holds the
 batches made from the fetches and the one being written. A source that sets `max_batch_memory`
 uses it as it is:

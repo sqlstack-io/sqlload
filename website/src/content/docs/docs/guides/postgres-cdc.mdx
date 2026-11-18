@@ -206,7 +206,7 @@ running with [`--follow`](#keep-streaming).
 
 ## Keep streaming
 
-From sqlload 0.20.0, `sqlload load SOURCE --follow` keeps streaming after it catches up. It holds
+`sqlload load SOURCE --follow` keeps streaming after it catches up. It holds
 one replication session open and writes a batch every `batch_interval` (default `10s`, or `1m` into
 files), at 100,000
 changes, or when it stops. A transaction still open on the server stays buffered until it
@@ -217,7 +217,7 @@ sqlload load app --follow                    # until Ctrl-C or SIGTERM
 sqlload load app --follow --max-duration 10m
 ```
 
-It logs each batch it writes, with how far it is behind the server. From 0.52.0 it prints the same
+It logs each batch it writes, with how far it is behind the server. It prints the same
 plan line, table lines and summary as `load`, plus a `written` line for each table in each batch.
 Here an order is inserted and then updated while it follows, then Ctrl-C stops it:
 
@@ -247,7 +247,7 @@ and how to stop; piped or redirected output has no escape codes, and `--json` is
   read, then exits 0. A snapshot or copy under way finishes first. A second signal stops at once
   (exit code 130), which is safe: the next load skips what was already written.
 - **A load started right after one that stopped** finds the slot still held until Postgres
-  notices the stopped load is gone. From 0.56.0 it waits up to 30 seconds for the slot, then fails
+  notices the stopped load is gone. It waits up to 30 seconds for the slot, then fails
   naming the server process that holds it: another load reading the slot, or one whose network
   connection was lost and that the server hasn't noticed yet (until `wal_sender_timeout`).
 - **While idle** it writes nothing and confirms the server's position, so the slot keeps no WAL for
@@ -263,7 +263,7 @@ and how to stop; piped or redirected output has no escape codes, and `--json` is
   ```
 
   The same column gained again, with nothing written in between, stops it.
-- **Only a whole plan follows.** From 0.51.0, a plan with errors in any selected source or table
+- **Only a whole plan follows.** A plan with errors in any selected source or table
   doesn't start it, since following the rest would move the slot past the changes of what didn't
   plan, and they'd be lost for good. It prints the plan with each error and its fix, then says how
   to leave them out to follow the rest: `--exclude <source>` for another source, or the table
@@ -300,7 +300,7 @@ With `cdc_mode = "changelog"`, two updates to order 5 after the snapshot leave t
 
 ## Adding tables
 
-From sqlload 0.19.0, a table that joins a source after its first load, because `include` now
+A table that joins a source after its first load, because `include` now
 matches it or was widened, is copied on its own at the start of the next load (under `--follow`,
 at its next re-plan or restart). The other tables
 keep streaming, with their history and soft deletes; they aren't copied again. The copy reads
@@ -372,7 +372,7 @@ failed  raw.app__refunds    rows captured before slot sqlload_app was recreated 
 Drop the destination table and run `sqlload apply`, and the next load copies it alone. An empty
 destination table is copied without asking. On a files target, delete the table's folder instead.
 
-From 0.21.0, a table whose destination is gone, because its table was dropped or its folder
+A table whose destination is gone, because its table was dropped or its folder
 deleted, is copied again alone the same way. After `DROP TABLE raw.app__orders` in DuckDB, `plan`
 creates it again and copies it:
 
@@ -432,7 +432,7 @@ loaded  raw.app__orders     1,000 rows 0.3s
 
 ### Reloading
 
-`--resnapshot`, not `--reload`, copies a captured table again. From sqlload 0.22.0, `--reload`
+`--resnapshot`, not `--reload`, copies a captured table again. `--reload`
 refuses captured tables on every target, with or without `--resnapshot`. In a project that also
 has other sources, a bare `load --reload` still rebuilds their tables, but it exits 1. Here `shop`
 is an ordinary `postgres` source next to `app`:

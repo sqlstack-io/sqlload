@@ -28,14 +28,14 @@ SQLLoad's reader loads a files table instead when DuckDB can't load it exactly:
 A later batch whose files hold a column differently fails the load, naming the column.
 
 DuckDB reads S3 with the keys SQLLoad finds for the [`s3` connection](/docs/configuration/#s3):
-from the environment or, from 0.27.0, the shared credentials file. Without
+from the environment or the shared credentials file. Without
 either, it uses the AWS credential chain. The first load from S3 installs DuckDB's `httpfs`
 extension into `~/.duckdb`, and `aws` too when it uses the chain. That needs the network once.
 Local folders need nothing extra.
 
 ## VARIANT columns
 
-From 0.54.0, `json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
+`json_type = "variant"` on a DuckDB or MotherDuck target creates `json` columns as
 DuckDB's `VARIANT` instead of `JSON`, which holds each value as its text:
 
 ```toml
@@ -58,7 +58,7 @@ with `--allow-type-change-rebuild`. The column keeps its values.
 
 ## Memory
 
-From 0.68.0, a DuckDB target opens with its part of the run's
+A DuckDB target opens with its part of the run's
 [memory budget](/docs/cli/load/#memory-budget): a `memory_limit` of half that part, at least 256MB,
 and one thread per 128 MiB of it, between two and the machine's cores. `plan` shows both on its
 `Memory` line.
@@ -78,6 +78,10 @@ budget. SQLLoad handles this for you:
   opens, before any table loads.
 - A table whose last row group would hold more large values than a checkpoint can rewrite within
   the `memory_limit` fails before it commits, naming the run's `memory_limit` that would fit it.
+
+With [`memory_limit = "off"`](/docs/cli/load/#memory-budget), DuckDB keeps its own `memory_limit`,
+threads and automatic checkpoints, and commits aren't cut into pieces. Only the row-group check
+stays, against DuckDB's own `memory_limit`.
 
 Loading 300 rows of 1 MiB each with a 256MB `memory_limit` succeeds for every write strategy, in
 pieces. A Postgres target stays bounded without pieces: the same 286 MB loads in about 225 MB with

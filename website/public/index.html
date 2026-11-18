@@ -4,7 +4,7 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<title>SQLLoad · Load data into your warehouse, and see how first</title>
-		<meta name="description" content="SQLLoad loads Postgres, Snowflake and ODBC database tables (SQL Server, MySQL and others), files, Google Sheets, Kafka topics and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
+		<meta name="description" content="SQLLoad loads Postgres, Snowflake, BigQuery, Databricks and ODBC database tables (SQL Server, MySQL and others), files, Google Sheets, Kafka topics and Python sources into Snowflake, Databricks, BigQuery, ClickHouse, Postgres, DuckDB or Parquet files. sqlload plan shows every table, column and route before anything changes. Free and open source, written in Rust." />
 		<meta property="og:title" content="SQLLoad · Load data into your warehouse, and see how first" />
 		<meta property="og:description" content="A free, open-source data loader in Rust that shows you its plan before it changes anything." />
 		<meta property="og:type" content="website" />
@@ -289,8 +289,8 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 							<tbody>
 								<tr><th scope="row">Postgres</th><td>✓ (incl. <a href="/docs/sources/postgres-cdc/">CDC</a>)</td><td>✓</td></tr>
 								<tr><th scope="row">Snowflake</th><td>✓</td><td>✓</td></tr>
-								<tr><th scope="row">BigQuery</th><td>✓</td><td>✓</td></tr>
-								<tr><th scope="row">Databricks</th><td></td><td>✓</td></tr>
+								<tr><th scope="row">BigQuery</th><td>beta</td><td>beta</td></tr>
+								<tr><th scope="row">Databricks</th><td>beta</td><td>beta</td></tr>
 								<tr><th scope="row">ClickHouse</th><td></td><td>✓¹</td></tr>
 								<tr><th scope="row">DuckDB</th><td></td><td>✓</td></tr>
 								<tr><th scope="row">MotherDuck</th><td></td><td>beta²</td></tr>
@@ -298,12 +298,12 @@ api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg"
 								<tr><th scope="row">Files</th><td>✓ Parquet, CSV, JSON, NDJSON, Excel, XML; gzip, zstd, ZIP; other names through <code>pattern</code> (S3, local, SFTP)</td><td>✓ Parquet, CSV (S3, local)</td></tr>
 								<tr><th scope="row">Google Sheets</th><td>✓</td><td></td></tr>
 								<tr><th scope="row">HTTP APIs and Python</th><td>✓</td><td></td></tr>
-								<tr><th scope="row">Kafka</th><td>✓ into Snowflake, through the <a href="/docs/kafka/">exporter</a></td><td></td></tr>
+								<tr><th scope="row">Kafka</th><td>✓ into Snowflake, or (beta) Databricks or BigQuery, through the <a href="/docs/kafka/">exporter</a></td><td></td></tr>
 							</tbody>
 						</table>
-						<p class="systems-notes">¹ Self-hosted, container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² From 0.34.0, through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
+						<p class="systems-notes">¹ Self-hosted, container-tested on ClickHouse 25.3, 25.8 and 26.10. One server: no clusters, replicated or distributed tables. ClickHouse Cloud is untested.<br />² Through a separate DuckDB 1.5 process: install <code>sqlload[motherduck]</code>.<br />³ Tested with psqlODBC, Microsoft ODBC Driver 18 for SQL Server and MySQL Connector/ODBC; MariaDB Connector/ODBC and OpenEdge are checked by hand.<br />See the <a href="/docs/supported-systems/">connector matrix</a> for every combination and write strategy.</p>
 						<ul>
-							<li>Linux and macOS; Python only for Python sources.</li>
+							<li>Linux, macOS and Windows; Python only for Python sources.</li>
 							<li>Free and open source, Apache-2.0.</li>
 						</ul>
 					</div>

@@ -35,24 +35,27 @@ selects a table by name, since that table could be one of its own.
 | `--exclude <SELECTOR>...` | Sources or tables to leave out. Wins over `--select`. |
 | `--start-cursor <VALUE>` | Read from this cursor value instead of the destination's maximum. Typed from each table's cursor: an integer, an RFC 3339 timestamp or a date. |
 | `--end-cursor <VALUE>` | Read only cursor values below this one. |
-| `--start-cursor-ts <TIMESTAMP>`, `--end-cursor-ts <TIMESTAMP>` | From 0.52.0. The range for the selected date and timestamp cursor tables only: an RFC 3339 timestamp or a date. A date cursor takes a date. Not with `--start-cursor`/`--end-cursor`. See [Backfilling a range](/docs/concepts/cursors/#backfilling-a-range). |
-| `--start-cursor-int <INTEGER>`, `--end-cursor-int <INTEGER>` | From 0.52.0. The range for the selected integer cursor tables only. Can be given with the `-ts` flags, so one run ranges tables of both kinds. |
+| `--start-cursor-ts <TIMESTAMP>`, `--end-cursor-ts <TIMESTAMP>` | The range for the selected date and timestamp cursor tables only: an RFC 3339 timestamp or a date. A date cursor takes a date. Not with `--start-cursor`/`--end-cursor`. See [Backfilling a range](/docs/concepts/cursors/#backfilling-a-range). |
+| `--start-cursor-int <INTEGER>`, `--end-cursor-int <INTEGER>` | The range for the selected integer cursor tables only. Can be given with the `-ts` flags, so one run ranges tables of both kinds. |
 | `--reload` | Rebuild the selected tables from the whole source, with the current columns and types. Asks first, unless `--yes`. Refuses `postgres_cdc` tables, which `--resnapshot` copies again; see [Reloading](/docs/guides/postgres-cdc/#reloading). |
 | `--resnapshot` | `postgres_cdc` sources: drop and recreate the replication slot, then copy every table again. Asks first, unless `--yes`. See [Postgres changes](/docs/guides/postgres-cdc/#re-snapshot). |
 | `--follow` | `load` of one `postgres_cdc` source only: keep streaming after catching up, writing a batch every `batch_interval`, until `--max-duration` passes or Ctrl-C or SIGTERM. See [Keep streaming](/docs/guides/postgres-cdc/#keep-streaming). |
 | `--max-duration <DURATION>` | With `--follow`: stop after this long, such as `10m`, once the changes read so far are written. |
 | `--yes` | Rebuild with `--reload` or `--resnapshot` without asking. Needed when not on a terminal. |
-| `--sync-deletes` | From 0.54.0. After each selected table with `deletes` merges, read every key of its source and mark its rows of the keys the source no longer holds. Fails when no selected table sets `deletes`. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
+| `--sync-deletes` | After each selected table with `deletes` merges, read every key of its source and mark its rows of the keys the source no longer holds. Fails when no selected table sets `deletes`. See [Rows deleted at the source](/docs/concepts/write-strategies/#rows-deleted-at-the-source). |
 | `--allow-type-change-rebuild` | Allow table rebuilds that `type_change_rebuild = "require_confirmation"` would block. |
 | `--concurrency <N>` | The most tables loading at once. Default: the project's `concurrency`, else 4. |
-| `--memory-limit <SIZE>` | From 0.68.0. The memory the run stays under, such as `4GiB`. Default: the project's `memory_limit`. See [Memory budget](/docs/cli/load/#memory-budget). |
-| `--memory-per-table` | From 0.52.0, Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |
-| `-v`, `--verbose` | From 0.58.0. Print every line of the plan: each table's source, route and memory lines and the defaults it follows, each column of a new table, and every connection's and discovery's own line. See [Reading a plan](#reading-a-plan). |
-| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load` (from 0.27.0), the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
+| `--memory-limit <SIZE\|off>` | The memory the run stays under, such as `4GiB`, or `off` for no budget. Default: the project's `memory_limit`. See [Memory budget](/docs/cli/load/#memory-budget). |
+| `--fail-fast` | `load`: once a table fails, start no other table. See [Stopping at the first failure](/docs/cli/load/#stopping-at-the-first-failure). |
+| `--events jsonl`, `--events-file <PATH>` | `load`: write each load event as one line of JSON, to stderr or to a file. See [Events](/docs/cli/load/#events). |
+| `--progress <auto\|always\|never>` | `load`: when to draw the live block of running tables on stderr. Default `auto`: on a terminal, without `--json` or `--log-format json`. See [Events](/docs/cli/load/#events). |
+| `--memory-per-table` | Linux only: `load` loads one table at a time and reports each table's peak memory. See [Peak memory](/docs/cli/load/#peak-memory). |
+| `-v`, `--verbose` | Print every line of the plan: each table's source, route and memory lines and the defaults it follows, each column of a new table, and every connection's and discovery's own line. See [Reading a plan](#reading-a-plan). |
+| `--json` | Print one JSON document on standard output. For `plan`, the plan. For `apply` and `load`, the result: see [Results as JSON](/docs/cli/load/#results-as-json). |
 
 ## Reading a plan
 
-From 0.58.0, `plan` shows only the lines that are a table's own or ask you to act. A table that
+`plan` shows only the lines that are a table's own or ask you to act. A table that
 keeps every default takes one line; `-v` shows everything else.
 
 ```console
@@ -151,7 +154,7 @@ The sections, as `-v` shows them; without it, `Objects` counts a new table's col
 
 | Section | Lists |
 |---------|-------|
-| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (from 0.29.0; for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note from 0.31.0, excluded and masked columns. |
+| `Objects` | Tables `apply` creates or alters: each column as its portable type `->` the warehouse type, then in brackets what that type loses, if anything (for an array, the array's own loss, then its elements' after `elements:`), added and widened columns, with the same note, excluded and masked columns. |
 | `Loads` | Each table `load` loads, with its write strategy, and lines for `source`, `key`, `reads`, `commits`, `files`, `schema`, `route`, `why`, `batch` and `note`. A plan of one table also shows `columns` (how many, and the names `naming` changes), `names` (every column `rename` named or numbering numbered; see [Naming](/docs/concepts/nested-data/#naming)) and `checks`, and `key` names the `sqlload.toml` line that sets `unique_key`. |
 | `Skipped` | Tables left out on purpose, with the reason: a files table with no new file (`up to date: 0 new of 3 files in drop/orders/ (csv)`), or one left out by `skip_tables_with_columns` or `new_tables = "skip"`. `load` reads nothing for them. |
 | `Errors` | Tables that can't load as configured, with a short headline, the reason and the fix. A source that can't be read is one item, with what it holds up under `blocks`. |
@@ -161,8 +164,8 @@ A table under `Errors` is left out; the others still run, and the command exits 
 
 ## Connecting and discovering
 
-From 0.53.0, `plan`, and the plan `apply` and `load` start with, times each target's and source's
-connection and each source's discovery of its tables. From 0.58.0, once they are done they collapse
+`plan`, and the plan `apply` and `load` start with, times each target's and source's
+connection and each source's discovery of its tables. Once they are done they collapse
 into two lines on standard error:
 
 ```console

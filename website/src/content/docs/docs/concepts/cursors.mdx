@@ -18,15 +18,15 @@ $ sqlload plan -v app__orders
 
 | Setting | Meaning |
 |---------|---------|
-| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. From 0.51.0, a list of columns of one type family, such as `["updated_at", "created_at"]`, reads the first non-NULL of them in each row. See [NULL cursor values](#null-cursor-values). |
-| `null_cursor` | From 0.51.0. `fail` (default), `include` or `ignore`: what a read does with source rows whose cursor is NULL. See [NULL cursor values](#null-cursor-values). |
+| `cursor_column` | The column runs continue from: an integer, date, timestamp or text column. A list of columns of one type family, such as `["updated_at", "created_at"]`, reads the first non-NULL of them in each row. See [NULL cursor values](#null-cursor-values). |
+| `null_cursor` | `fail` (default), `include` or `ignore`: what a read does with source rows whose cursor is NULL. See [NULL cursor values](#null-cursor-values). |
 | `cursor_start` | Where the first run starts, when the table is empty. Without it, the first run reads everything. |
-| `lookback` | Read this far before the maximum, to pick up late rows: a duration on a date or timestamp cursor, such as `"1h"` or `"2d"` (a date cursor moves back by whole days); from 0.52.0, a number of cursor units on an integer cursor, such as `1`. See [Fiscal year tables](#fiscal-year-tables). Not with `append`. |
-| `lookback_from` | From 0.26.0. `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
-| `lookahead` | From 0.26.0. Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. Date and timestamp cursors only. |
+| `lookback` | Read this far before the maximum, to pick up late rows: a duration on a date or timestamp cursor, such as `"1h"` or `"2d"` (a date cursor moves back by whole days); a number of cursor units on an integer cursor, such as `1`. See [Fiscal year tables](#fiscal-year-tables). Not with `append`. |
+| `lookback_from` | `destination` (default) counts `lookback` back from the destination's maximum; `now` counts it back from the time of the run. See [Reload a window](/docs/guides/reload-a-window/). |
+| `lookahead` | Read only cursor values before now plus this; a date cursor reads up to and including today plus that many days. Date and timestamp cursors only. |
 | `append_cursor_inclusive` | `false` (default) reads strictly after the maximum; `true` reads from the maximum itself, inserting its rows again on every run. See [append](/docs/concepts/write-strategies/#append). |
-| `on_cursor_out_of_range` | From 0.53.0, Python tables only. `fail` (default), `skip` or `warn`: what a load does with rows the function returns outside the window it was asked for. See [Rows outside the window](#rows-outside-the-window). |
-| `timezone` | From 0.53.0. The IANA zone, such as `"Europe/Paris"`, that `cursor_start`, `--start-cursor` and `--end-cursor` without an offset are read in on a cursor of times, and that a Python table's `ctx.cursor_value` and `ctx.cursor_end` arrive in; UTC when unset. See [Times without an offset](#times-without-an-offset). |
+| `on_cursor_out_of_range` | Python tables only. `fail` (default), `skip` or `warn`: what a load does with rows the function returns outside the window it was asked for. See [Rows outside the window](#rows-outside-the-window). |
+| `timezone` | The IANA zone, such as `"Europe/Paris"`, that `cursor_start`, `--start-cursor` and `--end-cursor` without an offset are read in on a cursor of times, and that a Python table's `ctx.cursor_value` and `ctx.cursor_end` arrive in; UTC when unset. See [Times without an offset](#times-without-an-offset). |
 
 Where the read starts, in order:
 
@@ -40,11 +40,9 @@ Where the read starts, in order:
 
 `plan` says which one applies, on the table's `reads` line.
 
-From 0.27.0, text cursors compare by Unicode code point on both sides,
+Text cursors compare by Unicode code point on both sides,
 whatever collation the source column or the destination uses, so `'B1'` comes before `'a9'`.
-Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`. Before,
-each side used its own collation. A linguistic one, such as `en_US` or a case-insensitive ICU
-collation, could then read rows again on every run.
+Postgres sources and targets compare with `COLLATE "C"`, and Snowflake with `utf8`.
 
 - Postgres stops using a plain index on a text cursor for the read, the destination's
   maximum and `delete_insert`'s deletes, unless the column is already `COLLATE "C"`. Create the
@@ -64,7 +62,7 @@ nothing. A row whose cursor is NULL loads on the first run, which reads everythi
 again while its cursor stays NULL: an edit to it, or a new row with a NULL cursor, never loads.
 Systems that set a modified date only after the first edit leave it NULL on every row never edited.
 
-From 0.51.0, a load that would skip such rows fails the table instead. Before the read, SQLLoad
+A load that would skip such rows fails the table instead. Before the read, SQLLoad
 counts the source rows with a NULL cursor (`SELECT count(*) ... WHERE <cursor> IS NULL` on a
 database or warehouse source; a Python table counts the rows it yields). On a database or warehouse
 source, the table fails before its read when there are any, and nothing is written. A Python table
@@ -149,7 +147,7 @@ $ sqlload plan -v app__orders --start-cursor 2026-10-01 --end-cursor 2026-10-08
 
 Every selected table must have the same kind of cursor. Select tables of one cursor type per run.
 
-From 0.52.0, the typed flags range a selection with both kinds, as in SQLBuild. `--start-cursor-ts`
+The typed flags range a selection with both kinds, as in SQLBuild. `--start-cursor-ts`
 and `--end-cursor-ts` take an RFC 3339 timestamp or a date, and apply to date and timestamp cursors.
 `--start-cursor-int` and `--end-cursor-int` take an integer, and apply to integer cursors. Give
 both kinds in one run, and each table takes the flags of its cursor's kind:
@@ -186,7 +184,7 @@ before its first load, takes one kind of typed flag only.
 
 ## Fiscal year tables
 
-From 0.52.0, `lookback` on an integer cursor counts back that many cursor units. An ERP table
+`lookback` on an integer cursor counts back that many cursor units. An ERP table
 with no timestamp, only `fiscal_year` and `fiscal_period`, can reload from the destination's
 latest year with `delete_insert`. With `lookback = 1` it reloads the year before too, so late
 adjustments to last year still land after the year-end close:
@@ -236,11 +234,11 @@ and `merge` publish once per run (last row below). `plan -v` of one table shows 
 | Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
 | Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |
 | `replace` and `--reload` | Once, at the end: the new table is swapped in. |
-| `delete_insert` into ClickHouse in windows or cursor order, and from 0.60.0 `append` and `merge` | Once, at the end: everything read is staged and published together. A merge also commits every 10 million waiting rows, and with `on_duplicate_keys = "fail"` it commits each batch. A stopped run publishes nothing after its last commit, so split a long backfill with `--end-cursor`. |
+| `delete_insert` into ClickHouse in windows or cursor order, and `append` and `merge` | Once, at the end: everything read is staged and published together. A merge also commits every 10 million waiting rows, and with `on_duplicate_keys = "fail"` it commits each batch. A stopped run publishes nothing after its last commit, so split a long backfill with `--end-cursor`. |
 
 With `batch_size`, the first run needs a start, from `cursor_start` or `--start-cursor`. A Postgres
 integer cursor without `--end-cursor` ends at its maximum when `plan` ran. Other sources can't report
-their maximum, so an integer `batch_size` there needs `--end-cursor`. From 0.51.0 that includes
+their maximum, so an integer `batch_size` there needs `--end-cursor`. That includes
 `--reload`, which reads the windows from `cursor_start` (or `--start-cursor`) up to `--end-cursor`
 into a new table and swaps it in once at the end. The rebuilt table holds only that range; see
 [Reloading](/docs/cli/load/#reloading).
@@ -288,7 +286,7 @@ A Python table with `batch_size` is called once per window, with `ctx.cursor_val
 
 ### Reading windows at once
 
-From 0.65.0, a Postgres table with `batch_size` can read several windows at once while still
+A Postgres table with `batch_size` can read several windows at once while still
 committing them one at a time, in window order. Set `microbatch_concurrency = true` at the top of
 the project, then `batch_concurrency` on the table or its source:
 
@@ -323,7 +321,7 @@ once`, and notes the connections the read uses. Other sources, and tables that c
 
 ## Rows outside the window
 
-From 0.53.0. A Python table's function is asked for one window at a time, from `ctx.cursor_value`
+A Python table's function is asked for one window at a time, from `ctx.cursor_value`
 to `ctx.cursor_end`, and SQLLoad checks the rows it returns against that window by the read's own
 rule: from its start, or after it when `ctx.cursor_inclusive` is `False`, and before its end. The
 start that `lookback` or `append_cursor_inclusive = true` gives is part of the window, so the rows
@@ -391,7 +389,7 @@ Other sources filter their reads themselves, so the check is for Python tables o
 
 ### Times without an offset
 
-From 0.53.0. On a cursor of times with a time zone, `timezone` sets the zone that a `cursor_start`,
+On a cursor of times with a time zone, `timezone` sets the zone that a `cursor_start`,
 `--start-cursor` or `--end-cursor` without an offset is read in. A Python table's
 `ctx.cursor_value` and `ctx.cursor_end` arrive in that zone, as `datetime` values with a
 `zoneinfo.ZoneInfo`, so a function can send them to an API that reads times in it. Without
@@ -483,12 +481,14 @@ See [`sqlload logged-state`](/docs/cli/logged-state/) for every subcommand and f
 
 ### Unfinished appends
 
-From 0.68.0, a DuckDB or MotherDuck table can commit one load in
+A DuckDB or MotherDuck table can commit one load in
 [pieces](/docs/cli/load/#large-rows-in-duckdb) when its rows are too large for one commit. A rerun
 of a `merge` or `delete_insert` replaces what a stopped load's pieces wrote, but an `append` would
 add those rows again. So an `append`'s first piece also writes a row to `_sqlload_unfinished`, in
-the run log's schema, in the same transaction. Every `append` into DuckDB or MotherDuck creates
-that table when it starts, so it's there, empty, even when no load needed pieces. A row holds the
+the run log's schema, in the same transaction. Every `append` into DuckDB or MotherDuck under a
+memory budget creates that table when it starts, so it's there, empty, even when no load needed
+pieces. With [`memory_limit = "off"`](/docs/cli/load/#memory-budget) nothing is cut into pieces,
+and an `append` neither needs nor creates it. A row holds the
 table, the load's id, the column holding it (`_sqlload_load_id`) and when the load started. The
 load's last commit removes the row in its own transaction, so a crash between them can't leave
 rows without a marker, or a marker without rows.
