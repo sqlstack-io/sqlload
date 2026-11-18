@@ -265,7 +265,7 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
             expected_output: &["{table}", "one k value", "memory_limit"],
         },
         WideLoadTestCase {
-            description: "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads",
+            description: "past 90% of the budget the watchdog interrupts the largest table, which rolls back and fails, keeping its rows; the other loads, and the run goes on to its end",
             table: "wide_tripped",
             settings: "write_strategy = \"replace\"",
             rows: 300,
@@ -276,7 +276,7 @@ fn given_rows_no_commit_can_hold_when_loading_them_then_only_their_table_stops_n
                 (true, "300:300:0|2:2:0|none"),
                 (false, "300:300:0|2:2:0|none"),
             ],
-            expected_output: &["{table}", "90%", "memory_limit", "batch_size"],
+            expected_output: &["{table}", "90%", "memory_limit", "batch_size", "1 loaded, 1 failed"],
         },
     ];
     run_async(|| async move {
