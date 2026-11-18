@@ -10,4 +10,7 @@ pub enum BridgeError {
     /// DuckDB refused the request, in its own words.
     #[error("{0}")]
     Engine(String),
+    /// What the caller's batch consumer failed with, as it said it.
+    #[error("{0}")]
+    Consumer(String),
 }

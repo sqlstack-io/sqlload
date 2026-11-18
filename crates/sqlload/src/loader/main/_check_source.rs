@@ -9,7 +9,6 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
 use crate::project::models::{ConnectionConfig, ProjectConfig, SourceConfig, SourceKind};
 use crate::sheets_source::main::tab_ranges::tab_ranges;
-use crate::sql_api::main::execute_sql::execute_sql;
 
 /// What source `source` reads as, or why it cannot connect; for Postgres, what protects the connection and the bastion it goes through (a failure names the hop: the SSH tunnel, or the database via it).
 pub(in crate::loader) async fn check_source(
@@ -25,16 +24,7 @@ pub(in crate::loader) async fn check_source(
                     "a snowflake source opens as a Snowflake reader".to_owned(),
                 ));
             };
-            let answer = execute_sql(
-                &snowflake.sql,
-                "SELECT CURRENT_USER() || '@' || CURRENT_ACCOUNT() || ', warehouse ' || COALESCE(CURRENT_WAREHOUSE(), 'none') || ', Snowflake ' || CURRENT_VERSION()",
-            )
-            .await?;
-            Ok(answer
-                .rows
-                .first()
-                .and_then(|row| row.first().cloned().flatten())
-                .unwrap_or_default())
+            Ok(crate::snowflake_source::main::describe_source::describe_source(&snowflake).await?)
         }
         SourceKind::BigQuery => {
             let SourceReader::BigQuery(reader) = open_source(project, source, 1).await? else {
@@ -57,9 +47,19 @@ pub(in crate::loader) async fn check_source(
             ))
         }
         SourceKind::Databricks => check_databricks(project, source).await,
+        #[cfg(feature = "duckdb")]
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            let reader = crate::duckdb_source::main::duckdb_reader::duckdb_reader(project, source)?;
+            Ok(crate::duckdb_source::main::describe_source::describe_source(&reader).await?)
+        }
+        #[cfg(not(feature = "duckdb"))]
+        SourceKind::DuckDb | SourceKind::MotherDuck => Err(LoaderError::Invalid(
+            crate::loader::constants::NO_DUCKDB_SOURCE.to_owned(),
+        )),
         #[cfg(feature = "odbc")]
         SourceKind::Odbc => {
-            let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
+            let reader = crate::odbc_source::main::source_reader::source_reader(project, source)
+                .map_err(LoaderError::Invalid)?;
             Ok(crate::odbc_source::main::describe_source::describe_source(&reader).await?)
         }
         #[cfg(not(feature = "odbc"))]

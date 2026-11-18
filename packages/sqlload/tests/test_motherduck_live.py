@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import duckdb
 import pytest
 
 TOKEN_VARIABLE = "SQLLOAD_TEST_MOTHERDUCK_TOKEN"
@@ -80,13 +81,13 @@ print(json.dumps(rows, default=str))
 
 @pytest.fixture(scope="module")
 def python(tmp_path_factory: pytest.TempPathFactory) -> str:
-	"""A Python with duckdb 1.5.6, the newest version MotherDuck accepts."""
+	"""A Python with duckdb 1.5.6, the newest version MotherDuck accepts, and pyarrow, which a source's rows stream through."""
 	folder = tmp_path_factory.mktemp("duckdb15")
 	uv = shutil.which("uv")
 	assert uv, "the live MotherDuck tests need uv to build a duckdb 1.5.6 environment"
 	subprocess.run([uv, "venv", "--quiet", "--python", "3.12", str(folder / "venv")], check=True)
 	executable = folder / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-	subprocess.run([uv, "pip", "install", "--quiet", "--python", str(executable), "duckdb==1.5.6"], check=True)
+	subprocess.run([uv, "pip", "install", "--quiet", "--python", str(executable), "duckdb==1.5.6", "pyarrow"], check=True)
 	return str(executable)
 
 
@@ -200,3 +201,67 @@ def test_given_json_type_variant_when_loading_into_live_motherduck_then_dicts_la
 	assert admin(
 		python, f"SELECT variant_typeof(payload), CAST(payload.user.id AS BIGINT) FROM {database}.raw.cloud__customers"
 	) == [["OBJECT(user)", 42]]
+
+
+SOURCE_PROJECT = """\
+[connections.md]
+kind = "motherduck"
+database = "{database}"
+token = "${{ENV:{variable}}}"
+
+[connections.wh]
+kind = "duckdb"
+database = "wh.duckdb"
+
+[targets.local]
+connection = "wh"
+loader_schema = "raw"
+
+[sources.shop]
+kind = "motherduck"
+connection = "md"
+destination = "local"
+description = "The shop's MotherDuck database."
+include = ["sales.*"]
+exclude_columns = ["card"]
+write_strategy = "replace"
+
+[sources.shop.tables."sales.orders"]
+description = "Orders, merged after their cursor."
+write_strategy = "merge"
+unique_key = ["id"]
+cursor_column = "updated_at"
+where = "region = 'EU'"
+
+[sources.shop.tables.big_query]
+description = "Orders over 25, by query."
+sql = "SELECT id, amount FROM sales.orders WHERE amount > 25"
+"""
+
+
+def test_given_a_motherduck_source_when_loading_again_then_its_tables_and_queries_land_in_duckdb_and_the_cursor_merges_changes(
+	tmp_path: Path, python: str, database: str
+) -> None:
+	admin(
+		python,
+		f"CREATE SCHEMA {database}.sales",
+		f"CREATE TABLE {database}.sales.orders (id INTEGER PRIMARY KEY, amount DECIMAL(12,2), updated_at TIMESTAMP, tags VARCHAR[], card VARCHAR, region VARCHAR)",
+		f"INSERT INTO {database}.sales.orders VALUES (1, 10.50, '2026-01-01', ['a'], '4111', 'EU'), (2, 20.00, '2026-01-02', [], '4222', 'EU'), (3, 30.25, '2026-01-03', NULL, '4333', 'US')",
+	)
+	(tmp_path / "sqlload.toml").write_text(SOURCE_PROJECT.format(database=database, variable=TOKEN_VARIABLE))
+	debug = sqlload(tmp_path, python, "debug")
+	assert debug.returncode == 0 and f"{database} on MotherDuck, through DuckDB v1.5.6" in debug.stdout, debug.stdout + debug.stderr
+	load(tmp_path, python)
+	admin(
+		python,
+		f"UPDATE {database}.sales.orders SET amount = 21.00, updated_at = '2026-01-05' WHERE id = 2",
+		f"INSERT INTO {database}.sales.orders VALUES (4, 40.00, '2026-01-06', ['b', 'c'], '4444', 'EU')",
+	)
+	load(tmp_path, python)
+	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as local:
+		orders = local.execute("SELECT id, CAST(amount AS VARCHAR), CAST(tags AS VARCHAR) FROM raw.shop__orders ORDER BY id").fetchall()
+		big = local.execute("SELECT id FROM raw.shop__big_query ORDER BY id").fetchall()
+		columns = local.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'shop__orders' ORDER BY ordinal_position").fetchall()
+	assert orders == [(1, "10.50", '["a"]'), (2, "21.00", "[]"), (4, "40.00", '["b","c"]')]
+	assert big == [(3,), (4,)]
+	assert "card" not in [column[0] for column in columns]

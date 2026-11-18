@@ -37,6 +37,9 @@ pub enum LoaderError {
     #[cfg(feature = "odbc")]
     #[error(transparent)]
     Odbc(#[from] crate::odbc_source::errors::OdbcSourceError),
+    #[cfg(feature = "duckdb")]
+    #[error(transparent)]
+    DuckDbSource(#[from] crate::duckdb_source::errors::DuckDbSourceError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]

@@ -432,6 +432,16 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
                 &spec.pinned,
             )
         }
+        #[cfg(feature = "duckdb")]
+        (None, None)
+            if system(crate::duckdb_source::constants::DUCKDB_SOURCE)
+                || system(crate::duckdb_source::constants::MOTHERDUCK_SOURCE) =>
+        {
+            crate::duckdb_source::main::read_columns::read_columns(
+                &selected_columns(spec),
+                &spec.pinned,
+            )
+        }
         #[cfg(feature = "odbc")]
         (None, None)
             if spec
@@ -1857,7 +1867,8 @@ pub(crate) async fn block_refused_bounds(
     (source_name, source): (&str, &crate::project::models::SourceConfig),
     planned: &mut [TablePlan],
 ) -> Result<(), LoaderError> {
-    let reader = crate::loader::_helpers::sources::odbc_source_reader(project, source)?;
+    let reader = crate::odbc_source::main::source_reader::source_reader(project, source)
+        .map_err(LoaderError::Invalid)?;
     for table in planned
         .iter_mut()
         .filter(|table| table.schema.blocked.is_none())

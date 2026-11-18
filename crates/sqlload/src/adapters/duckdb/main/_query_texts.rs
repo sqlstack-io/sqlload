@@ -3,7 +3,7 @@
 use crate::adapters::duckdb::_helpers::blocking::with_connection;
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
-use crate::adapters::motherduck_bridge::main::_run_statement::run_statement;
+use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 
 /// The first column of every row of `query`, as text; SQL `NULL`s are skipped.
 pub(in crate::adapters) async fn query_texts(

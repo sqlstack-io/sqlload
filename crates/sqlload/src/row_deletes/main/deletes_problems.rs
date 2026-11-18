@@ -27,6 +27,8 @@ pub fn deletes_problems(
             | SourceKind::Snowflake
             | SourceKind::BigQuery
             | SourceKind::Databricks
+            | SourceKind::DuckDb
+            | SourceKind::MotherDuck
     ) {
         problems.push(format!(
             "deletes reads every key of the source table to find the ones it no longer holds, which only database and warehouse sources list; a {} source can't. Fix: remove deletes",

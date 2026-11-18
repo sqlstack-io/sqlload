@@ -1,9 +1,10 @@
+pub(in crate::odbc_source) mod _odbc_reader;
 pub mod count_rows;
 pub mod describe_source;
 pub mod memory_warning;
-pub mod odbc_reader;
 pub mod plan_fetches;
 pub mod read_catalog;
 pub mod read_columns;
 pub mod read_rows;
 pub mod run_query;
+pub mod source_reader;

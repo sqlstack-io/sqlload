@@ -1702,42 +1702,48 @@ async fn failed_count(
     table: &SourceTable,
     filter: &str,
 ) -> Option<String> {
-    match reader? {
-        SourceReader::Postgres(client, _) => {
-            crate::postgres_source::main::count_rows::count_rows(client, table, filter)
-                .await
-                .err()
-                .map(|error| error.to_string())
-        }
-        SourceReader::Snowflake(snowflake) => {
-            crate::snowflake_source::main::count_rows::count_rows(snowflake, (table, None), filter)
-                .await
-                .err()
-                .map(|error| error.to_string())
-        }
+    let failed = match reader? {
         SourceReader::BigQuery(bigquery) => {
             crate::bigquery_source::main::dry_count::dry_count(bigquery, (table, None), filter)
                 .await
                 .err()
-                .map(|error| error.to_string())
+                .map(LoaderError::from)
+        }
+        reader => count_rows(reader, (table, None), filter).await.err(),
+    };
+    failed.map(|error| error.to_string())
+}
+
+/// How many rows of `table` (or of its query `sql`) `filter` selects, counted by the source's database; `None` for a files or Google Sheets source, which has no database to ask.
+pub(crate) async fn count_rows(
+    reader: &SourceReader,
+    (table, sql): (&SourceTable, Option<&str>),
+    filter: &str,
+) -> Result<Option<u64>, LoaderError> {
+    Ok(Some(match reader {
+        SourceReader::Postgres(client, _) => {
+            crate::postgres_source::main::count_rows::count_rows(client, table, filter).await?
+        }
+        SourceReader::Snowflake(snowflake) => {
+            crate::snowflake_source::main::count_rows::count_rows(snowflake, (table, sql), filter)
+                .await?
+        }
+        SourceReader::BigQuery(bigquery) => {
+            crate::bigquery_source::main::count_rows::count_rows(bigquery, (table, sql), filter)
+                .await?
         }
         SourceReader::Databricks(databricks) => {
-            crate::databricks_source::main::count_rows::count_rows(
-                databricks,
-                (table, None),
-                filter,
-            )
-            .await
-            .err()
-            .map(|error| error.to_string())
+            crate::databricks_source::main::count_rows::count_rows(databricks, (table, sql), filter)
+                .await?
         }
         #[cfg(feature = "odbc")]
         SourceReader::Odbc(odbc) => {
-            crate::odbc_source::main::count_rows::count_rows(odbc, (table, None), filter)
-                .await
-                .err()
-                .map(|error| error.to_string())
+            crate::odbc_source::main::count_rows::count_rows(odbc, (table, sql), filter).await?
         }
-        SourceReader::Files(_) | SourceReader::Sheets(..) => None,
-    }
+        #[cfg(feature = "duckdb")]
+        SourceReader::DuckDb(duckdb) => {
+            crate::duckdb_source::main::count_rows::count_rows(duckdb, (table, sql), filter).await?
+        }
+        SourceReader::Files(_) | SourceReader::Sheets(..) => return Ok(None),
+    }))
 }

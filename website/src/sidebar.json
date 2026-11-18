@@ -70,6 +70,8 @@
 					"docs/sources/snowflake",
 					"docs/sources/bigquery",
 					"docs/sources/databricks",
+					"docs/sources/duckdb",
+					"docs/sources/motherduck",
 					"docs/sources/files",
 					"docs/sources/google-sheets",
 					"docs/sources/odbc",

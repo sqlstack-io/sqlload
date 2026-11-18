@@ -21,6 +21,7 @@ pub mod copy;
 pub mod databricks_api;
 pub mod databricks_source;
 pub mod delivery;
+pub mod duckdb_source;
 pub mod envelope;
 pub mod exporter;
 pub mod file_format;

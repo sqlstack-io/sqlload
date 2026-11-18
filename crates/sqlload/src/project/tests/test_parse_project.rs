@@ -435,9 +435,9 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "unknown variant `avro`",
         },
         ParseProjectErrorTestCase {
-            description: "a query table is for snowflake, odbc, bigquery and databricks sources",
+            description: "a query table is for snowflake, odbc, bigquery, databricks, duckdb and motherduck sources",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\nsql = \"SELECT 1\"\n",
-            expected_message: "[sources.app] sql is for kind = \"snowflake\", \"odbc\", \"bigquery\" and \"databricks\"",
+            expected_message: "[sources.app] sql is for kind = \"snowflake\", \"odbc\", \"bigquery\", \"databricks\", \"duckdb\" and \"motherduck\"",
         },
         ParseProjectErrorTestCase {
             description: "a databricks connection a target loads into needs a volume to stage files in",
@@ -447,12 +447,12 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "where narrows a database table's SELECT, so a files source refuses it",
             text: "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[sources.raw]\nkind = \"files\"\nconnection = \"lake\"\npath = \"raw/\"\nformat = \"csv\"\nwhere = \"a = 1\"\n",
-            expected_message: "[sources.raw] where is for kind = \"postgres\", \"snowflake\", \"odbc\", \"bigquery\" and \"databricks\"",
+            expected_message: "[sources.raw] where is for kind = \"postgres\", \"snowflake\", \"odbc\", \"bigquery\", \"databricks\", \"duckdb\" and \"motherduck\"",
         },
         ParseProjectErrorTestCase {
             description: "a postgres_cdc source captures every change, so it refuses where on a table",
             text: "[sources.app]\nkind = \"postgres_cdc\"\nconnection = \"pg\"\ninclude = [\"public.a\"]\n[sources.app.tables.\"public.a\"]\nwhere = \"a = 1\"\n",
-            expected_message: "[sources.app] where is for kind = \"postgres\", \"snowflake\", \"odbc\", \"bigquery\" and \"databricks\"",
+            expected_message: "[sources.app] where is for kind = \"postgres\", \"snowflake\", \"odbc\", \"bigquery\", \"databricks\", \"duckdb\" and \"motherduck\"",
         },
         ParseProjectErrorTestCase {
             description: "a query table takes its condition in its sql",

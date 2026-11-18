@@ -7,6 +7,8 @@ pub mod execute;
 pub mod execute_ddl;
 pub mod helper_process;
 pub mod live_columns;
+#[cfg(feature = "duckdb")]
+pub mod open_source_bridge;
 pub mod recover_unfinished;
 pub mod single_text;
 pub mod table_destination;

@@ -1305,6 +1305,9 @@ pub enum SourceReader {
     /// A database read through its ODBC driver.
     #[cfg(feature = "odbc")]
     Odbc(Box<crate::odbc_source::models::OdbcReader>),
+    /// A DuckDB database file, opened read-only for each read.
+    #[cfg(feature = "duckdb")]
+    DuckDb(Box<crate::duckdb_source::models::DuckDbReader>),
     /// A Google Sheets client and the spreadsheet it reads.
     Sheets(crate::sheets_source::models::SheetsClient, String),
 }

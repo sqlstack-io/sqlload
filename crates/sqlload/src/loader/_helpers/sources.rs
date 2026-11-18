@@ -25,6 +25,13 @@ use crate::databricks_source::main::databricks_reader::databricks_reader;
 use crate::databricks_source::main::read_catalog::read_catalog as read_databricks_catalog;
 use crate::databricks_source::main::read_rows::read_rows as read_databricks_rows;
 use crate::databricks_source::models::DatabricksReadRequest;
+#[cfg(feature = "duckdb")]
+use crate::duckdb_source::main::{
+    duckdb_reader::duckdb_reader, read_catalog::read_catalog as read_duckdb_catalog,
+    read_rows::read_rows as read_duckdb_rows,
+};
+#[cfg(feature = "duckdb")]
+use crate::duckdb_source::models::DuckDbReadRequest;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::models::{OpenFolder, StoredFile};
 use crate::files_source::constants::{
@@ -65,6 +72,8 @@ use crate::loader::_helpers::specs::{
 };
 use crate::loader::_helpers::specs::{path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
+#[cfg(not(feature = "duckdb"))]
+use crate::loader::constants::NO_DUCKDB_SOURCE;
 use crate::loader::constants::NO_TRANSFORM_HOST;
 use crate::loader::constants::{
     DRAINED_REASON, KEPT_TABLES_COLUMN_FIX, LOCALHOST, PRIMARY_KEY_PLACEHOLDER, RELOAD_FIX,
@@ -77,6 +86,8 @@ use crate::loader::models::{
     DrainedFiles, FilesSource, PlanOptions, ResolvedTables, SkippedTable, SourceEnd, SourceProblem,
     SourceReader, TablePlan, TableSpec,
 };
+#[cfg(feature = "odbc")]
+use crate::odbc_source::main::source_reader::source_reader;
 use crate::postgres_source::constants::DEFAULT_BATCH_BYTES;
 use crate::postgres_source::main::connect_postgres::connect_postgres;
 use crate::postgres_source::main::copy_table::copy_table;
@@ -226,6 +237,14 @@ pub(crate) async fn open_source(
         SourceKind::Databricks => Ok(SourceReader::Databricks(Box::new(databricks_reader(
             project, source,
         )?))),
+        #[cfg(feature = "duckdb")]
+        SourceKind::DuckDb | SourceKind::MotherDuck => Ok(SourceReader::DuckDb(Box::new(
+            duckdb_reader(project, source)?,
+        ))),
+        #[cfg(not(feature = "duckdb"))]
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned()))
+        }
         SourceKind::Python => Err(LoaderError::Invalid(
             "a Python source is read by calling its table functions".to_owned(),
         )),
@@ -370,45 +389,25 @@ pub(crate) async fn source_tables(
                 .map(|tables| (tables, None, Vec::new()))
                 .map_err(|error| LoaderError::from(error).into()))
         }
+        #[cfg(feature = "duckdb")]
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            let read =
+                async { read_duckdb_catalog(&duckdb_reader(project, source)?, source).await };
+            Ok(read
+                .await
+                .map(|tables| (tables, None, Vec::new()))
+                .map_err(|error| LoaderError::from(error).into()))
+        }
+        #[cfg(not(feature = "duckdb"))]
+        SourceKind::DuckDb | SourceKind::MotherDuck => {
+            Ok(Err(LoaderError::Invalid(NO_DUCKDB_SOURCE.to_owned()).into()))
+        }
         SourceKind::Python => Ok(Ok((python_tables(source), None, Vec::new()))),
         SourceKind::GoogleSheets => Ok(match sheets_tables(project, source).await {
             Ok((tables, warnings)) => Ok((tables, None, warnings)),
             Err(error) => Err(error.into()),
         }),
     }
-}
-
-/// An `odbc` source's reader, for its connection's settings and the source's value caps.
-#[cfg(feature = "odbc")]
-pub(crate) fn odbc_source_reader(
-    project: &ProjectConfig,
-    source: &SourceConfig,
-) -> Result<crate::odbc_source::models::OdbcReader, LoaderError> {
-    let Some(ConnectionConfig::Odbc {
-        connection_string,
-        dsn,
-        user,
-        password,
-    }) = project.connections.get(&source.connection)
-    else {
-        return Err(LoaderError::Invalid(format!(
-            "connection {:?} is not an odbc connection",
-            source.connection
-        )));
-    };
-    let limits = crate::odbc_source::models::ValueLimits {
-        max_text_size: source.max_text_size,
-        max_binary_size: source.max_binary_size,
-        long_column_threshold: source
-            .long_column_threshold
-            .map(|size| usize::try_from(size.0).unwrap_or(usize::MAX)),
-    };
-    crate::odbc_source::main::odbc_reader::odbc_reader(
-        (connection_string.as_ref(), dsn.as_deref()),
-        (user.as_deref(), password.as_ref()),
-        limits,
-    )
-    .map_err(LoaderError::Invalid)
 }
 
 /// `planned`, each unblocked table of ODBC source `source` given how its rows are fetched on this machine: its budget, and in bulk or value by value (see [`plan_fetches`](plan_fetches)).
@@ -418,7 +417,7 @@ pub(crate) async fn with_fetch_memory(
     source: &SourceConfig,
     mut planned: Vec<TablePlan>,
 ) -> Result<Vec<TablePlan>, LoaderError> {
-    let reader = odbc_source_reader(project, source)?;
+    let reader = source_reader(project, source).map_err(LoaderError::Invalid)?;
     let open: Vec<usize> = (0..planned.len())
         .filter(|&index| planned[index].schema.blocked.is_none())
         .collect();
@@ -458,9 +457,9 @@ pub(crate) async fn with_fetch_memory(
 
 #[cfg(feature = "odbc")]
 fn open_odbc(project: &ProjectConfig, source: &SourceConfig) -> Result<SourceReader, LoaderError> {
-    Ok(SourceReader::Odbc(Box::new(odbc_source_reader(
-        project, source,
-    )?)))
+    Ok(SourceReader::Odbc(Box::new(
+        source_reader(project, source).map_err(LoaderError::Invalid)?,
+    )))
 }
 
 #[cfg(not(feature = "odbc"))]
@@ -477,7 +476,7 @@ async fn discover_odbc(
     source: &SourceConfig,
     queries: &[(String, String)],
 ) -> Result<Vec<SourceTable>, String> {
-    let reader = odbc_source_reader(project, source).map_err(|error| error.to_string())?;
+    let reader = source_reader(project, source)?;
     crate::odbc_source::main::read_catalog::read_catalog(
         &reader,
         (
@@ -1595,6 +1594,19 @@ async fn read_each(
                 filter: filter.as_deref(),
             };
             Ok(read_databricks_rows(reader, &request, on_batch).await?)
+        }
+        #[cfg(feature = "duckdb")]
+        (SourceReader::DuckDb(reader), _) => {
+            let filter = table
+                .spec
+                .read_filter(part.filter.or_else(|| table.source_filter.clone()));
+            let request = DuckDbReadRequest {
+                table: &table.spec.source_table,
+                sql: table.spec.query_sql(),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+            };
+            Ok(read_duckdb_rows(reader, &request, SOURCE_BATCH_ROWS, on_batch).await?)
         }
         (SourceReader::Sheets(client, spreadsheet_id), _) => {
             let batches =

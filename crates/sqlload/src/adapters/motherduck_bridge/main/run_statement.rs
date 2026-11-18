@@ -1,11 +1,11 @@
 //! Run SQL on a bridge connection.
 
-use crate::adapters::motherduck_bridge::_helpers::process::{failure, send};
+use crate::adapters::motherduck_bridge::_helpers::process::{ask, failure};
 use crate::adapters::motherduck_bridge::errors::BridgeError;
 use crate::adapters::motherduck_bridge::models::BridgeConnection;
 
 /// Run `sql` (one statement or several, separated by `;`) with text `params` bound to its `?`s, after every earlier statement on `connection`, and return the last statement's rows: each value as text (numbers and booleans as their SQL text), `None` for `NULL`.
-pub(in crate::adapters) async fn run_statement(
+pub(crate) async fn run_statement(
     connection: &BridgeConnection,
     sql: String,
     params: Vec<String>,
@@ -13,14 +13,7 @@ pub(in crate::adapters) async fn run_statement(
     let cursor = &connection.cursor;
     let request =
         serde_json::json!({"op": "run", "cursor": cursor.id, "sql": sql, "params": params});
-    let received = send(&cursor.process, request)?;
-    let python = cursor.process.python.clone();
-    let reply = tokio::task::spawn_blocking(move || received.recv())
-        .await
-        .map_err(|error| BridgeError::Stopped(error.to_string()))?
-        .map_err(|_| {
-            BridgeError::Stopped(format!("the MotherDuck bridge on {python} stopped"))
-        })??;
+    let reply = ask(cursor, request).await?;
     if let Some((error, _)) = failure(&reply) {
         return Err(BridgeError::Engine(error));
     }

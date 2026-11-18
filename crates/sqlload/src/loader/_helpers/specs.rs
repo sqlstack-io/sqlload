@@ -7,7 +7,6 @@ use crate::adapters::contract::models::{ChangeApply, TableName, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
-use crate::bigquery_source::main::count_rows::count_rows as count_bigquery_rows;
 use crate::cdc::constants::{
     BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
 };
@@ -19,7 +18,7 @@ use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::databricks_source::constants::DATABRICKS_SOURCE;
-use crate::databricks_source::main::count_rows::count_rows as count_databricks_rows;
+use crate::duckdb_source::constants::{DUCKDB_SOURCE, MOTHERDUCK_SOURCE};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
@@ -43,7 +42,6 @@ use crate::loader::models::{
 };
 use crate::loader::models::{SourceReader, TablePlan};
 use crate::masking::models::MaskRules;
-use crate::postgres_source::main::count_rows::count_rows as count_postgres_rows;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::postgres_source::models::{ReadColumn, WireType};
 use crate::project::constants::DEFAULT_MAX_DEPTH;
@@ -66,7 +64,6 @@ use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
-use crate::snowflake_source::main::count_rows::count_rows as count_snowflake_rows;
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -532,17 +529,21 @@ pub(crate) fn build_spec(
         deletes,
         tombstones_of: overrides.tombstones_of.clone(),
         warehouse_source: match context.source.kind {
-            kind @ (SourceKind::Odbc | SourceKind::BigQuery | SourceKind::Databricks) => {
-                Some(WarehouseSource {
-                    system: match kind {
-                        SourceKind::Odbc => ODBC_SOURCE,
-                        SourceKind::BigQuery => BIGQUERY_SOURCE,
-                        _ => DATABRICKS_SOURCE,
-                    },
-                    sql: overrides.sql.clone(),
-                    route: WarehouseRoute::Query,
-                })
-            }
+            kind @ (SourceKind::Odbc
+            | SourceKind::BigQuery
+            | SourceKind::Databricks
+            | SourceKind::DuckDb
+            | SourceKind::MotherDuck) => Some(WarehouseSource {
+                system: match kind {
+                    SourceKind::Odbc => ODBC_SOURCE,
+                    SourceKind::BigQuery => BIGQUERY_SOURCE,
+                    SourceKind::Databricks => DATABRICKS_SOURCE,
+                    SourceKind::DuckDb => DUCKDB_SOURCE,
+                    _ => MOTHERDUCK_SOURCE,
+                },
+                sql: overrides.sql.clone(),
+                route: WarehouseRoute::Query,
+            }),
             _ => warehouse_source(context.source, overrides),
         },
         row_filter: layered(&settings.row_filter, &defaults.row_filter)
@@ -783,7 +784,9 @@ pub(crate) fn missing_description(
         | SourceKind::Snowflake
         | SourceKind::Odbc
         | SourceKind::BigQuery
-        | SourceKind::Databricks => format!(
+        | SourceKind::Databricks
+        | SourceKind::DuckDb
+        | SourceKind::MotherDuck => format!(
             "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
         ),
     };
@@ -1384,31 +1387,7 @@ pub(crate) async fn null_cursor_rows(
         .warehouse_source
         .as_ref()
         .and_then(|source| source.sql.as_deref());
-    let counted = match reader {
-        SourceReader::Postgres(client, _) => {
-            count_postgres_rows(client, &spec.source_table, &filter).await?
-        }
-        SourceReader::Snowflake(snowflake) => {
-            count_snowflake_rows(snowflake, (&spec.source_table, sql), &filter).await?
-        }
-        SourceReader::BigQuery(bigquery) => {
-            count_bigquery_rows(bigquery, (&spec.source_table, sql), &filter).await?
-        }
-        SourceReader::Databricks(databricks) => {
-            count_databricks_rows(databricks, (&spec.source_table, sql), &filter).await?
-        }
-        #[cfg(feature = "odbc")]
-        SourceReader::Odbc(odbc) => {
-            crate::odbc_source::main::count_rows::count_rows(
-                odbc,
-                (&spec.source_table, sql),
-                &filter,
-            )
-            .await?
-        }
-        SourceReader::Files(_) | SourceReader::Sheets(..) => return Ok(None),
-    };
-    Ok(Some(counted))
+    crate::loader::_helpers::resolve::count_rows(reader, (&spec.source_table, sql), &filter).await
 }
 
 /// Why `spec`'s load fails: `rows` source rows have a NULL cursor, which its incremental read never selects, so they would never load; with the fixes `plan` accepts for the table: `null_cursor = "include"` on `merge`, a coalesced cursor where one may be listed (not a Python table, `delete_insert` or a files target), and `null_cursor = "ignore"`.
