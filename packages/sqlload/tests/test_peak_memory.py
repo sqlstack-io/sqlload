@@ -1,4 +1,4 @@
-"""Peak memory: the run's in every `load --json`, and each table's with `--memory-per-table` (Linux), on a Python source."""
+"""Peak memory: the run's in every `load --json`, and each table's with `--memory-per-table` (Linux), on a Python source; and a budget too small for any table."""
 
 import json
 import os
@@ -7,6 +7,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import duckdb
 import pytest
 
 PROJECT = """\
@@ -80,3 +81,27 @@ def test_memory_per_table_measures_each_table_from_its_own_start(tmp_path: Path,
 	large, small = (second_peak, first_peak) if second == "large" else (first_peak, second_peak)
 	# Building and loading the large table counts in its own peak; the reset before the small table keeps it out of the small one's, apart from what the process still holds.
 	assert large - small > 300 * MEGABYTE, (first, second, tables)
+
+
+def test_a_budget_too_small_for_any_table_stops_the_load_before_it_writes(tmp_path: Path) -> None:
+	"""A 256MB budget leaves the tables nothing after DuckDB's share: `load` refuses like `plan`, creating and loading no table."""
+	(tmp_path / "sources").mkdir()
+	(tmp_path / "sqlload.toml").write_text(PROJECT)
+	(tmp_path / "sources" / "shop.py").write_text(textwrap.dedent(MODULE.format(first="small", second="small")))
+	home = tmp_path / "home"
+	home.mkdir()
+	env = {**os.environ, "HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"), "XDG_CACHE_HOME": str(home / ".cache")}
+	done = subprocess.run(
+		[sys.executable, "-c", "from sqlload._cli import main; main()", "load", "--memory-limit", "256MB"],
+		cwd=tmp_path,
+		env=env,
+		capture_output=True,
+		text=True,
+	)
+	output = done.stdout + done.stderr
+	assert done.returncode == 1, output
+	assert "raise memory_limit to at least" in output, output
+	assert "loaded" not in output and "created" not in output, output
+	with duckdb.connect(str(tmp_path / "wh.duckdb")) as connection:
+		tables = connection.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'RAW'").fetchall()
+	assert tables == [], tables

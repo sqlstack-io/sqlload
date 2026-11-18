@@ -497,6 +497,12 @@ async fn run_command(
     if !applies {
         return Ok((lines, exit_code(planned, plan_retryable)));
     }
+    if loads && project.memory.problem.is_some() {
+        return Ok(match json {
+            true => (vec![json_report(&plan, None).0], exit_code(false, false)),
+            false => (lines, exit_code(false, false)),
+        });
+    }
     if follow.is_some() && !render_plan(&plan, verbose).1 {
         return Ok(match json {
             true => {

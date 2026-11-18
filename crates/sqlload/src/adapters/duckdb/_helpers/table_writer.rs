@@ -78,7 +78,7 @@ impl TableWriter for DuckDbWriter {
     fn reopen_rows(&mut self) {}
 
     async fn rollback_batch(&mut self) {
-        if self.open_transaction
+        if std::mem::take(&mut self.open_transaction)
             && let Err(error) =
                 execute_statements(&self.destination, vec!["ROLLBACK".to_owned()]).await
         {
