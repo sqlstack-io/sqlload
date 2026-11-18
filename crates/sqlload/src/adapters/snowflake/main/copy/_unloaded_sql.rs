@@ -93,7 +93,7 @@ fn column_value(request: &UnloadedLoad<'_>, column: &DesiredColumn, rows: &Rows<
                         })
                         .collect();
                     format!(
-                        "(CASE METADATA$FILENAME {} END) * {UNLOADED_FILE_ROWS} + METADATA$FILE_ROW_NUMBER",
+                        "(CASE METADATA$FILENAME {} ELSE TO_NUMBER('sqlload: unexpected unloaded file ' || METADATA$FILENAME) END) * {UNLOADED_FILE_ROWS} + METADATA$FILE_ROW_NUMBER",
                         files.join(" ")
                     )
                 }

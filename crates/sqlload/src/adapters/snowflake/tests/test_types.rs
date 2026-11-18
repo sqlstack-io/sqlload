@@ -132,3 +132,16 @@ pub(crate) struct UnloadBlockedTestCase {
     /// The reason SQLLoad reads the files instead, or `None` when Snowflake loads them itself.
     pub(crate) expected_blocked: Option<&'static str>,
 }
+
+/// How the statements loading one unload inside Snowflake are sent.
+pub(crate) struct UnloadedRequestsTestCase {
+    pub(crate) description: &'static str,
+    /// How many `COPY`s, and how long each is; `None` is one `INSERT ... SELECT`.
+    pub(crate) copies: Option<(usize, usize)>,
+    /// Whether the batch commits into the table itself.
+    pub(crate) direct: bool,
+    /// How many requests, or the start of the error.
+    pub(crate) expected_requests: Result<usize, &'static str>,
+    /// Whether the (first) request commits only when every unloaded row loads.
+    pub(crate) expected_checks_count: bool,
+}
