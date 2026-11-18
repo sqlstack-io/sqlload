@@ -29,7 +29,7 @@ use crate::loader::_helpers::python::{list_choices, unnested_table};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{readers_note, unarchived};
 use crate::loader::_helpers::table_plan::{
-    archived_reason, is_direct, publishes_once, pulls_unloaded,
+    archived_reason, is_direct, publishes_once, pulls_unloaded, selects_rows,
 };
 use crate::loader::constants::{
     CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PLAN_DETAIL_COLUMN,
@@ -693,6 +693,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         route: WarehouseRoute::Unload { stage, .. },
         ..
     }) = &spec.warehouse_source
+        && !selects_rows(table.route.as_ref())
     {
         details.push(detail("stage", stage.as_str()));
     }
@@ -843,6 +844,9 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 thousands(MAX_BATCH_FILES as u64)
             )
         }
+        (_, true) if selects_rows(table.route.as_ref()) => {
+            "the rows selected at once into a new table, swapped in once at the end".to_owned()
+        }
         (_, true) if pulls_unloaded(table.route.as_ref()) => {
             "each unload loaded at once into a new table, swapped in once at the end".to_owned()
         }
@@ -865,6 +869,9 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 _ => "",
             }
         ),
+        (CommitRule::Size, false) if selects_rows(table.route.as_ref()) => {
+            "one commit: the destination selects every row at once".to_owned()
+        }
         (CommitRule::Size, false) if pulls_unloaded(table.route.as_ref()) => {
             "one commit: the destination loads the whole unload at once".to_owned()
         }
