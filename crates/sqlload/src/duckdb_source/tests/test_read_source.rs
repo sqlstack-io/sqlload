@@ -9,12 +9,13 @@ use crate::duckdb_source::main::duckdb_reader::duckdb_reader;
 use crate::duckdb_source::main::read_catalog::read_catalog;
 use crate::duckdb_source::main::read_columns::read_columns;
 use crate::duckdb_source::main::read_rows::read_rows;
-use crate::duckdb_source::models::DuckDbReadRequest;
+use crate::duckdb_source::models::{DuckDbReadRequest, DuckDbReader};
 use crate::duckdb_source::tests::helpers::{
     SHOP, runtime, shop_project, write_from_another_process, write_when_asked,
 };
 use crate::duckdb_source::tests::test_types::{
     LockedFileTestCase, ReadCatalogTestCase, ReadRowsTestCase, RefusedReaderTestCase,
+    SharedLimitTestCase,
 };
 
 #[test]
@@ -232,6 +233,57 @@ fn given_open_reads_of_a_file_when_another_process_writes_it_then_it_is_locked_u
             "{}: {said}",
             test_case.description
         );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_reads_sharing_a_file_when_they_open_and_end_then_its_memory_limit_is_one_read_limit_each()
+-> Result<(), String> {
+    let test_cases = [
+        SharedLimitTestCase {
+            description: "one read gets its own limit",
+            reads: 1,
+            ended: 0,
+            expected_limit: "128.0 MiB",
+        },
+        SharedLimitTestCase {
+            description: "three reads at once get three limits",
+            reads: 3,
+            ended: 0,
+            expected_limit: "384.0 MiB",
+        },
+        SharedLimitTestCase {
+            description: "two of three ended: one limit is left",
+            reads: 3,
+            ended: 2,
+            expected_limit: "128.0 MiB",
+        },
+    ];
+    for test_case in test_cases {
+        let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = folder.path().join("shop.duckdb");
+        duckdb::Connection::open(&path)
+            .and_then(|connection| connection.execute_batch(SHOP))
+            .map_err(|error| error.to_string())?;
+        let project = shop_project(&path.display().to_string(), "")?;
+        let reader = DuckDbReader {
+            memory_limit: Some(128 * 1024 * 1024),
+            ..duckdb_reader(&project, &project.sources["shop"])
+                .map_err(|error| error.to_string())?
+        };
+        let mut reads = (0..test_case.reads)
+            .map(|_| open_read_only(&reader))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        reads.drain(..test_case.ended);
+        let limit: String = reads[0]
+            .connection
+            .query_row("SELECT current_setting('memory_limit')", [], |row| {
+                row.get(0)
+            })
+            .map_err(|error| error.to_string())?;
+        assert_eq!(limit, test_case.expected_limit, "{}", test_case.description);
     }
     Ok(())
 }

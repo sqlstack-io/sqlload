@@ -66,7 +66,10 @@ pub(crate) fn write_when_asked() {
     println!(
         "{}",
         written.map_or_else(
-            |error| format!("the file was locked: {error}"),
+            |error| format!(
+                "the file was {}: {error}",
+                ["not opened", "locked"][usize::from(error.to_string().contains("lock"))]
+            ),
             |()| "the file was written".to_owned()
         )
     );

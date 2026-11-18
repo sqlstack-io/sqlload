@@ -53,6 +53,8 @@ pub(crate) struct FileHold {
 #[derive(Debug)]
 pub(crate) struct OpenFile {
     pub(crate) reads: usize,
+    /// Each read's `memory_limit`; the instance gets it once for each open read.
+    pub(crate) read_limit: Option<u64>,
     pub(crate) connection: duckdb::Connection,
     pub(crate) _spill: tempfile::TempDir,
 }

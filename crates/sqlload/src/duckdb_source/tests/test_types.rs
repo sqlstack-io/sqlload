@@ -46,3 +46,12 @@ pub(crate) struct LockedFileTestCase {
     /// What the other process says.
     pub(crate) expected_said: &'static str,
 }
+
+/// Reads of one database file open in this process, some of them ended, each with a 128 MiB `memory_limit`, and the limit their shared instance has.
+pub(crate) struct SharedLimitTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) reads: usize,
+    pub(crate) ended: usize,
+    /// `current_setting('memory_limit')` as DuckDB prints it.
+    pub(crate) expected_limit: &'static str,
+}

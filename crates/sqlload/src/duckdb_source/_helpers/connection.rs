@@ -19,14 +19,18 @@ pub(crate) type TextRows = Vec<Vec<Option<String>>>;
 /// Each database file a source reads now, by its canonical path, with the one instance this process holds on it. DuckDB locks a file with POSIX locks, which belong to the process: closing a second instance on the file would drop the first one's lock too, letting another process write the file mid-read.
 static OPEN_FILES: OnceLock<Mutex<HashMap<PathBuf, OpenFile>>> = OnceLock::new();
 
-/// A connection to the reader's database file, opened read-only, so the file is never changed and SQLLoad holds no write lock on it. Reads open at the same time share one instance, given the reader's `memory_limit` and a temporary folder of its own to spill into (not the default folder beside the file).
+/// A connection to the reader's database file, opened read-only, so the file is never changed and SQLLoad holds no write lock on it. Reads open at the same time share one instance, with a temporary folder of its own to spill into (not the default folder beside the file) and a `memory_limit` of the reader's limit for each of them, as separate instances would have had.
 pub(crate) fn open_read_only(reader: &DuckDbReader) -> Result<ReadOnlyFile, DuckDbSourceError> {
     let path = std::fs::canonicalize(&reader.database)
         .map_err(|error| DuckDbSourceError::Invalid(format!("{}: {error}", reader.database)))?;
     let files = OPEN_FILES.get_or_init(Mutex::default);
     let mut open = files.lock().unwrap_or_else(PoisonError::into_inner);
-    let file = match open.entry(path.clone()) {
-        Entry::Occupied(entry) => entry.into_mut(),
+    let (file, connection) = match open.entry(path.clone()) {
+        Entry::Occupied(entry) => {
+            let file = entry.into_mut();
+            let connection = file.connection.try_clone()?;
+            (file, connection)
+        }
         Entry::Vacant(entry) => {
             let spill = tempfile::Builder::new()
                 .prefix("sqlload-duckdb-source-")
@@ -35,26 +39,39 @@ pub(crate) fn open_read_only(reader: &DuckDbReader) -> Result<ReadOnlyFile, Duck
             let config = duckdb::Config::default()
                 .access_mode(duckdb::AccessMode::ReadOnly)?
                 .with("temp_directory", spill.path().display().to_string())?;
-            let connection = duckdb::Connection::open_with_flags(&path, config)?;
-            if let Some(limit) = reader.memory_limit {
-                connection.execute_batch(&format!("SET memory_limit = '{}KiB'", limit / 1024))?;
-            }
-            entry.insert(OpenFile {
+            let instance = duckdb::Connection::open_with_flags(&reader.database, config)?;
+            let connection = instance.try_clone()?;
+            let file = entry.insert(OpenFile {
                 reads: 0,
-                connection,
+                read_limit: reader.memory_limit,
+                connection: instance,
                 _spill: spill,
-            })
+            });
+            (file, connection)
         }
     };
-    let connection = file.connection.try_clone()?;
     file.reads += 1;
-    Ok(ReadOnlyFile {
+    let limited = share_limit(file);
+    drop(open);
+    let read = ReadOnlyFile {
         connection,
         _hold: FileHold { path },
-    })
+    };
+    limited?;
+    Ok(read)
 }
 
-/// The last read of a file to end closes its instance, while it holds the open files' lock, so no new instance on the file opens before this one has closed.
+/// Give `file`'s instance its read limit for each of its open reads; nothing without a limit.
+fn share_limit(file: &OpenFile) -> Result<(), duckdb::Error> {
+    let Some(limit) = file.read_limit else {
+        return Ok(());
+    };
+    let total = limit.saturating_mul(file.reads as u64) / 1024;
+    file.connection
+        .execute_batch(&format!("SET memory_limit = '{total}KiB'"))
+}
+
+/// A read ending lowers its file's shared `memory_limit` (a limit DuckDB can't lower yet stays as it was); the last read to end closes the instance, while it holds the open files' lock, so no new instance on the file opens before this one has closed.
 impl Drop for FileHold {
     fn drop(&mut self) {
         let files = OPEN_FILES.get_or_init(Mutex::default);
@@ -63,6 +80,8 @@ impl Drop for FileHold {
             entry.get_mut().reads -= 1;
             if entry.get().reads == 0 {
                 drop(entry.remove());
+            } else {
+                let _ = share_limit(entry.get());
             }
         }
     }
