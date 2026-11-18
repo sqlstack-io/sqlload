@@ -224,6 +224,16 @@ pub enum ConnectionConfig {
         #[serde(default)]
         profile: Option<String>,
     },
+    /// A Google Cloud Storage bucket that files sources read from; credentials come from `service_account_key`, else Google's application default credentials (`GOOGLE_APPLICATION_CREDENTIALS`, the gcloud user's, or the instance's service account).
+    Gcs {
+        bucket: String,
+        /// The service-account key file's JSON text, such as `${ENV:GCS_KEY}`.
+        #[serde(default)]
+        service_account_key: Option<crate::auth::models::Secret>,
+        /// A custom endpoint, for tests.
+        #[serde(default)]
+        endpoint: Option<String>,
+    },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
     /// An SFTP server that files sources read from; its host key must be listed in `known_hosts`.
@@ -330,6 +340,7 @@ impl ConnectionConfig {
             Self::DuckDb { .. } => "duckdb",
             Self::MotherDuck { .. } => "motherduck",
             Self::S3 { .. } => "s3",
+            Self::Gcs { .. } => "gcs",
             Self::Filesystem { .. } => "filesystem",
             Self::Sftp { .. } => "sftp",
             Self::Odbc { .. } => "odbc",
