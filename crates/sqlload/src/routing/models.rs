@@ -83,6 +83,8 @@ pub struct ReaderOffer {
     pub copy_to_internal_stage: bool,
     /// The destination's store paths name `existing_files`, but it cannot read them (the same bucket on another endpoint).
     pub out_of_reach: bool,
+    /// The source streams rows rather than unload files only for SQLLoad to read them back: a BigQuery export, whose source reads faster through its own API.
+    pub streams_over_read_back: bool,
     /// The destination can select a warehouse source's rows itself, as it writes through the source's own connection.
     pub selected_by_destination: bool,
 }

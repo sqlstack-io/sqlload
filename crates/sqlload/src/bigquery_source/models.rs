@@ -8,6 +8,8 @@ pub struct BigQueryReader {
     pub(crate) project: String,
     /// Milliseconds since the epoch.
     pub(crate) snapshot_ms: i64,
+    /// The folder the source's `export` names, which [`export_files`](crate::bigquery_source::main::export_files::export_files) exports into.
+    pub(crate) export: Option<crate::store_paths::models::Location>,
 }
 
 /// What one read selects: a table or a query, its columns, and the rows' filter.

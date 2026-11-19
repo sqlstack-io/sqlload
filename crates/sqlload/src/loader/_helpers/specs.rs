@@ -33,6 +33,7 @@ use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
 use crate::loader::_helpers::run_log::overlapping_files_problem;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
+use crate::loader::main::_warehouse_route::warehouse_source;
 use crate::loader::constants::{
     ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE, UNNEST_ALL,
 };
@@ -73,6 +74,8 @@ pub(crate) struct SourceContext<'a> {
     pub(crate) name: &'a str,
     pub(crate) source: &'a SourceConfig,
     pub(crate) target: &'a ResolvedTarget,
+    /// The folder a `bigquery` source with `export` exports into.
+    pub(crate) export: Option<Location>,
 }
 
 /// The columns a table drops and the types it pins.
@@ -540,28 +543,11 @@ pub(crate) fn build_spec(
         cdc,
         deletes,
         tombstones_of: overrides.tombstones_of.clone(),
-        warehouse_source: match context.source.kind {
-            kind @ (SourceKind::Odbc
-            | SourceKind::BigQuery
-            | SourceKind::Databricks
-            | SourceKind::DuckDb
-            | SourceKind::MotherDuck) => Some(WarehouseSource {
-                system: match kind {
-                    SourceKind::Odbc => ODBC_SOURCE,
-                    SourceKind::BigQuery => BIGQUERY_SOURCE,
-                    SourceKind::Databricks => DATABRICKS_SOURCE,
-                    SourceKind::DuckDb => DUCKDB_SOURCE,
-                    _ => MOTHERDUCK_SOURCE,
-                },
-                sql: overrides.sql.clone(),
-                route: WarehouseRoute::Query {
-                    same_connection: kind == SourceKind::BigQuery
-                        && context.target.session_connection.as_ref()
-                            == Some(&context.source.connection),
-                },
-            }),
-            _ => warehouse_source(context, overrides),
-        },
+        warehouse_source: warehouse_source(
+            (context.source, context.export.as_ref()),
+            overrides.sql.clone(),
+            context.target.session_connection.as_ref() == Some(&context.source.connection),
+        ),
         row_filter: layered(&settings.row_filter, &defaults.row_filter)
             .filter(|_| overrides.sql.is_none() && overrides.tombstones_of.is_none())
             .map(|(value, _)| value),
@@ -670,51 +656,6 @@ fn constant_type_problem(
             .type_problem(column_type)
             .map(|problem| format!("constant column {name}: {problem}")),
     }
-}
-
-/// How a `snowflake` source's table is read: unloaded to the source's `stage`, or to the user stage when it sets none; a Snowflake target writing through the source's own connection, on its warehouse (the source sets no `warehouse` of its own), may select the rows itself.
-fn warehouse_source(
-    context: &SourceContext<'_>,
-    overrides: &TableOverride,
-) -> Option<WarehouseSource> {
-    let source = context.source;
-    (source.kind == SourceKind::Snowflake).then(|| {
-        let (store, stage) = match &source.stage {
-            Some(UnloadStage {
-                url: Some(url),
-                storage_integration: Some(integration),
-                ..
-            }) => (
-                Store::ObjectStore(format!("{}/", url.trim_end_matches('/'))),
-                format!(
-                    "external: Snowflake writes to {url} through storage integration {integration}; the files are read there and removed after the read"
-                ),
-            ),
-            Some(UnloadStage {
-                name: Some(name), ..
-            }) => (
-                Store::ObjectStore(format!("@{name}")),
-                format!(
-                    "stage {name}: Snowflake writes the files there, and SQLLoad reads them and removes them after the read"
-                ),
-            ),
-            _ => (
-                Store::InternalStage(USER_STAGE_FOLDER.to_owned()),
-                "internal: no stage is set, so Snowflake writes to your user stage, and SQLLoad fetches the files in parallel, decrypts them and removes them after the read".to_owned(),
-            ),
-        };
-        WarehouseSource {
-            system: SNOWFLAKE_SOURCE,
-            sql: overrides.sql.clone(),
-            route: WarehouseRoute::Unload {
-                store,
-                stage,
-                same_connection: context.target.session_connection.as_ref()
-                    == Some(&source.connection)
-                    && source.warehouse.is_none(),
-            },
-        }
-    })
 }
 
 /// The table's layout, each field layered table over source; `table_settings` merged, the table's value winning per setting.

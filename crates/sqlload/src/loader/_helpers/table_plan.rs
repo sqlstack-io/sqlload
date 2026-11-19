@@ -38,6 +38,7 @@ use crate::batch_plan::main::ignored_concurrency::ignored_concurrency;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
+use crate::bigquery_source::main::export_refusal::export_refusal;
 use crate::bigquery_source::main::select_problem::select_problem;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
@@ -1071,11 +1072,23 @@ pub(crate) fn reader_offer(
     })
     .or_else(|| archived_reason(spec, read))
     .or_else(|| checked_encoding(spec));
+    let refused = match &spec.warehouse_source {
+        Some(WarehouseSource {
+            system: BIGQUERY_SOURCE,
+            route: WarehouseRoute::Unload { .. },
+            ..
+        }) => export_refusal(&selected_columns(spec), &spec.pinned, spec.warehouse),
+        _ => None,
+    };
     let unload_to: Vec<Store> = match &spec.warehouse_source {
         Some(WarehouseSource {
             route: WarehouseRoute::Unload { store, .. },
             ..
-        }) => vec![store.clone()],
+        }) if refused.is_none() => vec![store.clone()],
+        Some(WarehouseSource {
+            route: WarehouseRoute::Unload { .. },
+            ..
+        }) => Vec::new(),
         Some(WarehouseSource {
             route: WarehouseRoute::Query { .. },
             ..
@@ -1107,8 +1120,10 @@ pub(crate) fn reader_offer(
             )
         )
         && unselected.is_none();
+    let exports = (spec.warehouse_source.as_ref())
+        .is_some_and(|source| source.system == BIGQUERY_SOURCE && !unload_to.is_empty());
     let direct_blocked = match unload_to.is_empty() {
-        true => direct_blocked.or(unselected),
+        true => direct_blocked.or(unselected).or(refused),
         false => unload_blocked(
             spec.warehouse,
             (!spec.masked.columns.is_empty(), &spec.source_table.columns),
@@ -1117,7 +1132,8 @@ pub(crate) fn reader_offer(
         ),
     };
     ReaderOffer {
-        arrow: unload_to.is_empty(),
+        arrow: unload_to.is_empty() || exports,
+        streams_over_read_back: exports,
         existing_files,
         unload_to,
         estimated_bytes: match u64::try_from(spec.source_table.estimated_bytes) {

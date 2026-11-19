@@ -16,7 +16,9 @@ use crate::batch_plan::main::source_readers::source_readers;
 use crate::bigquery_source::main::bigquery_reader::bigquery_reader;
 use crate::bigquery_source::main::read_catalog::read_catalog as read_bigquery_catalog;
 use crate::bigquery_source::main::read_rows::read_rows as read_bigquery_rows;
+use crate::bigquery_source::main::export_files::export_files;
 use crate::bigquery_source::models::{BigQueryReadRequest, BigQueryReader};
+use crate::loader::_helpers::resolve::export_folder;
 use crate::column_parse::main::parsed_batch::parsed_batch;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::models::{ColumnType, Warehouse};
@@ -480,7 +482,10 @@ pub(crate) fn bigquery_source_reader(
             source.connection
         ))
     })?;
-    Ok(bigquery_reader(connection, source.project.as_deref())?)
+    Ok(BigQueryReader {
+        export: export_folder(project, source),
+        ..bigquery_reader(connection, source.project.as_deref())?
+    })
 }
 
 /// A Sheets client for a `google_sheets` source's connection, with the key it names (or `GOOGLE_APPLICATION_CREDENTIALS`'s) or as the Google user who consents to its OAuth client, and the spreadsheet it reads.
@@ -1704,16 +1709,28 @@ pub(crate) async fn unload_source<T>(
     part: ReadPart,
     load: impl AsyncFnOnce(&UnloadedFiles) -> Result<T, LoaderError>,
 ) -> Result<T, LoaderError> {
-    let SourceReader::Snowflake(snowflake) = reader else {
-        return Err(LoaderError::Invalid(format!(
-            "{}: only a warehouse source unloads files",
-            table.spec.source_table.qualified_name()
-        )));
-    };
     let filter = table
         .spec
         .read_filter(part.filter.or_else(|| table.source_filter.clone()));
-    unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
+    match reader {
+        SourceReader::Snowflake(snowflake) => {
+            unload_files(snowflake, &unload_request(table, filter.as_deref()), load).await
+        }
+        SourceReader::BigQuery(bigquery) => {
+            let request = BigQueryReadRequest {
+                table: &table.spec.source_table,
+                sql: table.spec.query_sql(),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                filtered: table.spec.row_filter.is_some(),
+            };
+            export_files(bigquery, &request, load).await
+        }
+        _ => Err(LoaderError::Invalid(format!(
+            "{}: only a warehouse source unloads files",
+            table.spec.source_table.qualified_name()
+        ))),
+    }
 }
 
 /// What one unload of `table` reads: its table or query, its read columns, and `filter`.

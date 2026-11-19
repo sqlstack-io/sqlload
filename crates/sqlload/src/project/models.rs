@@ -584,6 +584,19 @@ pub struct SourceConfig {
     /// The project a `bigquery` source's tables live in; the connection's when omitted.
     #[serde(default)]
     pub project: Option<String>,
+    /// Where a `bigquery` source exports its tables as Parquet for a DuckDB or MotherDuck target to read itself; without it SQLLoad reads the rows.
+    #[serde(default)]
+    pub export: Option<ExportFolder>,
+}
+
+/// A folder in a `gcs` connection's bucket that BigQuery exports into, each export in a folder of its own below it that SQLLoad removes after the read.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExportFolder {
+    pub connection: String,
+    /// The folder below the bucket (and the connection's own prefix), such as `exports/`.
+    #[serde(default)]
+    pub path: String,
 }
 
 /// Where a `snowflake` source's unloads go: an S3 URL with a storage integration, or an existing stage by name.

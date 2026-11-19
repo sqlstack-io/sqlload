@@ -17,6 +17,9 @@ use crate::load_naming::models::{
     ColumnName, Compat, LoadedColumn, LoadedNames, NameRules, Naming, NumberedName, RenameColumn,
 };
 use crate::load_naming::types::RenameFunction;
+use crate::store_paths::main::connection_store::connection_store;
+use crate::store_paths::main::resolve_location::resolve_location;
+use crate::store_paths::models::Location;
 use crate::loader::_helpers::destination::folder_claims;
 use crate::loader::_helpers::run_log::kept_numbered;
 use crate::loader::_helpers::sources::scoped_tables;
@@ -117,6 +120,7 @@ pub(crate) fn resolve_known(
             name: source_name,
             source: bare.as_ref().unwrap_or(source),
             target: &target,
+            export: export_folder(project, source),
         };
         let shown = || {
             let rule = (
@@ -371,6 +375,7 @@ fn resolve_table(
         name: context.name,
         source: &source,
         target: context.target,
+        export: context.export.clone(),
     };
     excluded.retain(|(column, _)| !overrides.mask.contains_key(&name(column)));
     let pinned = pinned_types(&overrides, context.target.warehouse);
@@ -1754,4 +1759,11 @@ pub(crate) async fn count_rows(
         }
         SourceReader::Files(_) | SourceReader::Sheets(..) => return Ok(None),
     }))
+}
+
+/// The folder a `bigquery` source's `export` names, in its `gcs` connection's bucket; `None` without `export`, or when it can't be resolved, which the project's checks already report.
+pub(crate) fn export_folder(project: &ProjectConfig, source: &SourceConfig) -> Option<Location> {
+    let export = source.export.as_ref()?;
+    let store = connection_store(project.connections.get(&export.connection)?)?;
+    resolve_location(Some((&export.connection, &store)), &export.path).ok()
 }

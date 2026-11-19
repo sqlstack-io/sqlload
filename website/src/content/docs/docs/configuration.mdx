@@ -263,6 +263,7 @@ For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach t
 | `max_batch_memory` | odbc | The fetch buffer of each table: the most the rows of one fetch hold, such as `"2GB"`; 512 MiB, or a quarter of each table's share of the [memory budget](/docs/cli/load/#memory-budget) when less, when omitted. It doesn't bound the load's whole memory. See [ODBC](/docs/sources/odbc/#memory). |
 | `long_column_threshold` | odbc | The buffer per value over which a text or binary column is read value by value; `"4KiB"` when omitted. See [ODBC](/docs/sources/odbc/#value-sizes). |
 | `project` | bigquery | The project the tables live in; the connection's when omitted. |
+| `export` | bigquery | `{ connection, path }`: a `gcs` folder BigQuery exports large tables to as Parquet, for a DuckDB or MotherDuck target to read itself. See [BigQuery](/docs/sources/bigquery/#duckdb-and-motherduck-read-an-export). |
 | `path` | files | The folder holding the files, relative to the connection. |
 | `format` | files | `parquet` (default), `ndjson`, `json` or `csv`. |
 | `compression` | files | `auto` (default), `none`, `gzip` or `zstd`. |

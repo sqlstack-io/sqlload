@@ -55,3 +55,25 @@ pub(crate) struct SelectProblemTestCase {
     /// Why BigQuery can't select the rows into a BigQuery table itself, if it can't.
     pub(crate) expected_problem: Option<&'static str>,
 }
+
+pub(crate) struct ExportRefusalTestCase {
+    pub(crate) description: &'static str,
+    /// The table's columns, as `tables.get` describes them.
+    pub(crate) fields: Vec<serde_json::Value>,
+    pub(crate) pinned: Vec<(&'static str, ColumnType)>,
+    pub(crate) warehouse: crate::column_types::models::Warehouse,
+    /// The table's location; query jobs on its connection run in `EU`.
+    pub(crate) location: &'static str,
+    /// Why SQLLoad's reader reads the table rather than an export, if it does.
+    pub(crate) expected_refusal: Option<&'static str>,
+}
+
+pub(crate) struct ExportColumnsTestCase {
+    pub(crate) description: &'static str,
+    /// The source column, as `tables.get` describes it.
+    pub(crate) field: serde_json::Value,
+    /// The name the column is read and loaded under.
+    pub(crate) read_name: &'static str,
+    /// The export's select-list entry, or why the column isn't exported.
+    pub(crate) expected_expression: Result<&'static str, &'static str>,
+}

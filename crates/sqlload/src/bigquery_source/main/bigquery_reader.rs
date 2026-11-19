@@ -41,5 +41,6 @@ pub fn bigquery_reader(
             (base_url.as_deref(), storage_url.as_deref()),
         ),
         snapshot_ms: now_ms(),
+        export: None,
     })
 }

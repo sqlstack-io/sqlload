@@ -115,6 +115,54 @@ SQLLoad still reads the rows itself, and `plan -v` on the table says why, for a 
 
 A target on another `bigquery` connection, even with the same key, reads through SQLLoad as before.
 
+## DuckDB and MotherDuck read an export
+
+With `export`, BigQuery writes a large table's rows to Parquet in a Cloud Storage folder with one
+`EXPORT DATA` query job per read, and a DuckDB or MotherDuck target reads the files itself, so no
+rows pass through SQLLoad:
+
+```toml
+[connections.exports]
+kind = "gcs"
+bucket = "example-exports"
+hmac_key_id = "${ENV:GCS_HMAC_KEY_ID}"
+hmac_secret = "${ENV:GCS_HMAC_SECRET}"
+
+[sources.marts]
+kind = "bigquery"
+connection = "bq"
+include = ["marts.*"]
+export = { connection = "exports", path = "bigquery/" }
+```
+
+| Key | Meaning |
+|-----|---------|
+| `export.connection` | A [`gcs` connection](/docs/configuration/#gcs) whose bucket BigQuery exports to. Its HMAC key lets the target read the files. |
+| `export.path` | The folder in the bucket; each read exports into a folder of its own below it. |
+
+```text
+route   unload Parquet to gs://example-exports/bigquery/ -> DuckDB reads them (nothing through the loader)
+```
+
+A table of under 256 MB streams through the Storage Read API instead, which is faster for it.
+Each read's folder is removed after the read, when the read fails too, and a read fails when
+DuckDB loads a different number of rows than the job reports exporting. A run that is killed can
+leave its folder behind; a lifecycle rule on the bucket removes such folders. Times and timestamps
+come back exactly, whatever DuckDB's session time zone.
+
+The bucket must be in the same location as the datasets, as `EXPORT DATA` requires. SQLLoad's
+reader still reads a table, and `plan -v` says why, when it:
+
+- has a `JSON`, `RANGE`, `INTERVAL`, `BIGNUMERIC`, `STRUCT`, `GEOGRAPHY` or repeated column,
+  which the export doesn't write to Parquet as SQLLoad loads it;
+- pins a column to another type than its own;
+- is in another location than the connection's;
+- has a `mask`, `parse`, `transform` or checks;
+- loads into another target than DuckDB or MotherDuck.
+
+The export bills its query job's scan, and the service account needs `storage.objects.create`,
+`storage.objects.list` and `storage.objects.delete` on the bucket.
+
 ## Query tables
 
 A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is

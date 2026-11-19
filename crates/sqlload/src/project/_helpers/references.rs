@@ -15,7 +15,7 @@ use crate::project::constants::{
     STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
-    CdcMode, ConnectionConfig, ConstantColumns, Deletes, ProjectConfig, RenameSetting,
+    CdcMode, ConnectionConfig, ConstantColumns, Deletes, ExportFolder, ProjectConfig, RenameSetting,
     SourceConfig, SourceKind, TableSettings, WriteStrategy,
 };
 use crate::sheets_source::main::a1_range::a1_range;
@@ -111,6 +111,11 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     let place = source_place(project, name);
     problems.extend(after_load_problems(project, (name, &place), source));
     problems.extend(tombstone_problems(&place, source));
+    problems.extend(
+        (source.export.as_ref())
+            .and_then(|export| export_problem(project, source, export))
+            .map(|problem| format!("{place} {problem}")),
+    );
     let (kinds, expected): (&[&str], &str) = match source.kind {
         SourceKind::Postgres | SourceKind::PostgresCdc => (&["postgres"], "postgres"),
         SourceKind::Snowflake => (&["snowflake"], "snowflake"),
@@ -993,4 +998,26 @@ fn cdc_name_problems(place: &str, name: &str, source: &SourceConfig) -> Vec<Stri
         }
     }
     problems
+}
+
+/// Why a source's `export` can't be used: it is for `bigquery` sources, and names a `gcs` connection.
+fn export_problem(
+    project: &ProjectConfig,
+    source: &SourceConfig,
+    export: &ExportFolder,
+) -> Option<String> {
+    let name = &export.connection;
+    match project.connections.get(name) {
+        _ if source.kind != SourceKind::BigQuery => {
+            Some("export is for kind = \"bigquery\"".to_owned())
+        }
+        Some(ConnectionConfig::Gcs { .. }) => None,
+        Some(other) => Some(format!(
+            "export.connection {name} is a {} connection; BigQuery exports to a gcs connection's bucket",
+            other.kind()
+        )),
+        None => Some(format!(
+            "export.connection {name} is not a [connections] entry; name a gcs connection"
+        )),
+    }
 }

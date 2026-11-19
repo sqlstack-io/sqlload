@@ -46,6 +46,13 @@ pub(crate) fn unload_route(
             ),
         });
     }
+    if reader.streams_over_read_back {
+        let reason = match reader.direct_blocked.as_ref().or(reader.needs_loader.as_ref()) {
+            Some(reason) => format!("the source streams rows, as the destination can't read its files itself: {reason}"),
+            None => "the source streams rows, as the destination can't read its files itself".to_owned(),
+        };
+        return deliver_arrow(vec![Step::ReadArrow], writer, overrides.stage, &reason);
+    }
     let refused = stores.first().filter(|_| unblocked).and_then(|store| {
         let files = FileSet {
             store: store.clone(),

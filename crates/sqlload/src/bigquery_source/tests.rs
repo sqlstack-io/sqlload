@@ -2,6 +2,8 @@
 mod convert_batch;
 #[path = "tests/test_count_query.rs"]
 mod count_query;
+#[path = "tests/test_export.rs"]
+mod export;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_read_columns.rs"]
