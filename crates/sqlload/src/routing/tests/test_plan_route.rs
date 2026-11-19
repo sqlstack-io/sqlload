@@ -420,15 +420,35 @@ fn given_an_impossible_combination_when_planning_then_the_error_says_why() {
 
 #[test]
 fn given_files_sqlload_must_read_when_planning_then_the_route_says_why() {
-    let test_cases = [PlanRouteReasonTestCase {
-        description: "Parquet in S3 Databricks can't load exactly, outside every external location",
-        reader: ReaderOffer {
-            direct_blocked: Some("at is a time".to_owned()),
-            ..files_source("s3://other/scores/", FileFormat::Parquet)
+    let test_cases = [
+        PlanRouteReasonTestCase {
+            description: "Parquet in S3 Databricks can't load exactly, outside every external location",
+            reader: ReaderOffer {
+                direct_blocked: Some("at is a time".to_owned()),
+                ..files_source("s3://other/scores/", FileFormat::Parquet)
+            },
+            writer: databricks_destination(),
+            expected_reason: "SQLLoad reads the files because at is a time",
         },
-        writer: databricks_destination(),
-        expected_reason: "SQLLoad reads the files because at is a time",
-    }];
+        PlanRouteReasonTestCase {
+            description: "masked Parquet in S3 DuckDB could read itself names the mask",
+            reader: ReaderOffer {
+                needs_loader: Some("the table masks columns".to_owned()),
+                ..files_source("s3://lake/scores/", FileFormat::Parquet)
+            },
+            writer: duckdb_destination(),
+            expected_reason: "SQLLoad reads the files because the table masks columns",
+        },
+        PlanRouteReasonTestCase {
+            description: "masked Parquet into Postgres, which reads no files, says only that it can't read them",
+            reader: ReaderOffer {
+                needs_loader: Some("the table masks columns".to_owned()),
+                ..files_source("s3://lake/scores/", FileFormat::Parquet)
+            },
+            writer: database_destination(),
+            expected_reason: "the destination cannot read the files where they are",
+        },
+    ];
     for test_case in test_cases {
         let reason = plan_route(
             &test_case.reader,

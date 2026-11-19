@@ -11,7 +11,7 @@ use crate::project::_helpers::targets::{
 };
 use crate::project::_helpers::tombstones::tombstone_problems;
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL,
+    MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, SHAREABLE_CONNECTION_KINDS,
     STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
@@ -189,14 +189,14 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     problems
 }
 
-/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3, gcs or filesystem connection may be shared).
+/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection, which holds no credentials, may be shared).
 fn shared_warehouse_problems(
     project: &ProjectConfig,
     name: &str,
     source: &SourceConfig,
     connection: &ConnectionConfig,
 ) -> Vec<String> {
-    if FILES_CONNECTION_KINDS.contains(&connection.kind()) {
+    if SHAREABLE_CONNECTION_KINDS.contains(&connection.kind()) {
         return Vec::new();
     }
     project

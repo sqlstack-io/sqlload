@@ -10,3 +10,5 @@ mod stale_removals;
 mod test_types;
 #[path = "tests/test_unloaded_copy.rs"]
 mod unloaded_copy;
+#[path = "tests/test_writer_accepts.rs"]
+mod writer_accepts;

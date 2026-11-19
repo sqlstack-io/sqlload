@@ -38,4 +38,6 @@ pub(crate) struct GcsCredentialsTestCase {
     pub(crate) home: Option<&'static str>,
     /// Text where the credentials come from, or the error, must contain.
     pub(crate) expected_text: &'static str,
+    /// Whether the client builder takes those credentials, rather than failing with the error.
+    pub(crate) expected_builds: bool,
 }

@@ -157,6 +157,9 @@ pub const CLICKHOUSE_CONNECTION_KIND: &str = "clickhouse";
 /// The connection kinds a target writes files into.
 pub const FILES_CONNECTION_KINDS: &[&str] = &["s3", "gcs", "filesystem"];
 
+/// The files connection kinds a Python source may share with a files target, as they hold no credentials (a gcs connection holds the bucket's keys).
+pub const SHAREABLE_CONNECTION_KINDS: &[&str] = &["s3", "filesystem"];
+
 /// The table folder template of a files target that sets no `path`.
 pub const DEFAULT_DESTINATION_PATH: &str = "{source}/{table}/";
 

@@ -3,8 +3,6 @@
 use object_store::ClientOptions;
 use object_store::gcp::GoogleCloudStorageBuilder;
 
-use crate::file_store::_helpers::aws_keys::environment_variable;
-
 /// Where a GCS client's credentials come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GcsCredentials {
@@ -61,16 +59,17 @@ pub(crate) fn gcs_credentials(
         }))
 }
 
-/// The GCS client builder for `bucket`, signed in with the service-account key's JSON text `key`, else Google's application default credentials (the file `GOOGLE_APPLICATION_CREDENTIALS` names, gcloud's, else the machine's service account); `endpoint` replaces Google's, as for an emulator.
+/// The GCS client builder for `bucket`, signed in with the service-account key's JSON text `key`, else Google's application default credentials as [`gcs_credentials`] finds them with `variable` (the file `GOOGLE_APPLICATION_CREDENTIALS` names, gcloud's, else the machine's service account); the error when that variable names no file, rather than signing in as someone else. `endpoint` replaces Google's, as for an emulator.
 pub(crate) fn gcs_builder(
     bucket: &str,
     key: Option<&str>,
     endpoint: Option<&str>,
-) -> GoogleCloudStorageBuilder {
+    variable: &dyn Fn(&str) -> Option<String>,
+) -> Result<GoogleCloudStorageBuilder, String> {
     let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
-    match (key, gcs_credentials(key.is_some(), &environment_variable)) {
+    match (key, gcs_credentials(key.is_some(), variable)?) {
         (Some(key), _) => builder = builder.with_service_account_key(key),
-        (None, Ok(GcsCredentials::Named { path })) => {
+        (None, GcsCredentials::Named { path }) => {
             builder = builder.with_application_credentials(path);
         }
         (None, _) => {}
@@ -80,5 +79,5 @@ pub(crate) fn gcs_builder(
             ClientOptions::new().with_allow_http(endpoint.starts_with("http://")),
         );
     }
-    builder
+    Ok(builder)
 }
