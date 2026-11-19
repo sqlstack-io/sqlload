@@ -39,18 +39,18 @@ pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
             .constants
             .iter()
             .find(|(name, _, _)| *name == column.name)
-            .map(|(_, _, value)| literal(value));
+            .map(|(_, _, value)| (literal(value), true));
         let read = load
             .read
             .iter()
             .find(|read| read.name == column.name)
-            .map(|read| format!("u.{}", read.expression));
+            .map(|read| (format!("u.{}", read.expression), false));
         let value = match (
             metadata_role(load.compat, &column.name),
             column.name.as_str(),
         ) {
-            (Some(MetadataRole::LoadId), _) => literal(load.load_id),
-            (Some(MetadataRole::LoadedAt), _) => literal(load.loaded_at),
+            (Some(MetadataRole::LoadId), _) => (literal(load.load_id), true),
+            (Some(MetadataRole::LoadedAt), _) => (literal(load.loaded_at), true),
             (None, MERGE_ROW_COLUMN) => {
                 values.push(format!(
                     "{} * {UNLOADED_BATCH_ROWS} + ROW_NUMBER() OVER () - 1",
@@ -58,9 +58,11 @@ pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
                 ));
                 continue;
             }
-            _ => constant.or(read).unwrap_or_else(|| "NULL".to_owned()),
+            _ => constant
+                .or(read)
+                .unwrap_or_else(|| ("NULL".to_owned(), true)),
         };
-        values.push(typed(&value, &column.column_type, load.builds));
+        values.push(typed(value, &column.column_type, load.builds));
     }
     let targets: Vec<String> = load
         .columns
@@ -76,12 +78,11 @@ pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
     )
 }
 
-/// `value` as a column of `column_type` holds it in the staging table, or in a build table (`builds`): JSON as its text in staging and as JSON in a build table (parsed from a constant's text), anything else cast to its type without parameters.
-fn typed(value: &str, column_type: &ColumnType, builds: bool) -> String {
-    let from_text = value.starts_with('\'') || value == "NULL";
+/// `value` as a column of `column_type` holds it in the staging table, or in a build table (`builds`): JSON as its text in staging and as JSON in a build table (parsed when the value is text, `from_text`: a literal or NULL), anything else cast to its type without parameters.
+fn typed((value, from_text): (String, bool), column_type: &ColumnType, builds: bool) -> String {
     match (column_type, builds, from_text) {
         (ColumnType::Json, false, false) => format!("TO_JSON_STRING({value})"),
-        (ColumnType::Json, true, false) => value.to_owned(),
+        (ColumnType::Json, true, false) => value,
         (ColumnType::Json, true, true) => format!("PARSE_JSON({value})"),
         _ => {
             let sql_type = match builds {

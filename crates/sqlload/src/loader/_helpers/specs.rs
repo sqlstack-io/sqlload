@@ -1517,7 +1517,11 @@ fn nesting(
             Unnest::None
         }
         Some(PathsSetting::Paths(paths)) => {
-            problems.extend(path_problems(paths, max_depth));
+            problems.extend(
+                paths
+                    .iter()
+                    .filter_map(|path| path_problem(path, paths, max_depth)),
+            );
             problems.extend(column_setting_problems(context, overrides, paths));
             Unnest::Paths(paths.clone())
         }
@@ -1576,14 +1580,6 @@ pub(crate) fn table_compat(
         .map(|(value, _)| value)
         .or(target)
         .unwrap_or_default()
-}
-
-/// The `unnest` paths with an empty part, a parent path not also listed, or more parts than `max_depth`.
-fn path_problems(paths: &[String], max_depth: u32) -> Vec<String> {
-    paths
-        .iter()
-        .filter_map(|path| path_problem(path, paths, max_depth))
-        .collect()
 }
 
 /// What is wrong with the `unnest` path `path` among `paths`: an empty part, a parent path not also listed, or more parts than `max_depth`.

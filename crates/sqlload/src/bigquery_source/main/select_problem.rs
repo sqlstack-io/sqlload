@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::bigquery_source::constants::CONVERTED_TYPES;
 use crate::column_types::models::ColumnType;
 use crate::postgres_source::models::SourceTable;
 
@@ -18,9 +19,11 @@ pub fn select_problem(
     table.columns.iter().find_map(|column| {
         let held = column.postgres_type.as_str();
         let plain = !held.starts_with("ARRAY<") && !CONVERTED_TYPES.contains(&held);
-        let output = pinned
-            .get(&column.name)
-            .or(column.column_type.as_ref().ok());
+        let output = match (pinned.get(&column.name), &column.column_type) {
+            (Some(pinned), _) => Some(pinned),
+            (None, Ok(natural)) => Some(natural),
+            (None, Err(_)) => None,
+        };
         match (plain, output, &column.column_type) {
             (_, None, _) => Some(format!(
                 "{} is BigQuery {held}, which has no type SQLLoad loads",
@@ -38,6 +41,3 @@ pub fn select_problem(
         }
     })
 }
-
-/// BigQuery types SQLLoad's reader converts: records and ranges to JSON, geographies to their WKT text.
-const CONVERTED_TYPES: [&str; 3] = ["STRUCT", "RANGE", "GEOGRAPHY"];

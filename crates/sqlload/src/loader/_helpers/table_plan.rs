@@ -1086,7 +1086,12 @@ pub(crate) fn reader_offer(
     let unselected = match route {
         Some(WarehouseRoute::Query {
             same_connection: true,
-        }) => select_problem(&selected_columns(spec), &spec.pinned),
+        }) => needs_loader
+            .clone()
+            .or_else(|| {
+                (!spec.masked.columns.is_empty()).then(|| "the table masks columns".to_owned())
+            })
+            .or_else(|| select_problem(&selected_columns(spec), &spec.pinned)),
         _ => None,
     };
     let selected_by_destination = spec.masked.columns.is_empty()
@@ -1141,42 +1146,6 @@ fn one_file_each(count: usize) -> Vec<FileGroup> {
             values: Vec::new(),
         })
         .collect()
-}
-
-/// Whether `route` has the destination select a warehouse source's rows itself, inside the warehouse.
-pub(crate) fn selects_rows(route: Option<&Route>) -> bool {
-    route.is_some_and(|route| matches!(route.steps.as_slice(), [Step::DestinationSelects]))
-}
-
-/// Whether `route` has the destination load a warehouse source's rows itself: its unloaded files, or the rows it selects inside the warehouse.
-pub(crate) fn pulls_unloaded(route: Option<&Route>) -> bool {
-    route.is_some_and(|route| {
-        matches!(
-            route.steps.as_slice(),
-            [Step::Unload(_), Step::DestinationPulls(_)]
-                | [Step::DestinationSelects]
-                | [
-                    Step::Unload(_),
-                    Step::CopyFiles(Store::Local(_)),
-                    Step::DestinationPulls(_)
-                ]
-        )
-    })
-}
-
-/// Whether `route` has the destination load a files source's own files.
-pub(crate) fn is_direct(route: Option<&Route>) -> bool {
-    route.is_some_and(|route| {
-        matches!(
-            route.steps.as_slice(),
-            [Step::UseFiles(_), Step::DestinationPulls(_)]
-                | [
-                    Step::UseFiles(_),
-                    Step::CopyFiles(_),
-                    Step::DestinationPulls(_)
-                ]
-        )
-    })
 }
 
 /// A warning for each `hmac`-masked column of a files source whose files `destination` would otherwise read itself: every file then goes through SQLLoad.

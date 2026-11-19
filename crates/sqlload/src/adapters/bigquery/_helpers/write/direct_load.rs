@@ -1,16 +1,15 @@
 //! A files batch loaded by BigQuery querying the source's own Parquet files in GCS.
 
-
 use crate::adapters::bigquery::_helpers::dialect::pull::{
     PulledFile, PulledGroup, pull_queries, unread_name,
 };
+use crate::adapters::bigquery::_helpers::write::insert_job::insert_job;
 use crate::adapters::bigquery::main::plan::_direct_problem::direct_problem;
 use crate::adapters::bigquery::models::BigQueryWriter;
 use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
 use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, TableName};
 use crate::adapters::contract::types::TableWriter;
-use crate::adapters::bigquery::_helpers::write::insert_job::insert_job;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::main::normal_value::normal_value;
 use crate::files_source::models::{BatchFooters, DataFile};
