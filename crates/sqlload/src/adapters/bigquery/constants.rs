@@ -24,3 +24,19 @@ pub const STREAMS_PER_BATCH: usize = 4;
 
 /// The most bytes one append request carries, under the Storage Write API's 10 MB request limit.
 pub const APPEND_REQUEST_BYTES: usize = 9 * 1024 * 1024;
+
+/// The types BigQuery reads a Parquet decimal as, the first that holds its precision and scale: a temporary external table's `decimalTargetTypes`.
+pub const DECIMAL_TARGET_TYPES: [&str; 3] = ["NUMERIC", "BIGNUMERIC", "STRING"];
+
+/// The longest column name BigQuery takes.
+pub const MAX_COLUMN_NAME: usize = 300;
+
+/// Prefixes BigQuery reserves for its own columns (in upper case; names ignore case), which no column it reads from Parquet may start with.
+pub const RESERVED_COLUMN_PREFIXES: [&str; 6] = [
+    "_TABLE_",
+    "_FILE_",
+    "_PARTITION",
+    "_ROW_TIMESTAMP",
+    "__ROOT__",
+    "_COLIDENTIFIER",
+];

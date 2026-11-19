@@ -112,10 +112,48 @@ fn given_parquet_files_in_gcs_when_routing_into_bigquery_then_bigquery_reads_the
             expected_reason: Some("id is a UUID, which BigQuery reads from Parquet as bytes"),
         },
         BigQueryReaderTestCase {
+            description: "decimal(20,0), the type an unsigned 64-bit integer loads as, keeps SQLLoad's reader, as BigQuery reads it as a signed one",
+            columns: vec![(
+                "n",
+                ColumnType::Decimal {
+                    precision: 20,
+                    scale: 0,
+                },
+            )],
+            endpoint: None,
+            expected_reason: Some(
+                "n is decimal(20,0), the type of an unsigned 64-bit integer, which BigQuery reads from Parquet as a signed one and fails on values above 9223372036854775807",
+            ),
+        },
+        BigQueryReaderTestCase {
             description: "a list keeps SQLLoad's reader",
             columns: vec![("tags", ColumnType::Array(Box::new(ColumnType::Text)))],
             endpoint: None,
             expected_reason: Some("tags is a list, which BigQuery reads from Parquet as a record"),
+        },
+        BigQueryReaderTestCase {
+            description: "a column name BigQuery renames keeps SQLLoad's reader, as BigQuery would read it under another name",
+            columns: vec![("Order ID", ColumnType::Int)],
+            endpoint: None,
+            expected_reason: Some(
+                "BigQuery would not read column \"Order ID\" as it is: BigQuery renames a name that isn't letters, digits and underscores starting with a letter or underscore",
+            ),
+        },
+        BigQueryReaderTestCase {
+            description: "two names differing only in case keep SQLLoad's reader",
+            columns: vec![("id", ColumnType::Int), ("ID", ColumnType::Text)],
+            endpoint: None,
+            expected_reason: Some(
+                "BigQuery would not read column \"ID\" as it is: another column has the same name in another case, and BigQuery's names ignore case",
+            ),
+        },
+        BigQueryReaderTestCase {
+            description: "a name with a prefix BigQuery reserves keeps SQLLoad's reader",
+            columns: vec![("_file_name", ColumnType::Text)],
+            endpoint: None,
+            expected_reason: Some(
+                "BigQuery would not read column \"_file_name\" as it is: _FILE_ is a prefix BigQuery reserves",
+            ),
         },
         BigQueryReaderTestCase {
             description: "an emulator's endpoint is SQLLoad's to follow, not BigQuery's",

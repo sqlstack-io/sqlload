@@ -13,6 +13,6 @@ pub async fn dry_count(
     filter: &str,
 ) -> Result<(), BigQuerySourceError> {
     let query = count_query(&reader.project, (table, sql), filter);
-    query_schema(&reader.client, &query).await?;
+    query_schema(&reader.client, &query, None).await?;
     Ok(())
 }
