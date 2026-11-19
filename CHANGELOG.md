@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.80.0](https://github.com/sqlstack-io/sqlload/compare/v0.79.0...v0.80.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **http:** `sl.http()` no longer takes `auth`, `rate_limit` or `retries`; passing one fails, naming the key to set on the connection in sqlload.toml. `sl.bearer`, `sl.api_key`, `sl.basic` and the `sl.oauth2_*` helpers are removed: set `auth = { kind = "..." }` on the connection instead.
+
+### Features
+
+* **bigquery:** BigQuery selects a BigQuery source's rows itself on the same connection ([#354](https://github.com/sqlstack-io/sqlload/issues/354)) ([4a43cd5](https://github.com/sqlstack-io/sqlload/commit/4a43cd54b393d92c11aecfd765bed3f3134ef93d))
+* **http:** auth, rate_limit, max_in_flight and retries on the http connection ([04c5b2b](https://github.com/sqlstack-io/sqlload/commit/04c5b2bf1f6ab9903cc9ddb82e1410c06729be3f))
+
 ## [0.79.0](https://github.com/sqlstack-io/sqlload/compare/v0.78.0...v0.79.0) (2026-11-19)
 
 
