@@ -16,7 +16,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | DuckDB | Tables and views of a database file, by `include` patterns, and query results | One `SELECT` on a read-only connection, streamed as Arrow. See [DuckDB](/docs/sources/duckdb/). |
 | MotherDuck (beta) | Tables and views of one database, by `include` patterns, and query results | One `SELECT` run by a separate DuckDB 1.5 process (`sqlload[motherduck]`), its Arrow batches handed over one at a time. See [MotherDuck](/docs/sources/motherduck/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON, Excel (xlsx) and XML; gzip or zstd for text formats; ZIP archives of any of them; any file name through `pattern`. See [Files](/docs/sources/files/#excel-xml-and-zip-files). | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
-| Files in Google Cloud Storage | As for S3 | As for S3; DuckDB and MotherDuck read Parquet themselves with an HMAC key. See [`gcs`](/docs/configuration/#gcs). |
+| Files in Google Cloud Storage | As for S3 | As for S3; DuckDB and MotherDuck read Parquet themselves with an HMAC key, and BigQuery with its own service account. See [`gcs`](/docs/configuration/#gcs). |
 | Files in a local folder | As for S3 | As for S3 |
 | Files on an SFTP server | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
 | Google Sheets | Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |

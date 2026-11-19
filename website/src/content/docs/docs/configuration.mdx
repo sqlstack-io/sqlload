@@ -173,6 +173,10 @@ a bucket's Parquet files themselves, create an HMAC key for a service account th
 (Cloud Storage → Settings → Interoperability) and set `hmac_key_id` and `hmac_secret`. Without one,
 SQLLoad reads the files and sends their rows, and `sqlload plan -v <table>` says why.
 
+BigQuery needs no HMAC key: it reads a bucket's Parquet files with its own connection's service
+account, on a table that excludes `_sqlload_source_row`; see [Parquet in Google Cloud
+Storage](/docs/targets/bigquery/#parquet-in-google-cloud-storage).
+
 ### `filesystem`
 
 | Key | Meaning |

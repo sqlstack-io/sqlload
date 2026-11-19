@@ -143,7 +143,8 @@ hmac_secret = "${ENV:GCS_HMAC_SECRET}"
 ```
 
 Without `service_account_key`, SQLLoad uses Google's application default credentials. The HMAC
-key is optional: DuckDB and MotherDuck read Parquet in GCS themselves only with one. See the
+key is optional: DuckDB and MotherDuck read Parquet in GCS themselves only with one; BigQuery reads
+it with its own service account. See the
 [`gcs` connection](/docs/configuration/#gcs).
 
 ## Load files from an SFTP server
@@ -189,6 +190,7 @@ SQLLoad. `plan` names the route on each table's `route` line:
 | DuckDB | Parquet in S3, GCS (with an HMAC key) or a local folder, with `read_parquet`. |
 | Snowflake | Parquet, JSON, NDJSON and CSV under the `url` of an `external_stage` load method, with `COPY`. |
 | ClickHouse | Parquet in S3, with `s3()`. |
+| BigQuery | Parquet in GCS, as temporary external tables, on a table that excludes `_sqlload_source_row`. |
 
 SQLLoad reads the files itself for a table that changes its rows before they load: one with a
 `transform`, a `parse`, `checks`, `row_id`, `unnest`, a `flatten` of the files' objects, or a column
