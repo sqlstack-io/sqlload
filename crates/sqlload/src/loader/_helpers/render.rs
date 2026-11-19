@@ -681,14 +681,15 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     let staged_why =
         (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
             || spec.warehouse_source.is_some();
+    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !staged_why);
     let why_shown = staged_why
         || table.route.as_ref().is_some_and(|route| {
             route.reason.starts_with(LOADER_READS_BECAUSE)
-                    && route.steps.iter().any(|step| {
-                        matches!(step, Step::UseFiles(files) if files.format == FileFormat::Parquet)
-                    })
+                && archived.as_ref().is_none_or(|note| !route.reason.contains(note))
+                && route.steps.iter().any(|step| {
+                    matches!(step, Step::UseFiles(files) if files.format == FileFormat::Parquet)
+                })
         });
-    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !staged_why);
     details.extend(table.route.as_ref().map(|route| {
         let text = route_text(table, route);
         detail(
