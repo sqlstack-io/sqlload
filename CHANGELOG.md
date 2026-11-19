@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.79.0](https://github.com/sqlstack-io/sqlload/compare/v0.78.0...v0.79.0) (2026-11-19)
+
+
+### Features
+
+* **bigquery:** BigQuery loads Parquet in GCS itself on tables that exclude _sqlload_source_row ([#352](https://github.com/sqlstack-io/sqlload/issues/352)) ([9950812](https://github.com/sqlstack-io/sqlload/commit/9950812dcbcf4cd271471b62e3482797fcb60d08))
+
 ## [0.78.0](https://github.com/sqlstack-io/sqlload/compare/v0.77.1...v0.78.0) (2026-11-19)
 
 
