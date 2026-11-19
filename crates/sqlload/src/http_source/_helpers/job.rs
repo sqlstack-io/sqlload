@@ -185,6 +185,7 @@ fn request_problems(request: &Request) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     problems.extend(selector(request.select.as_deref()).err());
     problems.extend(paginator_problem(&request.paginator));
+    problems.extend(page_size_twice(request));
     problems.extend(body_problems(request));
     problems.extend(request.cells.as_ref().and_then(cells_problem));
     problems.extend(request.error_path.as_deref().and_then(error_path_problem));
@@ -218,6 +219,21 @@ fn error_path_problem(path: &str) -> Option<String> {
         Ok(_) | Err(_) => Some(format!(
             "error_path {path:?} is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]"
         )),
+    }
+}
+
+/// Why `params` can't set the query parameter a page-number paginator sends `page_size` as: it would go twice.
+fn page_size_twice(request: &Request) -> Option<String> {
+    match &request.paginator {
+        Paginator::PageNumber {
+            page_size: Some(_),
+            page_size_param: Some(name),
+            location: Location::Query,
+            ..
+        } if request.params.contains_key(name) => Some(format!(
+            "params sets {name}, which page_size sends; leave it out of params"
+        )),
+        _ => None,
     }
 }
 
@@ -714,7 +730,7 @@ fn request_calls(
         in_flight,
         retries: shared.retries.unwrap_or(DEFAULT_RETRIES),
         on_status,
-        full_page_seen: std::sync::Arc::default(),
+        last_page_below: std::sync::Arc::default(),
         source_part,
         stop: tokio_util::sync::CancellationToken::new(),
     })

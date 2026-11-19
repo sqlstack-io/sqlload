@@ -104,11 +104,34 @@ def offset(
 	)
 
 
-def page_number(param: str = "page", *, start: int = 1, location: str = "query", read_ahead: int | None = None) -> Paginator:
-	"""`param` counts pages from `start`; ends at an empty page. With `location="body"`, `param` is a path in the JSON body.
+def page_number(
+	param: str = "page",
+	*,
+	start: int = 1,
+	page_size: int | None = None,
+	page_size_param: str | None = "page_size",
+	location: str = "query",
+	read_ahead: int | None = None,
+) -> Paginator:
+	"""`param` counts pages from `start`; ends at an empty page, or with `page_size=N` at a page with fewer than N rows.
 
+	`page_size` is sent as `page_size_param` with every page; `page_size_param=None` sends nothing, for an API whose
+	page size is fixed. A short page is checked with one more request until the API has shown it doesn't cap its pages
+	lower: an API that does still loads every row, paged to an empty page.
+	With `location="body"`, `param` and `page_size_param` are paths in the JSON body.
 	With `read_ahead=N`, the pages after a full first page are requested N at a time and still loaded in page order."""
-	return Paginator({"kind": "page_number", "param": param, "start": start, "location": _location(location), **_read_ahead(read_ahead)})
+	sized: dict[str, Any] = {}
+	if page_size is not None:
+		if isinstance(page_size, bool) or not isinstance(page_size, int):
+			raise TypeError(f"sl.page_number page_size takes a whole number of rows, not {page_size!r}")
+		if page_size < 1:
+			raise ValueError(f"sl.page_number page_size must be at least 1, not {page_size}")
+		sized = {"page_size": page_size, "page_size_param": page_size_param}
+	elif page_size_param != "page_size":
+		raise ValueError("sl.page_number page_size_param needs page_size: the number of rows a page holds")
+	return Paginator(
+		{"kind": "page_number", "param": param, "start": start, **sized, "location": _location(location), **_read_ahead(read_ahead)}
+	)
 
 
 def cursor(pointer: str, param: str, *, location: str = "query", read_ahead: int | None = None) -> Paginator:

@@ -350,8 +350,8 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.single()` | None: one request. |
 | `sl.next_link(pointer)` | The URL at `pointer` in the body, such as `"$.next"`. A link already followed fails the load; see [Repeated pages](#repeated-pages). |
 | `sl.link_header()` | The `Link` header's `rel="next"`. A link already followed fails the load. |
-| `sl.offset(param="offset", *, limit, limit_param="limit", location="query", read_ahead=None)` | Counts rows by `limit`; ends at a short page. For `read_ahead`, see [Reading pages ahead](#reading-pages-ahead). When a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). |
-| `sl.page_number(param="page", *, start=1, location="query", read_ahead=None)` | Counts pages; ends at an empty page. |
+| `sl.offset(param="offset", *, limit, limit_param="limit", location="query", read_ahead=None)` | Counts rows by `limit`; ends at a short page. For `read_ahead`, see [Reading pages ahead](#reading-pages-ahead). When a first page holds rows but fewer than `limit`, one more request at the next offset tells an API that caps its pages below `limit` (rows come back: the load fails, naming the page size to set as `limit`) from a table that really ended (no rows: the run ends). A fan-out checks a key's short first page only until its requests have shown the API sends pages that long. |
+| `sl.page_number(param="page", *, start=1, page_size=None, page_size_param="page_size", location="query", read_ahead=None)` | Counts pages; ends at an empty page, or with `page_size` at a short page. See [Ending at a short page](#ending-at-a-short-page). |
 | `sl.cursor(pointer, param, *, location="query")` | The token at `pointer` goes back as `param`. A token already sent fails the load. |
 
 | Cells | Columns |
@@ -380,6 +380,28 @@ for each and the credentials it uses.
   `python_row_loop`); filter rows downstream, or reshape each page with
   [`transform`](#transforming-each-page).
 
+### Ending at a short page
+
+`sl.page_number` without `page_size` ends only at an empty page, as it can't tell a short page from a full one. A
+fan-out whose keys mostly fit in one page then sends two requests per key. With `page_size`, a page holding fewer
+rows ends the run, as for `sl.offset`:
+
+```python
+api.fan_out("/proofs/{id}/activities", over=ids,
+            paginator=sl.page_number("page", page_size=100, page_size_param="count"), select="$.items")
+```
+
+`page_size` goes with every request as `page_size_param`, so leave it out of `params`; `page_size_param=None` sends
+nothing, for an API whose page size is fixed. An API can send fewer rows a page than asked, so a short page ends the
+run only once the table's requests have shown that the API sends that many:
+
+- After a page holding the whole `page_size`, every short page is the last.
+- Before that, a short page is checked with the next page. An empty one shows the short page was the last, and later
+  keys end at once on a shorter page. Rows there show the API caps its pages: paging goes on to an empty page, so
+  every row loads, and a warning names the `page_size` to set.
+
+A fan-out over 3,121 keys of about 19 rows each sends about 3,190 requests rather than 6,300.
+
 ### Reading pages ahead
 
 `read_ahead=N` on `sl.offset` or `sl.page_number` keeps up to `N` page requests open at once
@@ -393,7 +415,7 @@ api.paginate("/invoices", paginator=sl.offset(limit=50, read_ahead=20))
 The first page is read alone, so a short first page is checked as without `read_ahead`. After a full first page,
 the pages after it are requested two at a time, then four, eight and so on up to `N`, the open requests doubling
 each time the pages of the last round have loaded. Each goes through the connection's `rate_limit`, `max_in_flight` and retries, and their
-rows load strictly in page order. The run ends at the first short (or, for `sl.page_number`, empty) page, and the
+rows load strictly in page order. The run ends at the first short (or, for `sl.page_number` without `page_size`, empty) page, and the
 requests already sent past it are dropped, so a table or cursor window of a few pages sends only a few requests
 more than it loads, and a long one soon has `N` open.
 `sl.cursor`, `sl.next_link` and `sl.link_header` refuse `read_ahead`, as each page's address comes from the page
@@ -516,7 +538,7 @@ loaded  raw.shop__lines      6 rows 0.1s
 - A page's nested objects and lists arrive as JSON text, as `lines` does above: `json.loads` them,
   or pick their values with [`fields`](#fields) first.
 - Every page that's read goes through the function once, including an empty last page, such as the
-  one that ends `sl.page_number` paging. What it returns or yields loads in page order, batch by
+  one that ends `sl.page_number` paging without `page_size`. What it returns or yields loads in page order, batch by
   batch, and `flatten`, `columns` and `mask` apply to it.
 - A function that raises, or returns or yields something else, fails the table, naming the request:
   `GET .../regions/north/orders: transform order_lines failed: ...`.
