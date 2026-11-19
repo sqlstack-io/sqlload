@@ -4,7 +4,6 @@ use crate::adapters::bigquery::_helpers::dialect::pull::unread_name;
 use crate::adapters::contract::main::_custom_endpoint::custom_endpoint;
 use crate::adapters::contract::main::_files_direct_problem::files_direct_problem;
 use crate::column_types::models::ColumnType;
-use crate::file_store::_helpers::aws_keys::environment_variable;
 use crate::files_source::constants::{
     SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN,
 };
@@ -62,4 +61,12 @@ fn own_column(files: &FilesSource, name: &str) -> bool {
             .partition_types
             .iter()
             .any(|(partition, _)| partition == name)
+}
+
+/// `name`'s value in the process environment; unset when it isn't Unicode, as SQLLoad's reader takes it.
+fn environment_variable(name: &str) -> Option<String> {
+    match std::env::var(name) {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => None,
+    }
 }

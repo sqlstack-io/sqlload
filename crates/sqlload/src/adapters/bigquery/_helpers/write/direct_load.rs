@@ -6,16 +6,15 @@ use crate::adapters::bigquery::_helpers::dialect::pull::{
     PulledFile, PulledGroup, pull_query, unread_name,
 };
 use crate::adapters::bigquery::main::plan::_direct_problem::direct_problem;
-use crate::adapters::bigquery::models::{BigQuerySql, BigQueryWriter};
+use crate::adapters::bigquery::models::BigQueryWriter;
 use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
 use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, TableName};
-use crate::adapters::contract::types::{SqlAdapter, TableWriter};
+use crate::adapters::contract::types::TableWriter;
 use crate::bigquery_api::main::load_job::load_job;
-use crate::column_types::models::ColumnType;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::main::normal_value::normal_value;
-use crate::files_source::models::DataFile;
+use crate::files_source::models::{BatchFooters, DataFile};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::FilesSource;
 use crate::schema_plan::models::DesiredColumn;
@@ -58,14 +57,9 @@ impl BigQueryWriter {
             ..into.clone()
         };
         let groups = pulled_groups(source, (batch, columns)).map_err(refused)?;
-        let builds = target.builds;
-        let sql_type = |column_type: &ColumnType| match builds {
-            true => BigQuerySql.render_loader_logical_type(column_type).sql,
-            false => BigQuerySql.render_staging_type(column_type),
-        };
         let (query, definitions) = pull_query(
             &into,
-            (columns, &sql_type),
+            (columns, target.builds),
             &groups,
             (target.compat, target.load_id, batch.loaded_at),
         );
@@ -91,10 +85,14 @@ impl BigQueryWriter {
                 error["message"].as_str().unwrap_or_default()
             )));
         }
-        let rows = resource["statistics"]["query"]["numDmlAffectedRows"]
+        let affected = resource["statistics"]["query"]["numDmlAffectedRows"]
             .as_str()
-            .and_then(|rows| rows.parse::<u64>().ok())
             .unwrap_or_default();
+        let rows: u64 = affected.parse().map_err(|_| {
+            LoaderError::Invalid(format!(
+                "BigQuery's query job reported {affected:?} inserted rows, not a count; the batch is not committed"
+            ))
+        })?;
         let expected = footer_rows(batch.footers);
         if rows != expected {
             return Err(LoaderError::Invalid(format!(
@@ -112,19 +110,7 @@ fn pulled_groups(
 ) -> Result<Vec<PulledGroup>, String> {
     let mut groups: Vec<(Vec<String>, PulledGroup)> = Vec::new();
     for data in batch.files {
-        let fields: Vec<String> = batch
-            .footers
-            .parquet
-            .get(&data.file.store_key())
-            .map(|footer| {
-                let schema = footer.schema().clone();
-                schema
-                    .fields()
-                    .iter()
-                    .map(|field| field.name().clone())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let fields = footer_fields(batch.footers, data);
         if let Some(problem) = unread_name(fields.iter().map(String::as_str)) {
             return Err(format!("{}: {problem}", data.file.relative_key));
         }
@@ -132,7 +118,7 @@ fn pulled_groups(
         match groups.iter_mut().find(|(held, _)| *held == fields) {
             Some((_, group)) => group.files.push(file),
             None => {
-                let in_files = fields
+                let in_files: Vec<(String, String)> = fields
                     .iter()
                     .map(|field| {
                         let loaded = batch.spec.source_table.loaded_as(field);
@@ -188,4 +174,17 @@ fn pulled_file(
         constants.push((loaded.to_owned(), value));
     }
     Ok(PulledFile { url, constants })
+}
+
+/// The column names of `data`'s Parquet footer, in order; none when the batch has no footer of it.
+fn footer_fields(footers: &BatchFooters, data: &DataFile) -> Vec<String> {
+    let Some(footer) = footers.parquet.get(&data.file.store_key()) else {
+        return Vec::new();
+    };
+    let schema = footer.schema().clone();
+    schema
+        .fields()
+        .iter()
+        .map(|field| field.name().clone())
+        .collect()
 }
