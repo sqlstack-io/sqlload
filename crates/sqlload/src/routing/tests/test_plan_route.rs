@@ -228,6 +228,29 @@ fn given_a_source_and_destination_when_planning_then_the_cheapest_route_is_chose
             expected_steps: &["destination selects the rows itself"],
         },
         PlanRouteTestCase {
+            description: "a source that streams Arrow and never unloads is selected by a destination writing through its own connection",
+            reader: ReaderOffer {
+                arrow: true,
+                selected_by_destination: true,
+                ..ReaderOffer::default()
+            },
+            writer: database_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &["destination selects the rows itself"],
+        },
+        PlanRouteTestCase {
+            description: "a source that streams Arrow on the destination's connection still streams a table that needs the loader",
+            reader: ReaderOffer {
+                arrow: true,
+                selected_by_destination: true,
+                needs_loader: Some("the table has checks".to_owned()),
+                ..ReaderOffer::default()
+            },
+            writer: database_destination(),
+            overrides: RouteOverrides::default(),
+            expected_steps: &["read as Arrow", "destination takes Arrow"],
+        },
+        PlanRouteTestCase {
             description: "on the source's own connection, a table that needs the loader is still unloaded and read back",
             reader: ReaderOffer {
                 selected_by_destination: true,

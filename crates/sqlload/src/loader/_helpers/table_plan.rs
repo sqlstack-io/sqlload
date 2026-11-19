@@ -38,6 +38,7 @@ use crate::batch_plan::main::ignored_concurrency::ignored_concurrency;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
+use crate::bigquery_source::main::select_problem::select_problem;
 use crate::cdc::constants::{CDC_PARTITION_PROBLEM, CDC_RELOAD_PROBLEM, PLAIN_JSON_TYPE};
 use crate::cdc::main::metadata_read_columns::metadata_read_columns;
 use crate::column_types::main::is_variant::is_variant;
@@ -449,7 +450,7 @@ pub(crate) fn read_columns(spec: &TableSpec) -> Result<Vec<ReadColumn>, Vec<Stri
             if spec
                 .warehouse_source
                 .as_ref()
-                .is_some_and(|source| source.route == WarehouseRoute::Query) =>
+                .is_some_and(|source| matches!(source.route, WarehouseRoute::Query { .. })) =>
         {
             crate::odbc_source::main::read_columns::read_columns(
                 &selected_columns(spec),
@@ -1076,22 +1077,33 @@ pub(crate) fn reader_offer(
             ..
         }) => vec![store.clone()],
         Some(WarehouseSource {
-            route: WarehouseRoute::Query,
+            route: WarehouseRoute::Query { .. },
             ..
         })
         | None => Vec::new(),
     };
     let route = spec.warehouse_source.as_ref().map(|source| &source.route);
+    let unselected = match route {
+        Some(WarehouseRoute::Query {
+            same_connection: true,
+        }) => select_problem(&selected_columns(spec), &spec.pinned),
+        _ => None,
+    };
     let selected_by_destination = spec.masked.columns.is_empty()
         && matches!(
             route,
-            Some(WarehouseRoute::Unload {
-                same_connection: true,
-                ..
-            })
-        );
+            Some(
+                WarehouseRoute::Unload {
+                    same_connection: true,
+                    ..
+                } | WarehouseRoute::Query {
+                    same_connection: true
+                }
+            )
+        )
+        && unselected.is_none();
     let direct_blocked = match unload_to.is_empty() {
-        true => direct_blocked,
+        true => direct_blocked.or(unselected),
         false => unload_blocked(
             spec.warehouse,
             (!spec.masked.columns.is_empty(), &spec.source_table.columns),

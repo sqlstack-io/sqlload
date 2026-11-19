@@ -55,6 +55,8 @@ use crate::number_text::main::memory_text::memory_text;
 use crate::project::models::SendMode;
 
 use crate::batch_plan::main::window_concurrency::window_concurrency;
+use crate::bigquery_source::main::selected_rows_query::selected_rows_query;
+use crate::bigquery_source::models::BigQueryReadRequest;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
@@ -1116,7 +1118,7 @@ impl Publisher {
     ) -> Result<(), LoaderError> {
         let table = self.table.clone();
         if selects_rows(table.route.as_ref()) {
-            let query = selected_query(&table, part)?;
+            let query = selected_query(reader, &table, part)?;
             self.load_unloaded(UnloadedSource::Query(&query)).await?;
             return Ok(());
         }
@@ -1955,11 +1957,27 @@ pub(crate) fn publishes_once(table: &TablePlan) -> bool {
     ) && sql_adapter(table.spec.warehouse).publishes_runs_once()
 }
 
-/// The query an unload of `part` of `table` would run, which a destination writing through the source's own connection runs itself.
-fn selected_query(table: &TablePlan, part: ReadPart) -> Result<String, LoaderError> {
+/// The query that selects `part` of `table` from its source, which a destination writing through the source's own connection runs itself: a Snowflake source's unload query, or the query a BigQuery source's rows would be read with.
+fn selected_query(
+    reader: &SourceReader,
+    table: &TablePlan,
+    part: ReadPart,
+) -> Result<String, LoaderError> {
     let filter = table
         .spec
         .read_filter(part.filter.or_else(|| table.source_filter.clone()));
-    select_query(&unload_request(table, filter.as_deref()))
-        .map_err(|error| LoaderError::Invalid(error.to_string()))
+    match reader {
+        SourceReader::BigQuery(reader) => Ok(selected_rows_query(
+            reader,
+            &BigQueryReadRequest {
+                table: &table.spec.source_table,
+                sql: table.spec.query_sql(),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                filtered: table.spec.row_filter.is_some(),
+            },
+        )),
+        _ => select_query(&unload_request(table, filter.as_deref()))
+            .map_err(|error| LoaderError::Invalid(error.to_string())),
+    }
 }
