@@ -29,9 +29,7 @@ use crate::loader::_helpers::python::{list_choices, unnested_table};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::run_log::recorded_commits;
 use crate::loader::_helpers::sources::{readers_note, unarchived};
-use crate::loader::_helpers::table_plan::{
-    archived_reason, is_direct, pulls_unloaded, selects_rows,
-};
+use crate::loader::_helpers::table_plan::archived_reason;
 use crate::loader::constants::{
     CONSTANT_NOTE, DRAINED_REASON, LABEL_WIDTH, NULL_KEYS_NOTE, PLAN_DETAIL_COLUMN,
     PRIMARY_KEY_PLACEHOLDER, RESULT_SCHEMA_VERSION, SELECTED_ROUTE,
@@ -678,9 +676,10 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             "changed columns move to the end of the column order",
         ));
     }
-    let staged_why =
-        (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
-            || spec.warehouse_source.is_some();
+    let staged_why = (table.stage.is_some()
+        && spec.files.is_some()
+        && !table.route.as_ref().is_some_and(Route::is_direct))
+        || spec.warehouse_source.is_some();
     let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !staged_why);
     let why_shown = staged_why
         || table.route.as_ref().is_some_and(|route| {
@@ -703,7 +702,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         route: WarehouseRoute::Unload { stage, .. },
         ..
     }) = &spec.warehouse_source
-        && !selects_rows(table.route.as_ref())
+        && !table.route.as_ref().is_some_and(Route::selects_rows)
     {
         details.push(detail("stage", stage.as_str()));
     }
@@ -716,7 +715,7 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
         details.push(detail("why", reason));
     }
     if table.route.as_ref().is_some_and(|route| {
-        is_direct(Some(route))
+        route.is_direct()
             && spec
                 .masked
                 .columns
@@ -844,7 +843,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 thousands(MAX_BATCH_FILES as u64)
             )
         }
-        (_, true) if pulls_unloaded(table.route.as_ref()) => {
+        (_, true) if table.route.as_ref().is_some_and(Route::pulls_unloaded) => {
             "every row loaded at once into a new table, swapped in once at the end".to_owned()
         }
         (_, true) if sql_adapter(spec.warehouse).keeps_tables() => {
@@ -866,7 +865,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
                 _ => "",
             }
         ),
-        (CommitRule::Size, false) if pulls_unloaded(table.route.as_ref()) => {
+        (CommitRule::Size, false) if table.route.as_ref().is_some_and(Route::pulls_unloaded) => {
             "one commit: the destination loads every row at once".to_owned()
         }
         (CommitRule::Size, false) => "about every 1 GB".to_owned(),

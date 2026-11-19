@@ -22,7 +22,7 @@ use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableT
 use crate::loader::tests::test_types::{
     BigQueryReaderTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, GcsReaderTestCase,
     InferredTableTestCase, ItemSpec, OlderFilesTestCase, ReloadOrderTestCase,
-    SourceSpellingTestCase, TransformReaderTestCase,
+    SelectedReaderTestCase, SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -558,6 +558,32 @@ pub(crate) fn transform_reader(
     spec.parses
         .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
     Ok(reader_offer(&spec, None, None).needs_loader)
+}
+
+/// Whether BigQuery selects a BigQuery source's table itself through the source's own connection, with the case's mask and parse, and why SQLLoad reads it otherwise.
+pub(crate) fn selected_reader(
+    test_case: &SelectedReaderTestCase,
+) -> Result<(bool, Option<String>), String> {
+    let mut spec = python_spec("{}")?;
+    spec.python = None;
+    spec.warehouse = crate::column_types::models::Warehouse::BigQuery;
+    spec.warehouse_source = Some(crate::loader::models::WarehouseSource {
+        system: crate::bigquery_source::constants::BIGQUERY_SOURCE,
+        sql: None,
+        route: crate::loader::models::WarehouseRoute::Query {
+            same_connection: true,
+        },
+    });
+    spec.masked.columns.extend(
+        test_case
+            .mask
+            .map(|(column, method)| (column.to_owned(), method)),
+    );
+    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
+    spec.parses
+        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
+    let offer = reader_offer(&spec, None, None);
+    Ok((offer.selected_by_destination, offer.direct_blocked))
 }
 
 /// Why DuckDB can't read a Parquet files table's files in GCS itself, with the case's HMAC key and endpoint on the connection.

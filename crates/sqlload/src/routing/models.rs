@@ -191,3 +191,37 @@ pub struct Route {
     pub steps: Vec<Step>,
     pub reason: String,
 }
+
+impl Route {
+    /// Whether the route has the destination select a warehouse source's rows itself, inside the warehouse.
+    pub fn selects_rows(&self) -> bool {
+        matches!(self.steps.as_slice(), [Step::DestinationSelects])
+    }
+
+    /// Whether the route has the destination load a warehouse source's rows itself: its unloaded files, or the rows it selects inside the warehouse.
+    pub fn pulls_unloaded(&self) -> bool {
+        matches!(
+            self.steps.as_slice(),
+            [Step::Unload(_), Step::DestinationPulls(_)]
+                | [Step::DestinationSelects]
+                | [
+                    Step::Unload(_),
+                    Step::CopyFiles(Store::Local(_)),
+                    Step::DestinationPulls(_)
+                ]
+        )
+    }
+
+    /// Whether the route has the destination load a files source's own files.
+    pub fn is_direct(&self) -> bool {
+        matches!(
+            self.steps.as_slice(),
+            [Step::UseFiles(_), Step::DestinationPulls(_)]
+                | [
+                    Step::UseFiles(_),
+                    Step::CopyFiles(_),
+                    Step::DestinationPulls(_)
+                ]
+        )
+    }
+}

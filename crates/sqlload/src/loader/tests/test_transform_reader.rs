@@ -1,8 +1,11 @@
 use crate::column_types::models::ColumnType;
-use crate::loader::tests::helpers::{bigquery_reader, gcs_reader, transform_reader};
-use crate::loader::tests::test_types::{
-    BigQueryReaderTestCase, GcsReaderTestCase, TransformReaderTestCase,
+use crate::loader::tests::helpers::{
+    bigquery_reader, gcs_reader, selected_reader, transform_reader,
 };
+use crate::loader::tests::test_types::{
+    BigQueryReaderTestCase, GcsReaderTestCase, SelectedReaderTestCase, TransformReaderTestCase,
+};
+use crate::project::models::MaskMethod;
 
 #[test]
 fn given_a_files_table_with_a_transform_or_a_parse_when_routing_then_sqlload_reads_the_files_itself()
@@ -166,6 +169,51 @@ fn given_parquet_files_in_gcs_when_routing_into_bigquery_then_bigquery_reads_the
         assert_eq!(
             bigquery_reader(&test_case)?.as_deref(),
             test_case.expected_reason,
+            "{}",
+            test_case.description
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn given_a_bigquery_source_on_the_targets_connection_when_routing_then_bigquery_selects_the_rows_unless_sqlload_must_see_them_and_plan_says_why()
+-> Result<(), String> {
+    let test_cases = [
+        SelectedReaderTestCase {
+            description: "a plain table is selected by BigQuery itself",
+            mask: None,
+            parse: None,
+            expected_selected: true,
+            expected_reason: None,
+        },
+        SelectedReaderTestCase {
+            description: "a hashed column is masked by SQLLoad, which says so",
+            mask: Some(("note", MaskMethod::Hash)),
+            parse: None,
+            expected_selected: false,
+            expected_reason: Some("the table masks columns"),
+        },
+        SelectedReaderTestCase {
+            description: "an HMAC key must never appear in SQL",
+            mask: Some(("note", MaskMethod::Hmac)),
+            parse: None,
+            expected_selected: false,
+            expected_reason: Some("note masked with hmac, whose key must never appear in SQL"),
+        },
+        SelectedReaderTestCase {
+            description: "a parse runs in SQLLoad, which says so",
+            mask: None,
+            parse: Some("updated"),
+            expected_selected: false,
+            expected_reason: Some("parse runs on updated"),
+        },
+    ];
+    for test_case in test_cases {
+        let (selected, reason) = selected_reader(&test_case)?;
+        assert_eq!(
+            (selected, reason.as_deref()),
+            (test_case.expected_selected, test_case.expected_reason),
             "{}",
             test_case.description
         );
