@@ -7,7 +7,7 @@ use crate::merge_helpers::{load_step, run_merge_case};
 use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 
 /// Every row as `version:line:amount`, then how many file commits the run log records.
-const CHECK: &str = "SELECT (SELECT string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+const CHECK: &str = "SELECT (SELECT COALESCE(string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line), '') FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
 /// No table is created when plan refuses the settings.
 const NO_TABLE: &str =
@@ -33,7 +33,7 @@ const SECOND: MergeFile = MergeFile {
     modified_secs: 2_000,
 };
 
-const LAST_WINS_PLAN: &str = "2 files, one commit each, oldest modified first (ties by path), each recorded in the run log; the last file holding a replace_key value replaces it (on_overlapping_files = \"last_wins\")";
+const LAST_WINS_PLAN: &str = "2 files, 1 commit, oldest modified first (ties by path), each recorded in the run log; the last file holding a replace_key value replaces it (on_overlapping_files = \"last_wins\")";
 
 const OUTSIDE: &str = "on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value";
 
@@ -123,7 +123,7 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 settings: LAST_WINS,
                 steps: ONE_RUN,
                 check_query: CHECK,
-                expected_result: "P01:A:1,P01:B:2,P02:X:7,P02:Y:8,P03:Z:9|2",
+                expected_result: "P01:A:1,P01:B:2,P02:X:7,P02:Y:8,P03:Z:9|1",
             },
             FilesMergeTestCase {
                 description: "across runs, a file sent later replaces a value of a file still in the folder",
@@ -137,14 +137,14 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 settings: LAST_WINS_BY_PATH,
                 steps: BY_PATH,
                 check_query: CHECK,
-                expected_result: "P01:A:1,P02:X:7|2",
+                expected_result: "P01:A:1,P02:X:7|1",
             },
             FilesMergeTestCase {
                 description: "with on_overlapping_files = \"fail\", a value split across part files still fails on the later file, naming both and the setting",
                 settings: FAILS,
                 steps: SPLIT,
                 check_query: CHECK,
-                expected_result: "P01:A:1,P01:B:2,P02:A:10|1",
+                expected_result: "|0",
             },
             FilesMergeTestCase {
                 description: "with order = \"path\", an older file sent after a newer one fails instead of taking back the newer file's value, which stays",
@@ -158,7 +158,7 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 settings: LAST_WINS_BY_PATH,
                 steps: REWRITTEN,
                 check_query: CHECK,
-                expected_result: "P01:A:5,P02:X:70,P03:Z:9|4",
+                expected_result: "P01:A:5,P02:X:70,P03:Z:9|2",
             },
             FilesMergeTestCase {
                 description: "set on the source, it leaves alone a table of the source that merges",
@@ -222,7 +222,7 @@ fn given_files_holding_one_replace_key_value_when_loading_into_postgres_then_on_
                 settings: LAST_WINS,
                 steps: ONE_RUN,
                 check_query: CHECK,
-                expected_result: "P01:A:1,P01:B:2,P02:X:7,P02:Y:8,P03:Z:9|2",
+                expected_result: "P01:A:1,P01:B:2,P02:X:7,P02:Y:8,P03:Z:9|1",
             },
             FilesMergeTestCase {
                 description: "across runs, a file sent later replaces a value of a file still in the folder",
@@ -236,7 +236,7 @@ fn given_files_holding_one_replace_key_value_when_loading_into_postgres_then_on_
                 settings: FAILS,
                 steps: SPLIT,
                 check_query: CHECK,
-                expected_result: "P01:A:1,P01:B:2,P02:A:10|1",
+                expected_result: "|0",
             },
         ];
         for test_case in &test_cases {

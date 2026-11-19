@@ -14,7 +14,7 @@ use crate::adapters::contract::_helpers::promote::{
 };
 use crate::adapters::contract::_helpers::queries::{
     check_query, child_tables_query, cursor_query, insert_rows, loaded_files_query,
-    staging_tables_query, staging_time, stale_staging,
+    staging_tables_query, staging_time, stale_staging, superseded_delete,
 };
 use crate::adapters::contract::_helpers::recreate::recreate_statements;
 use crate::adapters::contract::_helpers::schema::{
@@ -271,6 +271,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The query `check` runs on `relation`, returning its values as text.
     fn render_check_query(&self, relation: &TableName, check: CheckQuery<'_>) -> String {
         check_query(self, relation, check)
+    }
+
+    /// A statement deleting from `staging` the rows of `file` (its `file_column`) whose `key` values, as [`CheckQuery::KeyFiles`] gives them, are among `values`.
+    fn render_superseded_delete(
+        &self,
+        staging: &TableName,
+        (key, file_column): (&[String], &str),
+        (file, values): (&str, &[String]),
+    ) -> String {
+        superseded_delete(self, staging, (key, file_column), (file, values))
     }
 
     /// A query returning a row when `table` holds one.

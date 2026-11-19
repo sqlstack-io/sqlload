@@ -288,18 +288,33 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
             "SELECT DISTINCT {} AS example FROM {from} ORDER BY 1 LIMIT {limit}",
             examples(&names_of(columns), true)
         ),
-        CheckQuery::KeySources {
+        CheckQuery::KeyFiles {
             key,
-            staged,
             file_column,
-            file,
+            held_by,
         } => {
-            let values = examples(&names_of(key), true);
+            let values = key_text(adapter, key);
             let column = adapter.render_identifier(file_column);
+            let length = adapter.render_text_cast(&format!("length({column})"));
+            let held = held_by.map_or_else(String::new, |held_by| {
+                format!(
+                    " WHERE {values} IN (SELECT {values} FROM {})",
+                    adapter.render_qualified_name(held_by)
+                )
+            });
             format!(
-                "SELECT DISTINCT {column} AS example FROM {from} WHERE {values} IN (SELECT {values} FROM {}) AND {column} <> {} ORDER BY 1",
-                adapter.render_qualified_name(staged),
-                adapter.render_loader_value_literal(file)
+                "SELECT DISTINCT {length} || ':' || {column} || {values} AS example FROM {from}{held} ORDER BY 1"
+            )
+        }
+        CheckQuery::NullKeyFiles(columns, file_column) => {
+            let missing: Vec<String> = names_of(columns)
+                .iter()
+                .map(|name| format!("{name} IS NULL"))
+                .collect();
+            format!(
+                "SELECT DISTINCT {} AS example FROM {from} WHERE {} ORDER BY 1",
+                adapter.render_identifier(file_column),
+                missing.join(" OR ")
             )
         }
         CheckQuery::NullKeyExamples(columns) => {
@@ -312,4 +327,37 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
             )
         }
     }
+}
+
+/// `key`'s columns of a row as one text, each `NULL` for a NULL, joined by `, `.
+fn key_text<A: SqlAdapter + ?Sized>(adapter: &A, key: &[String]) -> String {
+    let texts: Vec<String> = key
+        .iter()
+        .map(|column| {
+            let name = adapter.render_identifier(column);
+            format!("COALESCE({}, 'NULL')", adapter.render_text_cast(&name))
+        })
+        .collect();
+    texts.join(" || ', ' || ")
+}
+
+/// `DELETE FROM staging` of the rows of `file` (its `file_column`) whose `key` values, as [`key_text`] writes them, are among `values`.
+pub(crate) fn superseded_delete<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    staging: &TableName,
+    (key, file_column): (&[String], &str),
+    (file, values): (&str, &[String]),
+) -> String {
+    let listed: Vec<String> = values
+        .iter()
+        .map(|value| adapter.render_loader_value_literal(value))
+        .collect();
+    format!(
+        "DELETE FROM {} WHERE {} = {} AND {} IN ({})",
+        adapter.render_qualified_name(staging),
+        adapter.render_identifier(file_column),
+        adapter.render_loader_value_literal(file),
+        key_text(adapter, key),
+        listed.join(", ")
+    )
 }

@@ -1,6 +1,10 @@
 //! What the merge loader tests share: a Postgres table with repeated keys loaded into any target.
 
 use std::collections::BTreeMap;
+use std::path::Path;
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
@@ -16,8 +20,8 @@ use sqlload_testkit::postgres::constants::{PASSWORD, USER};
 
 use crate::helpers::{described_project, load_selected, words};
 use crate::test_types::{
-    DedupeRule, DedupeTargetTestCase, FilesMergeTestCase, MergeFile, MergeStep,
-    NullKeyTargetTestCase, ReplaceKeyTargetTestCase, SyncDeletesTestCase,
+    DedupeRule, DedupeTargetTestCase, FileBatchTestCase, FilesMergeTestCase, ManyFilesTestCase,
+    MergeFile, MergeStep, NullKeyTargetTestCase, ReplaceKeyTargetTestCase, SyncDeletesTestCase,
 };
 
 /// `public.readings`: `s1` and `s2` repeat with their `seen_at` order unlike their `reading_id` order, `s2`'s last row has no `seen_at`, and two rows have no sensor (nor `seen_at`), a repeated NULL key.
@@ -795,4 +799,254 @@ pub(crate) const fn load_step(
         expected_error,
         expected_plan,
     }
+}
+
+/// The `(id, v, seen)` rows of file `index` of [`run_many_files_case`]: its first and last rows share an id, which other files hold too, and `bad` gives its second row a `seen` that isn't a number.
+fn generated_rows(index: usize, bad: bool) -> Vec<(i64, String, String)> {
+    let at = i64::try_from(index).unwrap_or(i64::MAX);
+    [(at * 3) % 50, (at * 7 + 1) % 50, (at * 3) % 50]
+        .into_iter()
+        .enumerate()
+        .map(|(row, id)| {
+            let seen = [at.to_string(), "oops".to_owned()];
+            let seen = seen[usize::from(bad && row == 1)].clone();
+            (id, format!("f{index}r{row}"), seen)
+        })
+        .collect()
+}
+
+/// Write `rows` as `folder/key.<format>`, modified at `modified_secs`.
+fn write_batch_file(
+    folder: &Path,
+    (format, key): (&str, &str),
+    rows: &[(i64, String, String)],
+    modified_secs: u64,
+) -> Result<(), String> {
+    let path = folder.join(format!("{key}.{format}"));
+    let writers: [(&str, FileBytes); 2] = [("parquet", parquet_bytes), ("csv", csv_bytes)];
+    let (_, writer) = writers
+        .iter()
+        .find(|(name, _)| *name == format)
+        .ok_or_else(|| format!("no writer for {format} files"))?;
+    let bytes = writer(rows)?;
+    std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified_secs);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|opened| opened.set_modified(modified))
+        .map_err(|error| error.to_string())
+}
+
+/// Writes a batched test file's rows as one format's bytes.
+type FileBytes = fn(&[(i64, String, String)]) -> Result<Vec<u8>, String>;
+
+/// `rows` as one Parquet file of `id` and `seen` integers and `v` text.
+fn parquet_bytes(rows: &[(i64, String, String)]) -> Result<Vec<u8>, String> {
+    let seen: Vec<i64> = rows
+        .iter()
+        .map(|row| row.2.parse::<i64>().map_err(|error| error.to_string()))
+        .collect::<Result<_, _>>()?;
+    let columns: Vec<(&str, ArrayRef)> = vec![
+        (
+            "id",
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.0))),
+        ),
+        (
+            "v",
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|row| row.1.as_str()),
+            )),
+        ),
+        ("seen", Arc::new(Int64Array::from(seen))),
+    ];
+    let batch = RecordBatch::try_from_iter(columns).map_err(|error| error.to_string())?;
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = parquet::arrow::ArrowWriter::try_new(&mut buffer, batch.schema(), None)
+        .map_err(|error| error.to_string())?;
+    writer.write(&batch).map_err(|error| error.to_string())?;
+    writer.close().map_err(|error| error.to_string())?;
+    Ok(buffer)
+}
+
+/// `rows` as a CSV file with a header line.
+fn csv_bytes(rows: &[(i64, String, String)]) -> Result<Vec<u8>, String> {
+    let lines: Vec<String> = rows
+        .iter()
+        .map(|(id, v, seen)| format!("{id},{v},{seen}\n"))
+        .collect();
+    Ok(format!("id,v,seen\n{}", lines.concat()).into_bytes())
+}
+
+/// A project whose files connection is rooted at `root`, loading into `target` (its TOML lines) under `schema`, with one files source per `(name, folder, settings)`.
+fn batch_project(
+    root: &Path,
+    (target, schema): (&str, &str),
+    format: &str,
+    sources: &[(&str, &str, &str)],
+) -> String {
+    let sources: Vec<String> = sources
+        .iter()
+        .map(|(name, folder, settings)| {
+            format!(
+                "[sources.{name}]\nkind = \"files\"\ndescription = \"Test table.\"\nconnection = \"files\"\npath = \"{folder}/\"\nformat = \"{format}\"\n{settings}\n"
+            )
+        })
+        .collect();
+    format!(
+        "[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[connections.target]\n{target}\n\n[targets.dev]\nconnection = \"target\"\nloader_schema = \"{schema}\"\n\n{}",
+        root.display(),
+        sources.concat()
+    )
+}
+
+/// How many `run` records the run log under `schema` holds for `table`, as text.
+fn commits(schema: &str, table: &str) -> String {
+    format!(
+        "(SELECT CAST(count(*) AS VARCHAR) FROM {schema}._sqlload_runs WHERE table_name = '{table}' AND event = 'run')"
+    )
+}
+
+/// The rows of `left` not in `right` (each a query of the same columns), counted, as text.
+fn missing(left: &str, right: &str) -> String {
+    format!("CAST((SELECT count(*) FROM ({left} EXCEPT ALL {right}) AS missing) AS VARCHAR)")
+}
+
+/// Load `test_case.files` into `target` under `schema` as table `batched` in one run, then into table `single` one file per run; the comparison its `expected_result` describes.
+pub(crate) async fn run_batch_case(
+    (target, schema): (&str, &str),
+    test_case: &FileBatchTestCase,
+) -> Result<Option<String>, String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let text = batch_project(
+        directory.path(),
+        (target, schema),
+        test_case.format,
+        &[
+            ("batched", "all", test_case.settings),
+            ("single", "one", test_case.settings),
+        ],
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    for folder in ["all", "one"] {
+        std::fs::create_dir_all(directory.path().join(folder))
+            .map_err(|error| error.to_string())?;
+    }
+    let rows_of = |rows: &[(i64, &str, i64)]| -> Vec<(i64, String, String)> {
+        rows.iter()
+            .map(|(id, v, seen)| (*id, (*v).to_owned(), seen.to_string()))
+            .collect()
+    };
+    for file in test_case.files {
+        write_batch_file(
+            &directory.path().join("all"),
+            (test_case.format, file.key),
+            &rows_of(file.rows),
+            file.modified_secs,
+        )?;
+    }
+    load_selected(&project, &destinations, &["batched"]).await?;
+    for file in test_case.files {
+        write_batch_file(
+            &directory.path().join("one"),
+            (test_case.format, file.key),
+            &rows_of(file.rows),
+            file.modified_secs,
+        )?;
+        load_selected(&project, &destinations, &["single"]).await?;
+    }
+    let rows = |table: &str| {
+        format!(
+            "SELECT id, v, seen, _sqlload_source_row, regexp_replace(_sqlload_source_file, '^.*/', '') FROM {schema}.{table}"
+        )
+    };
+    let (batched, single) = (rows("batched"), rows("single"));
+    let query = format!(
+        "SELECT {} || '|' || {} || '|' || (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id, v) FROM {schema}.batched) || '|' || {} || '|' || {}",
+        missing(&batched, &single),
+        missing(&single, &batched),
+        commits(schema, "batched"),
+        commits(schema, "single")
+    );
+    single_text(destination, query)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Load `test_case.files` generated files into DuckDB as table `batched` (with a bad file first, then fixed, when it has one; after the failed load, the files its run log records) and once more with nothing new, then as table `appended`, every row; the two checks its expected fields describe.
+pub(crate) async fn run_many_files_case(
+    test_case: &ManyFilesTestCase,
+) -> Result<(String, Option<String>), String> {
+    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let folder = directory.path().join("all");
+    std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let text = batch_project(
+        directory.path(),
+        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
+        test_case.format,
+        &[
+            ("batched", "all", test_case.settings),
+            ("appended", "all", "write_strategy = \"append\""),
+        ],
+    );
+    let project = described_project(&text).await?;
+    let destinations = connect_targets(&project)
+        .await
+        .map_err(|error| error.to_string())?;
+    let destination = destinations
+        .get("dev")
+        .ok_or_else(|| "no dev destination".to_owned())?;
+    let write = |index: usize, bad: bool| {
+        write_batch_file(
+            &folder,
+            (test_case.format, &format!("f{index:05}")),
+            &generated_rows(index, bad),
+            1_000_000 + index as u64,
+        )
+    };
+    for index in 0..test_case.files {
+        write(index, test_case.bad_files.contains(&index))?;
+    }
+    let mut after_error = String::new();
+    for bad in test_case.bad_files {
+        let error = load_selected(&project, &destinations, &["batched"])
+            .await
+            .err()
+            .unwrap_or_default();
+        assert!(
+            error.contains(test_case.expected_error),
+            "{}: {error}",
+            test_case.description
+        );
+        let state = format!(
+            "SELECT (SELECT CAST(sum(json_array_length(record_json, '$.files')) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'batched' AND event = 'run') || '|' || {}",
+            commits("raw", "batched")
+        );
+        after_error = single_text(destination, state)
+            .await
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default();
+        write(*bad, false)?;
+    }
+    load_selected(&project, &destinations, &["batched"]).await?;
+    load_selected(&project, &destinations, &["batched"]).await?;
+    load_selected(&project, &destinations, &["appended"]).await?;
+    let merged = "SELECT id, v, seen FROM raw.batched";
+    let oracle = "SELECT id, v, seen FROM (SELECT id, v, seen, row_number() OVER (PARTITION BY id ORDER BY _sqlload_source_file DESC, _sqlload_source_row DESC) AS newest FROM raw.appended) AS ranked WHERE newest = 1";
+    let query = format!(
+        "SELECT {} || '|' || {} || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw.batched) || '|' || {} || '|' || (SELECT CAST(sum(CAST(row_count AS BIGINT)) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'batched' AND event = 'run')",
+        missing(merged, oracle),
+        missing(oracle, merged),
+        commits("raw", "batched")
+    );
+    let result = single_text(destination, query)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok((after_error, result))
 }

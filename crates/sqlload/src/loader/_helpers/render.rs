@@ -831,7 +831,7 @@ pub(crate) fn batch_line(table: &TablePlan) -> String {
             format!("{windows} of {step}, {commits}{}{end}", read_at_once(table))
         }
         (CommitRule::FileGroups(groups), _) if records_files(table) => {
-            recorded_commits(groups.len(), spec)
+            recorded_commits(groups, spec)
         }
         (CommitRule::FileGroups(groups), _) => {
             format!(

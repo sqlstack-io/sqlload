@@ -4,6 +4,7 @@ pub mod file_groups;
 pub mod ignored_batch;
 pub mod ignored_concurrency;
 pub mod last_value;
+pub mod ordered_groups;
 pub mod outside_text;
 pub mod read_at_once;
 pub mod read_in_order;
