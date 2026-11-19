@@ -16,6 +16,7 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | DuckDB | Tables and views of a database file, by `include` patterns, and query results | One `SELECT` on a read-only connection, streamed as Arrow. See [DuckDB](/docs/sources/duckdb/). |
 | MotherDuck (beta) | Tables and views of one database, by `include` patterns, and query results | One `SELECT` run by a separate DuckDB 1.5 process (`sqlload[motherduck]`), its Arrow batches handed over one at a time. See [MotherDuck](/docs/sources/motherduck/). |
 | Files in S3 | Parquet, CSV, JSON, NDJSON, Excel (xlsx) and XML; gzip or zstd for text formats; ZIP archives of any of them; any file name through `pattern`. See [Files](/docs/sources/files/#excel-xml-and-zip-files). | The destination itself where it can load them exactly, otherwise SQLLoad's reader |
+| Files in Google Cloud Storage | As for S3 | As for S3; DuckDB and MotherDuck read Parquet themselves with an HMAC key. See [`gcs`](/docs/configuration/#gcs). |
 | Files in a local folder | As for S3 | As for S3 |
 | Files on an SFTP server | As for S3 | SQLLoad's reader, over SFTP. See [Files](/docs/sources/files/#files-on-an-sftp-server). |
 | Google Sheets | Tabs or A1 ranges, values typed by their cells | The Sheets API with a service-account key, into Arrow. See [Google Sheets](/docs/sources/google-sheets/). |
@@ -33,8 +34,9 @@ description: "What SQLLoad reads and writes, by which route, and how each is tes
 | ClickHouse, one self-hosted server | `append`, `merge`, `delete_insert`, `replace` | Arrow over HTTP into a staging table, published by swapping in a whole table or whole partitions; Parquet in S3 read by ClickHouse with `s3()`. No clusters, replicated or distributed tables; ClickHouse Cloud is untested. See [ClickHouse](/docs/targets/clickhouse/). |
 | Postgres | `append`, `merge`, `delete_insert`, `replace` | Binary `COPY` into a temporary staging table, then one transaction per commit. See [Postgres](/docs/targets/postgres/). |
 | DuckDB | `append`, `merge`, `delete_insert`, `replace` | Arrow appends; Parquet files read by DuckDB with `read_parquet`. |
-| MotherDuck (beta) | `append`, `merge`, `delete_insert`, `replace` | Batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; Parquet in S3 is read on MotherDuck's servers, other files by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
+| MotherDuck (beta) | `append`, `merge`, `delete_insert`, `replace` | Batches inserted by a separate DuckDB 1.5 process (`sqlload[motherduck]`), as MotherDuck doesn't accept DuckDB 2.0 clients yet; Parquet in S3, and in GCS with an HMAC key, is read on MotherDuck's servers, other files by SQLLoad. See [MotherDuck](/docs/targets/motherduck/). |
 | Parquet or CSV files in S3 | `append`, `delete_insert`, `replace` | Parquet written by SQLLoad, zstd-compressed; or CSV: plain, gzip or zstd. |
+| Parquet or CSV files in Google Cloud Storage | As for S3 | As for S3 |
 | Parquet or CSV files in a local folder | As for S3; `replace` swaps the folder in one rename | As for S3 |
 
 ## Source and destination combinations

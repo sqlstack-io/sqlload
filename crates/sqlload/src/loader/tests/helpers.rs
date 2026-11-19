@@ -6,9 +6,10 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
+use crate::auth::models::Secret;
 use crate::column_types::constants::ARROW_TYPE_METADATA_KEY;
 use crate::file_store::errors::StoreError;
-use crate::files_source::models::{FilesEncoding, FilesTable, TextChecks};
+use crate::files_source::models::{FilesEncoding, FilesRead, FilesTable, TextChecks};
 use crate::http::errors::ApiError;
 use crate::loader::_helpers::python::child_paths;
 use crate::loader::_helpers::python::{
@@ -19,15 +20,16 @@ use crate::loader::_helpers::table_plan::reader_offer;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
-    ChildPathsTestCase, DeclaredProblemsTestCase, InferredTableTestCase, ItemSpec,
-    OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase, TransformReaderTestCase,
+    ChildPathsTestCase, DeclaredProblemsTestCase, GcsReaderTestCase, InferredTableTestCase,
+    ItemSpec, OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase,
+    TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::python_sources::models::PythonSource;
 use crate::routing::models::{FileFormat, FileSet, Route, Step, Store};
 use crate::schema_plan::models::LiveColumn;
-use crate::store_paths::models::{Location, StoreKind};
+use crate::store_paths::models::{HmacKey, Location, StoreKind};
 
 /// The columns of the inferred table, as `name:type` joined by commas.
 pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
@@ -540,13 +542,50 @@ pub(crate) fn not_null_keys(
 pub(crate) fn transform_reader(
     test_case: &TransformReaderTestCase,
 ) -> Result<Option<String>, String> {
+    let mut spec = files_spec(StoreKind::Filesystem {
+        root: "/data".to_owned(),
+    })?;
+    spec.transform = test_case.transform.map(|function| TableTransform {
+        function: function.to_owned(),
+        version: format!("{function}@0"),
+        older: 0,
+        creates_log: false,
+    });
+    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
+    spec.parses
+        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
+    Ok(reader_offer(&spec, None, None).needs_loader)
+}
+
+/// Why DuckDB can't read a Parquet files table's files in GCS itself, with the case's HMAC key and endpoint on the connection.
+pub(crate) fn gcs_reader(test_case: &GcsReaderTestCase) -> Result<Option<String>, String> {
+    let spec = files_spec(StoreKind::Gcs {
+        bucket: "lake".to_owned(),
+        service_account_key: None,
+        endpoint: test_case.endpoint.map(str::to_owned),
+        hmac: test_case.hmac.then(|| HmacKey {
+            key_id: "GOOG1EXAMPLE".to_owned(),
+            secret: Secret("hm4c".to_owned()),
+        }),
+    })?;
+    let read = FilesRead {
+        files: Vec::new(),
+        encoding: FilesEncoding::default(),
+        checks: TextChecks::default(),
+        columns: Vec::new(),
+        nanos: Vec::new(),
+        batch_rows: 1000,
+    };
+    Ok(reader_offer(&spec, Some(&read), None).direct_blocked)
+}
+
+/// A Parquet files table in `drop/` of `store`, loading into DuckDB.
+fn files_spec(store: StoreKind) -> Result<TableSpec, String> {
     let mut spec = python_spec("{}")?;
     spec.python = None;
     spec.files = Some(FilesSource {
         location: Location {
-            store: StoreKind::Filesystem {
-                root: "/data".to_owned(),
-            },
+            store,
             prefix: "drop/".to_owned(),
         },
         table: FilesTable {
@@ -568,16 +607,7 @@ pub(crate) fn transform_reader(
         transform: None,
         archive: None,
     });
-    spec.transform = test_case.transform.map(|function| TableTransform {
-        function: function.to_owned(),
-        version: format!("{function}@0"),
-        older: 0,
-        creates_log: false,
-    });
-    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
-    spec.parses
-        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
-    Ok(reader_offer(&spec, None, None).needs_loader)
+    Ok(spec)
 }
 
 /// How many files `older_files` counts in the case's records, for table `t` of a Python source, whose `transform` is now at `f@2`.

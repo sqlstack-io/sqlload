@@ -349,21 +349,25 @@ fn given_a_duckdb_connection_when_its_database_is_a_motherduck_path_then_it_is_r
 }
 
 #[test]
-fn given_a_motherduck_destination_when_routing_then_it_reads_parquet_only_from_s3_itself()
+fn given_a_motherduck_destination_when_routing_then_it_reads_parquet_only_from_object_stores_itself()
 -> Result<(), String> {
     let test_cases = [
         MotherDuckRouteTestCase {
-            description: "local DuckDB reads Parquet in S3 and on this machine itself",
+            description: "local DuckDB reads Parquet in S3, GCS and on this machine itself",
             motherduck: false,
             expected_pulls_from: vec![
                 Store::ObjectStore("s3://".to_owned()),
+                Store::ObjectStore("gs://".to_owned()),
                 Store::Local(String::new()),
             ],
         },
         MotherDuckRouteTestCase {
-            description: "MotherDuck reads Parquet in S3 on its servers, and never files on this machine",
+            description: "MotherDuck reads Parquet in S3 and GCS on its servers, and never files on this machine",
             motherduck: true,
-            expected_pulls_from: vec![Store::ObjectStore("s3://".to_owned())],
+            expected_pulls_from: vec![
+                Store::ObjectStore("s3://".to_owned()),
+                Store::ObjectStore("gs://".to_owned()),
+            ],
         },
     ];
     for test_case in test_cases {

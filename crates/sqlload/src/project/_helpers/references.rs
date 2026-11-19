@@ -11,7 +11,7 @@ use crate::project::_helpers::targets::{
 };
 use crate::project::_helpers::tombstones::tombstone_problems;
 use crate::project::constants::{
-    FILES_CONNECTION_KINDS, MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL,
+    MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, SHAREABLE_CONNECTION_KINDS,
     STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
 use crate::project::models::{
@@ -50,6 +50,17 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
         {
             problems.push(format!(
                 "[connections.{name}] profile is empty; omit it to use AWS_PROFILE, else default"
+            ));
+        }
+        if let ConnectionConfig::Gcs {
+            hmac_key_id,
+            hmac_secret,
+            ..
+        } = connection
+            && hmac_key_id.is_some() != hmac_secret.is_some()
+        {
+            problems.push(format!(
+                "[connections.{name}] hmac_key_id and hmac_secret go together: set both for DuckDB and MotherDuck to read the bucket themselves, or neither"
             ));
         }
     }
@@ -108,7 +119,10 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
         SourceKind::Databricks => (&["databricks"], "databricks"),
         SourceKind::DuckDb => (&["duckdb"], "duckdb"),
         SourceKind::MotherDuck => (&["motherduck"], "motherduck"),
-        SourceKind::Files => (&["s3", "filesystem", "sftp"], "s3, filesystem or sftp"),
+        SourceKind::Files => (
+            &["s3", "gcs", "filesystem", "sftp"],
+            "s3, gcs, filesystem or sftp",
+        ),
         SourceKind::Python => (&[], "any"),
         SourceKind::GoogleSheets => (&["google_sheets"], "google_sheets"),
     };
@@ -175,14 +189,14 @@ fn source_problems(project: &ProjectConfig, name: &str, source: &SourceConfig) -
     problems
 }
 
-/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection may be shared).
+/// A Python source reading a connection a warehouse target loads into, whose credentials Python code must never get (a files target's s3 or filesystem connection, which holds no credentials, may be shared).
 fn shared_warehouse_problems(
     project: &ProjectConfig,
     name: &str,
     source: &SourceConfig,
     connection: &ConnectionConfig,
 ) -> Vec<String> {
-    if FILES_CONNECTION_KINDS.contains(&connection.kind()) {
+    if SHAREABLE_CONNECTION_KINDS.contains(&connection.kind()) {
         return Vec::new();
     }
     project

@@ -10,6 +10,16 @@ pub(crate) fn bucket(name: &str) -> Option<StoreKind> {
     })
 }
 
+/// A `gcs` connection's store for bucket `name`.
+pub(crate) fn gcs_bucket(name: &str) -> Option<StoreKind> {
+    Some(StoreKind::Gcs {
+        bucket: name.to_owned(),
+        service_account_key: None,
+        endpoint: None,
+        hmac: None,
+    })
+}
+
 /// The root and folders of `path` as `local_root` finds them, written `root|folders`.
 pub(crate) fn root_of(path: &str, windows: bool) -> Option<String> {
     let separated = crate::store_paths::_helpers::local_root::windows_separators(path, windows);

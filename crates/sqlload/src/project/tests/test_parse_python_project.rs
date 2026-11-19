@@ -103,6 +103,15 @@ fn given_python_sources_when_parsing_the_project_then_they_join_it_under_the_sam
             expected_value: Ok("lake"),
         },
         ParsePythonProjectTestCase {
+            description: "a Python source may not read the gcs connection a files target writes to, as it holds the bucket's keys",
+            toml: "[connections.lake]\nkind = \"gcs\"\nbucket = \"lake\"\nservice_account_key = \"{}\"\n[targets.files]\nconnection = \"lake\"\n",
+            sources: r#"[{"name": "shop", "module": "sources/shop.py", "settings": {"connection": "lake", "destination": "dev", "tables": {}}}]"#,
+            read: |project| project.sources["shop"].connection.clone(),
+            expected_value: Err(
+                "Python source shop uses connection lake, which target files loads into; Python code never gets warehouse credentials — give the source its own connection",
+            ),
+        },
+        ParsePythonProjectTestCase {
             description: "a None setting from Python is refused",
             toml: "",
             sources: r#"[{"name": "a", "module": "sources/a.py", "settings": {"schema": null, "tables": {}}}]"#,
