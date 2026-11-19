@@ -22,7 +22,7 @@ pub fn http_connection_lines(connections: &BTreeMap<String, ConnectionConfig>) -
                 rate_limit.as_deref().unwrap_or("none"),
                 max_in_flight.map_or_else(|| "none".to_owned(), |most| most.to_string()),
                 retries.unwrap_or(DEFAULT_RETRIES),
-                auth_scheme(auth),
+                auth.as_ref().map_or_else(|| "none".to_owned(), auth_scheme),
             )),
             _ => None,
         })
@@ -32,8 +32,7 @@ pub fn http_connection_lines(connections: &BTreeMap<String, ConnectionConfig>) -
 /// The connection's `auth` as `plan` names it: `bearer`, `api_key in header X-Api-Key`, `oauth2_password`, ...
 fn auth_scheme(auth: &Auth) -> String {
     match auth {
-        Auth::None => "none".to_owned(),
-        Auth::Bearer => "bearer".to_owned(),
+        Auth::Bearer {} => "bearer".to_owned(),
         Auth::ApiKey {
             header: Some(header),
             ..
@@ -41,7 +40,7 @@ fn auth_scheme(auth: &Auth) -> String {
         Auth::ApiKey { query, .. } => {
             format!("api_key in query {}", query.as_deref().unwrap_or_default())
         }
-        Auth::Basic => "basic".to_owned(),
+        Auth::Basic {} => "basic".to_owned(),
         Auth::Oauth2ClientCredentials(_) => "oauth2_client_credentials".to_owned(),
         Auth::Oauth2RefreshToken(_) => "oauth2_refresh_token".to_owned(),
         Auth::Oauth2Password(_) => "oauth2_password".to_owned(),

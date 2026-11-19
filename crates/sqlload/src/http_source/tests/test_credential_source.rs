@@ -8,14 +8,16 @@ fn given_an_http_connections_auth_when_debugging_then_it_names_the_settings_the_
     let test_cases = [
         CredentialSourceTestCase {
             description: "bearer with its token",
-            auth: r#"kind = "bearer""#,
+            auth: Some(r#"kind = "bearer""#),
             set: &["token", "username"],
             expected_source: Ok("auth bearer: token from the connection"),
         },
         CredentialSourceTestCase {
             description: "OAuth2 also names the token URL",
-            auth: r#"kind = "oauth2_client_credentials"
+            auth: Some(
+                r#"kind = "oauth2_client_credentials"
 token_url = "https://auth.example.com/token""#,
+            ),
             set: &["client_id", "client_secret"],
             expected_source: Ok(
                 "auth oauth2_client_credentials: client_id and client_secret from the connection; access tokens from https://auth.example.com/token",
@@ -23,19 +25,22 @@ token_url = "https://auth.example.com/token""#,
         },
         CredentialSourceTestCase {
             description: "basic without a password names only what is missing",
-            auth: r#"kind = "basic""#,
+            auth: Some(r#"kind = "basic""#),
             set: &["username", "token"],
             expected_source: Err("auth basic needs password on the connection"),
         },
         CredentialSourceTestCase {
             description: "no auth needs nothing",
-            auth: r#"kind = "none""#,
+            auth: None,
             set: &[],
             expected_source: Ok("no auth"),
         },
     ];
     for test_case in test_cases {
-        let auth: Auth = toml::from_str(test_case.auth)
+        let auth: Option<Auth> = test_case
+            .auth
+            .map(toml::from_str::<Auth>)
+            .transpose()
             .unwrap_or_else(|error| panic!("{}: {error}", test_case.description));
         let set: Vec<(&str, bool)> = [
             "token",
@@ -48,7 +53,7 @@ token_url = "https://auth.example.com/token""#,
         .map(|key| (key, test_case.set.contains(&key)))
         .collect();
         assert_eq!(
-            http_credential_source(&auth, &set),
+            http_credential_source(auth.as_ref(), &set),
             test_case
                 .expected_source
                 .map(str::to_owned)

@@ -709,7 +709,7 @@ fn request_calls(
         .collect::<Result<BTreeMap<u16, StatusAction>, String>>()?;
     Ok(Calls {
         http: http.clone(),
-        endpoint: endpoint(client, (&shared.auth, settings))?,
+        endpoint: endpoint(client, (shared.auth.as_ref(), settings))?,
         limiter,
         in_flight,
         retries: shared.retries.unwrap_or(DEFAULT_RETRIES),

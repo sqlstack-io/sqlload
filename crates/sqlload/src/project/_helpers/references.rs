@@ -58,6 +58,7 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             auth,
             rate_limit,
             max_in_flight,
+            retries,
             ..
         } = connection
         {
@@ -65,7 +66,11 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
                 rate_limit: rate_limit.clone(),
                 max_in_flight: *max_in_flight,
             };
-            problems.extend(http_connection_problems(name, auth, &limits));
+            problems.extend(http_connection_problems(
+                name,
+                auth.as_ref(),
+                (&limits, *retries),
+            ));
         }
         if let ConnectionConfig::Gcs {
             hmac_key_id,

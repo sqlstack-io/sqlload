@@ -14,8 +14,8 @@ use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
-    deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
-    deserialize_optional_lookback, deserialize_optional_percent,
+    deserialize_optional_auth, deserialize_optional_batch, deserialize_optional_duration,
+    deserialize_optional_keys, deserialize_optional_lookback, deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -314,9 +314,9 @@ pub enum ConnectionConfig {
     /// An HTTP API, for Python sources' `sl.http` jobs; its settings reach table functions as `ctx.connection`.
     Http {
         base_url: String,
-        /// How requests authenticate, with the credentials below.
-        #[serde(default)]
-        auth: crate::http_source::models::Auth,
+        /// How requests authenticate, with the credentials below; `None` sends none.
+        #[serde(default, deserialize_with = "deserialize_optional_auth")]
+        auth: Option<crate::http_source::models::Auth>,
         #[serde(default)]
         token: Option<crate::auth::models::Secret>,
         /// For `auth` `basic` and `oauth2_password`.

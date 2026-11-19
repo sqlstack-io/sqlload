@@ -216,15 +216,15 @@ requests authenticate, the limits they stay under together, and how often a fail
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `base_url` | required | The API's base URL. |
-| `auth` | none | How requests authenticate; see the table below. |
+| `auth` | none | How requests authenticate, a table such as `{ kind = "bearer" }`; see the table below. Without it, requests carry no credential. |
 | `token` | none | For `auth` `bearer` and `api_key`. Use `${ENV:NAME}`. |
 | `username`, `password` | none | For `auth` `basic` and `oauth2_password`. |
 | `client_id`, `client_secret` | none | For `auth` `oauth2_client_credentials`, and for `oauth2_refresh_token` or `oauth2_password` when the API wants the client too. |
 | `refresh_token` | none | For `auth` `oauth2_refresh_token`. |
 | `headers` | none | Headers sent with every request. |
 | `rate_limit` | none | Requests started per second, minute or hour: `"10/s"`, `"600/m"` or `"1000/h"`. |
-| `max_in_flight` | none | The most requests open at once. |
-| `retries` | 5 | Retries of a request that failed with a transport error, 429 or a 5xx. |
+| `max_in_flight` | none | The most requests open at once, from 1 to 10,000. |
+| `retries` | 5 | Retries of a request that failed with a transport error, 429 or a 5xx, at most 100. |
 
 `rate_limit` and `max_in_flight` hold for every request to the connection in one `sqlload load`:
 every table, page, [`read_ahead`](/docs/sources/python/#reading-pages-ahead) request, fan-out key

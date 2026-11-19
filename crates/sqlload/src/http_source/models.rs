@@ -214,6 +214,7 @@ pub enum Over {
 
 /// The connection a job uses, and the headers its own requests add to the connection's.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClientSpec {
     pub connection: String,
     #[serde(default)]
@@ -223,8 +224,9 @@ pub struct ClientSpec {
 /// What an `http` connection sets for every request to its API in the run: how requests authenticate, the limits they share, and how often a failed one is retried.
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpSettings {
+    /// `None` sends no credential.
     #[serde(default)]
-    pub auth: Auth,
+    pub auth: Option<Auth>,
     #[serde(flatten)]
     pub limits: ConnectionLimits,
     /// Retries of a request that failed with a transport error, 429 or a 5xx; `None` for [`DEFAULT_RETRIES`](crate::http_source::constants::DEFAULT_RETRIES).
@@ -243,14 +245,12 @@ pub struct ConnectionLimits {
     pub max_in_flight: Option<usize>,
 }
 
-/// How requests to the connection authenticate, with credentials from its settings, sent only to its own origin.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+/// How requests to the connection authenticate, with credentials from its settings, sent only to its own origin. The variants without settings are empty structs, so a key written beside their `kind` (`{ kind = "bearer", token = "..." }`) is refused rather than dropped.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Auth {
-    #[default]
-    None,
     /// `Authorization: Bearer <token>`.
-    Bearer,
+    Bearer {},
     /// The token in a header or a query parameter.
     ApiKey {
         #[serde(default)]
@@ -259,7 +259,7 @@ pub enum Auth {
         query: Option<String>,
     },
     /// `username` and `password`.
-    Basic,
+    Basic {},
     /// An access token from `token_url` for the connection's `client_id` and `client_secret`.
     Oauth2ClientCredentials(OAuth2Spec),
     /// An access token from `token_url` for the connection's `refresh_token`.

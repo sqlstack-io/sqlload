@@ -14,7 +14,7 @@ use crate::http_source::constants::{
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, PageCall, StatusAction};
 use crate::python_sources::errors::ReadError;
 
-/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out. Every attempt, retries included, holds one of the connection's `max_in_flight` permits while its request is open and takes a turn under its `rate_limit`. The permit comes before the turn, so a request that got its turn starts at once rather than queueing for a permit and then going in a burst with others; it is released once the response is read, not held through a retry's backoff.
+/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out. Every attempt, retries included, holds one of the connection's `max_in_flight` permits while its request is open and takes a turn under its `rate_limit`. The permit comes first, then the OAuth2 access token, then the turn, so a request that got its turn starts at once: neither a queue for a permit nor a token fetch lets turns pass unused and then go in a burst. The permit is released once the response is read, not held through a retry's backoff.
 pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetched>, ReadError> {
     let policy = RetryPolicy {
         first_delay: FIRST_RETRY_DELAY,
@@ -25,20 +25,16 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
     let mut refused: Option<String> = None;
     let mut renewed = false;
     loop {
-        let waited = async {
-            let permit = match &calls.in_flight {
+        let acquired = async {
+            match &calls.in_flight {
                 Some(in_flight) => Some(in_flight.clone().acquire_owned().await),
                 None => None,
-            };
-            if let Some(limiter) = &calls.limiter {
-                limiter.wait().await;
             }
-            permit
         };
         let permit = tokio::select! {
             biased;
             () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
-            permit = waited => permit,
+            permit = acquired => permit,
         };
         let access = match &calls.endpoint.credential {
             Credential::OAuth2(tokens) => Some(
@@ -48,8 +44,15 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             ),
             _ => None,
         };
-        if calls.stop.is_cancelled() {
-            return Err(STOPPED.to_owned().into());
+        let turn = async {
+            if let Some(limiter) = &calls.limiter {
+                limiter.wait().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
+            () = turn => {}
         }
         let attempted = once(calls, call, access.as_deref(), !renewed).await?;
         drop(permit);

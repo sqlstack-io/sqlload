@@ -492,7 +492,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "an in-flight cap of none would never send a request",
             text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nmax_in_flight = 0\n",
-            expected_message: "[connections.api] max_in_flight must be at least 1",
+            expected_message: "[connections.api] max_in_flight must be from 1 to 10000",
         },
         ParseProjectErrorTestCase {
             description: "an API key goes in a header or a query parameter, not both",
@@ -518,6 +518,26 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             description: "a rate limit on a connection that sends no HTTP request is refused",
             text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nrate_limit = \"10/s\"\n",
             expected_message: "unknown field `rate_limit`",
+        },
+        ParseProjectErrorTestCase {
+            description: "a token written as auth is refused without showing it",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = \"${ENV:API_TOKEN}\"\n",
+            expected_message: "auth is a table such as { kind = \"bearer\" }; credentials such as token go in their own keys",
+        },
+        ParseProjectErrorTestCase {
+            description: "a credential written inside a bearer auth is never silently dropped",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = { kind = \"bearer\", token = \"t\" }\n",
+            expected_message: "unknown field `token`",
+        },
+        ParseProjectErrorTestCase {
+            description: "an in-flight cap past what one process can hold is refused",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nmax_in_flight = 1000000000000\n",
+            expected_message: "[connections.api] max_in_flight must be from 1 to 10000",
+        },
+        ParseProjectErrorTestCase {
+            description: "a retry count that would overflow is refused",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nretries = 4294967295\n",
+            expected_message: "[connections.api] retries must be at most 100",
         },
         ParseProjectErrorTestCase {
             description: "an odbc connection needs a connection string or a DSN",

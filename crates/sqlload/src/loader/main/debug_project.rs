@@ -65,7 +65,7 @@ pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<Strin
                     ("client_secret", secret(client_secret)),
                     ("refresh_token", secret(refresh_token)),
                 ];
-                http_credential_source(auth, &set)
+                http_credential_source(auth.as_ref(), &set)
             }
             _ => continue,
         };

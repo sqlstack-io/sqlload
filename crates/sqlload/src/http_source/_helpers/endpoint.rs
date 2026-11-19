@@ -36,7 +36,7 @@ pub(crate) fn connection_settings<'a>(
 /// The endpoint of `client`'s connection: its `base_url`, headers and the credential its `auth` names.
 pub(crate) fn endpoint(
     client: &ClientSpec,
-    (auth, settings): (&Auth, &Map<String, Value>),
+    (auth, settings): (Option<&Auth>, &Map<String, Value>),
 ) -> Result<Endpoint, String> {
     let name = &client.connection;
     let text = |key: &str| settings.get(key).and_then(Value::as_str).map(str::to_owned);
@@ -51,31 +51,31 @@ pub(crate) fn endpoint(
     };
     let present = |key: &str| text(key).filter(|value| !value.is_empty());
     let credential = match auth {
-        Auth::None => Credential::None,
-        Auth::Bearer => Credential::Header {
+        None => Credential::None,
+        Some(Auth::Bearer {}) => Credential::Header {
             name: "Authorization".to_owned(),
             value: format!("Bearer {}", needed("token")?),
         },
-        Auth::ApiKey {
+        Some(Auth::ApiKey {
             header: Some(header),
             query: None,
-        } => Credential::Header {
+        }) => Credential::Header {
             name: header.clone(),
             value: needed("token")?,
         },
-        Auth::ApiKey {
+        Some(Auth::ApiKey {
             header: None,
             query: Some(query),
-        } => Credential::Query {
+        }) => Credential::Query {
             name: query.clone(),
             value: needed("token")?,
         },
-        Auth::ApiKey { .. } => {
+        Some(Auth::ApiKey { .. }) => {
             return Err(format!(
                 "[connections.{name}] auth api_key takes exactly one of header or query"
             ));
         }
-        Auth::Basic => {
+        Some(Auth::Basic {}) => {
             let pair = format!("{}:{}", needed("username")?, needed("password")?);
             Credential::Header {
                 name: "Authorization".to_owned(),
@@ -85,7 +85,7 @@ pub(crate) fn endpoint(
                 ),
             }
         }
-        Auth::Oauth2ClientCredentials(spec) => {
+        Some(Auth::Oauth2ClientCredentials(spec)) => {
             let grant = Grant::ClientCredentials {
                 client_id: needed("client_id")?,
                 client_secret: needed("client_secret")?,
@@ -97,7 +97,7 @@ pub(crate) fn endpoint(
                 grant,
             )?)
         }
-        Auth::Oauth2RefreshToken(spec) => {
+        Some(Auth::Oauth2RefreshToken(spec)) => {
             let grant = Grant::RefreshToken {
                 refresh_token: needed("refresh_token")?,
                 client: (present("client_id"), present("client_secret")),
@@ -109,7 +109,7 @@ pub(crate) fn endpoint(
                 grant,
             )?)
         }
-        Auth::Oauth2Password(spec) => {
+        Some(Auth::Oauth2Password(spec)) => {
             let grant = Grant::Password {
                 username: needed("username")?,
                 password: needed("password")?,

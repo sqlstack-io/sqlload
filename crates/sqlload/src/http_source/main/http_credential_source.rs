@@ -3,23 +3,23 @@
 use crate::http_source::models::Auth;
 
 /// `auth bearer: token from the connection`, or for OAuth2 also the token URL its access tokens come from; an error naming each setting the connection's `auth` needs and lacks. `set` lists which credential settings the connection has, by name.
-pub fn http_credential_source(auth: &Auth, set: &[(&str, bool)]) -> Result<String, String> {
+pub fn http_credential_source(auth: Option<&Auth>, set: &[(&str, bool)]) -> Result<String, String> {
     let (kind, needed, token_url): (&str, &[&str], Option<&str>) = match auth {
-        Auth::None => return Ok("no auth".to_owned()),
-        Auth::Bearer => ("bearer", &["token"], None),
-        Auth::ApiKey { .. } => ("api_key", &["token"], None),
-        Auth::Basic => ("basic", &["username", "password"], None),
-        Auth::Oauth2ClientCredentials(spec) => (
+        None => return Ok("no auth".to_owned()),
+        Some(Auth::Bearer {}) => ("bearer", &["token"], None),
+        Some(Auth::ApiKey { .. }) => ("api_key", &["token"], None),
+        Some(Auth::Basic {}) => ("basic", &["username", "password"], None),
+        Some(Auth::Oauth2ClientCredentials(spec)) => (
             "oauth2_client_credentials",
             &["client_id", "client_secret"],
             Some(&spec.token_url),
         ),
-        Auth::Oauth2RefreshToken(spec) => (
+        Some(Auth::Oauth2RefreshToken(spec)) => (
             "oauth2_refresh_token",
             &["refresh_token"],
             Some(&spec.token_url),
         ),
-        Auth::Oauth2Password(spec) => (
+        Some(Auth::Oauth2Password(spec)) => (
             "oauth2_password",
             &["username", "password"],
             Some(&spec.token_url),
