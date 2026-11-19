@@ -714,6 +714,7 @@ async fn sheets_tables(
             estimated_bytes: 0,
             comment: None,
             listed_keys: Vec::new(),
+            other_location: None,
         });
     }
     match problems.is_empty() {

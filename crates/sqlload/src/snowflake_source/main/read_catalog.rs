@@ -102,5 +102,6 @@ async fn query_table(
         estimated_bytes: -1,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     })
 }

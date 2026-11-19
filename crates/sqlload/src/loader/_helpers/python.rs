@@ -154,6 +154,7 @@ pub(crate) fn python_tables(source: &SourceConfig) -> Vec<SourceTable> {
             estimated_bytes: -1,
             comment: None,
             listed_keys: Vec::new(),
+            other_location: None,
         });
     }
     tables

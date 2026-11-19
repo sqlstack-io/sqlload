@@ -56,6 +56,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         estimated_bytes: -1,
         split_pages: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let live: Vec<LiveColumn> = test_case
         .live
@@ -432,6 +433,7 @@ pub(crate) fn refused_bounds_runs(
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "erp", &[table]);
     let spec = resolved
@@ -529,6 +531,7 @@ pub(crate) fn not_null_keys(
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "erp", &[table]);
     resolved
@@ -741,6 +744,7 @@ pub(crate) fn unload_spec(url: &str) -> Result<TableSpec, String> {
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "marts", &[table]);
     resolved

@@ -62,6 +62,7 @@ pub async fn read_catalog(
             estimated_bytes: -1,
             comment: None,
             listed_keys: Vec::new(),
+            other_location: None,
         });
     }
     Ok(tables)

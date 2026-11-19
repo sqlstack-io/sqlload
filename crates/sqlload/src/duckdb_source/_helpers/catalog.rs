@@ -46,6 +46,7 @@ pub(crate) fn catalog_tables(
                 estimated_bytes: -1,
                 comment: Some(text(row, 2)).filter(|comment| !comment.is_empty()),
                 listed_keys: Vec::new(),
+                other_location: None,
             },
         );
     }

@@ -48,6 +48,8 @@ pub(crate) struct SelectProblemTestCase {
     /// The table's columns, as `tables.get` describes them.
     pub(crate) fields: Vec<serde_json::Value>,
     pub(crate) pinned: Vec<(&'static str, ColumnType)>,
+    /// The table's location, as `tables.get` gives it; query jobs on its connection run in `EU`.
+    pub(crate) location: &'static str,
     /// Why BigQuery can't select the rows into a BigQuery table itself, if it can't.
     pub(crate) expected_problem: Option<&'static str>,
 }
