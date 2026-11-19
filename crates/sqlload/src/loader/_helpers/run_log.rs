@@ -15,13 +15,15 @@ use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::files::models::PendingPhase;
+use crate::batch_plan::constants::MAX_BATCH_FILES;
+use crate::batch_plan::models::FileGroup;
 use crate::column_types::models::ColumnType;
 use crate::file_store::main::list_files::list_files;
 use crate::file_store::main::open_folder::open_folder;
 use crate::file_store::main::read_file::read_file;
 use crate::file_store::main::write_file::write_file;
 use crate::files_source::constants::{
-    SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
+    SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN, SOURCE_VERSION_COLUMN, VERSION_SEPARATOR,
 };
 use crate::files_source::main::merge_order::merge_order;
 use crate::files_source::models::{DataFile, FilesOrder, LoadedFile};
@@ -33,7 +35,10 @@ use crate::loader::errors::LoaderError;
 use crate::loader::models::{
     MergeRebuild, ProjectPlan, PythonLoad, RunEntry, TablePlan, TableSpec, TransformRun,
 };
+use crate::number_text::main::thousands::thousands;
 use crate::project::models::{OnOverlappingFiles, WriteStrategy};
+use crate::publish_checks::main::key_sources::key_sources;
+use crate::publish_checks::models::CheckedCommit;
 use crate::row_batches::models::Unnest;
 use crate::run_log::constants::RECORD_FORMAT_VERSION;
 use crate::run_log::main::cursor_order::cursor_order;
@@ -49,7 +54,7 @@ use crate::run_log::main::select_runs::select_runs;
 use crate::run_log::models::{
     DecodedRuns, RecordTable, RunEvent, RunOutcome, RunRecord, StateEvent, UnreadableRecord,
 };
-use crate::schema_plan::models::{LiveColumn, TableAction};
+use crate::schema_plan::models::{DesiredColumn, LiveColumn, TableAction};
 use crate::store_paths::models::Location;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
@@ -419,11 +424,11 @@ pub(crate) fn unchanged_files(
         .collect()
 }
 
-/// The record a files source's merge commits with `file` (`name|version`), its `batch`th commit of run `run_id`, which wrote `rows`.
+/// The record a files source's merge commits with `files` (each `name|version`, in the order merged), its `batch`th commit of run `run_id`, which wrote `rows`.
 pub(crate) fn merged_record(
     spec: &TableSpec,
     (run_id, batch): (&str, u64),
-    (file, rows): (String, u64),
+    (files, rows): (Vec<String>, u64),
 ) -> RunRecord {
     let about = record_table(spec);
     RunRecord {
@@ -438,7 +443,7 @@ pub(crate) fn merged_record(
         cursor_after: None,
         state: None,
         row_count: rows,
-        files: vec![file],
+        files,
         note: Some(
             match spec.strategy {
                 WriteStrategy::Merge => "files source merge",
@@ -799,8 +804,8 @@ fn record_json(record: &RunRecord) -> Result<String, LoaderError> {
     serde_json::to_string(record).map_err(|error| LoaderError::Invalid(error.to_string()))
 }
 
-/// The file a group of a files merge or `delete_insert` by `replace_key` reads (it holds one), as its run record names it: `name|version`.
-pub(crate) fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String {
+/// The files a group of a files merge or `delete_insert` by `replace_key` reads, in order, as its run record names them: `name|version`.
+pub(crate) fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> Vec<String> {
     let location = table
         .spec
         .files
@@ -816,8 +821,7 @@ pub(crate) fn merged_file_text(table: &TablePlan, files: &[DataFile]) -> String 
                 data.file.version()
             )
         })
-        .collect::<Vec<String>>()
-        .join(", ")
+        .collect()
 }
 
 /// The name of the merged file `merged` (`name|version`).
@@ -835,6 +839,61 @@ pub(crate) fn in_file(merged: &str, error: LoaderError) -> LoaderError {
         true => LoaderError::Transient(text),
         false => LoaderError::Invalid(text),
     }
+}
+
+/// `earlier` (as [`with_file_keys`] takes it) with the `replace_key` values of each of `files` (`name|version`, in the order the commit loads them) added, as each file's staged rows in `checked` hold them; or why the commit cannot replace them, checking each file as a commit of its own would: a value an earlier file of the run holds ([`with_file_keys`]), or one the table holds from a file still listed ([`listed_sources`]). Under `on_overlapping_files = "last_wins"` a file's staged rows of a value a later file of the commit holds (compared as typed) are deleted first, so the later file replaces it.
+pub(crate) async fn checked_file_keys(
+    table: &TablePlan,
+    (checked, replace_key): (&CheckedCommit<'_>, &[String]),
+    (files, mut earlier): (&[String], BTreeMap<String, String>),
+) -> Result<BTreeMap<String, String>, LoaderError> {
+    let named = (replace_key, SOURCE_FILE_COLUMN);
+    let staged = key_sources(checked, (checked.staging, None), named).await?;
+    let held = key_sources(checked, (checked.table, Some(checked.staging)), named).await?;
+    for file in files {
+        let name = merged_name(file);
+        let values: Vec<String> = staged
+            .iter()
+            .filter(|(of, _)| of == name)
+            .map(|(_, value)| value.clone())
+            .collect();
+        let named_file = |reason: String| match files.len() {
+            1 => LoaderError::Invalid(reason),
+            _ => in_file(file, LoaderError::Invalid(reason)),
+        };
+        earlier = with_file_keys(table, (file, &values), earlier).map_err(named_file)?;
+        let sources: BTreeSet<String> = held
+            .iter()
+            .filter(|(of, value)| of != name && values.contains(value))
+            .map(|(of, _)| of.clone())
+            .collect();
+        let sources: Vec<String> = sources.into_iter().collect();
+        listed_sources(table, file, &sources).map_err(named_file)?;
+    }
+    if files.len() > 1 && table.spec.on_overlapping_files == OnOverlappingFiles::LastWins {
+        let names: Vec<&str> = files.iter().map(|file| merged_name(file)).collect();
+        let key = (replace_key.iter())
+            .map(|name| written_column(checked.columns, name))
+            .collect::<Option<Vec<&DesiredColumn>>>()
+            .ok_or_else(|| {
+                LoaderError::Invalid(format!(
+                    "a replace_key column of {} isn't one the table writes",
+                    replace_key.join(", ")
+                ))
+            })?;
+        let delete = sql_adapter(checked.warehouse).render_superseded_delete(
+            checked.staging,
+            (&key, SOURCE_FILE_COLUMN, SOURCE_ROW_COLUMN),
+            &names,
+        );
+        execute(checked.destination, vec![delete]).await?;
+    }
+    Ok(earlier)
+}
+
+/// The column of `columns` named `name`.
+fn written_column<'a>(columns: &'a [DesiredColumn], name: &str) -> Option<&'a DesiredColumn> {
+    columns.iter().find(|column| column.name == name)
 }
 
 /// `earlier` (each `replace_key` value this run's commits of a files source's `delete_insert` into `table` inserted, with the file it came from, named below the source's location) with the key `values` of the commit of `file` (`name|version`) added; or why that commit cannot replace them: one of them came in an earlier commit of the same run, so this commit would delete that file's rows. A value must come whole in one file, unless `on_overlapping_files = "last_wins"`, where the later file replaces it; [`listed_sources`] checks the files of earlier runs.
@@ -1004,7 +1063,7 @@ pub(crate) fn overlapping_files_problem(
         (true, _, true) => None,
         (false, _, _) => Some(format!("{FOR}; this source reads no files, so remove it")),
         (true, WriteStrategy::Merge, _) => Some(format!(
-            "{FOR}; a merge applies the files one at a time, so the last file already wins each unique_key; remove it"
+            "{FOR}; a merge already lets the last file win each unique_key; remove it"
         )),
         (true, WriteStrategy::DeleteInsert, false) => Some(format!(
             "{FOR}; this delete_insert replaces a cursor range, not key values, so remove it, or set replace_key"
@@ -1015,11 +1074,21 @@ pub(crate) fn overlapping_files_problem(
     }
 }
 
-/// How `plan` describes the commits of a files table whose `groups` files are each recorded in the run log: their order, and what `on_overlapping_files = "last_wins"` adds.
-pub(crate) fn recorded_commits(groups: usize, spec: &TableSpec) -> String {
-    let files = match groups {
+/// How `plan` describes the commits of a files table whose files, in `groups`, are each recorded in the run log: how many commits, their order, and what `on_overlapping_files = "last_wins"` adds.
+pub(crate) fn recorded_commits(groups: &[FileGroup], spec: &TableSpec) -> String {
+    let files = match groups.iter().map(|group| group.files.len()).sum::<usize>() {
         1 => "1 file".to_owned(),
-        count => format!("{count} files"),
+        count => format!("{} files", thousands(count as u64)),
+    };
+    let commits = match groups.len() {
+        _ if groups.iter().all(|group| group.files.len() == 1) && groups.len() > 1 => {
+            "one commit each".to_owned()
+        }
+        1 => "1 commit".to_owned(),
+        count => format!(
+            "{count} commits of up to {} files or about 1 GB",
+            thousands(MAX_BATCH_FILES as u64)
+        ),
     };
     let order = match spec.files_order {
         FilesOrder::Modified => "oldest modified first (ties by path)",
@@ -1031,7 +1100,7 @@ pub(crate) fn recorded_commits(groups: usize, spec: &TableSpec) -> String {
         }
         OnOverlappingFiles::Fail => "",
     };
-    format!("{files}, one commit each, {order}, each recorded in the run log{last_wins}")
+    format!("{files}, {commits}, {order}, each recorded in the run log{last_wins}")
 }
 
 /// The files a merge already merged into `request`'s table at the version listed now, which it skips (one rewritten in place since is merged again, as the newest), and under `--reload` none, with every file the table's merges recorded instead (oldest first), whose order the reload keeps; or why a files source cannot load into it: only into a DuckDB or Postgres table, never with `state = "logged"`, nor `--reload` with `unnest` or of a `delete_insert` (one commit would lose the files' order); none while the table does not exist.
@@ -1057,7 +1126,7 @@ pub(crate) async fn merge_ledger(
     }
     if request.options.reload && spec.strategy != WriteStrategy::Merge {
         return Ok(Err(format!(
-            "--reload would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
+            "--reload rebuilds only a merge's table in file order, so it would {what} every file in one commit and lose their order; drop the table and load again to {what} every file anew"
         )));
     }
     if request.options.reload && spec.unnest != Unnest::None {

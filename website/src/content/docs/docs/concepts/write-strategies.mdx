@@ -120,7 +120,7 @@ once, `merge` keeps one row for each value. The destination never gets the key t
 never fails on the warehouse's own error about it.
 
 - Without `newest_by`, the row read last wins, and every row overwrites the table's row of its
-  key: the last one the source returned, or the last row of a file.
+  key: the last one the source returned, or of files, the last row of the newest file holding it.
 - `newest_by = "updated_at"` names the column whose higher value is the newer version
   of a row. Of a commit's rows sharing a key, the newest wins; a NULL loses to any value, and a tie
   goes to the row read later. It also applies against the table: a row only overwrites the table's

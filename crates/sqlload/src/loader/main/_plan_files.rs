@@ -80,6 +80,7 @@ pub(in crate::loader) async fn plan_files_table(
         read_columns: &read_columns,
         files: files.as_ref(),
         mode: &mode,
+        write_columns: &schema.write_columns,
     });
     let commits = match commits {
         Ok(_) if destination.encoding.single_file => CommitRule::Whole(WholeReason::SingleFile),

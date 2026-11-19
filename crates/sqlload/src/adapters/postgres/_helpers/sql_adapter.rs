@@ -124,6 +124,10 @@ impl SqlAdapter for PostgresSql {
         staging_type(column_type)
     }
 
+    fn deletes_superseded_rows(&self) -> bool {
+        true
+    }
+
     /// JSON, UUIDs, arrays and native types are converted from their staged text by their type's own input, which refuses what it cannot read; the rest by the table's assignment casts, which refuse a value that does not fit.
     fn render_source_expression_cast(&self, name: &str, column_type: &ColumnType) -> String {
         let column = self.render_identifier(name);

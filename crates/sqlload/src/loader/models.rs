@@ -1171,8 +1171,8 @@ pub struct Publisher {
     pub batch_bytes: usize,
     /// A files target's folder and the commit being written.
     pub files: Option<FilesSink>,
-    /// A files source's merge, or `delete_insert` by `replace_key`: the file (`name|version`) the next commit loads, recorded in the run log with it.
-    pub merged_file: Option<String>,
+    /// A files source's merge, or `delete_insert` by `replace_key`: the files (`name|version`) the next commit loads, in order, recorded in the run log with it; empty for other tables.
+    pub merged_files: Vec<String>,
     /// The `replace_key` values committed so far; `None` without a `replace_key`.
     pub replaced: Option<ReplacedKeys>,
     /// The rows a key scan's commit marked deleted; `None` for other loads.
