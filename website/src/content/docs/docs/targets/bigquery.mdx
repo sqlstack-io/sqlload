@@ -125,8 +125,9 @@ loaded  raw.app__orders     1,000 rows 0.1s
 
 Parquet files in a [`gcs`](/docs/configuration/#gcs) bucket can load without passing through
 SQLLoad: BigQuery queries them where they lie, as temporary external tables, into the staging
-table, in one query job per batch. SQLLoad still lists the files, reads their footers and picks
-the batch; it checks the job's row count against the footers, and a batch that differs fails.
+table, in one query job per batch (several for a batch of over 1,000 files or a very long query).
+SQLLoad still lists the files, reads their footers and picks the batch; it checks the jobs' row
+count against the footers, and a batch that differs fails.
 
 BigQuery doesn't report a row's position in its file, so it can't fill `_sqlload_source_row`, the
 row's number in its file. A table that keeps that column, as every files table does by default,

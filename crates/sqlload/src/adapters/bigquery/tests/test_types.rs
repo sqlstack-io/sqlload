@@ -37,3 +37,9 @@ pub(crate) struct PullQueryTestCase {
     pub(crate) expected_query: &'static str,
     pub(crate) expected_definitions: &'static str,
 }
+
+pub(crate) struct PullQueriesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) groups: Vec<crate::adapters::bigquery::_helpers::dialect::pull::PulledGroup>,
+    pub(crate) expected_queries: usize,
+}
