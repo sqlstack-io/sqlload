@@ -19,11 +19,13 @@ pub async fn read_catalog(
         false => catalog_tables(reader, (include, exclude)).await?,
     };
     for (name, sql) in queries {
-        let fields = query_schema(&reader.client, &format!("SELECT * FROM {}", subquery(sql)))
-            .await
-            .map_err(|error| {
-                BigQuerySourceError::Invalid(format!("query table {name}: {error}"))
-            })?;
+        let fields = query_schema(
+            &reader.client,
+            &format!("SELECT * FROM {}", subquery(sql)),
+            None,
+        )
+        .await
+        .map_err(|error| BigQuerySourceError::Invalid(format!("query table {name}: {error}")))?;
         tables.push(SourceTable {
             split_pages: None,
             schema: String::new(),

@@ -1,5 +1,6 @@
 //! Whether a destination reaches the files it would read itself.
 
+use crate::adapters::bigquery::main::plan::_check_files::check_files as bigquery_check_files;
 use crate::adapters::databricks::main::stage::_check_folder::check_folder;
 use crate::adapters::databricks::main::stage::_external_locations::external_locations;
 use crate::adapters::databricks::models::DatabricksDestination;
@@ -11,7 +12,7 @@ use crate::loader::models::FilesSource;
 use crate::routing::models::Store;
 use crate::store_paths::models::StoreKind;
 
-/// Check, at plan, that `destination` reads the files of `source` in S3 or GCS where they lie, or the S3 folder a warehouse source unloads to (`unload_to`), for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers, and DuckDB reads it from GCS (Databricks reads only S3). An unload's folder is new each run, so for it Databricks only lists its locations, and the route then needs one to cover it. The error says why it can't, with the fix.
+/// Check, at plan, that `destination` reads the files of `source` in S3 or GCS where they lie, or the S3 folder a warehouse source unloads to (`unload_to`), for a table nothing sends through SQLLoad, with `read` its planned read: Databricks looks up its Unity Catalog external locations once per run, which [`writer_accepts`](crate::adapters::dispatch::main::route::writer_accepts::writer_accepts) then offers, and lists the folder when one covers it and it holds files to load; MotherDuck reads the first file to load on its servers, DuckDB reads it from GCS, and BigQuery reads its schema from GCS in a dry run (Databricks reads only S3). An unload's folder is new each run, so for it Databricks only lists its locations, and the route then needs one to cover it. The error says why it can't, with the fix.
 pub async fn check_reach(
     destination: &Destination,
     (source, unload_to): (Option<&FilesSource>, &[Store]),
@@ -39,6 +40,20 @@ pub async fn check_reach(
             if matches!(source.location.store, StoreKind::S3 { .. }) =>
         {
             databricks_reach(databricks, first.map(|_| folder.as_str())).await
+        }
+        Destination::BigQuery(bigquery)
+            if matches!(source.location.store, StoreKind::Gcs { .. }) =>
+        {
+            let Some(data) = first else {
+                return Ok(());
+            };
+            let url = format!("{folder}{}", data.file.relative_key);
+            bigquery_check_files(bigquery, &url).await.map_err(|error| {
+                format!(
+                    "{url} cannot be read by BigQuery: {}. Fix: BigQuery reads the files with its own connection's service account, not the gcs connection's key: give that service account roles/storage.objectViewer on the bucket, and let no VPC Service Controls perimeter keep BigQuery out",
+                    first_line(&error.to_string())
+                )
+            })
         }
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => {

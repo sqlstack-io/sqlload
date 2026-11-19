@@ -590,6 +590,21 @@ pub(crate) fn bigquery_reader(
         hmac: None,
     })?;
     spec.warehouse = crate::column_types::models::Warehouse::BigQuery;
+    spec.files.as_mut().ok_or("no files source")?.table.columns = test_case
+        .columns
+        .iter()
+        .filter(|(name, _)| !name.starts_with("_sqlload_"))
+        .map(
+            |(name, column_type)| crate::files_source::models::FileColumn {
+                name: (*name).to_owned(),
+                column_type: Ok(column_type.clone()),
+                direct_refusal: None,
+                stored_read: crate::files_source::models::StoredRead::Plain,
+                lists: None,
+                repeat_of: None,
+            },
+        )
+        .collect();
     let read = FilesRead {
         files: Vec::new(),
         encoding: FilesEncoding::default(),

@@ -29,3 +29,11 @@ pub(crate) struct AppendRequestsTestCase {
     /// The ids the requests decode back to, in order, as `first..=last` and their count.
     pub(crate) expected_ids: String,
 }
+
+pub(crate) struct PullQueryTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    pub(crate) groups: Vec<crate::adapters::bigquery::_helpers::dialect::pull::PulledGroup>,
+    pub(crate) expected_query: &'static str,
+    pub(crate) expected_definitions: &'static str,
+}
