@@ -10,6 +10,7 @@ use std::collections::VecDeque;
 use reqwest::Url;
 use serde_json::{Map, Value};
 use tokio::sync::mpsc::Sender;
+use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use crate::http_source::_helpers::cells::pivoted_rows;
@@ -27,7 +28,7 @@ use crate::http_source::models::{
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested that many at a time (fewer under a memory budget: only as many as pages the size of the largest yet fit in a quarter of each table's share), each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up, and is aborted when the run ends), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested two at a time, then four, eight and so on up to that many (fewer under a memory budget: only as many as pages the size of the largest yet fit in a quarter of each table's share), each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
 pub(crate) async fn paginate(
     calls: &Calls,
     (request, context): (&Request, &RowContext),
@@ -49,8 +50,11 @@ pub(crate) async fn paginate(
     let mut names: Option<CellNames> = None;
     let ahead = read_ahead(&request.paginator);
     let mut in_flight: VecDeque<AbortOnDropHandle<AheadPage>> = VecDeque::new();
+    let stop = CancellationToken::new();
+    let _stopping = stop.clone().drop_guard();
     let mut queued: u64 = 1;
     let mut largest: u64 = 0;
+    let (mut ramp, mut ramped): (u64, u64) = (1, 1);
     for step in 1_u64.. {
         let shown = redacted(
             &format!("{} {}", call.method.as_str(), call.url),
@@ -63,10 +67,17 @@ pub(crate) async fn paginate(
                     (Some(part), largest) if largest > 0 => (part / largest).max(1),
                     _ => ahead,
                 };
-                while queued < step + ahead.min(fitting) - 1 {
+                let grows = step > ramped;
+                if grows {
+                    ramp = ramp.saturating_mul(2).min(ahead);
+                }
+                while queued < step + ramp.min(fitting) - 1 {
                     queued += 1;
                     let ahead_call = counted_call(request, &first, queued)?;
-                    let ahead_calls = calls.clone();
+                    let ahead_calls = Calls {
+                        stop: stop.clone(),
+                        ..calls.clone()
+                    };
                     in_flight.push_back(AbortOnDropHandle::new(tokio::spawn(async move {
                         let fetched = fetch(&ahead_calls, &ahead_call).await;
                         AheadPage {
@@ -74,6 +85,9 @@ pub(crate) async fn paginate(
                             fetched,
                         }
                     })));
+                }
+                if grows {
+                    ramped = queued;
                 }
                 let next =
                     match in_flight.pop_front() {
@@ -94,6 +108,7 @@ pub(crate) async fn paginate(
             }
         };
         let Some(fetched) = fetched else {
+            release(in_flight);
             return Ok(());
         };
         largest = largest.max(fetched.bytes.len() as u64);
@@ -171,10 +186,20 @@ pub(crate) async fn paginate(
         }
         match next {
             Some((next, _)) => call = next,
-            None => return Ok(()),
+            None => {
+                release(in_flight);
+                return Ok(());
+            }
         }
     }
     Ok(())
+}
+
+/// Let the pages still read ahead when paging ends finish their requests, so their connections go back to the pool, instead of aborting them with the paging, as a failure or a closed `pages` does; the paging's stop token keeps them from waiting for a turn or retrying.
+fn release(in_flight: VecDeque<AbortOnDropHandle<AheadPage>>) {
+    for handle in in_flight {
+        drop(handle.detach());
+    }
 }
 
 /// What identifies a request among those a paginator sent: its URL and body.

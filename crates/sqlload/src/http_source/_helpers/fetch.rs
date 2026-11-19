@@ -9,7 +9,7 @@ use crate::http::models::RetryPolicy;
 use crate::http_source::_helpers::urls::{link_header_next, redacted, same_origin};
 use crate::http_source::constants::{
     ERROR_EXCERPT_CHARS, FIRST_RETRY_DELAY, MAX_REDIRECTS, MAX_RETRY_AFTER, MAX_RETRY_DELAY,
-    SKIPPED_REFUSAL_RENEWAL_AGE,
+    SKIPPED_REFUSAL_RENEWAL_AGE, STOPPED,
 };
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, PageCall, StatusAction};
 use crate::python_sources::errors::ReadError;
@@ -25,8 +25,15 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
     let mut refused: Option<String> = None;
     let mut renewed = false;
     loop {
-        if let Some(limiter) = &calls.limiter {
-            limiter.wait().await;
+        let waited = async {
+            if let Some(limiter) = &calls.limiter {
+                limiter.wait().await;
+            }
+        };
+        tokio::select! {
+            biased;
+            () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
+            () = waited => {}
         }
         let access = match &calls.endpoint.credential {
             Credential::OAuth2(tokens) => Some(
@@ -36,6 +43,9 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             ),
             _ => None,
         };
+        if calls.stop.is_cancelled() {
+            return Err(STOPPED.to_owned().into());
+        }
         match once(calls, call, access.as_deref(), !renewed).await? {
             Attempt::Done(fetched) => return Ok(fetched),
             Attempt::Refused => {
@@ -50,7 +60,10 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             }
             Attempt::Retry { after, .. } => {
                 let delay = after.unwrap_or_else(|| jittered(policy.delay(attempt)));
-                tokio::time::sleep(delay).await;
+                tokio::select! {
+                    () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
+                    () = tokio::time::sleep(delay) => {}
+                }
                 attempt += 1;
             }
         }

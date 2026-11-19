@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http_source::constants::{
-    BODY_DROPPING_REDIRECTS, JOB_THREADS, MAX_READ_AHEAD, MAX_REDIRECTS, PAGES_AHEAD, SHOWN_KEYS,
+    BODY_DROPPING_REDIRECTS, MAX_READ_AHEAD, MAX_REDIRECTS, PAGES_AHEAD, SHOWN_KEYS,
 };
 use crate::http_source::models::{
     Auth, Calls, FanKey, FanOut, FanOutLevel, HttpJob, HttpPage, KeyFeed, Location, Method, Over,
@@ -572,19 +572,23 @@ fn key_problem(request: &Request, wanted: &[String], value: &Value) -> Option<St
     }
 }
 
-/// Run `job` on a runtime of its own, handing each page to `deliver` in arrival order; `deliver` returning `false` cancels the requests in flight.
+/// Run `job` on the shared [`jobs`] runtime, handing each page to `deliver` in arrival order; `deliver` returning `false` cancels the requests in flight.
 pub(crate) fn drive_job(
     job: HttpJob,
     (connections, source_part): (&Map<String, Value>, Option<u64>),
     mut deliver: impl FnMut(HttpPage) -> bool,
 ) -> Result<(), ReadError> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(JOB_THREADS)
-        .enable_all()
-        .build()
-        .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?;
+    let jobs = jobs()?;
+    let http = match job_posts(&job) {
+        true => jobs.post.clone(),
+        false => jobs.get.clone(),
+    };
     let (sender, mut receiver) = channel(PAGES_AHEAD);
-    let task = runtime.spawn(run_job(job, (connections.clone(), source_part), sender));
+    let task = jobs.runtime.spawn(run_job(
+        job,
+        (connections.clone(), source_part),
+        (http, sender),
+    ));
     while let Some(page) = receiver.blocking_recv() {
         if !deliver(page) {
             task.abort();
@@ -592,24 +596,54 @@ pub(crate) fn drive_job(
         }
     }
     drop(receiver);
-    match runtime.block_on(task) {
+    match jobs.runtime.handle().block_on(task) {
         Ok(result) => result,
         Err(error) if error.is_cancelled() => Ok(()),
         Err(error) => Err(format!("the sl.http job stopped: {error}").into()),
     }
 }
 
-/// Run `job`, sending every page to `pages`.
+/// The runtime every job's requests run on, and the pooled clients they share: one for jobs that send a `POST`, one for the rest, as they follow redirects differently.
+struct Jobs {
+    runtime: tokio::runtime::Runtime,
+    get: reqwest::Client,
+    post: reqwest::Client,
+}
+
+/// The process's [`Jobs`], made by the first job and kept: each job of a table read in cursor windows (one per window) finds the connections the jobs before it opened still in the pool, instead of a new runtime's empty one, so it opens no new connection, nor repeats a TLS handshake, to a host it already reached; a failure to make them is not kept, so the next job tries again.
+fn jobs() -> Result<&'static Jobs, String> {
+    static JOBS: std::sync::OnceLock<Jobs> = std::sync::OnceLock::new();
+    if let Some(jobs) = JOBS.get() {
+        return Ok(jobs);
+    }
+    let threads = std::thread::available_parallelism().map_or(2, |count| count.get().max(2));
+    let made = Jobs {
+        runtime: tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(threads)
+            .thread_name("sqlload-http")
+            .enable_all()
+            .build()
+            .map_err(|error| format!("cannot start the sl.http runtime: {error}"))?,
+        get: job_client(false)?,
+        post: job_client(true)?,
+    };
+    Ok(JOBS.get_or_init(|| made))
+}
+
+/// Whether any request of `job` sends a `POST`.
+fn job_posts(job: &HttpJob) -> bool {
+    match job {
+        HttpJob::Paginate(request) => request.method == Method::Post,
+        HttpJob::FanOut(fan_out) => fan_out_posts(fan_out),
+    }
+}
+
+/// Run `job` with the pooled client `http`, sending every page to `pages`.
 async fn run_job(
     job: HttpJob,
     (connections, source_part): (Map<String, Value>, Option<u64>),
-    pages: Sender<HttpPage>,
+    (http, pages): (reqwest::Client, Sender<HttpPage>),
 ) -> Result<(), ReadError> {
-    let posts = match &job {
-        HttpJob::Paginate(request) => request.method == Method::Post,
-        HttpJob::FanOut(fan_out) => fan_out_posts(fan_out),
-    };
-    let http = job_client(posts)?;
     match job {
         HttpJob::Paginate(request) => {
             let calls = request_calls(&request, &connections, (&http, source_part))?;
@@ -697,6 +731,7 @@ fn request_calls(
         on_status,
         full_page_seen: std::sync::Arc::default(),
         source_part,
+        stop: tokio_util::sync::CancellationToken::new(),
     })
 }
 
