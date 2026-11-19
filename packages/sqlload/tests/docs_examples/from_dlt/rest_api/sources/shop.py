@@ -3,7 +3,7 @@ import sqlload as sl
 shop = sl.source(
     "shop", connection="shop_api", table_name="{table}", write_strategy="merge"
 )
-api = sl.http(shop, auth=sl.bearer(), retries=5)
+api = sl.http(shop)
 
 
 @shop.table(

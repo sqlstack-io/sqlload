@@ -2,8 +2,24 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 
+use crate::http_source::models::Auth;
 use crate::project::constants::{MAX_PERCENT, WHOLE_BATCH};
 use crate::project::models::{BatchStep, Lookback};
+
+/// Deserialize an `http` connection's optional `auth`, a table such as `{ kind = "bearer" }`. Any other value fails without showing it, as a mistaken `auth = "${ENV:API_TOKEN}"` would otherwise print the token.
+pub(crate) fn deserialize_optional_auth<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Auth>, D::Error> {
+    match Option::<toml::Value>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(table @ toml::Value::Table(_)) => Auth::deserialize(table)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+        Some(_) => Err(serde::de::Error::custom(
+            "auth is a table such as { kind = \"bearer\" }; credentials such as token go in their own keys",
+        )),
+    }
+}
 
 /// Deserialize an optional duration written as text such as `1h` or `2d`.
 pub(crate) fn deserialize_optional_duration<'de, D: Deserializer<'de>>(

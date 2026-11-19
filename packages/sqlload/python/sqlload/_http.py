@@ -14,8 +14,8 @@ from sqlload._data import Field, Fields, field_list
 from sqlload._declare import Source
 from sqlload._transform import TRANSFORMS
 
-#: Default retries of a request that failed with a transport error, 429 or a 5xx.
-DEFAULT_RETRIES = 5
+#: What moved from `sl.http` onto the `http` connection in sqlload.toml.
+CONNECTION_SETTINGS = ("auth", "rate_limit", "max_in_flight", "retries")
 
 ROW_LOOP_HINT = (
 	"rows of an sl.http job stay in Rust and are never handed to Python one at a time (rule python_row_loop); "
@@ -26,13 +26,6 @@ ROW_LOOP_HINT = (
 @dataclass(frozen=True)
 class Paginator:
 	"""How the next page is found; every paginate names one."""
-
-	spec: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class Auth:
-	"""Which of the connection's settings authenticate requests."""
 
 	spec: Mapping[str, Any]
 
@@ -146,57 +139,6 @@ def _location(location: str) -> str:
 	return location
 
 
-def bearer() -> Auth:
-	"""`Authorization: Bearer <token>`, the connection's `token`."""
-	return Auth({"kind": "bearer"})
-
-
-def api_key(*, header: str | None = None, query: str | None = None) -> Auth:
-	"""The connection's `token` in the header or the query parameter named."""
-	if (header is None) == (query is None):
-		raise ValueError("sl.api_key takes exactly one of header= or query=")
-	return Auth({"kind": "api_key", "header": header, "query": query})
-
-
-def basic() -> Auth:
-	"""HTTP basic auth with the connection's `username` and `password`."""
-	return Auth({"kind": "basic"})
-
-
-def oauth2_client_credentials(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
-	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `client_id` and `client_secret`.
-
-	The token is fetched once per run, renewed before it expires and once after a 401. `client_auth` is `"basic"`
-	(HTTP basic auth at the token URL) or `"post"` (`client_id` and `client_secret` as form fields).
-	"""
-	return Auth(_oauth2("oauth2_client_credentials", token_url, scope, client_auth))
-
-
-def oauth2_refresh_token(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
-	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `refresh_token`.
-
-	The connection's `client_id` and `client_secret` go along when it has them. A refresh token the server rotates is
-	used for the rest of the run but not saved, so the next run starts from the connection's `refresh_token` again.
-	"""
-	return Auth(_oauth2("oauth2_refresh_token", token_url, scope, client_auth))
-
-
-def oauth2_password(token_url: str, *, scope: str | None = None, client_auth: str = "basic") -> Auth:
-	"""`Authorization: Bearer <access token>`, the token `token_url` issues for the connection's `username` and `password`.
-
-	The resource-owner password grant. The connection's `client_id` and `client_secret` go along when it has them. The
-	token is renewed before it expires and once after a 401: with the refresh token the server handed out, if it did,
-	and by asking with the password again otherwise or when that refresh token is refused.
-	"""
-	return Auth(_oauth2("oauth2_password", token_url, scope, client_auth))
-
-
-def _oauth2(kind: str, token_url: str, scope: str | None, client_auth: str) -> dict[str, Any]:
-	if client_auth not in ("basic", "post"):
-		raise ValueError(f'client_auth must be "basic" or "post", not {client_auth!r}')
-	return {"kind": kind, "token_url": token_url, "scope": scope, "client_auth": client_auth}
-
-
 def _param_text(value: Any) -> str:
 	"""A request parameter JSON has no form for, such as a `datetime` cursor value: ISO text for dates and times, else `str()`."""
 	isoformat = getattr(value, "isoformat", None)
@@ -240,22 +182,18 @@ class Http:
 		self,
 		source: Source,
 		*,
-		auth: Auth | None = None,
-		rate_limit: str | None = None,
-		retries: int = DEFAULT_RETRIES,
 		headers: Mapping[str, str] | None = None,
 		connection: str | None = None,
+		**moved: Any,
 	) -> None:
 		name = connection or source.settings.get("connection")
 		if not name:
 			raise ValueError(f"sl.http needs a connection: set connection= on source {source.name} or pass connection=")
-		self._client = {
-			"connection": name,
-			"auth": dict(auth.spec) if auth else {"kind": "none"},
-			"rate_limit": rate_limit,
-			"retries": retries,
-			"headers": dict(headers or {}),
-		}
+		for key in moved:
+			if key in CONNECTION_SETTINGS:
+				raise TypeError(f"sl.http no longer takes {key}: set {key} on [connections.{name}] in sqlload.toml")
+			raise TypeError(f"sl.http got an unexpected keyword argument {key!r}")
+		self._client = {"connection": name, "headers": dict(headers or {})}
 
 	def paginate(
 		self,
@@ -445,12 +383,11 @@ def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any
 def http(
 	source: Source,
 	*,
-	auth: Auth | None = None,
-	rate_limit: str | None = None,
-	retries: int = DEFAULT_RETRIES,
 	headers: Mapping[str, str] | None = None,
 	connection: str | None = None,
+	**moved: Any,
 ) -> Http:
-	"""Requests to `source`'s HTTP connection (or `connection`), with `auth`, a `rate_limit` such as `"10/s"` shared
-	by every job on the connection, and `retries` of transport errors, 429s and 5xx responses."""
-	return Http(source, auth=auth, rate_limit=rate_limit, retries=retries, headers=headers, connection=connection)
+	"""Requests to `source`'s HTTP connection (or `connection`), adding `headers` to the connection's. The connection in
+	sqlload.toml sets how requests authenticate (`auth`), the limits every request to it shares in the run (`rate_limit`,
+	`max_in_flight`) and its `retries`."""
+	return Http(source, headers=headers, connection=connection, **moved)

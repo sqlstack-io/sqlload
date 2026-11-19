@@ -341,7 +341,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 | Function | Meaning |
 |----------|---------|
-| `sl.http(source, *, auth=None, rate_limit=None, retries=5, headers=None, connection=None)` | Requests to the source's `http` connection. `rate_limit` (`"10/s"`, `"600/m"`, `"1000/h"`) is shared by every job on the connection with the same limit. |
+| `sl.http(source, *, headers=None, connection=None)` | Requests to the source's `http` connection, or to `connection`, adding `headers` to the connection's. How requests authenticate, their `rate_limit` and `max_in_flight`, and their `retries` are set on the [connection](/docs/configuration/#http); passing `auth`, `rate_limit`, `max_in_flight` or `retries` to `sl.http` fails, naming the connection key to set. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail", error_path=None, transform=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. A response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `error_path` is where the API reports an error in a successful response; see [Errors in a successful response](#errors-in-a-successful-response). `fields` and `keep_record` pick and rename each row's values; see [Fields](#fields). For `method` and `json_body`, see [POST with a JSON body](#post-with-a-json-body). `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). `transform` reshapes each page's rows in Python before they load; see [Transforming each page](#transforming-each-page). |
 | `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail", error_path=None, transform=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` and `error_path` are as for `paginate`. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are as for `paginate`. Keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). `transform` is as for `paginate`, called once per page of each key. |
 
@@ -360,14 +360,14 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 | `sl.listed(path, *, key="columnId", id_key="id", name_key="title", by_position=False)` | The columns the response lists at `path`, such as `"$.columns"`. Each cell's `key` matches a listed column's `id_key`, and `name_key` names it; `by_position=True` matches cells to columns by position. |
 | `sl.header_row()` | The first row's cells name the columns, by position, and that row doesn't load. |
 
-| Auth | Sends |
-|------|-------|
-| `sl.bearer()` | `Authorization: Bearer <token>`, the connection's `token`. |
-| `sl.api_key(header=...)` or `sl.api_key(query=...)` | The `token` in that header or query parameter. |
-| `sl.basic()` | Basic auth with the connection's `username` and `password`. |
-| `sl.oauth2_client_credentials(token_url, *, scope=None, client_auth="basic")` | `Authorization: Bearer <access token>`, with the token `token_url` issues for the connection's `client_id` and `client_secret`. See [OAuth2](#oauth2). |
-| `sl.oauth2_refresh_token(token_url, *, scope=None, client_auth="basic")` | The same, with the token issued for the connection's `refresh_token`. The connection's `client_id` and `client_secret` go along when it has them. |
-| `sl.oauth2_password(token_url, *, scope=None, client_auth="basic")` | The same, with the token issued for the connection's `username` and `password` (the resource-owner password grant). The connection's `client_id` and `client_secret` go along when it has them. |
+The connection's `auth` says how requests authenticate: `bearer`, `api_key` in a header or query
+parameter, `basic`, or one of three OAuth2 grants. See the [`http` connection](/docs/configuration/#http)
+for each and the credentials it uses.
+
+- Every request to the connection in a run shares its `rate_limit` and `max_in_flight`, whichever
+  table, page, fan-out key or retry it belongs to, so two tables reading one API at once stay under
+  one limit together. Load one API's tables in one `sqlload load`: separate processes don't share
+  the limits.
 
 - Every `paginate` names its paginator; nothing is guessed.
 - Credentials go only to the connection's own scheme, host and port, never to a next-page link
@@ -392,7 +392,7 @@ api.paginate("/invoices", paginator=sl.offset(limit=50, read_ahead=20))
 
 The first page is read alone, so a short first page is checked as without `read_ahead`. After a full first page,
 the pages after it are requested two at a time, then four, eight and so on up to `N`, the open requests doubling
-each time the pages of the last round have loaded. Each goes through the shared `rate_limit` and retries, and their
+each time the pages of the last round have loaded. Each goes through the connection's `rate_limit`, `max_in_flight` and retries, and their
 rows load strictly in page order. The run ends at the first short (or, for `sl.page_number`, empty) page, and the
 requests already sent past it are dropped, so a table or cursor window of a few pages sends only a few requests
 more than it loads, and a long one soon has `N` open.
@@ -408,7 +408,9 @@ mock API answering each page of 100 rows in 80 ms, 1,000 pages took:
 | `read_ahead=8` | 12 s | 85 |
 | `read_ahead=20` | 6 s | 171 |
 
-Raise `read_ahead` until the API's own limits, or a `rate_limit` you set for them, become the bound.
+Raise `read_ahead` until the API's own limits, or the connection's `rate_limit` or `max_in_flight` you set for them,
+become the bound. Every table reading at once adds its own open requests, up to `concurrency` × `read_ahead`;
+`max_in_flight` caps them all together.
 
 Every job of a load shares one pool of connections, so the cursor windows of a backfill reuse the connections
 the first window opened instead of each opening its own.
@@ -550,9 +552,9 @@ def notes(ctx):
                        paginator=sl.page_number("page"), select="$.items")
 ```
 
-- Every level has its own paginator, `concurrency`, `on_status` and, through the `sl.http` it
-  comes from, its own retries and rate limit. Up to one more request than the sum of the fan-out
-  levels' `concurrency` is in flight at once (the top paginate's); a shared `rate_limit` caps them.
+- Every level has its own paginator, `concurrency` and `on_status`; retries and limits are the
+  connection's. Up to one more request than the sum of the fan-out levels' `concurrency` is in
+  flight at once (the top paginate's); the connection's `max_in_flight` and `rate_limit` cap them.
 - An incremental cursor goes on the top level, as above; lower levels only see the keys it picks.
 - Only the last level's rows load. A level that should be a table of its own is a table function
   whose job stops at that level, so the levels above it are requested again for that table.
@@ -722,15 +724,15 @@ origin, so `json_body` never leaves the connection's origin.
 
 ### OAuth2
 
-`sl.oauth2_client_credentials`, `sl.oauth2_refresh_token` and `sl.oauth2_password` fetch short-lived
-access tokens from `token_url`. See [OAuth2](/docs/guides/python/#oauth2) in the guide for an
+The `oauth2_client_credentials`, `oauth2_refresh_token` and `oauth2_password` kinds of `auth` fetch
+short-lived access tokens from `token_url`. See [OAuth2](/docs/guides/python/#oauth2) in the guide for an
 example.
 
-- The token is fetched once per run and shared by every job on the connection with the same auth.
+- The token is fetched once per run and shared by every job on the connection.
   It is renewed before it expires (by `expires_in`), and once more when the API answers 401; the
   request is then retried with the new token. When `on_status` maps 401 to `"skip"`, a 401 renews
   the token only if it is over 30 seconds old; otherwise the request is skipped.
-- `client_auth="basic"` sends `client_id` and `client_secret` to the token URL with HTTP basic
+- `client_auth = "basic"` sends `client_id` and `client_secret` to the token URL with HTTP basic
   auth, the method RFC 6749 requires servers to support. As the RFC asks, both are form-encoded
   first, so a secret with characters such as `+` or `/` reaches the server encoded. Use `"post"`
   for a server that rejects that, or that wants them as form fields.
@@ -743,7 +745,7 @@ example.
   does not save it, so each run starts from the connection's `refresh_token`. An API that revokes
   the old refresh token on rotation therefore fails on the next run; use client credentials there
   when the API offers them.
-- `sl.oauth2_password` posts `grant_type=password` with the
+- `oauth2_password` posts `grant_type=password` with the
   connection's `username` and `password`. When the response includes a `refresh_token`, later
   renewals in the run use it; when it doesn't, or the server refuses it, SQLLoad asks with the
   password again. The password is shown as `***` like the other secrets, and wrong credentials end
@@ -756,10 +758,7 @@ base_url = "https://api.example.com/v1"
 username = "loader"
 password = "${ENV:SHOP_PASSWORD}"
 client_id = "sqlload"
-```
-
-```python
-api = sl.http(shop, auth=sl.oauth2_password("https://auth.example.com/oauth/token", client_auth="post"))
+auth = { kind = "oauth2_password", token_url = "https://auth.example.com/oauth/token", client_auth = "post" }
 ```
 
 ## Logged state

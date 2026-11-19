@@ -8,12 +8,15 @@ use crate::loader::models::{PlanItem, ProjectPlan, TablePlan};
 use crate::plan_text::main::plan_lines::plan_lines;
 use crate::plan_text::models::{LoadedTable, PlanParts};
 
-/// The plan's lines, and whether every selected table can load: only the lines a table has of its own or that ask for something (see [`plan_lines`]), or with `verbose` every line; a plan of only project problems shows just its `Errors`, and tables stopped for the same reasons share one item.
+/// The plan's lines, and whether every selected table can load: each `http` connection's settings, then only the lines a table has of its own or that ask for something (see [`plan_lines`]), or with `verbose` every line; a plan of only project problems shows just its `Errors`, and tables stopped for the same reasons share one item.
 pub fn render_plan(plan: &ProjectPlan, verbose: bool) -> (Vec<String>, bool) {
     let mut view = text_view(plan);
     view.errors = merged_errors(std::mem::take(&mut view.errors));
     if verbose {
-        return (view_lines(&view), view.ok);
+        return (
+            with_http_lines(view_lines(&view), &plan.http, true),
+            view.ok,
+        );
     }
     let ready: Vec<&TablePlan> = plan
         .tables
@@ -39,5 +42,19 @@ pub fn render_plan(plan: &ProjectPlan, verbose: bool) -> (Vec<String>, bool) {
         tables,
         problems,
     };
-    (plan_lines(&parts), view.ok)
+    (
+        with_http_lines(plan_lines(&parts), &plan.http, false),
+        view.ok,
+    )
+}
+
+/// `lines` with each `http` connection's line: under `-v` (`verbose`) after the `Plan ready`, `to` and `memory` lines, otherwise first, apart from the rest.
+fn with_http_lines(mut lines: Vec<String>, http: &[String], verbose: bool) -> Vec<String> {
+    let at = match verbose {
+        true => lines.iter().position(String::is_empty).unwrap_or_default(),
+        false => 0,
+    };
+    let gap = (!verbose && !http.is_empty()).then(String::new);
+    lines.splice(at..at, http.iter().cloned().chain(gap));
+    lines
 }

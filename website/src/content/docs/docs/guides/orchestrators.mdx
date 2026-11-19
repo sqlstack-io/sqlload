@@ -9,6 +9,11 @@ each event to the orchestrator's logger at its level, and records a row per tabl
 fails logs an error, and the run fails when `sqlload load` exits with a non-zero code. Run every
 recipe in the project folder, with `sqlload` on `PATH`.
 
+An [`http` connection's](/docs/configuration/#http) `rate_limit` and `max_in_flight` hold within
+one `sqlload load`; separate processes don't share them. Run one task per API, loading all of its
+tables, not one task per endpoint. The recipes log each `rate_limited` event, which names the
+connection and its `rate_limit`, so a run that waits on its limit shows it.
+
 ## Prefect
 
 The flow logs through `get_run_logger()` and saves a table artifact, `sqlload-load`, with one row

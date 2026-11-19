@@ -14,8 +14,8 @@ use crate::http_source::models::LiteralPaths;
 use crate::load_naming::models::{Compat, Naming, OnDuplicateNames};
 use crate::project::_helpers::defaults;
 use crate::project::_helpers::serde_values::{
-    deserialize_optional_batch, deserialize_optional_duration, deserialize_optional_keys,
-    deserialize_optional_lookback, deserialize_optional_percent,
+    deserialize_optional_auth, deserialize_optional_batch, deserialize_optional_duration,
+    deserialize_optional_keys, deserialize_optional_lookback, deserialize_optional_percent,
 };
 use crate::project::constants::{
     DEFAULT_DESTINATION_PATH, DEFAULT_FILES_TABLE_NAME, DEFAULT_MAX_FOOTER_READS,
@@ -311,26 +311,38 @@ pub enum ConnectionConfig {
         #[serde(default)]
         token_url: Option<String>,
     },
-    /// An HTTP API, for Python sources; its settings reach table functions as `ctx.connection`.
+    /// An HTTP API, for Python sources' `sl.http` jobs; its settings reach table functions as `ctx.connection`.
     Http {
         base_url: String,
+        /// How requests authenticate, with the credentials below; `None` sends none.
+        #[serde(default, deserialize_with = "deserialize_optional_auth")]
+        auth: Option<crate::http_source::models::Auth>,
         #[serde(default)]
         token: Option<crate::auth::models::Secret>,
-        /// For `sl.basic()` and `sl.oauth2_password(...)`.
+        /// For `auth` `basic` and `oauth2_password`.
         #[serde(default)]
         username: Option<String>,
         #[serde(default)]
         password: Option<crate::auth::models::Secret>,
-        /// For `sl.oauth2_client_credentials(...)`, and `sl.oauth2_refresh_token(...)` or `sl.oauth2_password(...)` when the API wants the client too.
+        /// For `auth` `oauth2_client_credentials`, and `oauth2_refresh_token` or `oauth2_password` when the API wants the client too.
         #[serde(default)]
         client_id: Option<String>,
         #[serde(default)]
         client_secret: Option<crate::auth::models::Secret>,
-        /// For `sl.oauth2_refresh_token(...)`.
+        /// For `auth` `oauth2_refresh_token`.
         #[serde(default)]
         refresh_token: Option<crate::auth::models::Secret>,
         #[serde(default)]
         headers: BTreeMap<String, String>,
+        /// Requests started per second, minute or hour (`10/s`), shared by every request to the connection in the run.
+        #[serde(default)]
+        rate_limit: Option<String>,
+        /// The most requests open at once on the connection in the run.
+        #[serde(default)]
+        max_in_flight: Option<usize>,
+        /// Retries of a request that failed with a transport error, 429 or a 5xx.
+        #[serde(default)]
+        retries: Option<u32>,
     },
 }
 

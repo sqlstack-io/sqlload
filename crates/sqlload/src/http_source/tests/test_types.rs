@@ -23,3 +23,12 @@ pub(crate) struct LimiterTestCase {
     /// How many requests went.
     pub(crate) expected_turns: usize,
 }
+
+pub(crate) struct CredentialSourceTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's `auth`, as TOML; `None` when it sets none.
+    pub(crate) auth: Option<&'static str>,
+    /// The credential settings the connection has.
+    pub(crate) set: &'static [&'static str],
+    pub(crate) expected_source: Result<&'static str, &'static str>,
+}

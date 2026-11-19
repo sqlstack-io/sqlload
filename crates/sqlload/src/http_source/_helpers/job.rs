@@ -11,8 +11,7 @@ use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task::JoinSet;
 
 use crate::http_source::_helpers::cells::cells_problem;
-use crate::http_source::_helpers::endpoint::{endpoint, interval, shared_limiter};
-use crate::http_source::_helpers::oauth::token_url;
+use crate::http_source::_helpers::endpoint::{connection_settings, endpoint, shared_limits};
 use crate::http_source::_helpers::pages::{paginate, set_at};
 use crate::http_source::_helpers::reshaped::reshapes;
 use crate::http_source::_helpers::selector::{enclosing_levels, selected_rows, selector};
@@ -28,10 +27,11 @@ use std::time::Duration;
 
 use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::http_source::constants::{
-    BODY_DROPPING_REDIRECTS, MAX_READ_AHEAD, MAX_REDIRECTS, PAGES_AHEAD, SHOWN_KEYS,
+    BODY_DROPPING_REDIRECTS, DEFAULT_RETRIES, MAX_READ_AHEAD, MAX_REDIRECTS, PAGES_AHEAD,
+    SHOWN_KEYS,
 };
 use crate::http_source::models::{
-    Auth, Calls, FanKey, FanOut, FanOutLevel, HttpJob, HttpPage, KeyFeed, Location, Method, Over,
+    Calls, FanKey, FanOut, FanOutLevel, HttpJob, HttpPage, KeyFeed, Location, Method, Over,
     Paginator, Request, RowContext, Selector, Sink, StatusAction,
 };
 
@@ -188,25 +188,12 @@ fn request_problems(request: &Request) -> Vec<String> {
     problems.extend(body_problems(request));
     problems.extend(request.cells.as_ref().and_then(cells_problem));
     problems.extend(request.error_path.as_deref().and_then(error_path_problem));
-    problems.extend(match &request.client.auth {
-        Auth::Oauth2ClientCredentials(spec)
-        | Auth::Oauth2RefreshToken(spec)
-        | Auth::Oauth2Password(spec) => token_url(spec).err(),
-        Auth::None | Auth::Bearer | Auth::ApiKey { .. } | Auth::Basic => None,
-    });
     problems.extend(
         request
             .client
             .headers
             .iter()
             .filter_map(|(name, value)| header_problem(name, value)),
-    );
-    problems.extend(
-        request
-            .client
-            .rate_limit
-            .as_deref()
-            .and_then(|rate| interval(rate).err()),
     );
     problems.extend(
         request
@@ -708,11 +695,8 @@ fn request_calls(
     (http, source_part): (&reqwest::Client, Option<u64>),
 ) -> Result<Calls, String> {
     let client = &request.client;
-    let limiter = client
-        .rate_limit
-        .as_deref()
-        .map(|rate| shared_limiter(&client.connection, rate))
-        .transpose()?;
+    let (shared, settings) = connection_settings(client, connections)?;
+    let (limiter, in_flight) = shared_limits(&client.connection, &shared.limits)?;
     let on_status = request
         .on_status
         .iter()
@@ -725,9 +709,10 @@ fn request_calls(
         .collect::<Result<BTreeMap<u16, StatusAction>, String>>()?;
     Ok(Calls {
         http: http.clone(),
-        endpoint: endpoint(client, connections)?,
+        endpoint: endpoint(client, (shared.auth.as_ref(), settings))?,
         limiter,
-        retries: client.retries,
+        in_flight,
+        retries: shared.retries.unwrap_or(DEFAULT_RETRIES),
         on_status,
         full_page_seen: std::sync::Arc::default(),
         source_part,
