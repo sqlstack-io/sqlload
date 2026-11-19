@@ -40,3 +40,12 @@ pub const RESERVED_COLUMN_PREFIXES: [&str; 6] = [
     "__ROOT__",
     "_COLIDENTIFIER",
 ];
+
+/// The most bytes of SQL one query job over files in GCS holds, under BigQuery's limit of 1,024K characters for a query before it is resolved.
+pub const MAX_QUERY_BYTES: usize = 900 * 1024;
+
+/// The most files one query job over files in GCS reads.
+pub const MAX_FILES_PER_QUERY: usize = 1000;
+
+/// What a query over files in GCS fails with on a row of a file not in its batch, before the file's name.
+pub const UNEXPECTED_FILE: &str = "sqlload: unexpected file ";

@@ -3,7 +3,8 @@
 use serde_json::{Map, Value, json};
 
 use crate::adapters::bigquery::constants::{
-    DECIMAL_TARGET_TYPES, MAX_COLUMN_NAME, RESERVED_COLUMN_PREFIXES,
+    DECIMAL_TARGET_TYPES, MAX_COLUMN_NAME, MAX_FILES_PER_QUERY, MAX_QUERY_BYTES,
+    RESERVED_COLUMN_PREFIXES, UNEXPECTED_FILE,
 };
 use crate::adapters::bigquery::models::BigQuerySql;
 use crate::adapters::contract::models::TableName;
@@ -61,6 +62,53 @@ pub(crate) fn pull_query(
         definitions.insert(group_table(index), table_definition(&urls));
     }
     (query, Value::Object(definitions))
+}
+
+/// [`pull_query`] over `groups`, split into as many queries as keep each under [`MAX_QUERY_BYTES`] and [`MAX_FILES_PER_QUERY`] files, halving the files until they fit; a single file whose query is still too long is one query, which BigQuery refuses.
+pub(crate) fn pull_queries(
+    into: &TableName,
+    (columns, builds): (&[DesiredColumn], bool),
+    groups: &[PulledGroup],
+    (compat, load_id, loaded_at): (Compat, &str, &str),
+) -> Vec<(String, Value)> {
+    let mut queries: Vec<(String, Value)> = Vec::new();
+    let mut pending: Vec<Vec<PulledGroup>> = vec![groups.to_vec()];
+    while let Some(part) = pending.pop() {
+        let files: usize = part.iter().map(|group| group.files.len()).sum();
+        let (query, definitions) =
+            pull_query(into, (columns, builds), &part, (compat, load_id, loaded_at));
+        let over = query.len() > MAX_QUERY_BYTES || files > MAX_FILES_PER_QUERY;
+        match (over, files) {
+            (true, count) if count > 1 => {
+                let (first, second) = split_groups(&part, count / 2);
+                pending.push(second);
+                pending.push(first);
+            }
+            _ => queries.push((query, definitions)),
+        }
+    }
+    queries
+}
+
+/// `groups` cut after their first `at` files, in order, each side keeping only groups that hold files.
+fn split_groups(groups: &[PulledGroup], at: usize) -> (Vec<PulledGroup>, Vec<PulledGroup>) {
+    let mut first: Vec<PulledGroup> = Vec::new();
+    let mut second: Vec<PulledGroup> = Vec::new();
+    let mut left = at;
+    for group in groups {
+        let take = left.min(group.files.len());
+        left -= take;
+        let (head, tail) = group.files.split_at(take);
+        for (side, files) in [(&mut first, head), (&mut second, tail)] {
+            if !files.is_empty() {
+                side.push(PulledGroup {
+                    files: files.to_vec(),
+                    in_files: group.in_files.clone(),
+                });
+            }
+        }
+    }
+    (first, second)
 }
 
 /// The `SELECT` of `columns` from the `index`th group's external table, as [`pull_query`] fills them.
@@ -139,7 +187,7 @@ fn constant<'a>(file: &'a PulledFile, name: &str) -> Option<Option<&'a str>> {
         .map(|(_, value)| value.as_deref())
 }
 
-/// The row's file's value of constant `name`, as text: each file's value picked by `_FILE_NAME`, a typed NULL where its folder lacks it, so a column no file has a value of still casts to its type.
+/// The row's file's value of constant `name`, as text: each file's value picked by `_FILE_NAME`, a typed NULL where its folder lacks it, so a column no file has a value of still casts to its type; a row of any other file fails the query, so a file name BigQuery reports differently never loads as NULL.
 fn by_file(files: &[PulledFile], name: &str) -> String {
     let cases: Vec<String> = files
         .iter()
@@ -154,7 +202,11 @@ fn by_file(files: &[PulledFile], name: &str) -> String {
             )
         })
         .collect();
-    format!("CASE _FILE_NAME {} END", cases.join(" "))
+    format!(
+        "CASE _FILE_NAME {} ELSE ERROR(CONCAT({}, _FILE_NAME)) END",
+        cases.join(" "),
+        BigQuerySql.render_loader_value_literal(UNEXPECTED_FILE)
+    )
 }
 
 /// Why BigQuery would not read Parquet columns named `names` under those names: one that is not letters, digits and underscores starting with a letter or underscore, which BigQuery renames (`Order ID` reads as `Order_ID`), starts with a prefix BigQuery reserves, or differs from another only in case; `None` when it reads every one as it is.
