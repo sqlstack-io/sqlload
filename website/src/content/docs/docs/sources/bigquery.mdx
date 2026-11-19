@@ -90,6 +90,31 @@ the table's description.
   runs.
 - **Query tables** run as a query job too, and also read the data as it is when the job runs.
 
+## BigQuery loads the rows itself
+
+When the target is BigQuery and writes through the source's own `connection`, no rows pass through
+SQLLoad. BigQuery selects each batch's rows with one `INSERT ... SELECT` query job into the load's
+staging or build table, which then publishes as any other load does. A table is read as of the
+moment its load starts, as a read session reads it, and views, query tables and tables with `where`
+run their query in the same job. The rows load exactly as SQLLoad's reader would load them, with
+the same types.
+
+`plan` shows the route:
+
+```text
+route   BigQuery INSERT ... SELECT on the source's connection (nothing through the loader)
+```
+
+SQLLoad still reads the rows itself, and `plan -v` on the table says why, for a table that:
+
+- has a `STRUCT`, `RANGE`, `GEOGRAPHY` or repeated column, which SQLLoad converts to JSON or text;
+- pins a column to another type than its own;
+- is in another location than the connection's, which a read session reaches but a query job
+  doesn't;
+- has a `mask`, `parse`, `transform` or checks, which SQLLoad applies to the rows.
+
+A target on another `bigquery` connection, even with the same key, reads through SQLLoad as before.
+
 ## Query tables
 
 A table entry with `sql` is a query table: its rows are the query's result, and the entry's key is
@@ -158,7 +183,7 @@ fraction in a pinned integer, fails the read too. NaN and infinities inside a re
 ## Cost
 
 Read sessions bill the bytes of the columns and rows they read; the first 300 TB a month are free.
-Views and query tables also bill their query job. Listing tables, describing them and dry runs
+Views and query tables also bill their query job. A table [BigQuery loads itself](#bigquery-loads-the-rows-itself) bills its query job's scan instead of a read session. Listing tables, describing them and dry runs
 bill nothing.
 
 A table read from a cursor with `null_cursor = "fail"` (the default) and a cursor column

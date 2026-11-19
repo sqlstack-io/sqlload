@@ -16,7 +16,7 @@ pub const PLAN_DETAIL_COLUMN: usize = 52;
 /// The width of a plan detail's label and the space after it, as `route   `.
 pub const LABEL_WIDTH: usize = 8;
 
-/// The route of a table a Snowflake target selects from a source on its own connection, after the warehouse's name.
+/// The route of a table a Snowflake or BigQuery target selects from a source on its own connection, after the warehouse's name.
 pub const SELECTED_ROUTE: &str =
     "INSERT ... SELECT on the source's connection (nothing through the loader)";
 

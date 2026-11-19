@@ -34,7 +34,11 @@ pub(crate) async fn read_session(
             Some(reader.snapshot_ms),
         ),
         false => (
-            query_destination(&reader.client, &select_query(&reader.project, request)).await?,
+            query_destination(
+                &reader.client,
+                &select_query(&reader.project, request, None),
+            )
+            .await?,
             None,
             None,
         ),

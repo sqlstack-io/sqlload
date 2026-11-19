@@ -22,7 +22,7 @@ use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableT
 use crate::loader::tests::test_types::{
     BigQueryReaderTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, GcsReaderTestCase,
     InferredTableTestCase, ItemSpec, OlderFilesTestCase, ReloadOrderTestCase,
-    SourceSpellingTestCase, TransformReaderTestCase,
+    SelectedReaderTestCase, SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -56,6 +56,7 @@ pub(crate) fn inferred_columns(test_case: &InferredTableTestCase) -> String {
         estimated_bytes: -1,
         split_pages: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let live: Vec<LiveColumn> = test_case
         .live
@@ -432,6 +433,7 @@ pub(crate) fn refused_bounds_runs(
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "erp", &[table]);
     let spec = resolved
@@ -529,6 +531,7 @@ pub(crate) fn not_null_keys(
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "erp", &[table]);
     resolved
@@ -555,6 +558,32 @@ pub(crate) fn transform_reader(
     spec.parses
         .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
     Ok(reader_offer(&spec, None, None).needs_loader)
+}
+
+/// Whether BigQuery selects a BigQuery source's table itself through the source's own connection, with the case's mask and parse, and why SQLLoad reads it otherwise.
+pub(crate) fn selected_reader(
+    test_case: &SelectedReaderTestCase,
+) -> Result<(bool, Option<String>), String> {
+    let mut spec = python_spec("{}")?;
+    spec.python = None;
+    spec.warehouse = crate::column_types::models::Warehouse::BigQuery;
+    spec.warehouse_source = Some(crate::loader::models::WarehouseSource {
+        system: crate::bigquery_source::constants::BIGQUERY_SOURCE,
+        sql: None,
+        route: crate::loader::models::WarehouseRoute::Query {
+            same_connection: true,
+        },
+    });
+    spec.masked.columns.extend(
+        test_case
+            .mask
+            .map(|(column, method)| (column.to_owned(), method)),
+    );
+    let parse = column_parse(&serde_json::json!({ "timestamp": ["iso"] }))?;
+    spec.parses
+        .extend(test_case.parse.map(|column| (column.to_owned(), parse)));
+    let offer = reader_offer(&spec, None, None);
+    Ok((offer.selected_by_destination, offer.direct_blocked))
 }
 
 /// Why DuckDB can't read a Parquet files table's files in GCS itself, with the case's HMAC key and endpoint on the connection.
@@ -741,6 +770,7 @@ pub(crate) fn unload_spec(url: &str) -> Result<TableSpec, String> {
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let resolved = resolve_tables(&project, "marts", &[table]);
     resolved

@@ -60,5 +60,6 @@ pub(crate) fn orders() -> SourceTable {
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     }
 }

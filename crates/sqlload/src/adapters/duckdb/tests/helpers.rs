@@ -157,6 +157,7 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
     };
     let batch = UnloadedBatch {
         source: crate::adapters::contract::models::UnloadedSource::Files(&files),
+        merge_key: &[],
         read: &read,
         write_columns: &columns,
         target: WriteTarget {

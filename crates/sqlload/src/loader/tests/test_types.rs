@@ -285,3 +285,16 @@ pub(crate) struct BigQueryReaderTestCase {
     /// Why SQLLoad must read the files instead of BigQuery, if it must.
     pub(crate) expected_reason: Option<&'static str>,
 }
+
+/// A BigQuery source's table loading into BigQuery through the source's own connection.
+pub(crate) struct SelectedReaderTestCase {
+    pub(crate) description: &'static str,
+    /// A column the table masks, with its method.
+    pub(crate) mask: Option<(&'static str, crate::project::models::MaskMethod)>,
+    /// A column the table parses.
+    pub(crate) parse: Option<&'static str>,
+    /// Whether BigQuery selects the rows itself.
+    pub(crate) expected_selected: bool,
+    /// Why SQLLoad reads the rows instead, as `plan` shows it.
+    pub(crate) expected_reason: Option<&'static str>,
+}

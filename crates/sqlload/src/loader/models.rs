@@ -333,8 +333,8 @@ pub enum WarehouseRoute {
         stage: String,
         same_connection: bool,
     },
-    /// SQLLoad runs the query and reads its rows as Arrow.
-    Query,
+    /// SQLLoad runs the query and reads its rows as Arrow. `same_connection`: the target writes through the source's own connection, so it can select the rows itself instead.
+    Query { same_connection: bool },
 }
 
 /// A created table's layout, with SQLBuild's ClickHouse field names; every field unset by default.

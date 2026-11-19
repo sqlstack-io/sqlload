@@ -55,6 +55,8 @@ use crate::number_text::main::memory_text::memory_text;
 use crate::project::models::SendMode;
 
 use crate::batch_plan::main::window_concurrency::window_concurrency;
+use crate::bigquery_source::main::selected_rows_query::selected_rows_query;
+use crate::bigquery_source::models::BigQueryReadRequest;
 use crate::files_source::models::BatchFooters;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::{FilesRead, FilesTable, SourceFormat, TextChecks};
@@ -165,16 +167,15 @@ use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::loader::_helpers::table_plan::{
-    added_constants, is_direct, pulls_unloaded, selects_rows,
-};
+use crate::loader::_helpers::table_plan::added_constants;
+use crate::routing::models::Route;
 
 /// Whether `append` can write the batches straight into the table: not a logged table (its rows wait for a changed `ctx.state`), and a writer that can (on Snowflake, a route loading files into the table itself), and, for an unload the destination reads itself, one that [loads it directly](unloads_directly).
 fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
     table.mode == WriteMode::Append
         && table.logged.is_none()
         && writer.writes_directly()
-        && (!pulls_unloaded(table.route.as_ref()) || unloads_directly(writer))
+        && (!table.route.as_ref().is_some_and(Route::pulls_unloaded) || unloads_directly(writer))
 }
 
 /// Where the batches go, from the publisher's fields: `staging` when there is one, and `columns` as the staged batches carry them.
@@ -1046,7 +1047,7 @@ impl Publisher {
         let Some(read) = &self.table.files else {
             return Ok(None);
         };
-        if !is_direct(self.table.route.as_ref()) {
+        if !self.table.route.as_ref().is_some_and(Route::is_direct) {
             return Ok(None);
         }
         let columns = staged_columns(&self.table);
@@ -1083,8 +1084,13 @@ impl Publisher {
         source: UnloadedSource<'_>,
     ) -> Result<DirectLoaded, LoaderError> {
         let columns = staged_columns(&self.table);
+        let merge_key = match &self.table.mode {
+            WriteMode::Merge { unique_key, .. } => unique_key.as_slice(),
+            _ => &[],
+        };
         let batch = UnloadedBatch {
             source,
+            merge_key,
             read: &self.table.read_columns,
             write_columns: &self.table.schema.write_columns,
             target: write_target(
@@ -1115,12 +1121,12 @@ impl Publisher {
         part: ReadPart,
     ) -> Result<(), LoaderError> {
         let table = self.table.clone();
-        if selects_rows(table.route.as_ref()) {
-            let query = selected_query(&table, part)?;
+        if table.route.as_ref().is_some_and(Route::selects_rows) {
+            let query = selected_query(reader, &table, part)?;
             self.load_unloaded(UnloadedSource::Query(&query)).await?;
             return Ok(());
         }
-        if pulls_unloaded(table.route.as_ref()) {
+        if table.route.as_ref().is_some_and(Route::pulls_unloaded) {
             unload_source(reader, &table, part, async |files| {
                 self.load_unloaded(UnloadedSource::Files(files)).await
             })
@@ -1359,7 +1365,8 @@ impl Publisher {
             return Ok(BatchFooters::default());
         };
         if source_files.encoding.record.is_some() {
-            let direct = self.table.files.is_some() && is_direct(self.table.route.as_ref());
+            let direct = self.table.files.is_some()
+                && self.table.route.as_ref().is_some_and(Route::is_direct);
             return match (source_files.encoding.format, direct) {
                 (SourceFormat::Csv, true) => Ok(BatchFooters {
                     headers: batch_headers(folder, files, &source_files.encoding).await?,
@@ -1385,8 +1392,10 @@ impl Publisher {
                 (columns, footers)
             }
             SourceFormat::Csv => {
-                let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
-                else {
+                let (Some(read), true) = (
+                    &self.table.files,
+                    self.table.route.as_ref().is_some_and(Route::is_direct),
+                ) else {
                     return Ok(BatchFooters::default());
                 };
                 let headers = batch_headers(folder, files, &source_files.encoding).await?;
@@ -1408,8 +1417,10 @@ impl Publisher {
             }
             SourceFormat::Xlsx | SourceFormat::Xml => return Ok(BatchFooters::default()),
             SourceFormat::Json | SourceFormat::Ndjson => {
-                let (Some(read), true) = (&self.table.files, is_direct(self.table.route.as_ref()))
-                else {
+                let (Some(read), true) = (
+                    &self.table.files,
+                    self.table.route.as_ref().is_some_and(Route::is_direct),
+                ) else {
                     return Ok(BatchFooters::default());
                 };
                 let Some(found) = file_keys(&self.writer, spec, files).await? else {
@@ -1769,7 +1780,7 @@ async fn feed(
                     transform: transform.cloned(),
                     ..ReadPart::default()
                 };
-                match pulls_unloaded(table.route.as_ref()) {
+                match table.route.as_ref().is_some_and(Route::pulls_unloaded) {
                     true => publisher.pass_part(reader, part).await?,
                     false => {
                         read_source(reader, table, part, async |batch| {
@@ -1873,7 +1884,8 @@ pub(crate) fn published_once(table: &TablePlan) -> &'static str {
 
 /// Whether the target loads the table's files itself: a files source's, or a warehouse source's unload.
 pub(crate) fn reads_files_itself(table: &TablePlan) -> bool {
-    is_direct(table.route.as_ref()) || pulls_unloaded(table.route.as_ref())
+    table.route.as_ref().is_some_and(Route::is_direct)
+        || table.route.as_ref().is_some_and(Route::pulls_unloaded)
 }
 
 /// The table's spool, in its `staging_dir` or the system's temporary folder, once that has room for about what a commit holds (see [`held_estimate`]), where the source and the file system say; commits are cut at `commit_bytes`.
@@ -1955,11 +1967,27 @@ pub(crate) fn publishes_once(table: &TablePlan) -> bool {
     ) && sql_adapter(table.spec.warehouse).publishes_runs_once()
 }
 
-/// The query an unload of `part` of `table` would run, which a destination writing through the source's own connection runs itself.
-fn selected_query(table: &TablePlan, part: ReadPart) -> Result<String, LoaderError> {
+/// The query that selects `part` of `table` from its source, which a destination writing through the source's own connection runs itself: a Snowflake source's unload query, or the query a BigQuery source's rows would be read with.
+fn selected_query(
+    reader: &SourceReader,
+    table: &TablePlan,
+    part: ReadPart,
+) -> Result<String, LoaderError> {
     let filter = table
         .spec
         .read_filter(part.filter.or_else(|| table.source_filter.clone()));
-    select_query(&unload_request(table, filter.as_deref()))
-        .map_err(|error| LoaderError::Invalid(error.to_string()))
+    match reader {
+        SourceReader::BigQuery(reader) => Ok(selected_rows_query(
+            reader,
+            &BigQueryReadRequest {
+                table: &table.spec.source_table,
+                sql: table.spec.query_sql(),
+                columns: &table.read_columns,
+                filter: filter.as_deref(),
+                filtered: table.spec.row_filter.is_some(),
+            },
+        )),
+        _ => select_query(&unload_request(table, filter.as_deref()))
+            .map_err(|error| LoaderError::Invalid(error.to_string())),
+    }
 }

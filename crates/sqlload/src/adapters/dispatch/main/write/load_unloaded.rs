@@ -15,6 +15,7 @@ pub async fn load_unloaded(
         Writer::Snowflake(snowflake) => snowflake.pull_unloaded(batch).await.map(Some),
         Writer::ClickHouse(clickhouse) => clickhouse.pull_unloaded(batch).await.map(Some),
         Writer::Databricks(databricks) => databricks.pull_unloaded(batch).await.map(Some),
+        Writer::BigQuery(bigquery) => bigquery.pull_unloaded(batch).await.map(Some),
         _ => Ok(None),
     }
 }
