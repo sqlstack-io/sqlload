@@ -14,7 +14,7 @@ use crate::http_source::constants::{
 use crate::http_source::models::{Attempt, Calls, Credential, Fetched, PageCall, StatusAction};
 use crate::python_sources::errors::ReadError;
 
-/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out. Every attempt, retries included, holds one of the connection's `max_in_flight` permits while its request is open and takes a turn under its `rate_limit`. The permit comes first, then the OAuth2 access token, then the turn, so a request that got its turn starts at once: neither a queue for a permit nor a token fetch lets turns pass unused and then go in a burst. The permit is released once the response is read, not held through a retry's backoff.
+/// The response to `call`, its JSON body resent on every retry, or `None` when `on_status` skips its status; transport errors, 429 and 5xx are retried up to `calls.retries` times, and are still worth retrying later once those run out. Every attempt, retries included, holds one of the connection's `max_in_flight` permits while its request is open and takes a turn under its `rate_limit`. The permit comes first, then the OAuth2 access token, then the turn, so a request that got its turn starts at once: neither a queue for a permit nor a token fetch lets turns pass unused and then go in a burst. The token is taken again after the turn, which returns the one just fetched unless the wait outlasted it. The permit is released once the response is read, not held through a retry's backoff.
 pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetched>, ReadError> {
     let policy = RetryPolicy {
         first_delay: FIRST_RETRY_DELAY,
@@ -36,14 +36,11 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
             permit = acquired => permit,
         };
-        let access = match &calls.endpoint.credential {
-            Credential::OAuth2(tokens) => Some(
-                tokens
-                    .access_token(calls.retries, refused.as_deref())
-                    .await?,
-            ),
-            _ => None,
-        };
+        if let Credential::OAuth2(tokens) = &calls.endpoint.credential {
+            tokens
+                .access_token(calls.retries, refused.as_deref())
+                .await?;
+        }
         let turn = async {
             if let Some(limiter) = &calls.limiter {
                 limiter.wait().await;
@@ -53,6 +50,17 @@ pub(crate) async fn fetch(calls: &Calls, call: &PageCall) -> Result<Option<Fetch
             biased;
             () = calls.stop.cancelled() => return Err(STOPPED.to_owned().into()),
             () = turn => {}
+        }
+        let access = match &calls.endpoint.credential {
+            Credential::OAuth2(tokens) => Some(
+                tokens
+                    .access_token(calls.retries, refused.as_deref())
+                    .await?,
+            ),
+            _ => None,
+        };
+        if calls.stop.is_cancelled() {
+            return Err(STOPPED.to_owned().into());
         }
         let attempted = once(calls, call, access.as_deref(), !renewed).await?;
         drop(permit);
