@@ -6,6 +6,7 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::auth::models::Secret;
+use crate::file_store::_helpers::aws_keys::environment_variable;
 use crate::file_store::_helpers::gcs_keys::gcs_builder;
 use crate::file_store::errors::StoreError;
 use crate::file_store::main::s3_builder::s3_builder;
@@ -53,7 +54,14 @@ pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
                 bucket,
                 service_account_key.as_ref().map(Secret::expose),
                 endpoint.as_deref(),
+                &environment_variable,
             )
+            .map_err(|reason| {
+                failed(object_store::Error::Generic {
+                    store: "GCS",
+                    source: reason.into(),
+                })
+            })?
             .build()
             .map_err(failed)?,
         ),

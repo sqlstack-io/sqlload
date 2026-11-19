@@ -1,8 +1,8 @@
-use crate::file_store::_helpers::gcs_keys::gcs_credentials;
+use crate::file_store::_helpers::gcs_keys::{gcs_builder, gcs_credentials};
 use crate::file_store::tests::test_types::GcsCredentialsTestCase;
 
 #[test]
-fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_then_the_first_in_googles_chain_wins()
+fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_then_the_first_in_googles_chain_wins_and_a_missing_named_file_fails_the_client()
 -> Result<(), String> {
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let home = directory.path().join("home");
@@ -18,6 +18,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             named: Some("sa.json"),
             home: Some("home"),
             expected_text: "the connection's service_account_key",
+            expected_builds: true,
         },
         GcsCredentialsTestCase {
             description: "GOOGLE_APPLICATION_CREDENTIALS wins over gcloud's file",
@@ -25,6 +26,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             named: Some("sa.json"),
             home: Some("home"),
             expected_text: "GOOGLE_APPLICATION_CREDENTIALS (",
+            expected_builds: true,
         },
         GcsCredentialsTestCase {
             description: "GOOGLE_APPLICATION_CREDENTIALS naming no file fails rather than falling through",
@@ -32,6 +34,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             named: Some("gone.json"),
             home: Some("home"),
             expected_text: "gone.json, which is not a file",
+            expected_builds: false,
         },
         GcsCredentialsTestCase {
             description: "without either, gcloud's application default credentials",
@@ -39,6 +42,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             named: None,
             home: Some("home"),
             expected_text: "gcloud's application default credentials (",
+            expected_builds: true,
         },
         GcsCredentialsTestCase {
             description: "with none of them, the machine's service account",
@@ -46,6 +50,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             named: None,
             home: Some("nobody"),
             expected_text: "the machine's service account",
+            expected_builds: true,
         },
     ];
     for test_case in &test_cases {
@@ -67,6 +72,13 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
         assert!(
             found.contains(test_case.expected_text),
             "{}: {found}",
+            test_case.description
+        );
+        let built = gcs_builder("lake", test_case.has_key.then_some("{}"), None, &variable);
+        assert_eq!(
+            built.is_ok(),
+            test_case.expected_builds,
+            "{}",
             test_case.description
         );
     }

@@ -73,7 +73,7 @@ use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::models::PgType;
 use crate::postgres_source::models::SourceColumn;
 use crate::postgres_source::models::SourceTable;
-use crate::project::constants::FILES_CONNECTION_KINDS;
+use crate::project::constants::SHAREABLE_CONNECTION_KINDS;
 use crate::project::models::CheckName;
 use crate::project::models::Contract;
 use crate::project::models::NullCursor;
@@ -538,12 +538,12 @@ pub(crate) async fn refuse_emptying(
     }
 }
 
-/// Whether a target's connection `name` may also be a Python source's own: only an s3, gcs or filesystem one (project checks refuse the rest).
+/// Whether a target's connection `name` may also be a Python source's own: only an s3 or filesystem one, which holds no credentials (project checks refuse the rest).
 pub(crate) fn shareable_connection(project: &ProjectConfig, name: &str) -> bool {
     project
         .connections
         .get(name)
-        .is_some_and(|connection| FILES_CONNECTION_KINDS.contains(&connection.kind()))
+        .is_some_and(|connection| SHAREABLE_CONNECTION_KINDS.contains(&connection.kind()))
 }
 
 /// The largest non-NULL value of cursor `column` (matched ignoring case) in `batch`, as cursor text; `None` when it has none.
@@ -1225,7 +1225,7 @@ async fn replan(
     })
 }
 
-/// What the table function is called with: the window to read (`ctx.cursor_value` / `ctx.cursor_end`) and the latest `ctx.state`; connections that targets write to are withheld, except the source's own s3, gcs or filesystem connection.
+/// What the table function is called with: the window to read (`ctx.cursor_value` / `ctx.cursor_end`) and the latest `ctx.state`; connections that targets write to are withheld, except the source's own s3 or filesystem connection.
 fn table_read(
     load: &PythonLoad<'_>,
     window: Option<&CursorWindow>,

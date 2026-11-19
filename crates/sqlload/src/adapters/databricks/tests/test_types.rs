@@ -41,3 +41,10 @@ pub(crate) struct UnloadedCopyTestCase {
     pub(crate) builds: bool,
     pub(crate) expected_statement: &'static str,
 }
+
+/// The external locations Databricks lists, and those it then reads files from itself, after its staging volume.
+pub(crate) struct WriterAcceptsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) locations: &'static [&'static str],
+    pub(crate) expected_pulls_from: &'static [&'static str],
+}
