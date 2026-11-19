@@ -12,9 +12,9 @@ names the route for every table.
 
 | Into | Parquet files in S3, GCS or a folder | CSV, JSON, NDJSON files | Postgres or Python rows |
 |------|---------------------------------|-------------------------|-------------------------|
-| DuckDB | DuckDB reads them with `read_parquet` | Read by SQLLoad, appended as Arrow | Appended as Arrow |
-| MotherDuck (beta) | In S3: MotherDuck's servers read them with `read_parquet`. In a folder: read by SQLLoad, appended as Arrow | Read by SQLLoad, appended as Arrow | Appended as Arrow |
-| Snowflake | `COPY` from an external stage over the bucket | `COPY` from an external stage over the bucket | Written as Parquet to the `load_method`'s stage, then `COPY` (or streamed or inserted, if the `load_method` says so) |
+| DuckDB | DuckDB reads them with `read_parquet` (in GCS, with an HMAC key) | Read by SQLLoad, appended as Arrow | Appended as Arrow |
+| MotherDuck (beta) | In S3, or in GCS with an HMAC key: MotherDuck's servers read them with `read_parquet`. Otherwise read by SQLLoad, appended as Arrow | Read by SQLLoad, appended as Arrow | Appended as Arrow |
+| Snowflake | In S3: `COPY` from an external stage over the bucket. Otherwise read by SQLLoad, then loaded as rows are | In S3: `COPY` from an external stage over the bucket. Otherwise as for Parquet files | Written as Parquet to the `load_method`'s stage, then `COPY` (or streamed or inserted, if the `load_method` says so) |
 | Databricks (beta) | In S3: `COPY INTO` where they lie, through an external location. In a folder: staged by SQLLoad in the volume, then `COPY INTO` | Read by SQLLoad, staged as Parquet in the volume, then `COPY INTO` | Written as Parquet to the volume, then `COPY INTO` |
 | BigQuery (beta) | In GCS, on a table that excludes `_sqlload_source_row`: BigQuery queries them where they lie into a staging table. Otherwise read by SQLLoad, streamed as Arrow into a staging table, then one query job | As for Parquet files | Streamed as Arrow into a staging table, then one query job |
 | ClickHouse | In S3: ClickHouse reads them with `s3()` into a staging table. In a folder: read by SQLLoad, sent as Arrow | Read by SQLLoad, sent as Arrow into a staging table | Sent as Arrow into a staging table, then swapped in by table or partition |
