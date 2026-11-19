@@ -48,15 +48,18 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             expected_text: "the machine's service account",
         },
     ];
-    let home_variable = if cfg!(windows) { "APPDATA" } else { "HOME" };
     for test_case in &test_cases {
+        let variables = [
+            ("GOOGLE_APPLICATION_CREDENTIALS", test_case.named),
+            ("HOME", test_case.home),
+            ("APPDATA", test_case.home),
+        ];
         let variable = |name: &str| {
-            let relative = match name {
-                "GOOGLE_APPLICATION_CREDENTIALS" => test_case.named,
-                other if other == home_variable => test_case.home,
-                _ => None,
-            };
-            relative.map(|relative| directory.path().join(relative).display().to_string())
+            variables
+                .iter()
+                .find(|(variable, _)| *variable == name)
+                .and_then(|(_, relative)| *relative)
+                .map(|relative| directory.path().join(relative).display().to_string())
         };
         let found = gcs_credentials(test_case.has_key, &variable)
             .map(|source| source.describe())

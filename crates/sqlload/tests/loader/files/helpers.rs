@@ -2,6 +2,7 @@ use arrow_array::RecordBatch;
 use sqlload::adapters::dispatch::main::session::execute::execute;
 use sqlload::adapters::dispatch::main::session::single_text::single_text;
 use sqlload::adapters::dispatch::models::Destination;
+use sqlload::auth::models::Secret;
 use sqlload::file_store::main::list_files::list_files;
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::read_file::read_file;
@@ -11,7 +12,8 @@ use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::main::render_plan::render_plan;
 use sqlload::loader::models::PlanOptions;
-use sqlload::store_paths::models::Location;
+use sqlload::store_paths::models::{Location, StoreKind};
+use sqlload_testkit::fake_gcs::constants::{BUCKET, SERVICE_ACCOUNT_KEY};
 
 use crate::helpers::{
     column_values, day_files, described_project, duckdb_text, load_with_options, local_store,
@@ -21,6 +23,20 @@ use crate::test_types::{
     ColumnNamesTestCase, FilesToFilesTestCase, NamesOutcome, ParquetFile, PlantedTestCase,
     SourceRowUpgradeTestCase,
 };
+
+/// The fake GCS server's bucket as a `gcs` connection, and its `[connections.files]` TOML.
+pub(crate) fn gcs_store(endpoint: &str, _: &std::path::Path) -> (StoreKind, String) {
+    let toml = format!(
+        "kind = \"gcs\"\nbucket = \"{BUCKET}\"\nendpoint = \"{endpoint}\"\nservice_account_key = '{SERVICE_ACCOUNT_KEY}'"
+    );
+    let store = StoreKind::Gcs {
+        bucket: BUCKET.to_owned(),
+        service_account_key: Some(Secret(SERVICE_ACCOUNT_KEY.to_owned())),
+        endpoint: Some(endpoint.to_owned()),
+        hmac: None,
+    };
+    (store, toml)
+}
 
 /// A run adding no source files.
 pub(crate) fn no_files() -> Result<Vec<(String, bytes::Bytes)>, String> {

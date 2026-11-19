@@ -76,7 +76,7 @@ const NOV_6_ESCAPED: ParquetFile = ParquetFile {
     extra: Some("w"),
 };
 
-const APPEND_RUNS: &[FilesRun] = &[
+pub(crate) const APPEND_RUNS: &[FilesRun] = &[
     FilesRun {
         files: &[NOV_3, NOV_4],
         expected_error: "",
@@ -88,7 +88,7 @@ const APPEND_RUNS: &[FilesRun] = &[
 ];
 
 /// Rows, distinct source files, and the newest `extra`; a column added in later files is NULL for older rows.
-const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_source_file) || ',' || count(extra) || ',' || max(day) FROM raw.scores";
+pub(crate) const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_source_file) || ',' || count(extra) || ',' || max(day) FROM raw.scores";
 
 /// `0` while the table was never created.
 const NO_TABLE: &str =

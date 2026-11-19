@@ -1,4 +1,9 @@
-//! Where SQLLoad's GCS clients get their credentials: the connection's key, else Google's application default credentials.
+//! The GCS client SQLLoad reads a bucket with, and where it gets its credentials: the connection's key, else Google's application default credentials.
+
+use object_store::ClientOptions;
+use object_store::gcp::GoogleCloudStorageBuilder;
+
+use crate::file_store::_helpers::aws_keys::environment_variable;
 
 /// Where a GCS client's credentials come from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,4 +59,26 @@ pub(crate) fn gcs_credentials(
         .map_or(GcsCredentials::Machine, |path| GcsCredentials::Gcloud {
             path: path.display().to_string(),
         }))
+}
+
+/// The GCS client builder for `bucket`, signed in with the service-account key's JSON text `key`, else Google's application default credentials (the file `GOOGLE_APPLICATION_CREDENTIALS` names, gcloud's, else the machine's service account); `endpoint` replaces Google's, as for an emulator.
+pub(crate) fn gcs_builder(
+    bucket: &str,
+    key: Option<&str>,
+    endpoint: Option<&str>,
+) -> GoogleCloudStorageBuilder {
+    let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
+    match (key, gcs_credentials(key.is_some(), &environment_variable)) {
+        (Some(key), _) => builder = builder.with_service_account_key(key),
+        (None, Ok(GcsCredentials::Named { path })) => {
+            builder = builder.with_application_credentials(path);
+        }
+        (None, _) => {}
+    }
+    if let Some(endpoint) = endpoint {
+        builder = builder.with_base_url(endpoint).with_client_options(
+            ClientOptions::new().with_allow_http(endpoint.starts_with("http://")),
+        );
+    }
+    builder
 }
