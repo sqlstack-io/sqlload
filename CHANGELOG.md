@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.77.0](https://github.com/sqlstack-io/sqlload/compare/v0.76.0...v0.77.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **snowflake:** a Snowflake S3 unload into Databricks that no external location covers now fails `plan` with the fix, instead of loading through SQLLoad. A Snowflake table read through an unload is limited to 32,767 cursor windows.
+
+### Features
+
+* **snowflake:** Databricks and ClickHouse read a Snowflake S3 unload themselves ([#346](https://github.com/sqlstack-io/sqlload/issues/346)) ([fac8e30](https://github.com/sqlstack-io/sqlload/commit/fac8e301f3a43197f3c77fefe7f56b8f52b5a504))
+
 ## [0.76.0](https://github.com/sqlstack-io/sqlload/compare/v0.75.0...v0.76.0) (2026-11-18)
 
 
