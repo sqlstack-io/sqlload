@@ -198,7 +198,7 @@ fn given_tables_stopped_for_the_same_reasons_when_printing_errors_then_they_shar
 }
 
 #[test]
-fn given_tables_on_their_destinations_when_printing_the_plan_then_each_destination_is_named_and_each_route_names_it_when_there_are_several()
+fn given_tables_on_their_destinations_when_printing_the_plan_then_each_destination_is_named_and_each_route_names_it_and_one_table_says_why_sqlload_reads_parquet()
  {
     let test_cases = [
         RouteLinesTestCase {
@@ -219,6 +219,18 @@ fn given_tables_on_their_destinations_when_printing_the_plan_then_each_destinati
                 "to  DuckDB dev",
                 "route   read as Arrow -> DuckDB takes Arrow",
                 "route   read parquet into Arrow -> DuckDB takes Arrow",
+            ],
+        },
+        RouteLinesTestCase {
+            description: "a plan of one Parquet table the destination could read itself says why SQLLoad reads it",
+            tables: &[RoutedTable {
+                name: "b",
+                target: "dev",
+                route: masked_files_route,
+            }],
+            expected_lines: &[
+                "route   read parquet into Arrow -> DuckDB takes Arrow",
+                "why     SQLLoad reads the files because email is masked with hmac",
             ],
         },
         RouteLinesTestCase {
@@ -264,7 +276,9 @@ fn given_tables_on_their_destinations_when_printing_the_plan_then_each_destinati
         };
         let lines: Vec<String> = view_lines(&text_view(&plan))
             .into_iter()
-            .filter(|line| line.starts_with("to  ") || line.contains("── route"))
+            .filter(|line| {
+                line.starts_with("to  ") || line.contains("── route") || line.contains("── why")
+            })
             .map(|line| {
                 line.trim_start_matches(['│', '├', '└', '─', ' '])
                     .to_owned()

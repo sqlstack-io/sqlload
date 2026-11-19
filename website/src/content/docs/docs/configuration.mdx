@@ -161,8 +161,8 @@ SQLLoad reads and writes the bucket with the first credentials it finds, in this
 
 1. The connection's `service_account_key`.
 2. The key file `GOOGLE_APPLICATION_CREDENTIALS` names, which must exist.
-3. gcloud's application default credentials (`gcloud auth application-default login`).
-4. The service account of the machine SQLLoad runs on, from its metadata server.
+3. gcloud's application default credentials (`gcloud auth application-default login`) (Beta).
+4. The service account of the machine SQLLoad runs on, from its metadata server (Beta).
 
 They need `roles/storage.objectViewer` on the bucket to read it, and `roles/storage.objectUser`
 to write files or remove them after a load. `sqlload debug` shows where each GCS connection's
@@ -171,7 +171,7 @@ credentials come from, never the credentials.
 DuckDB and MotherDuck read GCS only with an HMAC key, not a service-account key. To have them read
 a bucket's Parquet files themselves, create an HMAC key for a service account that can read it
 (Cloud Storage → Settings → Interoperability) and set `hmac_key_id` and `hmac_secret`. Without one,
-SQLLoad reads the files and sends their rows, and `plan` says why.
+SQLLoad reads the files and sends their rows, and `sqlload plan -v <table>` says why.
 
 ### `filesystem`
 

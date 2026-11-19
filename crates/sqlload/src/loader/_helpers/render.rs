@@ -45,7 +45,8 @@ use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
-use crate::routing::models::{Route, Step, Store};
+use crate::routing::constants::LOADER_READS_BECAUSE;
+use crate::routing::models::{FileFormat, Route, Step, Store};
 use crate::row_batches::main::flatten_lines::flatten_lines;
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
@@ -679,7 +680,13 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
     }
     let why_shown =
         (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
-            || spec.warehouse_source.is_some();
+            || spec.warehouse_source.is_some()
+            || table.route.as_ref().is_some_and(|route| {
+                route.reason.starts_with(LOADER_READS_BECAUSE)
+                    && route.steps.iter().any(|step| {
+                        matches!(step, Step::UseFiles(files) if files.format == FileFormat::Parquet)
+                    })
+            });
     let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !why_shown);
     details.extend(table.route.as_ref().map(|route| {
         let text = route_text(table, route);
