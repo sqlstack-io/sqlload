@@ -100,12 +100,12 @@ holds now. `payments` reads every order's payments again and merges them on thei
 
 How `rest_api` settings map:
 
-- `client.base_url` and the credentials go in the `http` connection; `auth` is an argument of
-  `sl.http`. `bearer` is `sl.bearer()`, `api_key` is `sl.api_key(header=...)` or
-  `sl.api_key(query=...)`, `http_basic` is `sl.basic()`, and `oauth2_client_credentials` is
-  `sl.oauth2_client_credentials(token_url)`. The OAuth2 password grant, which dlt's `rest_api` has
-  no auth type for ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L89-L94)), is
-  `sl.oauth2_password(token_url)`; see [OAuth2](/docs/sources/python/#oauth2).
+- `client.base_url`, the credentials and `auth` go in the [`http` connection](/docs/configuration/#http).
+  `bearer` is `auth = { kind = "bearer" }`, `api_key` is `{ kind = "api_key", header = "..." }` or
+  `{ kind = "api_key", query = "..." }`, `http_basic` is `{ kind = "basic" }`, and
+  `oauth2_client_credentials` is `{ kind = "oauth2_client_credentials", token_url = "..." }`. The
+  OAuth2 password grant, which dlt's `rest_api` has no auth type for ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L89-L94)), is
+  `{ kind = "oauth2_password", token_url = "..." }`; see [OAuth2](/docs/sources/python/#oauth2).
 - Paginators: `json_link` is `sl.next_link("$.next")`, `header_link` is `sl.link_header()`,
   `offset` is `sl.offset(limit=...)`, `page_number` is `sl.page_number()`, `cursor` is
   `sl.cursor(pointer, param)`, and `single_page` is `sl.single()`. dlt's `auto` guesses one
@@ -127,7 +127,9 @@ How `rest_api` settings map:
   `transform=` on the job: a function called once per page with the page's rows; see
   [Transforming each page](/docs/sources/python/#transforming-each-page).
 - `response_actions` that ignore a status are `on_status={404: "skip"}`. 429, 5xx and dropped
-  connections are retried, honouring `Retry-After`; `retries=` on `sl.http` sets how many times.
+  connections are retried, honouring `Retry-After`; `retries` on the connection sets how many times.
+  A limit on the API's request rate or open requests is `rate_limit` or `max_in_flight` on the
+  connection, shared by every resource loading in the run.
 - An API that returns each row as a list of cells, such as a spreadsheet's or an EAM grid's, is
   `cells=sl.cells(..., name=...)`, whether each cell names its own column or the response lists
   them; see [Rows of cells](/docs/sources/python/#rows-of-cells).

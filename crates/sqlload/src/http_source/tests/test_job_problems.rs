@@ -8,35 +8,34 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
     let test_cases = [
         JobProblemsTestCase {
             description: "a paginate with a next link and a selector is fine",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":3,"rate_limit":"10/s"},"path":"/orders","paginator":{"kind":"next_link","pointer":"$.next"},"select":"$.items"}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"next_link","pointer":"$.next"},"select":"$.items"}"#,
             expected_problems: &[],
         },
         JobProblemsTestCase {
-            description: "a bad selector, rate and status are all reported",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0,"rate_limit":"fast"},"path":"/orders","paginator":{"kind":"single"},"select":"items","on_status":{"999":"skip"}}"#,
+            description: "a bad selector and status are both reported",
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"items","on_status":{"999":"skip"}}"#,
             expected_problems: &[
                 "select \"items\" is not a path such as \"$\", \"$.items\" or \"$.items[*].id\"; use dotted field names after \"$\"",
-                "rate_limit \"fast\" is not a rate such as \"10/s\", \"600/m\" or \"1000/h\"",
                 "on_status 999 is not an HTTP status",
             ],
         },
         JobProblemsTestCase {
             description: "a paginate path with a placeholder needs fan_out",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/orders/{id}","paginator":{"kind":"single"}}"#,
             expected_problems: &[
                 "paginate path /orders/{id} has the placeholder {id}; use fan_out to fill it",
             ],
         },
         JobProblemsTestCase {
             description: "a fan-out over a paginate whose field does not fill the placeholder",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{order_id}/items","paginator":{"kind":"single"},"concurrency":4,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders/{order_id}/items","paginator":{"kind":"single"},"concurrency":4,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
             expected_problems: &[
                 "fan-out path /orders/{order_id}/items needs {order_id}, but over gives only id",
             ],
         },
         JobProblemsTestCase {
             description: "a fan-out over a paginate without a key field, and zero concurrency",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":0,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":0,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items"}}"#,
             expected_problems: &[
                 "fan_out concurrency must be at least 1",
                 "fan_out over a paginate needs a select naming each key's field, such as \"$.items[*].id\", not \"$.items\"",
@@ -44,33 +43,33 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "listed keys must name every placeholder of a path with two",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
             expected_problems: &[
                 "fan-out path /{region}/orders/{id} needs {id}, which the key {\"region\":\"uk\"} lacks",
             ],
         },
         JobProblemsTestCase {
             description: "a third level may use the keys of both levels above it",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/i/{item_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
             expected_problems: &[],
         },
         JobProblemsTestCase {
             description: "a third level's placeholder that no level above gives",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i/{item_id}/n/{customer_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/i/{item_id}/n/{customer_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].item_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
             expected_problems: &[
                 "fan-out path /o/{order_id}/i/{item_id}/n/{customer_id} needs {customer_id}, but over gives only order_id, item_id",
             ],
         },
         JobProblemsTestCase {
             description: "a level that picks a key name a level above already gives",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].order_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/n","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{order_id}/i","paginator":{"kind":"single"},"select":"$.items[*].order_id","concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].order_id"}}}"#,
             expected_problems: &[
                 "fan_out over picks order_id, which a level above already gives; name it apart with key=",
             ],
         },
         JobProblemsTestCase {
             description: "a pointer that is not a path, a zero limit and a bad header",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0,"headers":{"X Bad":"1"}},"path":"/o","paginator":{"kind":"next_link","pointer":"next"}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop","headers":{"X Bad":"1"}},"path":"/o","paginator":{"kind":"next_link","pointer":"next"}}"#,
             expected_problems: &[
                 "paginator pointer \"next\" is not a path such as \"$.next\" or \"$.meta.next_cursor\"",
                 "header \"X Bad\" is not a valid HTTP header name and value",
@@ -78,31 +77,31 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "an offset limit of zero",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":0}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":0}}"#,
             expected_problems: &["sl.offset limit must be at least 1"],
         },
         JobProblemsTestCase {
             description: "a page-number read-ahead of zero pages",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"page_number","param":"p","start":1,"read_ahead":0}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"page_number","param":"p","start":1,"read_ahead":0}}"#,
             expected_problems: &["read_ahead must be at least 1 page"],
         },
         JobProblemsTestCase {
             description: "a read-ahead of more pages than the cap",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":10,"read_ahead":101}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"offset","param":"offset","limit_param":"limit","limit":10,"read_ahead":101}}"#,
             expected_problems: &[
                 "read_ahead 101 is more than 100 pages at once; most APIs refuse that many open requests",
             ],
         },
         JobProblemsTestCase {
             description: "a cursor pointer through a list",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"cursor","pointer":"$.meta[*].next","param":"after"}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"cursor","pointer":"$.meta[*].next","param":"after"}}"#,
             expected_problems: &[
                 "paginator pointer \"$.meta[*].next\" is not a path such as \"$.next\" or \"$.meta.next_cursor\"",
             ],
         },
         JobProblemsTestCase {
             description: "key_path on a fan-out that feeds keys to the level below, and key_path at the whole record",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$"},"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/p/{x}","paginator":{"kind":"single"},"select":"$.items[*].id","concurrency":1,"key_path":{"path":"$.x"},"over":{"kind":"values","values":[1]}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$"},"over":{"kind":"fan_out","client":{"connection":"shop"},"path":"/p/{x}","paginator":{"kind":"single"},"select":"$.items[*].id","concurrency":1,"key_path":{"path":"$.x"},"over":{"kind":"values","values":[1]}}}"#,
             expected_problems: &[
                 "fan_out's over picks keys with its select; key_path checks the records of the fan-out that loads rows",
                 "key_path \"$\" is not a path such as \"$.issueId\"; use dotted field names after \"$\"",
@@ -110,19 +109,19 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "key_path on a request filling two placeholders, one in the path and one in json_body",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orgs/{org}/issues","method":"POST","json_body":{"ids":["{id}"]},"paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$.issueId"},"over":{"kind":"values","values":[{"org":1,"id":2}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orgs/{org}/issues","method":"POST","json_body":{"ids":["{id}"]},"paginator":{"kind":"single"},"concurrency":1,"key_path":{"path":"$.issueId"},"over":{"kind":"values","values":[{"org":1,"id":2}]}}"#,
             expected_problems: &[
                 "key_path checks each record against the one key its request sent, but the request fills 2 placeholders (org, id), so a record could match the wrong one; fan out over one placeholder",
             ],
         },
         JobProblemsTestCase {
             description: "indexes in sl.parent and key_path are fine",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"last","path":"$.changes[-1].id","from":{"kind":"parent","levels":1}},{"name":"first","path":"$.items[0].to"}],"key_path":{"path":"$.keys[0]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"last","path":"$.changes[-1].id","from":{"kind":"parent","levels":1}},{"name":"first","path":"$.items[0].to"}],"key_path":{"path":"$.keys[0]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
             expected_problems: &[],
         },
         JobProblemsTestCase {
             description: "unsupported syntax in sl.parent and key_path is refused, naming the field and the path",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"first","path":"$.items[0].to"},{"name":"all","path":"$.items[*].id","from":{"kind":"parent","levels":1}}],"key_path":{"path":"$.keys[0:1]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"select":"$.issues[*].histories[*]","fields":[{"name":"first","path":"$.items[0].to"},{"name":"all","path":"$.items[*].id","from":{"kind":"parent","levels":1}}],"key_path":{"path":"$.keys[0:1]","from":{"kind":"parent","levels":1}},"over":{"kind":"values","values":[1]}}"#,
             expected_problems: &[
                 "fields[\"all\"]: field path \"$.items[*].id\" uses the wildcard [*], which one column can't hold; take one item with [n] or [-1], or select the list's items as rows",
                 "key_path \"$.keys[0:1]\" uses the slice [0:1], which field paths don't support; they take dotted names and [n] or [-1] indexes, such as \"$.items[0].id\"",
@@ -130,35 +129,35 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "a paginate selecting a key field",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id"}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id"}"#,
             expected_problems: &[
                 "select \"$.items[*].id\" names a key field (id); that form is for fan_out's over, so select the rows instead",
             ],
         },
         JobProblemsTestCase {
             description: "listed values over a path without a placeholder",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[1,2]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"values","values":[1,2]}}"#,
             expected_problems: &[
                 "fan-out path /orders has no placeholder, so every key would send the same request; add one such as {id} to the path or json_body",
             ],
         },
         JobProblemsTestCase {
             description: "a fan-out whose own select names a key field",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[1]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[1]}}"#,
             expected_problems: &[
                 "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
             ],
         },
         JobProblemsTestCase {
             description: "fields on a fan-out's over are refused; they belong to the fan-out's rows",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id","fields":[{"name":"id","path":"$.id"}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id","fields":[{"name":"id","path":"$.id"}]}}"#,
             expected_problems: &[
                 "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
             ],
         },
         JobProblemsTestCase {
             description: "a one-level fan-out's own select problem comes before its listed key's, as before multi-level fan-out",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/{region}/orders/{id}","paginator":{"kind":"single"},"select":"$.items[*].sku","concurrency":2,"over":{"kind":"values","values":[{"region":"uk"}]}}"#,
             expected_problems: &[
                 "select \"$.items[*].sku\" names a key field (sku); that form is for fan_out's over, so select the rows instead",
                 "fan-out path /{region}/orders/{id} needs {id}, which the key {\"region\":\"uk\"} lacks",
@@ -166,7 +165,7 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "a one-level over's fields problem comes before its placeholder problem, as before multi-level fan-out",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/shops/{shop}/orders","paginator":{"kind":"single"},"select":"$.items[*].id","keep_record":"raw"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/orders/{id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/shops/{shop}/orders","paginator":{"kind":"single"},"select":"$.items[*].id","keep_record":"raw"}}"#,
             expected_problems: &[
                 "fan_out's over picks keys with its select; fields and keep_record are for the fan-out's own rows",
                 "fan_out over path /shops/{shop}/orders has the placeholder {shop}; over must be a plain paginate",
@@ -174,24 +173,24 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "body placeholders filled from a paginate's keys; a GraphQL query's braces stay text",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"query":"{ order { lines } }","order":{"id":"{id}"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"query":"{ order { lines } }","order":{"id":"{id}"}},"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
             expected_problems: &[],
         },
         JobProblemsTestCase {
             description: "a body placeholder no level above gives",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"order":{"id":"{order_id}"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"order":{"id":"{order_id}"}},"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
             expected_problems: &["fan-out json_body needs {order_id}, but over gives only id"],
         },
         JobProblemsTestCase {
             description: "a listed key lacking a body placeholder",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"region":"{region}","id":"{id}"},"over":{"kind":"values","values":[{"id":1}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"json_body":{"region":"{region}","id":"{id}"},"over":{"kind":"values","values":[{"id":1}]}}"#,
             expected_problems: &[
                 "fan-out json_body needs {region}, which the key {\"id\":1} lacks",
             ],
         },
         JobProblemsTestCase {
             description: "a batch of zero, with a path placeholder and a placeholder within other text",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup/{id}","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":0,"json_body":{"q":"id in {id}"},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup/{id}","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":0,"json_body":{"q":"id in {id}"},"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}"#,
             expected_problems: &[
                 "fan_out batch must be at least 1",
                 "a batched fan-out sends many keys in one request, so its path /lookup/{id} cannot have the placeholder {id}; put the keys in json_body",
@@ -200,7 +199,7 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "a batch without a body to put its keys in",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":100,"over":{"kind":"values","values":[1]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":100,"over":{"kind":"values","values":[1]}}"#,
             expected_problems: &[
                 "fan-out path /lookup has no placeholder, so every key would send the same request; add one such as {id} to the path or json_body",
                 "fan_out batch= sends each batch's keys as a list in json_body, so it needs json_body with a placeholder, such as {\"ids\": \"{id}\"}",
@@ -208,19 +207,19 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "a batched level used as another fan-out's over",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}/l/{line_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":10,"select":"$.items[*].line_id","json_body":{"ids":"{id}"},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{id}/l/{line_id}","paginator":{"kind":"single"},"concurrency":2,"over":{"kind":"fan_out","client":{"connection":"shop"},"path":"/lookup","method":"POST","paginator":{"kind":"single"},"concurrency":2,"batch":10,"select":"$.items[*].line_id","json_body":{"ids":"{id}"},"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/orders","paginator":{"kind":"single"},"select":"$.items[*].id"}}}"#,
             expected_problems: &[
                 "batch= is for the fan-out that loads rows; a fan_out used as over sends one request per key",
             ],
         },
         JobProblemsTestCase {
             description: "cells named by a listed column, by the header row and by each cell itself are fine, and so is an error_path",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"error_path":"$.Result.ErrorAlert","cells":{"pointer":"$.DATAFIELD","value":["$.FIELDVALUE"],"name":{"kind":"field","path":"$.FIELDNAME"}},"over":{"kind":"values","values":[{"id":1}]}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"error_path":"$.Result.ErrorAlert","cells":{"pointer":"$.DATAFIELD","value":["$.FIELDVALUE"],"name":{"kind":"field","path":"$.FIELDNAME"}},"over":{"kind":"values","values":[{"id":1}]}}"#,
             expected_problems: &[],
         },
         JobProblemsTestCase {
             description: "a listed column source that is not a path, and a self-named cell's name path through a list",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"field","path":"$.names[*].text"}},"over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/sheets","paginator":{"kind":"single"},"select":"$.rows[*].id","cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"listed","from":"columns","key":"columnId","id_key":"id","name_key":"title"}}}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/grid/{id}","paginator":{"kind":"single"},"select":"$.rows","concurrency":1,"cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"field","path":"$.names[*].text"}},"over":{"kind":"paginate","client":{"connection":"shop"},"path":"/sheets","paginator":{"kind":"single"},"select":"$.rows[*].id","cells":{"pointer":"$.cells","value":["$.value"],"name":{"kind":"listed","from":"columns","key":"columnId","id_key":"id","name_key":"title"}}}}"#,
             expected_problems: &[
                 "cells path \"$.names[*].text\" cannot pick from a list with [*]",
                 "cells path \"columns\" is not a path such as \"$.cells\" or \"$.value\"",
@@ -229,14 +228,14 @@ fn given_a_job_definition_when_checking_it_then_every_problem_is_found_before_an
         },
         JobProblemsTestCase {
             description: "a header-row cells pointer that is not one field of the row",
-            job: r#"{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/grid","paginator":{"kind":"single"},"select":"$.rows","cells":{"pointer":"$","value":["$.v"],"name":{"kind":"header_row"}}}"#,
+            job: r#"{"kind":"paginate","client":{"connection":"shop"},"path":"/grid","paginator":{"kind":"single"},"select":"$.rows","cells":{"pointer":"$","value":["$.v"],"name":{"kind":"header_row"}}}"#,
             expected_problems: &[
                 "cells pointer \"$\" must name one field of the row, such as \"$.cells\"",
             ],
         },
         JobProblemsTestCase {
             description: "an error_path at the whole response, and one through a list on the level that feeds keys",
-            job: r#"{"kind":"fan_out","client":{"connection":"shop","retries":0},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"error_path":"$","over":{"kind":"paginate","client":{"connection":"shop","retries":0},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id","error_path":"$.errors[*].message"}}"#,
+            job: r#"{"kind":"fan_out","client":{"connection":"shop"},"path":"/o/{id}","paginator":{"kind":"single"},"concurrency":1,"error_path":"$","over":{"kind":"paginate","client":{"connection":"shop"},"path":"/o","paginator":{"kind":"single"},"select":"$.items[*].id","error_path":"$.errors[*].message"}}"#,
             expected_problems: &[
                 "error_path \"$\" is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]",
                 "error_path \"$.errors[*].message\" is not a path such as \"$.errors\" or \"$.result.error\"; name one value, without [*]",

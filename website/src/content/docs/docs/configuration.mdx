@@ -210,16 +210,53 @@ See [ODBC](/docs/sources/odbc/#connection).
 ### `http`
 
 For [Python HTTP sources](/docs/sources/python/#http-apis); its settings reach table functions as
-`ctx.connection`.
+`ctx.connection`. The connection holds everything about the API that every request shares: how
+requests authenticate, the limits they stay under together, and how often a failed one is retried.
 
-| Key | Meaning |
-|-----|---------|
-| `base_url` | The API's base URL. |
-| `token` | For `sl.bearer()` and `sl.api_key(...)`. |
-| `username`, `password` | For `sl.basic()`, and for `sl.oauth2_password(...)`. |
-| `client_id`, `client_secret` | For `sl.oauth2_client_credentials(...)`, and for `sl.oauth2_refresh_token(...)` or `sl.oauth2_password(...)` when the API wants the client too. |
-| `refresh_token` | For `sl.oauth2_refresh_token(...)`. |
-| `headers` | Headers sent with every request. |
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `base_url` | required | The API's base URL. |
+| `auth` | none | How requests authenticate, a table such as `{ kind = "bearer" }`; see the table below. Without it, requests carry no credential. |
+| `token` | none | For `auth` `bearer` and `api_key`. Use `${ENV:NAME}`. |
+| `username`, `password` | none | For `auth` `basic` and `oauth2_password`. |
+| `client_id`, `client_secret` | none | For `auth` `oauth2_client_credentials`, and for `oauth2_refresh_token` or `oauth2_password` when the API wants the client too. |
+| `refresh_token` | none | For `auth` `oauth2_refresh_token`. |
+| `headers` | none | Headers sent with every request. |
+| `rate_limit` | none | Requests started per second, minute or hour: `"10/s"`, `"600/m"` or `"1000/h"`. |
+| `max_in_flight` | none | The most requests open at once, from 1 to 10,000. |
+| `retries` | 5 | Retries of a request that failed with a transport error, 429 or a 5xx, at most 100. |
+
+`rate_limit` and `max_in_flight` hold for every request to the connection in one `sqlload load`:
+every table, page, [`read_ahead`](/docs/sources/python/#reading-pages-ahead) request, fan-out key
+and retry. A retried request takes a turn and a place again. Separate processes don't share them,
+so load one API's tables in one `sqlload load`; in an orchestrator, that means one task per API, not
+one per endpoint.
+
+| `auth` | Sends |
+|--------|-------|
+| `{ kind = "bearer" }` | `Authorization: Bearer <token>`. |
+| `{ kind = "api_key", header = "X-Api-Key" }` | `token` in that header. |
+| `{ kind = "api_key", query = "key" }` | `token` in that query parameter. |
+| `{ kind = "basic" }` | Basic auth with `username` and `password`. |
+| `{ kind = "oauth2_client_credentials", token_url = "...", scope = "...", client_auth = "basic" }` | `Authorization: Bearer <access token>`, the token `token_url` issues for `client_id` and `client_secret`. `scope` is optional; `client_auth` is `basic` (default) or `post`. See [OAuth2](/docs/sources/python/#oauth2). |
+| `{ kind = "oauth2_refresh_token", token_url = "..." }` | The same, with the token issued for `refresh_token`. Takes `scope` and `client_auth` too. |
+| `{ kind = "oauth2_password", token_url = "..." }` | The same, with the token issued for `username` and `password` (the resource-owner password grant). Takes `scope` and `client_auth` too. |
+
+```toml
+[connections.shop]
+kind = "http"
+base_url = "https://api.example.com/v1"
+token = "${ENV:SHOP_TOKEN}"
+auth = { kind = "bearer" }
+rate_limit = "10/s"
+max_in_flight = 4
+```
+
+`plan` shows each `http` connection's settings, never its credentials:
+
+```text
+http  shop  rate_limit 10/s, max_in_flight 4, retries 5, auth bearer
+```
 
 ## Targets
 

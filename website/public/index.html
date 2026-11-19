@@ -251,7 +251,7 @@ Objects (1)                                                                     
 <pre class="terminal"><span class="kw">import</span> sqlload <span class="kw">as</span> sl
 
 shop = sl.source(<span class="str">"shop"</span>, <span class="arg">connection</span>=<span class="str">"shop"</span>)
-api = sl.http(shop, <span class="arg">auth</span>=sl.bearer(), <span class="arg">rate_limit</span>=<span class="str">"10/s"</span>)
+api = sl.http(shop)  <span class="cm"># auth, rate_limit, max_in_flight: [connections.shop]</span>
 
 <span class="kw">@</span>shop.table(<span class="arg">unique_key</span>=<span class="str">"order_id"</span>)
 <span class="kw">def</span> orders(ctx):

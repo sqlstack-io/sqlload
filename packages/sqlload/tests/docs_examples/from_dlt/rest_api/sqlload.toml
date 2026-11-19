@@ -5,6 +5,8 @@ default_target = "warehouse"
 kind = "http"
 base_url = "${ENV:SHOP_API_URL}"
 token = "${ENV:SHOP_TOKEN}"
+auth = { kind = "bearer" }
+retries = 5
 
 [connections.duckdb]
 kind = "duckdb"

@@ -6,6 +6,7 @@ use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::models::Destination;
 use crate::column_types::models::{ColumnType, Warehouse};
 use crate::files_source::models::{AfterLoad, OnEmpty};
+use crate::http_source::main::http_connection_line::http_connection_lines;
 use crate::load_events::main::begin_step::begin_step;
 use crate::load_events::main::end_step::end_step;
 use crate::load_events::models::StepEnd;
@@ -1575,6 +1576,7 @@ pub(crate) async fn found_sources<'a>(
     options: &PlanOptions,
 ) -> Result<FoundSources<'a>, LoaderError> {
     let mut found = FoundSources::default();
+    found.plan.http = http_connection_lines(&project.connections);
     let mut drained_sources: Vec<(usize, DrainedFiles)> = Vec::new();
     for (source_name, source) in &project.sources {
         begin_step(source_name, "listing tables");

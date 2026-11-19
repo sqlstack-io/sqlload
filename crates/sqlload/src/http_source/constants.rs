@@ -1,5 +1,14 @@
 use std::time::Duration;
 
+/// Retries of a failed request when the connection sets no `retries`.
+pub const DEFAULT_RETRIES: u32 = 5;
+
+/// The most retries a connection may set.
+pub const MAX_RETRIES: u32 = 100;
+
+/// The largest `max_in_flight` a connection may set.
+pub const MAX_IN_FLIGHT: usize = 10_000;
+
 /// The delay before the first retry; each later one doubles it.
 pub const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
 

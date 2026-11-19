@@ -105,6 +105,14 @@ The start is `≥` when the bound row is read again and `>` when it isn't, follo
 comes from: `(max)`, the warehouse maximum, `(max − 5s)` with a `lookback`, `--start-cursor`, or
 `from state "…" (run 20d2b872)` for a logged state.
 
+A project with an [`http` connection](/docs/configuration/#http) starts with a line for each,
+showing the limits every request to it shares in the run, its retries and its auth scheme, never its
+credentials:
+
+```console
+http  shop  rate_limit 10/s, max_in_flight 4, retries 5, auth bearer
+```
+
 A child line under a table means it does something unlike the defaults, or needs a look:
 
 | Line | Means |
