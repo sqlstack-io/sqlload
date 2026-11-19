@@ -1084,8 +1084,13 @@ impl Publisher {
         source: UnloadedSource<'_>,
     ) -> Result<DirectLoaded, LoaderError> {
         let columns = staged_columns(&self.table);
+        let merge_key = match &self.table.mode {
+            WriteMode::Merge { unique_key, .. } => unique_key.as_slice(),
+            _ => &[],
+        };
         let batch = UnloadedBatch {
             source,
+            merge_key,
             read: &self.table.read_columns,
             write_columns: &self.table.schema.write_columns,
             target: write_target(

@@ -40,6 +40,7 @@ impl BigQueryWriter {
             constants: target.constants,
             compat: target.compat,
             batch: target.batch,
+            merge_key: batch.merge_key,
             builds: target.builds,
             load_id: target.load_id,
             loaded_at: batch.loaded_at,

@@ -30,8 +30,10 @@ pub(crate) struct ReadColumnsTestCase {
 
 pub(crate) struct SelectQueryTestCase {
     pub(crate) description: &'static str,
-    /// The query table's `sql`.
-    pub(crate) sql: &'static str,
+    /// The query table's `sql`; `None` reads the table itself.
+    pub(crate) sql: Option<&'static str>,
+    /// The instant, in milliseconds, a table is read as of.
+    pub(crate) as_of: Option<i64>,
     pub(crate) expected_query: &'static str,
 }
 

@@ -50,10 +50,10 @@ fn given_a_bigquery_source_on_the_targets_connection_when_bigquery_selects_its_r
     ];
     let test_cases = [
         SelectedInsertTestCase {
-            description: "into the staging table: each read column by its name in the source's query, cast without parameters, JSON as its text, a constant from its value, a column the source lacks NULL, a merge's row number after the earlier batches', and the batch's load id and time",
+            description: "into the staging table: each read column by its name in the source's query, cast without parameters, JSON as its text, a constant from its value, a column the source lacks NULL, a merge's row number after the earlier batches' among the rows sharing its key (a constant key column groups every row alike), and the batch's load id and time",
             columns: columns.clone(),
             builds: false,
-            expected_insert: "INSERT INTO `p`.`raw`.`orders` (`id`, `amount`, `doc`, `region`, `gone`, `_sqlload_row`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT CAST(u.`Order ID` AS INT64), CAST(u.`amount` AS NUMERIC), TO_JSON_STRING(u.`doc`), CAST('eu' AS STRING), CAST(NULL AS STRING), 3 * 281474976710656 + ROW_NUMBER() OVER () - 1, CAST('L1' AS STRING), CAST('2026-11-06T00:00:00Z' AS TIMESTAMP) FROM (SELECT `Order ID`, `amount`, `doc` FROM `p.marts.orders`) AS u",
+            expected_insert: "INSERT INTO `p`.`raw`.`orders` (`id`, `amount`, `doc`, `region`, `gone`, `_sqlload_row`, `_sqlload_load_id`, `_sqlload_loaded_at`) SELECT CAST(u.`Order ID` AS INT64), CAST(u.`amount` AS NUMERIC), TO_JSON_STRING(u.`doc`), CAST('eu' AS STRING), CAST(NULL AS STRING), 3 * 281474976710656 + ROW_NUMBER() OVER (PARTITION BY u.`Order ID`) - 1, CAST('L1' AS STRING), CAST('2026-11-06T00:00:00Z' AS TIMESTAMP) FROM (SELECT `Order ID`, `amount`, `doc` FROM `p.marts.orders`) AS u",
         },
         SelectedInsertTestCase {
             description: "into a build table JSON stays JSON",
@@ -70,6 +70,7 @@ fn given_a_bigquery_source_on_the_targets_connection_when_bigquery_selects_its_r
             constants: &constants,
             compat: Compat::Sqlload,
             batch: 3,
+            merge_key: &["id".to_owned(), "region".to_owned()],
             builds: test_case.builds,
             load_id: "L1",
             loaded_at: "2026-11-06T00:00:00Z",

@@ -23,6 +23,8 @@ pub(crate) struct SelectedLoad<'a> {
     pub compat: Compat,
     /// The batch, from 1: a merge's row number counts after earlier batches'.
     pub batch: u64,
+    /// A merge's `unique_key`: its row number counts among the rows sharing a key, which are all its dedupe compares, so BigQuery numbers them in parallel rather than on one worker.
+    pub merge_key: &'a [String],
     pub builds: bool,
     pub load_id: &'a str,
     pub loaded_at: &'a str,
@@ -30,7 +32,7 @@ pub(crate) struct SelectedLoad<'a> {
     pub query: &'a str,
 }
 
-/// `INSERT INTO into` every one of `columns` from the rows of `query`: a read column by its name in the query's result, a constant from its value, a merge's row number after the earlier batches' in the order the query gives the rows, the load id and load time the batch's; any other column NULL. Each is cast to its staging or build type without parameters, which a cast can't name and the column then checks; JSON goes into a staging table as its text, as SQLLoad's reader stages it.
+/// `INSERT INTO into` every one of `columns` from the rows of `query`: a read column by its name in the query's result, a constant from its value, a merge's row number after the earlier batches', among the rows sharing its key in the order the query gives them (a key column the query doesn't read is a constant, the same for every row), the load id and load time the batch's; any other column NULL. Each is cast to its staging or build type without parameters, which a cast can't name and the column then checks; JSON goes into a staging table as its text, as SQLLoad's reader stages it.
 pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
     let literal = |text: &str| BigQuerySql.render_loader_value_literal(text);
     let mut values: Vec<String> = Vec::with_capacity(load.columns.len());
@@ -52,8 +54,18 @@ pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
             (Some(MetadataRole::LoadId), _) => (literal(load.load_id), true),
             (Some(MetadataRole::LoadedAt), _) => (literal(load.loaded_at), true),
             (None, MERGE_ROW_COLUMN) => {
+                let keys: Vec<String> = load
+                    .merge_key
+                    .iter()
+                    .filter_map(|key| load.read.iter().find(|read| read.name == *key))
+                    .map(|read| format!("u.{}", read.expression))
+                    .collect();
+                let over = match keys.is_empty() {
+                    true => String::new(),
+                    false => format!("PARTITION BY {}", keys.join(", ")),
+                };
                 values.push(format!(
-                    "{} * {UNLOADED_BATCH_ROWS} + ROW_NUMBER() OVER () - 1",
+                    "{} * {UNLOADED_BATCH_ROWS} + ROW_NUMBER() OVER ({over}) - 1",
                     load.batch
                 ));
                 continue;
