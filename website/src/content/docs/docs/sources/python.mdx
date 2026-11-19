@@ -42,7 +42,8 @@ def orders(ctx: sl.Context):
 | `@sl.table` or `@sl.table(...)` | A standalone `Table`, loaded into the target's schema; it sets its own `write_strategy`. |
 | `@source.client` | Declares a client the source's tables share as `ctx.client`, built once per run. |
 
-A table's description is `description=`, or else the function's docstring; `plan` requires one.
+A table's description, its destination table's comment, is `description=`, or else the function's
+docstring. Both are optional.
 Unknown settings raise `TypeError` when the module is imported.
 
 ### Settings

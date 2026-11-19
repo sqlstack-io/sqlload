@@ -79,7 +79,7 @@ order = "path"
 - Each `[sources]` entry loads one folder of CSV files into one table. `merge` upserts each new file
   on its `unique_key`, one file at a time in path order, and later loads skip the files already
   merged.
-- Each table SQLLoad writes needs a description, which becomes the table's comment.
+- A table's `description`, when it has one, becomes the table's comment.
 
 ## Check, plan, apply and load
 
@@ -273,7 +273,7 @@ description = "Customers, one row per customer."
   source sets `merge` for all of them, and `unique_key = "{primary_key}"` upserts on each table's
   primary key.
 - `orders` is incremental: each run continues from the highest `updated_at` already loaded.
-- Each table SQLLoad writes needs a description, which becomes the table's comment.
+- A table's `description`, when it has one, becomes the table's comment.
 
 ```bash
 export PGPASSWORD=secret

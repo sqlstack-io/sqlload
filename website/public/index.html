@@ -159,12 +159,12 @@ Loads (2)  into DuckDB local                                                    
 ├── app postgres  into raw
 │   └── orders   merge on order_id     updated_at: first run, everything
 └── events ./lake/events/  into raw
-    └── events   delete_insert on dt   dt: first run, everything · 3 new of 3 files
+    └── events   delete_insert on dt   3 new of 3 files
         └── route  DuckDB reads directly from ./lake/events/ (nothing through the loader)
 
 Errors (1)
 └── raw.app__customers
-    └── reason  <span class="bad">no description; add description = "..." under [sources.app.tables."public.customers"]</span>
+    └── reason  <span class="bad">lifetime_value has type numeric(12,2), which cannot be read as int</span>
 
 <span class="bad">✗ Plan failed  2 objects to create, 2 to load, 1 error</span></pre>
 						</div>

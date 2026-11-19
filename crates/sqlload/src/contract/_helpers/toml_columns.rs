@@ -5,23 +5,7 @@ use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 use crate::contract::constants::{MISSING_DECLARATION, MISSING_PHYSICAL_COLUMN, TYPE_MISMATCH};
 use crate::contract::models::{Adoption, ContractFinding};
 
-/// Whether writing `adoption` would create a `[sources.*.tables.*]` entry for a database table with no description to give it, which would then block the table.
-pub(crate) fn lacks_description(root: &Item, adoption: &Adoption) -> bool {
-    let (source, table) = &adoption.toml_key;
-    let exists = root
-        .get("sources")
-        .and_then(|sources| sources.get(source.as_str()))
-        .and_then(|source| source.get("tables"))
-        .and_then(|tables| tables.get(table.as_str()))
-        .is_some();
-    !exists
-        && adoption
-            .description
-            .as_deref()
-            .is_some_and(|text| text.trim().is_empty())
-}
-
-/// `document` with `adoption` written into the `columns` of `[sources.<source>.tables.<table>]`, adding the tables on the way when missing, and a new database table entry's description; the source must be in the file.
+/// `document` with `adoption` written into the `columns` of `[sources.<source>.tables.<table>]`, adding the tables on the way when missing, and a new database table entry's description when it has one; the source must be in the file.
 pub(crate) fn write_adoption(
     mut document: DocumentMut,
     adoption: &Adoption,
@@ -37,7 +21,7 @@ pub(crate) fn write_adoption(
     let description = adoption
         .description
         .as_deref()
-        .filter(|_| tables.get(table.as_str()).is_none());
+        .filter(|text| !text.trim().is_empty() && tables.get(table.as_str()).is_none());
     let entry = child(tables, table, true)?;
     if let Some((text, entry)) = description.zip(entry.as_table_like_mut()) {
         entry.insert("description", Item::Value(Value::from(text)));
