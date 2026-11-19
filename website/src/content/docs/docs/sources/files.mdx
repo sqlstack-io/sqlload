@@ -739,7 +739,10 @@ records, unless you pin them with `columns`. `infer_types = false` loads every
 column not pinned as `text`, CSV fields exactly as written; see [Loading every column as
 text](/docs/concepts/types/#loading-every-column-as-text). Each row also gets `_sqlload_source_file`,
 `_sqlload_source_version` and `_sqlload_source_row` ([Columns SQLLoad
-adds](/docs/concepts/projects/#columns-sqlload-adds)).
+adds](/docs/concepts/projects/#columns-sqlload-adds)). BigQuery doesn't report a row's position in
+its file: into BigQuery, Parquet in GCS loads through BigQuery itself only when `exclude_columns`
+drops `_sqlload_source_row`; see [Parquet in Google Cloud
+Storage](/docs/targets/bigquery/#parquet-in-google-cloud-storage).
 
 Parquet list, struct and map columns load as `json`.
 A list becomes an array, a struct becomes an object with its fields in order, and a map becomes an

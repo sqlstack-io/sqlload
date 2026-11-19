@@ -1,8 +1,6 @@
 use crate::adapters::bigquery::_helpers::dialect::pull::{PulledFile, PulledGroup, pull_query};
-use crate::adapters::bigquery::models::BigQuerySql;
 use crate::adapters::bigquery::tests::helpers::{desired, orders};
 use crate::adapters::bigquery::tests::test_types::PullQueryTestCase;
-use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
 use crate::load_naming::models::Compat;
 
@@ -55,9 +53,7 @@ fn given_parquet_files_in_gcs_when_bigquery_reads_them_itself_then_each_column_c
     for test_case in test_cases {
         let (query, definitions) = pull_query(
             &orders(),
-            (&test_case.columns, &|column_type: &ColumnType| {
-                BigQuerySql.render_staging_type(column_type)
-            }),
+            (&test_case.columns, false),
             &test_case.groups,
             (Compat::Sqlload, "L1", "2026-11-06T00:00:00Z"),
         );

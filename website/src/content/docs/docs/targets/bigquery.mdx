@@ -121,6 +121,54 @@ loaded  raw.app__orders     1,000 rows 0.1s
 - **Then one query job.** A query job moves the rows from the staging table into the table. Each
   job carries a request ID, so a retried request never runs it twice.
 
+## Parquet in Google Cloud Storage
+
+Parquet files in a [`gcs`](/docs/configuration/#gcs) bucket can load without passing through
+SQLLoad: BigQuery queries them where they lie, as temporary external tables, into the staging
+table, in one query job per batch. SQLLoad still lists the files, reads their footers and picks
+the batch; it checks the job's row count against the footers, and a batch that differs fails.
+
+BigQuery doesn't report a row's position in its file, so it can't fill `_sqlload_source_row`, the
+row's number in its file. A table that keeps that column, as every files table does by default,
+has SQLLoad read the files instead, and `sqlload plan -v <table>` says why:
+
+```console
+├── route   read parquet into Arrow -> BigQuery takes Arrow
+├── why     SQLLoad reads the files because BigQuery doesn't report a row's position in its file, so it can't fill _sqlload_source_row; to have BigQuery load the files itself, add _sqlload_source_row to exclude_columns; the destination takes Arrow directly
+```
+
+To have BigQuery load them, drop the column:
+
+```toml
+[sources.orders]
+kind = "files"
+connection = "lake"
+path = "orders/"
+format = "parquet"
+exclude_columns = ["_sqlload_source_row"]
+```
+
+```console
+└── route  BigQuery reads directly from gs://example-bucket/orders/ (nothing through the loader)
+```
+
+Without the row number, a file's rows have no order. That matters only to a `merge`, which
+doesn't load files into BigQuery yet.
+
+- **BigQuery reads with its own identity.** The query job reads the bucket as the BigQuery
+  connection's service account, not with the `gcs` connection's key. Give that service account
+  `roles/storage.objectViewer` on the bucket. `plan` checks it with a dry run over the first file
+  to load, which bills nothing, and fails naming the fix when BigQuery can't read it.
+- **Every value loads as SQLLoad would load it, or SQLLoad reads the files.** SQLLoad reads them
+  instead when the table masks columns, when the `gcs` connection sets a custom `endpoint`, when
+  a column is a UUID, a list, JSON, a [native type](/docs/concepts/types/), or `decimal(20,0)`
+  (the type of an unsigned 64-bit integer, which BigQuery reads as a signed one), or when a
+  column's name is one BigQuery would change: anything other than letters, digits and
+  underscores starting with a letter or underscore, a name starting with a prefix BigQuery
+  reserves such as `_FILE_`, or two names differing only in case.
+- **Files with different columns load together.** BigQuery takes one file's columns for a whole
+  external table, so each set of files with the same columns gets its own, in the same job.
+
 ## Write strategies
 
 Each statement is its own query job and commits on its own. The run record commits after it.
@@ -184,6 +232,8 @@ as a UTC instant without its offset.
 - Records load as `JSON`, not as typed `STRUCT` columns. Columns pinned as
   [`array(T)`](/docs/concepts/types/#arrays) load as `ARRAY<T>`, except `array(timestamp_tz)`.
 - `copy_to_internal_stage` is for Snowflake and is refused here.
+- BigQuery loads Parquet in GCS itself only on a table that excludes `_sqlload_source_row`; see
+  [Parquet in Google Cloud Storage](#parquet-in-google-cloud-storage).
 - A [Postgres CDC](/docs/sources/postgres-cdc/) source can't load into BigQuery; `plan` refuses
   it:
 
@@ -211,6 +261,11 @@ A live round ran against a real BigQuery project, in one dataset dropped afterwa
   `contract generate`.
 - **A failed load:** a Python table that raised after two batches committed no rows and left no
   staging table.
+- **Parquet in GCS:** files in two partition folders, with different columns, loaded both by
+  BigQuery itself and by SQLLoad's reader, and the two tables matched value for value: decimals
+  up to 38 digits, timestamps with and without a time zone, dates from year 1, times, floats and
+  16-bit integers. An unsigned 64-bit value above BigQuery's `INT64` range loaded through
+  SQLLoad's reader.
 - **Deletes:** the key scan and tombstone rounds of `deletes` and `deletes_from`, soft and hard,
   matched on every step, with a key that can't be NULL and with a text key holding a NULL row.
 - **Rebuilds:** the statement a type change that rewrites a table renders, such as `int` to

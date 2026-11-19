@@ -129,7 +129,7 @@ Every loaded table gets columns that say where each row came from:
 | `_sqlload_loaded_at` | every table | When that load ran. |
 | `_sqlload_source_file` | files sources | The file the row came from. |
 | `_sqlload_source_version` | files sources | The file's version when it was loaded. |
-| `_sqlload_source_row` | files sources | The row's number in its file, from 1. |
+| `_sqlload_source_row` | files sources | The row's number in its file, from 1. BigQuery doesn't report a row's position in its file, so a BigQuery table that writes it has SQLLoad read the files; [exclude it](/docs/targets/bigquery/#parquet-in-google-cloud-storage) to have BigQuery load them itself. |
 | `_sqlload_source_row` | Google Sheets tables | The row's number in the sheet, as Google Sheets numbers it: a range starting at `A3` starts at 3, and a skipped empty row leaves a gap. Not on a table with a `transform`. |
 
 `plan` lists them as `+ _sqlload_load_id, _loaded_at`. Files sources use `_sqlload_source_file`
