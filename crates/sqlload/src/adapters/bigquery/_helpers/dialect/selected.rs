@@ -54,12 +54,12 @@ pub(crate) fn selected_insert(load: &SelectedLoad<'_>) -> String {
             (Some(MetadataRole::LoadId), _) => (literal(load.load_id), true),
             (Some(MetadataRole::LoadedAt), _) => (literal(load.loaded_at), true),
             (None, MERGE_ROW_COLUMN) => {
-                let keys: Vec<String> = load
-                    .merge_key
-                    .iter()
-                    .filter_map(|key| load.read.iter().find(|read| read.name == *key))
-                    .map(|read| format!("u.{}", read.expression))
-                    .collect();
+                let mut keys: Vec<String> = Vec::new();
+                for read in load.read {
+                    if load.merge_key.contains(&read.name) {
+                        keys.push(format!("u.{}", read.expression));
+                    }
+                }
                 let over = match keys.is_empty() {
                     true => String::new(),
                     false => format!("PARTITION BY {}", keys.join(", ")),
