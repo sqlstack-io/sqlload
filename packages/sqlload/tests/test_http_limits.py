@@ -26,8 +26,8 @@ TOKEN = "l1mits-token"
 
 class Api(BaseHTTPRequestHandler):
 	"""`/<table>?offset&limit`: `PAGES` rows of one row a page, each answer after `self.server.delay` seconds; every request's
-	arrival time goes in `self.server.arrivals`, and the most requests open at once in `self.server.most_open`. With
-	`self.server.throttle`, every third request is answered 429 with `Retry-After: 0`."""
+	arrival time goes in `self.server.arrivals`, and the most requests open at once (arrived and not yet answered) in
+	`self.server.most_open`. With `self.server.throttle`, every third request is answered 429 with `Retry-After: 0`."""
 
 	def log_message(self, *args: Any) -> None:
 		pass
@@ -42,25 +42,25 @@ class Api(BaseHTTPRequestHandler):
 			server.most_open = max(server.most_open, server.open)
 			server.auth.add(self.headers.get("Authorization"))
 			throttled = server.throttle and len(server.arrivals) % 3 == 0
-		try:
-			time.sleep(server.delay)
-			if throttled:
-				self.send_response(429)
-				self.send_header("Retry-After", "0")
-				self.send_header("Content-Length", "0")
-				self.end_headers()
-				return
-			offset, limit = int(query.get("offset", 0)), int(query.get("limit", 1))
-			rows = [{"id": n, "table": url.path} for n in range(offset, min(offset + limit, PAGES))]
-			data = json.dumps(rows).encode()
-			self.send_response(200)
-			self.send_header("Content-Type", "application/json")
-			self.send_header("Content-Length", str(len(data)))
+		time.sleep(server.delay)
+		# The request stops counting as open before any of its answer is sent: once the client has the answer it may send
+		# the next request, which could arrive before this thread ran again to count this one closed.
+		with server.lock:
+			server.open -= 1
+		if throttled:
+			self.send_response(429)
+			self.send_header("Retry-After", "0")
+			self.send_header("Content-Length", "0")
 			self.end_headers()
-			self.wfile.write(data)
-		finally:
-			with server.lock:
-				server.open -= 1
+			return
+		offset, limit = int(query.get("offset", 0)), int(query.get("limit", 1))
+		rows = [{"id": n, "table": url.path} for n in range(offset, min(offset + limit, PAGES))]
+		data = json.dumps(rows).encode()
+		self.send_response(200)
+		self.send_header("Content-Type", "application/json")
+		self.send_header("Content-Length", str(len(data)))
+		self.end_headers()
+		self.wfile.write(data)
 
 
 @pytest.fixture
