@@ -365,10 +365,16 @@ pub enum Paginator {
         #[serde(default)]
         read_ahead: Option<u64>,
     },
-    /// `param` counts pages from `start`; ends at an empty page.
+    /// `param` counts pages from `start`; ends at an empty page, or with `page_size` at a page holding fewer rows once the API has shown it doesn't cap its pages lower (see [`Calls::last_page_below`]).
     PageNumber {
         param: String,
         start: u64,
+        /// The rows a full page holds.
+        #[serde(default)]
+        page_size: Option<u64>,
+        /// Where `page_size` is sent with every page; `None` sends nothing, for an API whose page size is fixed.
+        #[serde(default)]
+        page_size_param: Option<String>,
         #[serde(default)]
         location: Location,
         /// As `Offset`'s.
@@ -465,8 +471,8 @@ pub struct Calls {
     pub in_flight: Option<std::sync::Arc<tokio::sync::Semaphore>>,
     pub retries: u32,
     pub on_status: BTreeMap<u16, StatusAction>,
-    /// Whether an offset page of this request held its whole limit in this job, which shows the API does not cap its pages lower, so a short first page needs no check; shared by its clones, the keys of a fan-out.
-    pub full_page_seen: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// A page of this request holding fewer rows than this is its run's last, as this job has shown the API sends that many when it has them: the paginator's whole page once a page held it, or the rows of a short page that the next request showed was the last, or that more pages followed (the API's cap); 0 until then. A short page that isn't below it is checked with one more request. Shared by its clones, the keys of a fan-out.
+    pub last_page_below: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The most the pages `read_ahead` requests may hold at once: a quarter of the table's share of the run's memory budget; `None` without a budget.
     pub source_part: Option<u64>,
     /// Cancelled once the pages read ahead are no longer wanted: after paging ends normally a request already sent still finishes, so its connection goes back to the pool, but no wait for a turn, retry or other attempt starts.

@@ -28,7 +28,7 @@ use crate::http_source::models::{
 };
 use crate::python_sources::errors::ReadError;
 
-/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, and fails when rows come back, as the API then caps its pages lower than the limit. With `read_ahead`, offset and page-number pages after a full first page are requested two at a time, then four, eight and so on up to that many (fewer under a memory budget: only as many as pages the size of the largest yet fit in a quarter of each table's share), each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
+/// Send every page of `request` at `path` (its placeholders filled) to `pages`, with where its rows are; a page whose selected node is null has no rows and is not sent, and one missing it fails, naming what the response holds, unless the request reads a missing node as no rows (`select_missing`). An offset run that would end after a first page shorter than its limit asks for the next offset once, unless the job has shown the API sends pages of more rows, and fails when rows come back, as the API then caps its pages lower than the limit. A page-number run with `page_size` ends at a short page in the same way, and where it can't yet tell asks for the next page, paging on to an empty page when rows come back (an API capping its pages lower). With `read_ahead`, offset and page-number pages after a full first page are requested two at a time, then four, eight and so on up to that many (fewer under a memory budget: only as many as pages the size of the largest yet fit in a quarter of each table's share), each through the shared rate limit and retries in a task of its own (so it keeps reading while the pages' receiver holds this loop up), and handled strictly in page order, so the run still ends at the first short page, dropping the requests past it. Stops quietly once `pages` closes. A next position (cursor, link or count) already requested for this request fails before it is requested again, naming the value and the page that returned it, and a counted page repeating the previous response fails, rather than loop. With `error_path`, an error a page reports there fails the table before any of that page's rows load.
 pub(crate) async fn paginate(
     calls: &Calls,
     (request, context): (&Request, &RowContext),
@@ -55,6 +55,7 @@ pub(crate) async fn paginate(
     let mut queued: u64 = 1;
     let mut largest: u64 = 0;
     let (mut ramp, mut ramped): (u64, u64) = (1, 1);
+    let mut checking: Option<u64> = None;
     for step in 1_u64.. {
         let shown = redacted(
             &format!("{} {}", call.method.as_str(), call.url),
@@ -130,6 +131,14 @@ pub(crate) async fn paginate(
             request,
             (&first, &call),
             (&fetched, document.as_ref(), step),
+            calls.last_page_below.load(Ordering::Relaxed),
+        )
+        .map_err(|error| format!("{shown}: {error}"))?;
+        learn_page_size(
+            calls,
+            request,
+            (document.as_ref(), next.is_some()),
+            (&mut checking, &shown),
         )
         .map_err(|error| format!("{shown}: {error}"))?;
         if let Some((next, position)) = &next
@@ -141,14 +150,8 @@ pub(crate) async fn paginate(
             )
             .into());
         }
-        match (step, &next, &document) {
-            (1, None, Some(document)) => {
-                capped_pages(calls, request, (&first, document), &shown).await?
-            }
-            (_, Some(_), _) if matches!(request.paginator, Paginator::Offset { .. }) => {
-                calls.full_page_seen.store(true, Ordering::Relaxed);
-            }
-            _ => {}
+        if let (1, None, Some(document)) = (step, &next, &document) {
+            capped_pages(calls, request, (&first, document), &shown).await?;
         }
         let has_rows = document.as_ref().is_none_or(|document| {
             selected_node(document, &rows).is_some_and(|node| !node.is_null())
@@ -195,6 +198,43 @@ pub(crate) async fn paginate(
     Ok(())
 }
 
+/// What this page (`document`, `continues` when paging goes on past it) shows about the API's page size, kept in [`Calls::last_page_below`] for every key of the job: a full page shows the paginator's whole page; the page after a short one (`checking`, that page's rows) shows those rows were all the API sends at once, whether it is empty (the short page was the last) or holds more, which shows a cap and is warned about the first time. A short page-number page that paging goes on past is checked by the next.
+fn learn_page_size(
+    calls: &Calls,
+    request: &Request,
+    (document, continues): (Option<&Value>, bool),
+    (checking, shown): (&mut Option<u64>, &str),
+) -> Result<(), String> {
+    let full = match &request.paginator {
+        Paginator::Offset { limit, .. } => Some(*limit),
+        Paginator::PageNumber { page_size, .. } => *page_size,
+        Paginator::Single
+        | Paginator::NextLink { .. }
+        | Paginator::LinkHeader
+        | Paginator::Cursor { .. } => None,
+    };
+    let (Some(full), Some(document)) = (full, document) else {
+        return Ok(());
+    };
+    let read = page_rows(document, request)?;
+    if let Some(short) = checking.take() {
+        let before = calls.last_page_below.fetch_max(short, Ordering::Relaxed);
+        if read > 0 && before < short {
+            tracing::warn!(
+                "{shown}: the page before held {short} rows, fewer than page_size {full}, but more followed, so the API caps its pages at {short} rows; set page_size={short} to end each run at its last page"
+            );
+        }
+    }
+    match (read >= full, read > 0 && continues) {
+        (true, _) => {
+            calls.last_page_below.fetch_max(full, Ordering::Relaxed);
+        }
+        (false, true) => *checking = Some(read),
+        (false, false) => {}
+    }
+    Ok(())
+}
+
 /// Let the pages still read ahead when paging ends finish their requests, so their connections go back to the pool, instead of aborting them with the paging, as a failure or a closed `pages` does; the paging's stop token keeps them from waiting for a turn or retrying.
 fn release(in_flight: VecDeque<AbortOnDropHandle<AheadPage>>) {
     for handle in in_flight {
@@ -233,7 +273,7 @@ fn reported_error(
     Err(format!("{shown}: the API reported an error at {path}: {text}").into())
 }
 
-/// For offset paging whose first page (`document`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so are the first page's rows again, from an API that rounds the offset down to a page boundary. Skipped once a page of the request held its whole limit in this job, which shows the API does not cap it (see `Calls::full_page_seen`).
+/// For offset paging whose first page (`document`, from the request `shown`) held some rows but fewer than its limit: the page at the next offset, which an API capping its pages below the limit fills, so rows there fail with the page size to set. An empty or missing page is the real end, and so are the first page's rows again, from an API that rounds the offset down to a page boundary. Skipped when the job has already shown the API sends pages of more rows than this one held (see [`Calls::last_page_below`]); an empty next page shows it for later keys.
 async fn capped_pages(
     calls: &Calls,
     request: &Request,
@@ -250,7 +290,7 @@ async fn capped_pages(
         return Ok(());
     };
     let read = page_rows(document, request).map_err(|error| format!("{shown}: {error}"))?;
-    if read == 0 || read >= *limit || calls.full_page_seen.load(Ordering::Relaxed) {
+    if read == 0 || read >= *limit || read < calls.last_page_below.load(Ordering::Relaxed) {
         return Ok(());
     }
     let probe = page_call(
@@ -281,7 +321,10 @@ async fn capped_pages(
         None => 0,
     };
     match more {
-        0 => Ok(()),
+        0 => {
+            calls.last_page_below.fetch_max(read, Ordering::Relaxed);
+            Ok(())
+        }
         _ => Err(format!(
             "{shown}: the first page held {read} rows, fewer than limit {limit}, but the API returned {more} more at offset {read}, so it caps its pages at {read} rows; set limit={read}"
         )
@@ -383,8 +426,8 @@ fn counted_call(request: &Request, first: &Url, step: u64) -> Result<PageCall, S
             (param.clone(), Value::from((step - 1) * limit)),
             (limit_param.clone(), Value::from(*limit)),
         ],
-        Paginator::PageNumber { param, start, .. } => {
-            vec![(param.clone(), Value::from(start + step - 1))]
+        Paginator::PageNumber { start, .. } => {
+            page_number_values(&request.paginator, start + step - 1)
         }
         Paginator::Single
         | Paginator::NextLink { .. }
@@ -406,12 +449,30 @@ fn start_values(paginator: &Paginator) -> Vec<(String, Value)> {
             (param.clone(), Value::from(0_u64)),
             (limit_param.clone(), Value::from(*limit)),
         ],
-        Paginator::PageNumber { param, start, .. } => vec![(param.clone(), Value::from(*start))],
+        Paginator::PageNumber { start, .. } => page_number_values(paginator, *start),
         Paginator::Single
         | Paginator::NextLink { .. }
         | Paginator::LinkHeader
         | Paginator::Cursor { .. } => Vec::new(),
     }
+}
+
+/// A page-number paginator's values for page `page`: its number, then its `page_size` where it is sent.
+fn page_number_values(paginator: &Paginator, page: u64) -> Vec<(String, Value)> {
+    let Paginator::PageNumber {
+        param,
+        page_size,
+        page_size_param,
+        ..
+    } = paginator
+    else {
+        return Vec::new();
+    };
+    let mut values = vec![(param.clone(), Value::from(page))];
+    if let (Some(size), Some(name)) = (page_size, page_size_param) {
+        values.push((name.clone(), Value::from(*size)));
+    }
+    values
 }
 
 /// Where the paginator's values go.
@@ -486,11 +547,12 @@ fn param_text(value: &Value) -> String {
     }
 }
 
-/// The request after `fetched` (the `step`th page, sent as `current`) with the position it goes to, such as `cursor abc`, or `None` at the end; links resolve against the URL the response came from, after any redirect, and keep the current body; `document` is the parsed response whenever the paginator reads the body.
+/// The request after `fetched` (the `step`th page, sent as `current`) with the position it goes to, such as `cursor abc`, or `None` at the end; links resolve against the URL the response came from, after any redirect, and keep the current body; `document` is the parsed response whenever the paginator reads the body. A page-number page with `page_size` ends the run when it is empty, or short and below `last_page_below` (see [`Calls::last_page_below`]).
 fn next_call(
     request: &Request,
     (first, current): (&Url, &PageCall),
     (fetched, document, step): (&Fetched, Option<&Value>, u64),
+    last_page_below: u64,
 ) -> Result<Option<(PageCall, String)>, String> {
     let body = || document.ok_or_else(|| "the paginator needs a JSON response".to_owned());
     let joined = |link: String, what: &str| {
@@ -543,13 +605,22 @@ fn next_call(
             ),
             false => Ok(None),
         },
-        Paginator::PageNumber { param, start, .. } => match page_rows(body()?, request)? > 0 {
-            true => next(
-                vec![(param.clone(), Value::from(start + step))],
-                format!("page number {}", start + step),
-            ),
-            false => Ok(None),
-        },
+        Paginator::PageNumber {
+            start, page_size, ..
+        } => {
+            let read = page_rows(body()?, request)?;
+            let more = match page_size {
+                None => read > 0,
+                Some(size) => read >= *size || (read > 0 && read >= last_page_below),
+            };
+            match more {
+                true => next(
+                    page_number_values(&request.paginator, start + step),
+                    format!("page number {}", start + step),
+                ),
+                false => Ok(None),
+            }
+        }
     }
 }
 
