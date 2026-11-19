@@ -25,6 +25,7 @@ pub(crate) fn table(schema: &str, name: &str, columns: &[&str]) -> SourceTable {
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     }
 }
 

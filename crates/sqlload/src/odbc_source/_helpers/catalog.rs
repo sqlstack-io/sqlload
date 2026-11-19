@@ -76,6 +76,7 @@ pub(crate) fn source_table(
         estimated_bytes: -1,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     }
 }
 
@@ -132,6 +133,7 @@ pub(crate) fn catalog_tables(
         };
         tables.push(SourceTable {
             listed_keys,
+            other_location: None,
             ..source_table((schema, table), columns, key)
         });
     }

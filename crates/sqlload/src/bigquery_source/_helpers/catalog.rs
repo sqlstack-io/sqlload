@@ -58,7 +58,7 @@ async fn described(
     (dataset, table): (String, String),
 ) -> Result<Option<SourceTable>, BigQuerySourceError> {
     let found = table_metadata(&reader.client, (&reader.project, &dataset, &table)).await?;
-    Ok(found.map(|found| listed_table((dataset, table), &found)))
+    Ok(found.map(|found| listed_table((dataset, table), &found, &reader.client.location)))
 }
 
 /// One glob set for `dataset.table` patterns, matched exactly.
@@ -75,8 +75,12 @@ fn matcher(patterns: &[String]) -> Result<GlobSet, BigQuerySourceError> {
         .map_err(|error| BigQuerySourceError::Invalid(error.to_string()))
 }
 
-/// `dataset.table` from `found`: its columns, declared primary key, row and byte counts, and description. Anything the Storage Read API cannot read directly (a view) has `estimated_bytes` -1, so it is read through a query.
-pub(crate) fn listed_table((dataset, table): (String, String), found: &Value) -> SourceTable {
+/// `dataset.table` from `found`: its columns, declared primary key, row and byte counts, description, and its location when query jobs run in another (`job_location`). Anything the Storage Read API cannot read directly (a view) has `estimated_bytes` -1, so it is read through a query.
+pub(crate) fn listed_table(
+    (dataset, table): (String, String),
+    found: &Value,
+    job_location: &str,
+) -> SourceTable {
     let mut columns: Vec<SourceColumn> = Vec::new();
     for field in found["schema"]["fields"].as_array().into_iter().flatten() {
         columns.push(source_column(field));
@@ -104,6 +108,10 @@ pub(crate) fn listed_table((dataset, table): (String, String), found: &Value) ->
         },
         comment: found["description"].as_str().map(str::to_owned),
         listed_keys: Vec::new(),
+        other_location: found["location"]
+            .as_str()
+            .filter(|location| !location.eq_ignore_ascii_case(job_location))
+            .map(str::to_owned),
     }
 }
 
