@@ -1692,3 +1692,36 @@ pub(crate) struct DuckDbSourceTestCase {
     /// The orders' rows, the target's columns, the view's row count and the query table's ids.
     pub(crate) expected_rows: &'static str,
 }
+
+/// A file a batched files load reads: its name below the folder, its rows as `(id, v, seen)`, and its modified time in seconds since 1970.
+pub(crate) struct BatchFile {
+    pub(crate) key: &'static str,
+    pub(crate) rows: &'static [(i64, &'static str, i64)],
+    pub(crate) modified_secs: u64,
+}
+
+/// `files` loaded with `settings` in one run, and again one file per run, into two tables of one target, compared.
+pub(crate) struct FileBatchTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    /// `csv` or `parquet`.
+    pub(crate) format: &'static str,
+    pub(crate) files: &'static [BatchFile],
+    /// Rows of the batched table not in the file-by-file one, then the reverse, then its `id:v` rows, then each table's commits, joined by `|`.
+    pub(crate) expected_result: &'static str,
+}
+
+/// `files` generated files (each repeating a key, and repeating keys of other files), loaded with `settings` in one run; each of `bad_files` first holds a value its column can't take, fails the load, and is then fixed and loaded again.
+pub(crate) struct ManyFilesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) settings: &'static str,
+    pub(crate) format: &'static str,
+    pub(crate) files: usize,
+    pub(crate) bad_files: &'static [usize],
+    /// Text the failed load's error holds; empty without `bad_files`.
+    pub(crate) expected_error: &'static str,
+    /// After the failed load: the files its run log records, then its commits.
+    pub(crate) expected_after_error: &'static str,
+    /// Rows of the table not in the newest-file-wins oracle, then the reverse, then its rows, its commits and the rows its commits recorded.
+    pub(crate) expected_result: &'static str,
+}

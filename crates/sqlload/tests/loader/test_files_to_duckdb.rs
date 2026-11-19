@@ -8,7 +8,7 @@ use crate::helpers::{
     int96_in_a_later_batch, local_store, run_async, run_file_set, run_files_scenario,
     run_large_partition, run_replaced_keys, seaweedfs_store,
 };
-use crate::merge_helpers::run_merge_case;
+use crate::merge_helpers::{load_step, run_merge_case};
 use crate::test_types::{
     AfterLoadStep, AfterLoadTestCase, ArchivedReloadTestCase, FileSetTestCase,
 };
@@ -20,13 +20,13 @@ use crate::test_types::{PeakMemoryTestCase, SourceRowUpgradeTestCase};
 pub(crate) const MERGE_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
 /// Every row as `id:v`, a NULL id as `NULL`, then how many merged files the run log records.
-const NULL_MERGE_CHECK: &str = "SELECT (SELECT string_agg(COALESCE(CAST(id AS VARCHAR), 'NULL') || ':' || v, ',' ORDER BY id NULLS LAST) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+const NULL_MERGE_CHECK: &str = "SELECT (SELECT COALESCE(string_agg(COALESCE(CAST(id AS VARCHAR), 'NULL') || ':' || v, ',' ORDER BY id NULLS LAST), '') FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
 const NULL_FAIL_SETTINGS: &str =
     "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnull_keys = \"fail\"\n";
 
 /// Every row as `id:v`, the run log's events in order (each run with its file), and how many staging or build tables are left.
-const RELOAD_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT string_agg(event || coalesce(':' || regexp_extract(json_extract_string(record_json, '$.files[0]'), '([a-z]+[.]csv)', 1), ''), ',' ORDER BY recorded_at) FROM raw._sqlload_runs WHERE table_name = 'scores') || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%')";
+const RELOAD_CHECK: &str = "SELECT (SELECT string_agg(CAST(id AS VARCHAR) || ':' || v, ',' ORDER BY id) FROM raw.scores) || '|' || (SELECT string_agg(event || coalesce(':' || nullif(array_to_string(list_transform(json_extract_string(record_json, '$.files[*]'), lambda file: regexp_extract(file, '([a-z]+[.]csv)', 1)), '+'), ''), ''), ',' ORDER BY recorded_at) FROM raw._sqlload_runs WHERE table_name = 'scores') || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name LIKE '%sqlload_staging%')";
 
 pub(crate) const MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\n";
 
@@ -35,7 +35,27 @@ pub(crate) const MERGE_FAIL_SETTINGS: &str =
 
 const UNORDERED_MERGE_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\n";
 
-const UNORDERED_SORT_SETTINGS: &str = "write_strategy = \"merge\"\nunique_key = [\"id\"]\nexclude_columns = [\"_sqlload_source_row\"]\nnewest_by = \"v\"\n";
+/// Two files merged in two runs, the second repeating a key.
+const UNORDERED_STEPS: &[MergeStep] = &[
+    load_step(
+        &[MergeFile {
+            key: "a.csv",
+            contents: "id,v\n1,a\n2,a\n",
+            modified_secs: 1_000,
+        }],
+        "",
+        "",
+    ),
+    load_step(
+        &[MergeFile {
+            key: "b.csv",
+            contents: "id,v\n1,b\n1,bb\n",
+            modified_secs: 2_000,
+        }],
+        "",
+        "",
+    ),
+];
 
 /// Monday's customers file: 42 once, and 43 twice, its newest row read first.
 pub(crate) const MONDAY: &str = "id,v,day\n42,mon,2026-11-02\n43,a,2026-11-02\n43,b,2026-11-01\n";
@@ -135,7 +155,7 @@ const PATH_CHECK: &str = "SELECT string_agg(id || ':' || score || ':' || region 
 const PATH_RESULT: &str = "1:1.0:eu:2026-11-03:main:1:2026-11-08,2:1.0:eu:2026-11-03:main:1:2026-11-08,3:2.0:eu:2026-11-04:main:1:2026-11-08,4:2.0:eu:2026-11-04:main:1:2026-11-08";
 
 /// Every row as `le_version:line:amount` (a NULL version as `NULL`), in order, then how many files the run log records.
-const LE_CHECK: &str = "SELECT (SELECT string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line) FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
+const LE_CHECK: &str = "SELECT (SELECT COALESCE(string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line), '') FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
 /// Every row as `le_version:line:amount`, in order, for a table without a run log.
 const LE_ROWS: &str = "SELECT string_agg(le_version || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version, line) FROM raw.scores";
@@ -595,10 +615,10 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     removed: &[],
                     loads: true,
                     reload: false,
-                    expected_plan: "3 files, one commit each, oldest modified first (ties by path)",
+                    expected_plan: "3 files, 1 commit, oldest modified first (ties by path)",
                 }],
                 check_query: MERGE_CHECK,
-                expected_result: "1:b,2:c,3:a|3",
+                expected_result: "1:b,2:c,3:a|1",
             },
             FilesMergeTestCase {
                 description: "files modified at the same time merge in path order",
@@ -624,7 +644,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_plan: "",
                 }],
                 check_query: MERGE_CHECK,
-                expected_result: "1:b|2",
+                expected_result: "1:b|1",
             },
             FilesMergeTestCase {
                 description: "with order = \"path\" files merge in name order whatever their modified times, so a key repeated across files ends with the last name's value",
@@ -652,10 +672,10 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     removed: &[],
                     loads: true,
                     reload: false,
-                    expected_plan: "3 files, one commit each, in path order",
+                    expected_plan: "3 files, 1 commit, in path order",
                 }],
                 check_query: MERGE_CHECK,
-                expected_result: "1:wed,2:mon,3:wed|3",
+                expected_result: "1:wed,2:mon,3:wed|1",
             },
             FilesMergeTestCase {
                 description: "order = \"path\" on an append table, which loads files without an order, is refused at plan",
@@ -670,7 +690,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     removed: &[],
                     loads: true,
                     reload: false,
-                    expected_error: "order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; append loads them without an order, so remove it",
+                    expected_error: "order = \"path\" orders the files a merge or a delete_insert by replace_key applies in turn; append loads them without an order, so remove it",
                     expected_plan: "",
                 }],
                 check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
@@ -743,57 +763,11 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "42:tue,43:a|3",
             },
             FilesMergeTestCase {
-                description: "without _sqlload_source_row a file's rows have no order, so files merge as in 0.38.0: one without repeats merges, one repeating a key fails, and plan says why",
+                description: "excluding _sqlload_source_row leaves the merge's order alone: a file repeating a key keeps its last row",
                 settings: UNORDERED_MERGE_SETTINGS,
-                steps: &[
-                    MergeStep {
-                        before: &[],
-                        files: &[MergeFile {
-                            key: "a.csv",
-                            contents: "id,v\n1,a\n2,a\n",
-                            modified_secs: 1_000,
-                        }],
-                        removed: &[],
-                        loads: true,
-                        reload: false,
-                        expected_error: "",
-                        expected_plan: "_sqlload_source_row is not written, so a file's rows have no order to pick the last of a repeated key by",
-                    },
-                    MergeStep {
-                        before: &[],
-                        files: &[MergeFile {
-                            key: "b.csv",
-                            contents: "id,v\n1,b\n1,bb\n",
-                            modified_secs: 2_000,
-                        }],
-                        removed: &[],
-                        loads: true,
-                        reload: false,
-                        expected_error: "drop/b.csv: the file repeats its unique_key: 1 value of (id) appears in more than one row, such as (1)",
-                        expected_plan: "",
-                    },
-                ],
+                steps: UNORDERED_STEPS,
                 check_query: MERGE_CHECK,
-                expected_result: "1:a,2:a|1",
-            },
-            FilesMergeTestCase {
-                description: "newest_by without _sqlload_source_row is refused at plan, as ties need the file's row order",
-                settings: UNORDERED_SORT_SETTINGS,
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[MergeFile {
-                        key: "a.csv",
-                        contents: "id,v\n1,a\n",
-                        modified_secs: 1_000,
-                    }],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "newest_by breaks ties by row order, which a files merge takes from _sqlload_source_row; stop excluding it",
-                    expected_plan: "",
-                }],
-                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
-                expected_result: "0",
+                expected_result: "1:bb,2:a|2",
             },
             FilesMergeTestCase {
                 description: "with on_duplicate_keys = \"fail\" a file repeating a key no row has yet fails before it merges, naming the key",
@@ -909,11 +883,11 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         loads: true,
                         reload: false,
                         expected_error: "",
-                        expected_plan: "2 files, one commit each",
+                        expected_plan: "2 files, 1 commit",
                     },
                 ],
                 check_query: MERGE_CHECK,
-                expected_result: "1:b|4",
+                expected_result: "1:b|2",
             },
             FilesMergeTestCase {
                 description: "a file changed back to a version merged before merges again, as the newest",
@@ -943,7 +917,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         loads: true,
                         reload: false,
                         expected_error: "",
-                        expected_plan: "1 file, one commit each",
+                        expected_plan: "1 file, 1 commit",
                     },
                     MergeStep {
                         before: &[],
@@ -956,7 +930,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         loads: true,
                         reload: false,
                         expected_error: "",
-                        expected_plan: "1 file, one commit each",
+                        expected_plan: "1 file, 1 commit",
                     },
                 ],
                 check_query: MERGE_CHECK,
@@ -997,11 +971,11 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                         removed: &[],
                         loads: true,
                         reload: false,
-                        expected_plan: "1 file, one commit each",
+                        expected_plan: "1 file, 1 commit",
                     },
                 ],
                 check_query: MERGE_CHECK,
-                expected_result: "1:a2|3",
+                expected_result: "1:a2|2",
             },
             FilesMergeTestCase {
                 description: "a row without an id in one file is updated by the next file's row without one, not inserted again, as a NULL in the key matches a NULL",
@@ -1027,10 +1001,10 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_plan: "merge (unique_key: id; NULLs in keys match)",
                 }],
                 check_query: NULL_MERGE_CHECK,
-                expected_result: "1:a,NULL:bb|2",
+                expected_result: "1:a,NULL:bb|1",
             },
             FilesMergeTestCase {
-                description: "with null_keys = \"fail\" a file holding a row without an id fails before it merges, naming the key, and the file before it stays merged",
+                description: "with null_keys = \"fail\" a file holding a row without an id fails before it merges, naming it and the key, and the file committed with it rolls back",
                 settings: NULL_FAIL_SETTINGS,
                 steps: &[MergeStep {
                     before: &[],
@@ -1053,7 +1027,7 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                     expected_plan: "",
                 }],
                 check_query: NULL_MERGE_CHECK,
-                expected_result: "1:a|1",
+                expected_result: "|0",
             },
         ];
         for test_case in &test_cases {
@@ -1126,7 +1100,7 @@ fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_orde
                     },
                 ],
                 check_query: RELOAD_CHECK,
-                expected_result: "1:c,2:a|reset,run:a.csv,run:b.csv,reset,run:a.csv,run:b.csv,run:c.csv|0",
+                expected_result: "1:c,2:a|reset,run:a.csv+b.csv,reset,run:a.csv+b.csv+c.csv|0",
             },
             FilesMergeTestCase {
                 description: "a --reload failing on its third file leaves the old table, its run log and no build table",
@@ -1201,7 +1175,7 @@ fn given_a_merge_files_table_when_reloading_then_every_file_merges_again_in_orde
                     },
                 ],
                 check_query: RELOAD_CHECK,
-                expected_result: "1:b|reset,run:export.csv,reset,run:export.csv,run:export.csv|0",
+                expected_result: "1:b|reset,run:export.csv,reset,run:export.csv+export.csv|0",
             },
         ];
         for test_case in &test_cases {
@@ -1440,7 +1414,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         loads: true,
                         reload: false,
                         expected_error: "",
-                        expected_plan: "1 file, one commit each, oldest modified first (ties by path), each recorded in the run log",
+                        expected_plan: "1 file, 1 commit, oldest modified first (ties by path), each recorded in the run log",
                     },
                     MergeStep {
                         before: &[],
@@ -1465,7 +1439,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                 expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
             },
             FilesMergeTestCase {
-                description: "in one run, a corrected P01 modified after the first P01 fails, naming both files, as the run would keep only one of them; the files before it stay",
+                description: "in one run, a corrected P01 modified after the first P01 fails, naming both files, as the run would keep only one of them; the files committed with it roll back",
                 settings: LE_SETTINGS,
                 steps: &[MergeStep {
                     before: &[],
@@ -1477,7 +1451,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     expected_plan: "",
                 }],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P01:A:1,LE-FY27-P01:B:2,LE-FY27-P01:C:3,LE-FY27-P02:A:10,LE-FY27-P02:B:20|2",
+                expected_result: "|0",
             },
             FilesMergeTestCase {
                 description: "a version split across two part files of one run fails on the later modified, naming both, whatever their names, instead of keeping only its lines",
@@ -1503,7 +1477,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     expected_plan: "",
                 }],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P05:A:1,LE-FY27-P05:B:2,LE-FY27-P05:C:3|1",
+                expected_result: "|0",
             },
             FilesMergeTestCase {
                 description: "a later run's file whose rows have no version replaces the rows without one, as a NULL in the key matches a NULL by default, once the file they came from has left the folder",
@@ -1540,7 +1514,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                 expected_result: "LE-FY27-P01:A:5,NULL:C:3|2",
             },
             FilesMergeTestCase {
-                description: "with null_keys = \"fail\" a file holding a row without a version fails before it loads, naming replace_key, and the file before it stays",
+                description: "with null_keys = \"fail\" a file holding a row without a version fails before it loads, naming it and replace_key, and the file committed with it rolls back",
                 settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\nnull_keys = \"fail\"\n",
                 steps: &[MergeStep {
                     before: &[],
@@ -1559,10 +1533,10 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     expected_plan: "",
                 }],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P02:A:10,LE-FY27-P02:B:20|1",
+                expected_result: "|0",
             },
             FilesMergeTestCase {
-                description: "a version split across two part files fails on the second in the first run, and again when the run is retried, which loads it alone, keeping the first part's rows",
+                description: "a version split across two part files fails on the second, rolling back both, and again in the same way when the run is retried",
                 settings: LE_SETTINGS,
                 steps: &[
                     MergeStep {
@@ -1580,12 +1554,12 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                         removed: &[],
                         loads: true,
                         reload: false,
-                        expected_error: "drop/part-0001.csv: the table holds rows of its replace_key (le_version) values from part-0000.csv, which is still in the folder; with two files of the folder holding one value, which of them is current can't be told, so replacing the value by part-0001.csv would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each (le_version) value in one file; if newer files restate older ones, set on_overlapping_files = \"last_wins\", so the file last in order replaces the values, or remove the older of part-0000.csv and part-0001.csv from the folder by hand and set after_load = { move_to = ... } (or \"delete\"), so that each file leaves the folder once it loads",
+                        expected_error: "drop/part-0001.csv: it holds the replace_key (le_version) value (LE-FY27-P01), which part-0000.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows part-0000.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each (le_version) value in one file; if newer files restate older ones, set on_overlapping_files = \"last_wins\", so the file last in order replaces the values, or remove the older of part-0000.csv and part-0001.csv from the folder by hand and set after_load = { move_to = ... } (or \"delete\"), so that each file leaves the folder once it loads",
                         expected_plan: "",
                     },
                 ],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P01:A:1,LE-FY27-P01:B:2|1",
+                expected_result: "|0",
             },
             FilesMergeTestCase {
                 description: "a corrected P01 under another name fails while the old P01 is still in the folder, naming both, and replaces P01 whole once the old file is removed",
@@ -1620,7 +1594,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     },
                 ],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
+                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|2",
             },
             FilesMergeTestCase {
                 description: "with after_load moving each file once it loads, P01 sent again into the folder still replaces P01's rows",
@@ -1646,7 +1620,7 @@ fn given_le_files_when_delete_insert_replaces_by_replace_key_then_each_version_h
                     },
                 ],
                 check_query: LE_CHECK,
-                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|3",
+                expected_result: "LE-FY27-P01:A:100,LE-FY27-P01:B:200,LE-FY27-P02:A:10,LE-FY27-P02:B:20|2",
             },
         ];
         for test_case in &test_cases {
