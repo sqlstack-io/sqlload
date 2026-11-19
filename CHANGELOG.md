@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.1](https://github.com/sqlstack-io/sqlload/compare/v0.77.0...v0.77.1) (2026-11-19)
+
+
+### Performance Improvements
+
+* **http:** reuse connections across cursor windows and ramp up read_ahead ([#348](https://github.com/sqlstack-io/sqlload/issues/348)) ([ab0ac82](https://github.com/sqlstack-io/sqlload/commit/ab0ac82b005e95fe2054f5573ad6066986201a31))
+
 ## [0.77.0](https://github.com/sqlstack-io/sqlload/compare/v0.76.0...v0.77.0) (2026-11-18)
 
 
