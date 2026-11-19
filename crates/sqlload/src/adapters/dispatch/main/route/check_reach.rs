@@ -54,10 +54,10 @@ pub async fn check_reach(
                     let error = first_line(&text);
                     match (gcs, duckdb.motherduck) {
                         (true, true) => format!(
-                            "{url} cannot be read by MotherDuck on its servers: {error}. Fix: MotherDuck's servers read the bucket from their own network with the gcs connection's HMAC key (hmac_key_id and hmac_secret): give the key's service account roles/storage.objectViewer on the bucket, and let no VPC Service Controls perimeter keep MotherDuck out"
+                            "{url} cannot be read by MotherDuck on its servers: {error}. Fix: MotherDuck's servers read the bucket from their own network with the gcs connection's HMAC key: check that hmac_key_id and hmac_secret are one active key, give its service account roles/storage.objectViewer on the bucket, and let no VPC Service Controls perimeter keep MotherDuck out"
                         ),
                         (true, false) => format!(
-                            "{url} cannot be read by DuckDB: {error}. Fix: DuckDB reads GCS with the gcs connection's HMAC key (hmac_key_id and hmac_secret), not its service_account_key: give the key's service account roles/storage.objectViewer on the bucket"
+                            "{url} cannot be read by DuckDB: {error}. Fix: DuckDB reads GCS with the gcs connection's HMAC key, not its service_account_key: check that hmac_key_id and hmac_secret are one active key, and give its service account roles/storage.objectViewer on the bucket"
                         ),
                         (false, _) => format!(
                             "{url} cannot be read by MotherDuck on its servers: {error}. Fix: MotherDuck's servers read the bucket from their own network, with the keys SQLLoad's S3 reads use (the AWS_* variables, else the connection's profile or AWS_PROFILE, else the AWS credential chain on this machine): give those keys s3:GetObject and s3:ListBucket on it, and kms:Decrypt on its KMS key if it has one, and let the bucket policy allow reads from outside your network or VPC endpoint; a bucket only your network may reach can't load into MotherDuck"

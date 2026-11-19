@@ -32,7 +32,7 @@ A later batch whose files hold a column differently fails the load, naming the c
 Parquet files in a [`gcs` connection](/docs/configuration/#gcs) load the same way when the
 connection sets an HMAC key (`hmac_key_id` and `hmac_secret`): DuckDB reads `gs://` with it, as a
 secret that lasts only for the load's session. DuckDB takes no service-account key, so without an
-HMAC key, or with a custom `endpoint`, SQLLoad reads the files instead, and `plan` says why. `plan`
+HMAC key, or with a custom `endpoint`, SQLLoad reads the files instead, and `sqlload plan -v <table>` says why. `plan`
 reads the first file to load with DuckDB, and fails the table with the fix when it can't, since the
 HMAC key isn't what SQLLoad's own reader uses:
 

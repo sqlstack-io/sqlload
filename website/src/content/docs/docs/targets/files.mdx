@@ -1,6 +1,6 @@
 ---
 title: "Parquet and CSV files"
-description: "Write each table as zstd Parquet or CSV files in S3 or a local folder, partitioned by a template."
+description: "Write each table as zstd Parquet or CSV files in S3, Google Cloud Storage or a local folder, partitioned by a template."
 ---
 
 A files target writes each table as Parquet or CSV files in its own folder.
@@ -17,7 +17,7 @@ path = "{source}/{table}/dt={cursor:date}/"
 
 | Key | Meaning |
 |-----|---------|
-| `connection` | An `s3` or `filesystem` connection. |
+| `connection` | An `s3`, `gcs` or `filesystem` connection. |
 | `path` | Each table's folder: a template with `{source}`, `{schema}`, `{table}`, and `{cursor}` or `{cursor:date}` to partition by the cursor. Default `{source}/{table}/`. |
 | `format` | `parquet` (default), or `csv`. See [CSV files](#csv-files). |
 | `compression` | CSV only: `none` (default), `gzip` or `zstd`. |
