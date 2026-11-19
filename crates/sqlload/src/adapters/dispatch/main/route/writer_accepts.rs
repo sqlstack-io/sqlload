@@ -7,7 +7,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::routing::models::WriterAccepts;
 use crate::routing::models::{FileFormat, Store};
 
-/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself, MotherDuck Parquet in S3 or GCS on its servers, and ClickHouse Parquet in S3), or what its stage route takes.
+/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself, MotherDuck Parquet in S3 or GCS on its servers, and ClickHouse Parquet in S3, BigQuery Parquet in GCS), or what its stage route takes.
 pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
     match destination {
         #[cfg(feature = "duckdb")]
@@ -37,12 +37,16 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
             pull_formats: vec![FileFormat::Parquet],
             ..WriterAccepts::default()
         },
-        Destination::Files(_) | Destination::BigQuery(_) | Destination::Postgres(_) => {
-            WriterAccepts {
-                arrow: true,
-                ..WriterAccepts::default()
-            }
-        }
+        Destination::BigQuery(_) => WriterAccepts {
+            arrow: true,
+            pulls_from: vec![Store::ObjectStore("gs://".to_owned())],
+            pull_formats: vec![FileFormat::Parquet],
+            ..WriterAccepts::default()
+        },
+        Destination::Files(_) | Destination::Postgres(_) => WriterAccepts {
+            arrow: true,
+            ..WriterAccepts::default()
+        },
         Destination::Snowflake(_) => snowflake_accepts(stage),
         Destination::Databricks(databricks) => databricks_accepts(databricks),
     }
