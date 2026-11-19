@@ -6,10 +6,11 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
 -> Result<(), String> {
     let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
     let home = directory.path().join("home");
-    let gcloud = home.join(".config/gcloud");
-    std::fs::create_dir_all(&gcloud).map_err(|error| error.to_string())?;
-    std::fs::write(gcloud.join("application_default_credentials.json"), "{}")
-        .map_err(|error| error.to_string())?;
+    for gcloud in [home.join(".config/gcloud"), home.join("gcloud")] {
+        std::fs::create_dir_all(&gcloud).map_err(|error| error.to_string())?;
+        std::fs::write(gcloud.join("application_default_credentials.json"), "{}")
+            .map_err(|error| error.to_string())?;
+    }
     std::fs::write(directory.path().join("sa.json"), "{}").map_err(|error| error.to_string())?;
     let test_cases = [
         GcsCredentialsTestCase {
