@@ -554,7 +554,11 @@ pub(crate) fn build_spec(
                     _ => MOTHERDUCK_SOURCE,
                 },
                 sql: overrides.sql.clone(),
-                route: WarehouseRoute::Query,
+                route: WarehouseRoute::Query {
+                    same_connection: kind == SourceKind::BigQuery
+                        && context.target.session_connection.as_ref()
+                            == Some(&context.source.connection),
+                },
             }),
             _ => warehouse_source(context, overrides),
         },

@@ -4,5 +4,7 @@ mod arrow_rows;
 mod dialect;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_selected_insert.rs"]
+mod selected_insert;
 #[path = "tests/test_types.rs"]
 mod test_types;

@@ -29,3 +29,11 @@ pub(crate) struct AppendRequestsTestCase {
     /// The ids the requests decode back to, in order, as `first..=last` and their count.
     pub(crate) expected_ids: String,
 }
+
+pub(crate) struct SelectedInsertTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    /// The rows go to a build table in their final types, rather than the staging table.
+    pub(crate) builds: bool,
+    pub(crate) expected_insert: &'static str,
+}
