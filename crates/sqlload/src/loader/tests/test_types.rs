@@ -274,3 +274,14 @@ pub(crate) struct GcsReaderTestCase {
     /// Why SQLLoad must read the files instead of DuckDB, if it must.
     pub(crate) expected_reason: Option<&'static str>,
 }
+
+/// A Parquet files table in GCS loading into BigQuery.
+pub(crate) struct BigQueryReaderTestCase {
+    pub(crate) description: &'static str,
+    /// The columns the load writes, with their types.
+    pub(crate) columns: Vec<(&'static str, crate::column_types::models::ColumnType)>,
+    /// The gcs connection's custom endpoint, if any.
+    pub(crate) endpoint: Option<&'static str>,
+    /// Why SQLLoad must read the files instead of BigQuery, if it must.
+    pub(crate) expected_reason: Option<&'static str>,
+}

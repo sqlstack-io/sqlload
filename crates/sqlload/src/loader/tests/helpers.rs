@@ -20,9 +20,9 @@ use crate::loader::_helpers::table_plan::reader_offer;
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{FilesSource, PlanDetail, PlanItem, TableSpec, TableTransform};
 use crate::loader::tests::test_types::{
-    ChildPathsTestCase, DeclaredProblemsTestCase, GcsReaderTestCase, InferredTableTestCase,
-    ItemSpec, OlderFilesTestCase, ReloadOrderTestCase, SourceSpellingTestCase,
-    TransformReaderTestCase,
+    BigQueryReaderTestCase, ChildPathsTestCase, DeclaredProblemsTestCase, GcsReaderTestCase,
+    InferredTableTestCase, ItemSpec, OlderFilesTestCase, ReloadOrderTestCase,
+    SourceSpellingTestCase, TransformReaderTestCase,
 };
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::project::main::parse_python_project::parse_python_project;
@@ -573,6 +573,53 @@ pub(crate) fn gcs_reader(test_case: &GcsReaderTestCase) -> Result<Option<String>
         encoding: FilesEncoding::default(),
         checks: TextChecks::default(),
         columns: Vec::new(),
+        nanos: Vec::new(),
+        batch_rows: 1000,
+    };
+    Ok(reader_offer(&spec, Some(&read), None).direct_blocked)
+}
+
+/// Why BigQuery can't load a Parquet files table's files in GCS itself, writing the case's columns, with the case's endpoint on the connection.
+pub(crate) fn bigquery_reader(
+    test_case: &BigQueryReaderTestCase,
+) -> Result<Option<String>, String> {
+    let mut spec = files_spec(StoreKind::Gcs {
+        bucket: "lake".to_owned(),
+        service_account_key: None,
+        endpoint: test_case.endpoint.map(str::to_owned),
+        hmac: None,
+    })?;
+    spec.warehouse = crate::column_types::models::Warehouse::BigQuery;
+    spec.files.as_mut().ok_or("no files source")?.table.columns = test_case
+        .columns
+        .iter()
+        .filter(|(name, _)| !name.starts_with("_sqlload_"))
+        .map(
+            |(name, column_type)| crate::files_source::models::FileColumn {
+                name: (*name).to_owned(),
+                column_type: Ok(column_type.clone()),
+                direct_refusal: None,
+                stored_read: crate::files_source::models::StoredRead::Plain,
+                lists: None,
+                repeat_of: None,
+            },
+        )
+        .collect();
+    let read = FilesRead {
+        files: Vec::new(),
+        encoding: FilesEncoding::default(),
+        checks: TextChecks::default(),
+        columns: test_case
+            .columns
+            .iter()
+            .map(
+                |(name, column_type)| crate::schema_plan::models::DesiredColumn {
+                    name: (*name).to_owned(),
+                    column_type: column_type.clone(),
+                    origin: crate::schema_plan::models::ColumnOrigin::Source,
+                },
+            )
+            .collect(),
         nanos: Vec::new(),
         batch_rows: 1000,
     };

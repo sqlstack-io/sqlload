@@ -7,22 +7,25 @@ use crate::bigquery_api::constants::{CONFLICT, JOB_POLL_FIRST, JOB_POLL_MAX};
 use crate::bigquery_api::models::BigQueryClient;
 use crate::http::errors::ApiError;
 
-/// Run the load job `job` (a `jobs.insert` body naming its own `jobId`) in the client's project and wait until it is done; returns its final resource, whose `status.errorResult` says whether it loaded. With `file`, the file is sent along with the job in a resumable upload, so no bucket is needed; without, the job reads the `sourceUris` it names. A job id already taken is not run again: that job is waited on instead.
+/// Run the load job `job` (a `jobs.insert` body naming its own `jobId`) in the client's project and wait until it is done; returns its final resource, whose `status.errorResult` says whether it loaded. With `file`, the file is sent along with the job in a resumable upload, so no bucket is needed; without, the job reads the `sourceUris` or runs the query it names, and its start is retried on a transport failure, a 429 or a 5xx. A job id already taken (as by a retried start that reached BigQuery) is not run again: that job is waited on instead.
 pub async fn load_job(
     client: &BigQueryClient,
     job: &Value,
     file: Option<bytes::Bytes>,
 ) -> Result<Value, ApiError> {
     let job_id = job["jobReference"]["jobId"].as_str().unwrap_or_default();
-    let started = match file {
+    let started: Result<Value, ApiError> = match file {
         None => {
             let url = format!("{}/projects/{}/jobs", client.base_url, client.project);
-            send(client, |http| http.post(&url).json(job)).await
+            json_with_retries(client, |http| http.post(&url).json(job)).await
         }
-        Some(file) => upload(client, job, file).await,
+        Some(file) => match upload(client, job, file).await {
+            Ok(response) => response.json().await.map_err(ApiError::from),
+            Err(error) => Err(error),
+        },
     };
     let mut resource: Value = match started {
-        Ok(response) => response.json().await?,
+        Ok(resource) => resource,
         Err(error) if error.status() == Some(CONFLICT) => job_resource(client, job_id).await?,
         Err(error) => return Err(error),
     };

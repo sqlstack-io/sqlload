@@ -7,15 +7,20 @@ use crate::bigquery_api::_helpers::requests::json_with_retries;
 use crate::bigquery_api::models::BigQueryClient;
 use crate::http::errors::ApiError;
 
-/// The schema fields (`name`, `type`, `mode` and sizes, as `tables.get` gives them) of `statement`'s result, from a dry run: nothing is read or billed.
+/// The schema fields (`name`, `type`, `mode` and sizes, as `tables.get` gives them) of `statement`'s result, from a dry run: nothing is read or billed. `definitions` are the query's temporary external tables (`tableDefinitions`), whose files' schemas the dry run reads, failing where BigQuery can't.
 pub async fn query_schema(
     client: &BigQueryClient,
     statement: &str,
+    definitions: Option<&Value>,
 ) -> Result<Vec<Value>, ApiError> {
+    let mut query = json!({ "query": statement, "useLegacySql": false });
+    if let Some(definitions) = definitions {
+        query["tableDefinitions"] = definitions.clone();
+    }
     let body = json!({
         "configuration": {
             "dryRun": true,
-            "query": { "query": statement, "useLegacySql": false },
+            "query": query,
         },
         "jobReference": { "projectId": client.project, "location": client.location },
     });

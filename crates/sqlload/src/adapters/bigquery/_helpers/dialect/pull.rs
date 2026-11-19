@@ -1,0 +1,245 @@
+//! The query that has BigQuery load Parquet files in GCS itself.
+
+use serde_json::{Map, Value, json};
+
+use crate::adapters::bigquery::constants::{
+    DECIMAL_TARGET_TYPES, MAX_COLUMN_NAME, MAX_FILES_PER_QUERY, MAX_QUERY_BYTES,
+    RESERVED_COLUMN_PREFIXES, UNEXPECTED_FILE,
+};
+use crate::adapters::bigquery::models::BigQuerySql;
+use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::types::SqlAdapter;
+use crate::load_naming::main::metadata_role::metadata_role;
+use crate::load_naming::models::{Compat, MetadataRole};
+use crate::schema_plan::models::DesiredColumn;
+
+/// One file BigQuery reads: its `gs://` URL, as `_FILE_NAME` reports it, and the values SQLLoad gives every row of it (its name and version as the files source records them, and its partition values, `None` for a partition folder it lacks), by column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PulledFile {
+    pub url: String,
+    pub constants: Vec<(String, Option<String>)>,
+}
+
+/// Files BigQuery reads through one temporary external table, which takes one file's schema for all of its files: files whose footers hold the same columns, and the table's columns they hold, each with its name in the files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PulledGroup {
+    pub files: Vec<PulledFile>,
+    pub in_files: Vec<(String, String)>,
+}
+
+/// The `INSERT INTO into` of every one of `columns` from the Parquet files of `groups`, and the `tableDefinitions` of the query job running it: one temporary external table per group, its rows appended to the others'. A column comes from the row's file's constants when the files have one of that name (picked by `_FILE_NAME`), otherwise from the group's files when they hold it, and is cast to its type in a build table (`builds`), else in the staging table, without its parameters (`NUMERIC(12,2)` as `NUMERIC`), which a cast can't name and the column then checks; the load id and load time are the batch's; any other column is NULL.
+pub(crate) fn pull_query(
+    into: &TableName,
+    (columns, builds): (&[DesiredColumn], bool),
+    groups: &[PulledGroup],
+    (compat, load_id, loaded_at): (Compat, &str, &str),
+) -> (String, Value) {
+    let selects: Vec<String> = groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| {
+            group_select(
+                index,
+                group,
+                (columns, builds),
+                (compat, load_id, loaded_at),
+            )
+        })
+        .collect();
+    let targets: Vec<String> = columns
+        .iter()
+        .map(|column| BigQuerySql.render_identifier(&column.name))
+        .collect();
+    let query = format!(
+        "INSERT INTO {} ({}) {}",
+        BigQuerySql.render_qualified_name(into),
+        targets.join(", "),
+        selects.join(" UNION ALL ")
+    );
+    let mut definitions = Map::new();
+    for (index, group) in groups.iter().enumerate() {
+        let urls: Vec<&str> = group.files.iter().map(|file| file.url.as_str()).collect();
+        definitions.insert(group_table(index), table_definition(&urls));
+    }
+    (query, Value::Object(definitions))
+}
+
+/// [`pull_query`] over `groups`, split into as many queries as keep each under [`MAX_QUERY_BYTES`] and [`MAX_FILES_PER_QUERY`] files, halving the files until they fit; a single file whose query is still too long is one query, which BigQuery refuses.
+pub(crate) fn pull_queries(
+    into: &TableName,
+    (columns, builds): (&[DesiredColumn], bool),
+    groups: &[PulledGroup],
+    (compat, load_id, loaded_at): (Compat, &str, &str),
+) -> Vec<(String, Value)> {
+    let mut queries: Vec<(String, Value)> = Vec::new();
+    let mut pending: Vec<Vec<PulledGroup>> = vec![groups.to_vec()];
+    while let Some(part) = pending.pop() {
+        let files: usize = part.iter().map(|group| group.files.len()).sum();
+        let (query, definitions) =
+            pull_query(into, (columns, builds), &part, (compat, load_id, loaded_at));
+        let over = query.len() > MAX_QUERY_BYTES || files > MAX_FILES_PER_QUERY;
+        match (over, files) {
+            (true, count) if count > 1 => {
+                let (first, second) = split_groups(&part, count / 2);
+                pending.push(second);
+                pending.push(first);
+            }
+            _ => queries.push((query, definitions)),
+        }
+    }
+    queries
+}
+
+/// `groups` cut after their first `at` files, in order, each side keeping only groups that hold files.
+fn split_groups(groups: &[PulledGroup], at: usize) -> (Vec<PulledGroup>, Vec<PulledGroup>) {
+    let mut first: Vec<PulledGroup> = Vec::new();
+    let mut second: Vec<PulledGroup> = Vec::new();
+    let mut left = at;
+    for group in groups {
+        let take = left.min(group.files.len());
+        left -= take;
+        let (head, tail) = group.files.split_at(take);
+        for (side, files) in [(&mut first, head), (&mut second, tail)] {
+            if !files.is_empty() {
+                side.push(PulledGroup {
+                    files: files.to_vec(),
+                    in_files: group.in_files.clone(),
+                });
+            }
+        }
+    }
+    (first, second)
+}
+
+/// The `SELECT` of `columns` from the `index`th group's external table, as [`pull_query`] fills them.
+fn group_select(
+    index: usize,
+    group: &PulledGroup,
+    (columns, builds): (&[DesiredColumn], bool),
+    (compat, load_id, loaded_at): (Compat, &str, &str),
+) -> String {
+    let literal = |text: &str| BigQuerySql.render_loader_value_literal(text);
+    let mut values: Vec<String> = Vec::with_capacity(columns.len());
+    for column in columns {
+        let value = match (metadata_role(compat, &column.name), column.name.as_str()) {
+            (Some(MetadataRole::LoadId), _) => literal(load_id),
+            (Some(MetadataRole::LoadedAt), _) => literal(loaded_at),
+            (_, name)
+                if group
+                    .files
+                    .first()
+                    .is_some_and(|file| constant(file, name).is_some()) =>
+            {
+                by_file(&group.files, name)
+            }
+            (_, name) if let Some(file) = in_file(&group.in_files, name) => {
+                format!("f.{}", BigQuerySql.render_exact_identifier(file))
+            }
+            _ => "NULL".to_owned(),
+        };
+        let sql_type = match builds {
+            true => {
+                BigQuerySql
+                    .render_loader_logical_type(&column.column_type)
+                    .sql
+            }
+            false => BigQuerySql.render_staging_type(&column.column_type),
+        };
+        let base = sql_type
+            .split_once('(')
+            .map_or(sql_type.as_str(), |(base, _)| base);
+        values.push(format!("CAST({value} AS {base})"));
+    }
+    format!(
+        "SELECT {} FROM {} AS f",
+        values.join(", "),
+        group_table(index)
+    )
+}
+
+/// A temporary external table over the Parquet files at `urls`, its decimals read as the first of BigQuery's types holding their precision and scale.
+pub(crate) fn table_definition(urls: &[&str]) -> Value {
+    json!({
+        "sourceFormat": "PARQUET",
+        "sourceUris": urls,
+        "decimalTargetTypes": DECIMAL_TARGET_TYPES,
+    })
+}
+
+/// The temporary external table of the `index`th group of files.
+pub(crate) fn group_table(index: usize) -> String {
+    format!("sqlload_files_{index}")
+}
+
+/// The name in the files of the column the table holds as `name`, when the files hold it.
+fn in_file<'a>(in_files: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    in_files
+        .iter()
+        .find(|(held, _)| held == name)
+        .map(|(_, file)| file.as_str())
+}
+
+/// `file`'s constant `name`: `Some(None)` when its folder lacks it, `None` when it has no such constant.
+fn constant<'a>(file: &'a PulledFile, name: &str) -> Option<Option<&'a str>> {
+    file.constants
+        .iter()
+        .find(|(constant, _)| constant == name)
+        .map(|(_, value)| value.as_deref())
+}
+
+/// The row's file's value of constant `name`, as text: each file's value picked by `_FILE_NAME`, a typed NULL where its folder lacks it, so a column no file has a value of still casts to its type; a row of any other file fails the query, so a file name BigQuery reports differently never loads as NULL.
+fn by_file(files: &[PulledFile], name: &str) -> String {
+    let cases: Vec<String> = files
+        .iter()
+        .map(|file| {
+            let value = constant(file, name).flatten().map_or_else(
+                || "CAST(NULL AS STRING)".to_owned(),
+                |value| BigQuerySql.render_loader_value_literal(value),
+            );
+            format!(
+                "WHEN {} THEN {value}",
+                BigQuerySql.render_loader_value_literal(&file.url)
+            )
+        })
+        .collect();
+    format!(
+        "CASE _FILE_NAME {} ELSE ERROR(CONCAT({}, _FILE_NAME)) END",
+        cases.join(" "),
+        BigQuerySql.render_loader_value_literal(UNEXPECTED_FILE)
+    )
+}
+
+/// Why BigQuery would not read Parquet columns named `names` under those names: one that is not letters, digits and underscores starting with a letter or underscore, which BigQuery renames (`Order ID` reads as `Order_ID`), starts with a prefix BigQuery reserves, or differs from another only in case; `None` when it reads every one as it is.
+pub(crate) fn unread_name<'a>(names: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for name in names {
+        let folded = name.to_ascii_uppercase();
+        let plain = name.len() <= MAX_COLUMN_NAME
+            && name
+                .chars()
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            && name
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '_');
+        let problem = match (
+            plain,
+            RESERVED_COLUMN_PREFIXES
+                .iter()
+                .find(|prefix| folded.starts_with(*prefix)),
+            seen.contains(&folded),
+        ) {
+            (false, _, _) => "BigQuery renames a name that isn't letters, digits and underscores starting with a letter or underscore".to_owned(),
+            (true, Some(prefix), _) => format!("{prefix} is a prefix BigQuery reserves"),
+            (true, None, true) => "another column has the same name in another case, and BigQuery's names ignore case".to_owned(),
+            (true, None, false) => {
+                seen.push(folded);
+                continue;
+            }
+        };
+        return Some(format!(
+            "BigQuery would not read column {name:?} as it is: {problem}"
+        ));
+    }
+    None
+}
