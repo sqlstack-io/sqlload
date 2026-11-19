@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.78.0](https://github.com/sqlstack-io/sqlload/compare/v0.77.1...v0.78.0) (2026-11-19)
+
+
+### Features
+
+* **gcs:** Google Cloud Storage files sources and targets, read directly by DuckDB and MotherDuck ([#350](https://github.com/sqlstack-io/sqlload/issues/350)) ([757ec17](https://github.com/sqlstack-io/sqlload/commit/757ec178996bee9961d8e58e3e6d6f54826955f2))
+
 ## [0.77.1](https://github.com/sqlstack-io/sqlload/compare/v0.77.0...v0.77.1) (2026-11-19)
 
 
