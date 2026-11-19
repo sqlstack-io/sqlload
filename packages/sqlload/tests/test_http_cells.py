@@ -154,6 +154,8 @@ def table_project(tmp_path: Path, server: ThreadingHTTPServer, job: str, setting
 			kind = "http"
 			base_url = "http://{host}:{port}/v1"
 			token = "${{ENV:SHOP_TOKEN}}"
+			auth = {{ kind = "bearer" }}
+			retries = 0
 
 			[targets.dev]
 			connection = "wh"
@@ -161,7 +163,7 @@ def table_project(tmp_path: Path, server: ThreadingHTTPServer, job: str, setting
 		""")
 	)
 	module = (
-		"import sqlload as sl\n\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=0)\n\n"
+		"import sqlload as sl\n\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop)\n\n"
 		f"@shop.table(description='Rows.'{settings})\ndef rows(ctx):\n    return {job}\n"
 	)
 	(tmp_path / "sources" / "shop.py").write_text(module)

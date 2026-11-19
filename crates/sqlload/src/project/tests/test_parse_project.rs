@@ -485,6 +485,41 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[connections.lake] hmac_key_id and hmac_secret go together",
         },
         ParseProjectErrorTestCase {
+            description: "an http connection's rate is checked when the project is read",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nrate_limit = \"fast\"\n",
+            expected_message: "[connections.api] rate_limit \"fast\" is not a rate such as \"10/s\", \"600/m\" or \"1000/h\"",
+        },
+        ParseProjectErrorTestCase {
+            description: "an in-flight cap of none would never send a request",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nmax_in_flight = 0\n",
+            expected_message: "[connections.api] max_in_flight must be at least 1",
+        },
+        ParseProjectErrorTestCase {
+            description: "an API key goes in a header or a query parameter, not both",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = { kind = \"api_key\", header = \"X-Key\", query = \"key\" }\n",
+            expected_message: "[connections.api] auth api_key takes exactly one of header or query",
+        },
+        ParseProjectErrorTestCase {
+            description: "a token URL the client secret would reach in clear text is refused",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = { kind = \"oauth2_client_credentials\", token_url = \"http://auth.example.com/token\" }\n",
+            expected_message: "[connections.api] token_url http://auth.example.com/token must be https",
+        },
+        ParseProjectErrorTestCase {
+            description: "a misspelt auth setting is never silently ignored",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = { kind = \"oauth2_password\", token_url = \"https://a.example.com/t\", scopes = \"x\" }\n",
+            expected_message: "unknown field `scopes`",
+        },
+        ParseProjectErrorTestCase {
+            description: "an unknown auth scheme is refused",
+            text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\nauth = { kind = \"digest\" }\n",
+            expected_message: "unknown variant `digest`",
+        },
+        ParseProjectErrorTestCase {
+            description: "a rate limit on a connection that sends no HTTP request is refused",
+            text: "[connections.sf]\nkind = \"snowflake\"\naccount = \"a\"\nrate_limit = \"10/s\"\n",
+            expected_message: "unknown field `rate_limit`",
+        },
+        ParseProjectErrorTestCase {
             description: "an odbc connection needs a connection string or a DSN",
             text: "[connections.erp]\nkind = \"odbc\"\n",
             expected_message: "[connections.erp] needs connection_string, or dsn",

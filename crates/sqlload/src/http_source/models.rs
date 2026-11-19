@@ -212,24 +212,40 @@ pub enum Over {
     FanOut(Box<FanOut>),
 }
 
-/// The connection a job uses and how it calls it.
+/// The connection a job uses, and the headers its own requests add to the connection's.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClientSpec {
     pub connection: String,
     #[serde(default)]
-    pub auth: Auth,
-    /// Requests allowed per second, minute or hour, such as `10/s`, shared by every job of the connection with the same limit.
-    #[serde(default)]
-    pub rate_limit: Option<String>,
-    /// Retries of a request that failed with a transport error, 429 or a 5xx.
-    pub retries: u32,
-    #[serde(default)]
     pub headers: BTreeMap<String, String>,
 }
 
-/// Credentials from the connection's settings, sent only to the connection's own origin.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+/// What an `http` connection sets for every request to its API in the run: how requests authenticate, the limits they share, and how often a failed one is retried.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HttpSettings {
+    #[serde(default)]
+    pub auth: Auth,
+    #[serde(flatten)]
+    pub limits: ConnectionLimits,
+    /// Retries of a request that failed with a transport error, 429 or a 5xx; `None` for [`DEFAULT_RETRIES`](crate::http_source::constants::DEFAULT_RETRIES).
+    #[serde(default)]
+    pub retries: Option<u32>,
+}
+
+/// The limits every request to one connection shares in the run, across tables, pages, `read_ahead`, fan-out keys and retries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct ConnectionLimits {
+    /// Requests started per second, minute or hour, such as `10/s`.
+    #[serde(default)]
+    pub rate_limit: Option<String>,
+    /// The most requests open at once.
+    #[serde(default)]
+    pub max_in_flight: Option<usize>,
+}
+
+/// How requests to the connection authenticate, with credentials from its settings, sent only to its own origin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Auth {
     #[default]
     None,
@@ -253,7 +269,8 @@ pub enum Auth {
 }
 
 /// Where an OAuth2 access token comes from and how the client authenticates there.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OAuth2Spec {
     pub token_url: String,
     #[serde(default)]
@@ -444,6 +461,8 @@ pub struct Calls {
     pub http: reqwest::Client,
     pub endpoint: Endpoint,
     pub limiter: Option<std::sync::Arc<Limiter>>,
+    /// The connection's `max_in_flight`: each attempt holds a permit while its request is open.
+    pub in_flight: Option<std::sync::Arc<tokio::sync::Semaphore>>,
     pub retries: u32,
     pub on_status: BTreeMap<u16, StatusAction>,
     /// Whether an offset page of this request held its whole limit in this job, which shows the API does not cap its pages lower, so a short first page needs no check; shared by its clones, the keys of a fan-out.

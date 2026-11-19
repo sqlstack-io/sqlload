@@ -681,6 +681,8 @@ pub struct ProjectPlan {
     pub memory: Option<String>,
     /// The `memory` line asks for something, so `plan` shows it without `-v` too (see [`RunMemory::asks`](crate::memory_budget::models::RunMemory)).
     pub memory_asks: bool,
+    /// One line per `http` connection: the limits every request to it shares in the run, its retries and its auth scheme.
+    pub http: Vec<String>,
 }
 
 /// The tables a source that could not be read would load, as far as its settings name them.

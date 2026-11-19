@@ -383,8 +383,14 @@ def api(elsewhere: ThreadingHTTPServer) -> Iterator[ThreadingHTTPServer]:
 	server.shutdown()
 
 
-def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Path:
+BEARER = 'auth = { kind = "bearer" }\nretries = 3'
+QUICK = 'auth = { kind = "bearer" }\nretries = 0'
+
+
+def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str, connection: str = BEARER) -> Path:
+	"""A project whose `shop` connection also sets `connection` (where `TOKEN_URL` is the stub's token endpoint), with `api = sl.http(shop)`."""
 	host, port = server.server_address[:2]
+	connection = connection.replace("TOKEN_URL", f"http://{host}:{port}/oauth/token")
 	(tmp_path / "sources").mkdir()
 	(tmp_path / "sqlload.toml").write_text(
 		textwrap.dedent(f"""\
@@ -403,13 +409,14 @@ def make_project(tmp_path: Path, server: ThreadingHTTPServer, tables: str) -> Pa
 			refresh_token = "{REFRESH_TOKEN}"
 			username = "loader"
 			password = "${{ENV:SHOP_PASSWORD}}"
+			CONNECTION
 
 			[targets.dev]
 			connection = "wh"
 			loader_schema = "RAW"
-		""")
+		""").replace("CONNECTION", connection)
 	)
-	module = f"import sqlload as sl\n\nTOKEN_URL = 'http://{host}:{port}/oauth/token'\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n\n" + textwrap.dedent(tables)
+	module = f"import sqlload as sl\n\nTOKEN_URL = 'http://{host}:{port}/oauth/token'\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop)\n\n" + textwrap.dedent(tables)
 	(tmp_path / "sources" / "shop.py").write_text(module)
 	return tmp_path
 
@@ -610,7 +617,7 @@ def orders(ctx):
 			"HTTP 400",
 		),
 		(
-			"versioned = sl.http(shop, auth=sl.bearer(), headers={'X-Version': '1', 'X-Session-Id': 'abcdef12', 'X-Credential': 'abc123secret'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
+			"versioned = sl.http(shop, headers={'X-Version': '1', 'X-Session-Id': 'abcdef12', 'X-Credential': 'abc123secret'})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return versioned.paginate('/echo', paginator=sl.single())\n",
 			"version 1 session *** credential ***",
 		),
 		(
@@ -815,7 +822,7 @@ def test_given_fan_out_keys_in_a_post_body_when_loading_then_each_request_carrie
 
 def test_given_a_batch_that_fails_when_loading_then_the_error_names_its_keys(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	job = "quick.fan_out('/lookup-flaky', method='POST', json_body={'ids': '{order_id}'}, batch=3, concurrency=1, over=range(1, 8), select='$.items')"
-	project = make_project(tmp_path, api, f"quick = sl.http(shop, auth=sl.bearer(), retries=0)\n\n@shop.table(description='Items.')\ndef items(ctx):\n    return {job}\n")
+	project = make_project(tmp_path, api, f"quick = api\n\n@shop.table(description='Items.')\ndef items(ctx):\n    return {job}\n", QUICK)
 	done = sqlload(project, "load", "--json")
 	assert done.returncode == 75, done.stdout + done.stderr
 	(table,) = json.loads(done.stdout)["tables"]
@@ -832,7 +839,7 @@ def test_given_a_body_placeholder_no_key_gives_when_loading_then_no_request_is_s
 
 
 FAIL_FAST_TABLES = """\
-quick = sl.http(shop, auth=sl.bearer(), retries=0)
+quick = api
 
 @shop.table(description='Fails at once.')
 def a_fails(ctx):
@@ -864,7 +871,7 @@ def d_later(ctx):
 def test_given_fail_fast_when_a_table_fails_while_another_loads_then_that_one_finishes_and_no_other_starts(
 	tmp_path: Path, api: ThreadingHTTPServer, path: str, fail_fast: bool, expected_exit: int, expected_statuses: list[str]
 ) -> None:
-	project = make_project(tmp_path, api, FAIL_FAST_TABLES.format(path=path))
+	project = make_project(tmp_path, api, FAIL_FAST_TABLES.format(path=path), QUICK)
 	flags = ["--fail-fast"] if fail_fast else []
 	done = sqlload(project, "load", "--json", "--concurrency", "2", *flags)
 	assert done.returncode == expected_exit, done.stdout + done.stderr
@@ -946,8 +953,8 @@ def test_given_read_ahead_under_a_memory_budget_when_pages_are_larger_than_a_qua
 
 
 def test_given_read_ahead_and_a_rate_limit_when_loading_then_every_request_waits_its_turn(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	tables = "limited = sl.http(shop, auth=sl.bearer(), rate_limit='10/s')\n\n@shop.table(description='T.')\ndef t(ctx):\n    return limited.paginate('/ahead', paginator=sl.offset(limit=1, read_ahead=4))\n"
-	project = make_project(tmp_path, api, tables)
+	tables = "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/ahead', paginator=sl.offset(limit=1, read_ahead=4))\n"
+	project = make_project(tmp_path, api, tables, BEARER + '\nrate_limit = "10/s"')
 	done = sqlload(project, "load", "--events", "jsonl")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW".shop__t') == [(len(ORDERS),)]
@@ -975,8 +982,8 @@ def test_given_offset_paging_when_the_api_rounds_the_offset_to_a_page_then_a_sho
 
 
 def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_connection(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	tables = "keyed = sl.http(shop, auth=sl.api_key(query='key'))\n\n@shop.table(description='T.')\ndef t(ctx):\n    return keyed.paginate('/offset', paginator=sl.offset(limit=10))\n"
-	project = make_project(tmp_path, api, tables)
+	tables = "@shop.table(description='T.')\ndef t(ctx):\n    return api.paginate('/offset', paginator=sl.offset(limit=10))\n"
+	project = make_project(tmp_path, api, tables, 'auth = { kind = "api_key", query = "key" }')
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert [(path, query.get("key"), auth) for path, query, auth in api.log] == [("/v1/offset", TOKEN, None)] * 2  # type: ignore[attr-defined]
@@ -993,8 +1000,8 @@ def test_given_an_api_key_in_the_query_when_loading_then_it_is_sent_only_to_the_
 def test_given_a_response_pointing_at_another_host_when_loading_then_no_credential_or_header_goes_there(
 	tmp_path: Path, api: ThreadingHTTPServer, elsewhere: ThreadingHTTPServer, path: str, paginator: str, expected_text: str
 ) -> None:
-	tables = f"keyed = sl.http(shop, auth=sl.api_key(header='X-Api-Key'), headers={{'X-Team': 'blue'}})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return keyed.paginate('{path}', paginator={paginator}, select='$.items')\n"
-	project = make_project(tmp_path, api, tables)
+	tables = f"keyed = sl.http(shop, headers={{'X-Team': 'blue'}})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return keyed.paginate('{path}', paginator={paginator}, select='$.items')\n"
+	project = make_project(tmp_path, api, tables, 'auth = { kind = "api_key", header = "X-Api-Key" }')
 	done = sqlload(project, "load")
 	assert expected_text in done.stdout + done.stderr, done.stdout + done.stderr
 	sent = {name.lower() for headers in elsewhere.seen for name in headers}  # type: ignore[attr-defined]
@@ -1110,13 +1117,14 @@ def test_given_a_masked_table_when_rows_keep_their_record_then_the_load_is_refus
 	assert api.log == []  # type: ignore[attr-defined]
 
 def oauth_project(tmp_path: Path, server: ThreadingHTTPServer, auth: str, job: str) -> Path:
-	tables = f"oauth = sl.http(shop, auth={auth})\n\n@shop.table(description='T.')\ndef t(ctx):\n    return oauth.{job}\n"
-	return make_project(tmp_path, server, tables)
+	"""A project whose connection sets `auth` (TOML, after `auth = `), with one table running `job`."""
+	tables = f"@shop.table(description='T.')\ndef t(ctx):\n    return api.{job}\n"
+	return make_project(tmp_path, server, tables, f"auth = {auth}")
 
 
 @pytest.mark.parametrize(
 	("auth", "expected_grant"),
-	[("sl.oauth2_client_credentials(TOKEN_URL, scope='orders:read')", "client_credentials"), ("sl.oauth2_password(TOKEN_URL, scope='orders:read')", "password")],
+	[('{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL", scope = "orders:read" }', "client_credentials"), ('{ kind = "oauth2_password", token_url = "TOKEN_URL", scope = "orders:read" }', "password")],
 	ids=["client-credentials", "password"],
 )
 def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_before_it_expires(
@@ -1135,9 +1143,9 @@ def test_given_short_lived_tokens_when_pages_outlast_one_then_it_is_renewed_befo
 @pytest.mark.parametrize(
 	("auth", "expected_grant"),
 	[
-		("sl.oauth2_client_credentials(TOKEN_URL)", [("client_credentials", None)] * 3),
-		("sl.oauth2_refresh_token(TOKEN_URL, client_auth='post')", [("refresh_token", REFRESH_TOKEN), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
-		("sl.oauth2_password(TOKEN_URL)", [("password", None), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
+		('{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL" }', [("client_credentials", None)] * 3),
+		('{ kind = "oauth2_refresh_token", token_url = "TOKEN_URL", client_auth = "post" }', [("refresh_token", REFRESH_TOKEN), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
+		('{ kind = "oauth2_password", token_url = "TOKEN_URL" }', [("password", None), ("refresh_token", "r3fresh-2"), ("refresh_token", "r3fresh-3")]),
 	],
 	ids=["client-credentials", "refresh-token-rotated-client-in-form", "password-then-its-refresh-token"],
 )
@@ -1160,22 +1168,22 @@ def test_given_a_token_revoked_mid_pagination_when_the_api_answers_401_then_a_ne
 	("auth", "job", "expected_text"),
 	[
 		(
-			"sl.oauth2_client_credentials(TOKEN_URL, client_auth='post')",
+			'{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL", client_auth = "post" }',
 			"paginate('/offset', paginator=sl.offset(limit=10))",
 			"/oauth/token (OAuth2 token): HTTP 401: invalid_client: unknown client ['app', '***'] or refresh token; check the connection's OAuth2 credentials",
 		),
 		(
-			"sl.oauth2_client_credentials('http://auth.example.com/token')",
+			'{ kind = "oauth2_client_credentials", token_url = "http://auth.example.com/token" }',
 			"paginate('/offset', paginator=sl.offset(limit=10))",
 			"token_url http://auth.example.com/token must be https",
 		),
 		(
-			"sl.oauth2_client_credentials(TOKEN_URL)",
+			'{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL" }',
 			"paginate('/whoami', paginator=sl.single())",
 			'HTTP 400: {"message": "you are Bearer ***"}',
 		),
 		(
-			"sl.oauth2_client_credentials(TOKEN_URL)",
+			'{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL" }',
 			"paginate('/leak', paginator=sl.next_link('$.next'), select='$.items')",
 			"/v1/notjson?access_token=***: the response is not JSON",
 		),
@@ -1200,7 +1208,7 @@ def test_given_a_password_grant_without_a_refresh_token_or_with_a_refused_one_wh
 	tmp_path: Path, api: ThreadingHTTPServer
 ) -> None:
 	api.oauth = {"uses": 3, "stale_refresh": True}  # type: ignore[attr-defined]
-	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL, client_auth='post')", "paginate('/offset', paginator=sl.offset(limit=1))")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_password", token_url = "TOKEN_URL", client_auth = "post" }', "paginate('/offset', paginator=sl.offset(limit=1))")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
@@ -1215,11 +1223,11 @@ def test_given_a_rotating_refresh_token_when_a_page_read_ahead_is_renewing_as_th
 ) -> None:
 	api.oauth = {"rotate": True, "slow_refresh": 1.0}  # type: ignore[attr-defined]
 	tables = (
-		"oauth = sl.http(shop, auth=sl.oauth2_refresh_token(TOKEN_URL))\n\n"
+		"oauth = api\n\n"
 		"@shop.table(description='T.')\ndef a_ahead(ctx):\n    return oauth.paginate('/ahead_end', paginator=sl.offset(limit=1, read_ahead=2))\n\n"
 		"@shop.table(description='T.')\ndef b_after(ctx):\n    return oauth.paginate('/refuse_once', paginator=sl.single())\n"
 	)
-	project = make_project(tmp_path, api, tables)
+	project = make_project(tmp_path, api, tables, 'auth = { kind = "oauth2_refresh_token", token_url = "TOKEN_URL" }')
 	done = sqlload(project, "load", "--concurrency", "1")
 	assert done.returncode == 0, done.stdout + done.stderr
 	for table in ("a_ahead", "b_after"):
@@ -1232,7 +1240,7 @@ def test_given_a_token_endpoint_down_once_when_refreshing_after_a_password_grant
 	tmp_path: Path, api: ThreadingHTTPServer
 ) -> None:
 	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
-	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=1))")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_password", token_url = "TOKEN_URL" }', "paginate('/offset', paginator=sl.offset(limit=1))")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, 'SELECT order_id, status FROM "RAW".shop__t ORDER BY order_id') == ALL_ORDERS
@@ -1244,14 +1252,14 @@ def test_given_a_token_endpoint_down_when_refreshing_without_retries_then_the_ru
 	tmp_path: Path, api: ThreadingHTTPServer
 ) -> None:
 	api.oauth = {"uses": 3, "rotate": True, "refresh_503_once": True}  # type: ignore[attr-defined]
-	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL), retries=0", "paginate('/offset', paginator=sl.offset(limit=1))")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_password", token_url = "TOKEN_URL" }\nretries = 0', "paginate('/offset', paginator=sl.offset(limit=1))")
 	done = sqlload(project, "load")
 	assert done.returncode == 75, done.stdout + done.stderr
 	assert [(request["grant_type"], request.get("refresh_token")) for request in api.token_requests] == [("password", None), ("refresh_token", "r3fresh-2")]  # type: ignore[attr-defined]
 
 
 def test_given_a_wrong_password_when_loading_with_json_then_it_fails_for_good_and_hides_the_password(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	project = oauth_project(tmp_path, api, "sl.oauth2_password(TOKEN_URL)", "paginate('/offset', paginator=sl.offset(limit=10))")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_password", token_url = "TOKEN_URL" }', "paginate('/offset', paginator=sl.offset(limit=10))")
 	(project / "sqlload.toml").write_text((project / "sqlload.toml").read_text().replace("${ENV:SHOP_PASSWORD}", "wr0ng+p\u00e4ss\\\\word"))
 	done = sqlload(project, "load", "--json")
 	assert done.returncode == 1, done.stdout + done.stderr
@@ -1263,7 +1271,7 @@ def test_given_a_wrong_password_when_loading_with_json_then_it_fails_for_good_an
 
 
 def test_given_401_listed_as_skip_when_the_api_answers_it_then_the_request_is_skipped_without_a_new_token(tmp_path: Path, api: ThreadingHTTPServer) -> None:
-	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL)", "fan_out('/denied?k={k}', over=range(5), concurrency=1, paginator=sl.single(), on_status={401: 'skip'})")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL" }', "fan_out('/denied?k={k}', over=range(5), concurrency=1, paginator=sl.single(), on_status={401: 'skip'})")
 	done = sqlload(project, "load")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert len([path for path, _, _ in api.log if path == "/v1/denied"]) == 5  # type: ignore[attr-defined]
@@ -1273,7 +1281,7 @@ def test_given_401_listed_as_skip_when_the_api_answers_it_then_the_request_is_sk
 def test_given_a_401_from_another_origin_when_loading_then_no_token_is_sent_there_or_renewed_for_it(
 	tmp_path: Path, api: ThreadingHTTPServer, elsewhere: ThreadingHTTPServer
 ) -> None:
-	project = oauth_project(tmp_path, api, "sl.oauth2_client_credentials(TOKEN_URL)", "paginate('/away401', paginator=sl.next_link('$.next'), select='$.items')")
+	project = oauth_project(tmp_path, api, '{ kind = "oauth2_client_credentials", token_url = "TOKEN_URL" }', "paginate('/away401', paginator=sl.next_link('$.next'), select='$.items')")
 	done = sqlload(project, "load")
 	assert done.returncode == 1
 	assert "/denied: HTTP 401" in done.stdout + done.stderr, done.stdout + done.stderr
@@ -1345,7 +1353,7 @@ def test_given_a_post_answered_with_a_redirect_or_link_when_loading_then_its_bod
 
 def test_given_a_connection_content_type_when_posting_then_it_is_the_only_one_sent(tmp_path: Path, api: ThreadingHTTPServer) -> None:
 	tables = (
-		"typed = sl.http(shop, auth=sl.bearer(), headers={'Content-Type': 'application/json; charset=utf-8'})\n\n"
+		"typed = sl.http(shop, headers={'Content-Type': 'application/json; charset=utf-8'})\n\n"
 		"@shop.table(description='Orders.')\ndef orders(ctx):\n"
 		"    return typed.paginate('/search-cursor', method='POST', paginator=sl.single(), select='$.items')\n"
 	)
@@ -1615,7 +1623,9 @@ def test_given_a_failing_level_when_loading_then_the_error_names_the_keys_that_l
 ) -> None:
 	project = tree_project(tmp_path, api, notes, on_status=on_status)
 	shop_py = project / "sources" / "shop.py"
-	shop_py.write_text(shop_py.read_text().replace("\n\n@shop.table", "\nonce = sl.http(shop, auth=sl.bearer(), retries=0)\n\n@shop.table", 1))
+	shop_py.write_text(shop_py.read_text().replace("\n\n@shop.table", "\nonce = api\n\n@shop.table", 1))
+	toml = project / "sqlload.toml"
+	toml.write_text(toml.read_text().replace("retries = 3", "retries = 0"))
 	done = sqlload(project, "load")
 	output = done.stdout + done.stderr
 	assert done.returncode == expected_code, output
@@ -1636,10 +1646,10 @@ def test_given_a_cursor_on_the_top_level_when_loading_twice_then_the_rerun_reque
 
 
 ONE_LEVEL_JOB = (
-	'{"kind": "fan_out", "client": {"connection": "shop", "auth": {"kind": "bearer"}, "rate_limit": null, "retries": 3, "headers": {}}, '
+	'{"kind": "fan_out", "client": {"connection": "shop", "headers": {}}, '
 	'"path": "/orders/{order_id}/items", "params": {}, "method": "GET", "json_body": null, "paginator": {"kind": "single"}, "select": "$.items", '
 	'"on_status": {"404": "skip"}, "fields": null, "keep_record": null, "over": {"kind": "paginate", "client": {"connection": "shop", '
-	'"auth": {"kind": "bearer"}, "rate_limit": null, "retries": 3, "headers": {}}, "path": "/orders", "params": {}, "method": "GET", '
+	'"headers": {}}, "path": "/orders", "params": {}, "method": "GET", '
 	'"json_body": null, "paginator": {"kind": "page_number", "param": "p", "start": 1, "location": "query"}, "select": "$.items[*].order_id", '
 	'"on_status": {}, "fields": null, "keep_record": null}, "concurrency": 3}'
 )
@@ -1647,7 +1657,7 @@ ONE_LEVEL_JOB = (
 
 def test_given_a_one_level_fan_out_when_defined_then_its_job_is_unchanged_by_multi_level_support() -> None:
 	code = (
-		"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop, auth=sl.bearer(), retries=3)\n"
+		"import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='shop')\napi = sl.http(shop)\n"
 		"orders = api.paginate('/orders', paginator=sl.page_number('p'), select='$.items[*].order_id')\n"
 		"print(api.fan_out('/orders/{order_id}/items', over=orders, concurrency=3, select='$.items', on_status={404: 'skip'}).__sqlload_http_job__())"
 	)

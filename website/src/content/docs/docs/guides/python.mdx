@@ -28,7 +28,7 @@ Rust, so there is no per-row Python cost.
 import sqlload as sl
 
 shop = sl.source("shop", connection="shop", write_strategy="merge")
-api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
+api = sl.http(shop)
 
 
 @shop.table(description="Orders, one row per order.", unique_key="order_id")
@@ -127,13 +127,21 @@ the base URL and credentials:
 kind = "http"
 base_url = "https://api.example.com"
 token = "${ENV:SHOP_TOKEN}"
+auth = { kind = "bearer" }
+rate_limit = "10/s"
+max_in_flight = 4
 ```
+
+The connection holds what every request to the API shares: `auth`, `rate_limit`, `max_in_flight`
+and `retries` (5 by default). The limits hold across every table in the run, so tables reading the
+same API at once stay under them together. Load one API's tables in one `sqlload load`; separate
+processes don't share the limits. See the [`http` connection](/docs/configuration/#http).
 
 ```python
 import sqlload as sl
 
 shop = sl.source("shop", connection="shop", write_strategy="merge")
-api = sl.http(shop, auth=sl.bearer(), rate_limit="10/s", retries=5)
+api = sl.http(shop)
 
 
 @shop.table(description="Orders, one row per order.", unique_key="order_id")
@@ -209,17 +217,13 @@ kind = "http"
 base_url = "https://api.example.com/v2"
 client_id = "loader"
 client_secret = "${ENV:ERP_CLIENT_SECRET}"
+auth = { kind = "oauth2_client_credentials", token_url = "https://auth.example.com/oauth/token", scope = "accounts:read" }
 ```
 
 ```python
 erp = sl.source("erp", connection="erp", write_strategy="replace")
-api = sl.http(
-    erp,
-    auth=sl.oauth2_client_credentials(
-        "https://auth.example.com/oauth/token", scope="accounts:read"
-    ),
-)
+api = sl.http(erp)
 ```
 
-SQLLoad fetches the token and renews it before it expires. For `sl.oauth2_refresh_token`, how
+SQLLoad fetches the token and renews it before it expires. For `oauth2_refresh_token`, how
 tokens are renewed and where secrets go, see [OAuth2](/docs/sources/python/#oauth2).

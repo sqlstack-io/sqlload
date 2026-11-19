@@ -1,4 +1,4 @@
-//! A connection's settings resolved into what requests need, and the rate limit its jobs share.
+//! A connection's settings resolved into what requests need, and the limits every request to it shares.
 
 use crate::load_events::main::emit::emit;
 use crate::load_events::models::EventKind;
@@ -12,29 +12,45 @@ use serde_json::{Map, Value};
 use crate::http_source::_helpers::oauth::shared_token_source;
 use crate::http_source::_helpers::urls::encoded;
 use crate::http_source::constants::SECRET_HEADER_WORDS;
-use crate::http_source::models::{Auth, ClientSpec, Credential, Endpoint, Grant, Limiter};
+use crate::http_source::models::{
+    Auth, ClientSpec, ConnectionLimits, Credential, Endpoint, Grant, HttpSettings, Limiter,
+};
+
+/// The settings of `client`'s connection that requests share, and the connection's own settings.
+pub(crate) fn connection_settings<'a>(
+    client: &ClientSpec,
+    connections: &'a Map<String, Value>,
+) -> Result<(HttpSettings, &'a Map<String, Value>), String> {
+    let name = &client.connection;
+    let settings = connections
+        .get(name)
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!("sl.http uses connection {name}, which is not in sqlload.toml or is a target's connection")
+        })?;
+    let shared = serde_json::from_value::<HttpSettings>(Value::Object(settings.clone()))
+        .map_err(|error| format!("[connections.{name}]: {error}"))?;
+    Ok((shared, settings))
+}
 
 /// The endpoint of `client`'s connection: its `base_url`, headers and the credential its `auth` names.
 pub(crate) fn endpoint(
     client: &ClientSpec,
-    connections: &Map<String, Value>,
+    (auth, settings): (&Auth, &Map<String, Value>),
 ) -> Result<Endpoint, String> {
     let name = &client.connection;
-    let settings = connections.get(name).ok_or_else(|| {
-        format!("sl.http uses connection {name}, which is not in sqlload.toml or is a target's connection")
-    })?;
     let text = |key: &str| settings.get(key).and_then(Value::as_str).map(str::to_owned);
     let base =
         text("base_url").ok_or_else(|| format!("connection {name} needs base_url for sl.http"))?;
     let base_url = reqwest::Url::parse(&base)
         .map_err(|error| format!("connection {name}: base_url {base} is not a URL: {error}"))?;
     let needed = |key: &str| {
-        text(key).filter(|value| !value.is_empty()).ok_or_else(|| {
-            format!("connection {name} needs {key} for the sl.http auth this job uses")
-        })
+        text(key)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("connection {name} needs {key} for its auth"))
     };
     let present = |key: &str| text(key).filter(|value| !value.is_empty());
-    let credential = match &client.auth {
+    let credential = match auth {
         Auth::None => Credential::None,
         Auth::Bearer => Credential::Header {
             name: "Authorization".to_owned(),
@@ -55,7 +71,9 @@ pub(crate) fn endpoint(
             value: needed("token")?,
         },
         Auth::ApiKey { .. } => {
-            return Err("sl.api_key takes exactly one of header= or query=".to_owned());
+            return Err(format!(
+                "[connections.{name}] auth api_key takes exactly one of header or query"
+            ));
         }
         Auth::Basic => {
             let pair = format!("{}:{}", needed("username")?, needed("password")?);
@@ -74,7 +92,7 @@ pub(crate) fn endpoint(
             };
             Credential::OAuth2(shared_token_source(
                 name,
-                &format!("{:?}", client.auth),
+                &format!("{auth:?}"),
                 spec,
                 grant,
             )?)
@@ -86,7 +104,7 @@ pub(crate) fn endpoint(
             };
             Credential::OAuth2(shared_token_source(
                 name,
-                &format!("{:?}", client.auth),
+                &format!("{auth:?}"),
                 spec,
                 grant,
             )?)
@@ -99,7 +117,7 @@ pub(crate) fn endpoint(
             };
             Credential::OAuth2(shared_token_source(
                 name,
-                &format!("{:?}", client.auth),
+                &format!("{auth:?}"),
                 spec,
                 grant,
             )?)
@@ -179,26 +197,41 @@ fn text_headers(headers: &Map<String, Value>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The limiter every job of `connection` with the limit `rate` (`10/s`, `600/m`, `1000/h`) shares in this process.
-pub(crate) fn shared_limiter(connection: &str, rate: &str) -> Result<Arc<Limiter>, String> {
-    static LIMITERS: OnceLock<Mutex<HashMap<String, Arc<Limiter>>>> = OnceLock::new();
-    let interval = interval(rate)?;
-    let limiters = LIMITERS.get_or_init(Mutex::default);
-    let mut limiters = limiters
+/// The limiter and in-flight cap every request to `connection` shares in this process, made for its `limits` by the first job to call it. A later project in the same process (as tests run) that gives the connection other limits replaces them.
+pub(crate) fn shared_limits(
+    connection: &str,
+    limits: &ConnectionLimits,
+) -> Result<SharedLimits, String> {
+    static SHARED: OnceLock<Mutex<HashMap<String, (ConnectionLimits, SharedLimits)>>> =
+        OnceLock::new();
+    let mut shared = SHARED
+        .get_or_init(Mutex::default)
         .lock()
         .map_err(|_| "the rate limiters' lock is poisoned".to_owned())?;
-    let limiter = limiters
-        .entry(format!("{connection}\u{0}{rate}"))
-        .or_insert_with(|| {
-            Arc::new(Limiter {
-                connection: connection.to_owned(),
-                rate: rate.to_owned(),
-                interval,
-                next: Mutex::new(tokio::time::Instant::now()),
-            })
-        });
-    Ok(limiter.clone())
+    if let Some((made_for, made)) = shared.get(connection)
+        && made_for == limits
+    {
+        return Ok(made.clone());
+    }
+    let limiter = match &limits.rate_limit {
+        Some(rate) => Some(Arc::new(Limiter {
+            connection: connection.to_owned(),
+            rate: rate.clone(),
+            interval: interval(rate)?,
+            next: Mutex::new(tokio::time::Instant::now()),
+        })),
+        None => None,
+    };
+    let in_flight = limits
+        .max_in_flight
+        .map(|most| Arc::new(tokio::sync::Semaphore::new(most)));
+    let made = (limiter, in_flight);
+    shared.insert(connection.to_owned(), (limits.clone(), made.clone()));
+    Ok(made)
 }
+
+/// A connection's shared limiter and in-flight cap, each `None` when it sets no such limit.
+pub(crate) type SharedLimits = (Option<Arc<Limiter>>, Option<Arc<tokio::sync::Semaphore>>);
 
 /// The time between requests `rate` allows.
 pub(crate) fn interval(rate: &str) -> Result<Duration, String> {

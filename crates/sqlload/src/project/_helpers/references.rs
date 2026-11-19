@@ -5,6 +5,8 @@ use crate::files_source::main::text_charset::text_charset;
 use crate::files_source::models::{
     AfterLoad, Compression, CsvQuote, FilePattern, FilesOrder, OnEmpty, RecordShape, SourceFormat,
 };
+use crate::http_source::main::http_connection_problems::http_connection_problems;
+use crate::http_source::models::ConnectionLimits;
 use crate::load_naming::constants::SQLLOAD_PREFIX;
 use crate::project::_helpers::targets::{
     destination_kind_problems, is_files_target, stage_problems, target_problems,
@@ -51,6 +53,19 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             problems.push(format!(
                 "[connections.{name}] profile is empty; omit it to use AWS_PROFILE, else default"
             ));
+        }
+        if let ConnectionConfig::Http {
+            auth,
+            rate_limit,
+            max_in_flight,
+            ..
+        } = connection
+        {
+            let limits = ConnectionLimits {
+                rate_limit: rate_limit.clone(),
+                max_in_flight: *max_in_flight,
+            };
+            problems.extend(http_connection_problems(name, auth, &limits));
         }
         if let ConnectionConfig::Gcs {
             hmac_key_id,

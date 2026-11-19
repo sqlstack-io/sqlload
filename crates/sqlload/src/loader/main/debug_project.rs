@@ -2,12 +2,14 @@
 
 use crate::adapters::dispatch::main::session::check_destination::check_destination;
 use crate::adapters::dispatch::main::session::connect_destination::connect_destination;
+use crate::auth::models::Secret;
 use crate::file_store::main::gcs_key_source::gcs_key_source;
 use crate::file_store::main::s3_key_source::s3_key_source;
+use crate::http_source::main::http_credential_source::http_credential_source;
 use crate::loader::main::_check_source::check_source;
 use crate::project::models::{ConnectionConfig, ProjectConfig};
 
-/// One line per check (`ok`, `warn` or `fail`), and whether nothing failed: where each S3 connection's keys and each GCS connection's credentials come from, then each target and source; `connect = false` skips them.
+/// One line per check (`ok`, `warn` or `fail`), and whether nothing failed: where each S3 connection's keys, each GCS connection's credentials and each HTTP connection's credentials come from, then each target and source; `connect = false` skips them.
 pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<String>, bool) {
     let mut lines = vec![format!(
         "ok    config  {} connections, {} targets, {} sources",
@@ -42,6 +44,29 @@ pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<Strin
                 ..
             } => gcs_key_source(service_account_key.is_some())
                 .map(|source| format!("GCS credentials from {source}")),
+            ConnectionConfig::Http {
+                auth,
+                token,
+                username,
+                password,
+                client_id,
+                client_secret,
+                refresh_token,
+                ..
+            } => {
+                let secret =
+                    |value: &Option<Secret>| value.as_ref().is_some_and(|it| !it.0.is_empty());
+                let text = |value: &Option<String>| value.as_ref().is_some_and(|it| !it.is_empty());
+                let set = [
+                    ("token", secret(token)),
+                    ("username", text(username)),
+                    ("password", secret(password)),
+                    ("client_id", text(client_id)),
+                    ("client_secret", secret(client_secret)),
+                    ("refresh_token", secret(refresh_token)),
+                ];
+                http_credential_source(auth, &set)
+            }
             _ => continue,
         };
         lines.push(match found {

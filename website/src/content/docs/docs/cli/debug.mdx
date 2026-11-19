@@ -27,6 +27,14 @@ $ sqlload debug
 fail  source app  cannot connect to Postgres at db.example.com:5432/postgres: error performing TLS handshake: invalid peer certificate: UnknownIssuer
 ```
 
+An `http` connection's line says which of its settings the credentials come from, and for OAuth2
+the token URL. One that lacks a credential its `auth` needs prints `fail`:
+
+```console
+ok    connection shop  auth bearer: token from the connection
+fail  connection erp  auth oauth2_client_credentials needs client_secret on the connection
+```
+
 | Option | Meaning |
 |--------|---------|
 | `--no-connection` | Only validate the configuration; connect to nothing. |

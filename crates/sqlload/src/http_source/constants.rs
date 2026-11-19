@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+/// Retries of a failed request when the connection sets no `retries`.
+pub const DEFAULT_RETRIES: u32 = 5;
+
 /// The delay before the first retry; each later one doubles it.
 pub const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
 
