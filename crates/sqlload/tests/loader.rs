@@ -63,6 +63,8 @@ mod test_files_round_trip;
 mod test_files_to_clickhouse;
 #[path = "loader/test_files_to_duckdb.rs"]
 mod test_files_to_duckdb;
+#[path = "loader/test_gcs_files.rs"]
+mod test_gcs_files;
 #[path = "loader/test_loader_edge_cases.rs"]
 mod test_loader_edge_cases;
 #[path = "loader/test_memory_budget.rs"]

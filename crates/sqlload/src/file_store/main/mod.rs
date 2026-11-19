@@ -1,7 +1,6 @@
 pub mod create_file;
 pub mod current_version;
 pub mod delete_files;
-pub mod gcs_builder;
 pub mod gcs_key_source;
 pub mod list_files;
 pub mod move_file;

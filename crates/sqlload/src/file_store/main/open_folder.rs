@@ -6,8 +6,8 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::auth::models::Secret;
+use crate::file_store::_helpers::gcs_keys::gcs_builder;
 use crate::file_store::errors::StoreError;
-use crate::file_store::main::gcs_builder::gcs_builder;
 use crate::file_store::main::s3_builder::s3_builder;
 use crate::file_store::models::{OpenFolder, SftpStore};
 use crate::http::main::install_tls_provider::install_tls_provider;

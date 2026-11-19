@@ -217,21 +217,25 @@ fn given_a_gcs_bucket_when_duckdb_reads_its_files_itself_then_its_secret_carries
                 access.chain,
             )
         });
-        let expected = test_case
-            .expected_access
-            .map(|(bucket, statement, parameters)| {
-                (
-                    bucket.to_owned(),
-                    "INSTALL httpfs; LOAD httpfs;",
-                    statement.to_owned(),
-                    parameters
-                        .iter()
-                        .map(|value| (*value).to_owned())
-                        .collect::<Vec<_>>(),
-                    false,
-                )
-            });
-        assert_eq!(found, expected, "{}", test_case.description);
+        assert_eq!(
+            found,
+            test_case
+                .expected_access
+                .map(|(bucket, statement, parameters)| {
+                    (
+                        bucket.to_owned(),
+                        "INSTALL httpfs; LOAD httpfs;",
+                        statement.to_owned(),
+                        parameters
+                            .iter()
+                            .map(|value| (*value).to_owned())
+                            .collect::<Vec<_>>(),
+                        false,
+                    )
+                }),
+            "{}",
+            test_case.description
+        );
     }
     Ok(())
 }
