@@ -6,5 +6,7 @@ mod dialect;
 mod helpers;
 #[path = "tests/test_pull_query.rs"]
 mod pull_query;
+#[path = "tests/test_selected_insert.rs"]
+mod selected_insert;
 #[path = "tests/test_types.rs"]
 mod test_types;

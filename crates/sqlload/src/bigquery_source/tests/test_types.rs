@@ -42,3 +42,12 @@ pub(crate) struct CountQueryTestCase {
     pub(crate) filter: &'static str,
     pub(crate) expected_query: &'static str,
 }
+
+pub(crate) struct SelectProblemTestCase {
+    pub(crate) description: &'static str,
+    /// The table's columns, as `tables.get` describes them.
+    pub(crate) fields: Vec<serde_json::Value>,
+    pub(crate) pinned: Vec<(&'static str, ColumnType)>,
+    /// Why BigQuery can't select the rows into a BigQuery table itself, if it can't.
+    pub(crate) expected_problem: Option<&'static str>,
+}

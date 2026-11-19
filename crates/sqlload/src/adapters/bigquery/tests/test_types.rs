@@ -43,3 +43,11 @@ pub(crate) struct PullQueriesTestCase {
     pub(crate) groups: Vec<crate::adapters::bigquery::_helpers::dialect::pull::PulledGroup>,
     pub(crate) expected_queries: usize,
 }
+
+pub(crate) struct SelectedInsertTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) columns: Vec<crate::schema_plan::models::DesiredColumn>,
+    /// The rows go to a build table in their final types, rather than the staging table.
+    pub(crate) builds: bool,
+    pub(crate) expected_insert: &'static str,
+}
