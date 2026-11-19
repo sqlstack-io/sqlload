@@ -77,8 +77,8 @@ use crate::loader::_helpers::run_log::ensure_runs_table;
 use crate::loader::_helpers::run_log::fold_maximum;
 use crate::loader::_helpers::run_log::logs_files;
 use crate::loader::_helpers::run_log::{
-    commit_transform, in_file, listed_sources, merge_rebuild, merged_file_text, merged_name,
-    merged_record, swap_rebuild, with_file_keys, with_transform,
+    checked_file_keys, commit_transform, in_file, merge_rebuild, merged_file_text, merged_record,
+    swap_rebuild, with_transform,
 };
 use crate::loader::_helpers::run_log::{record_numbered, recorded_names, transformed};
 use crate::loader::_helpers::sources::ReadPart;
@@ -123,7 +123,6 @@ use crate::memory_budget::constants::TABLE_SHARE_PARTS;
 use crate::number_text::main::thousands::thousands;
 use crate::postgres_source::errors::PostgresError;
 use crate::project::models::{NullCursor, NullKeys};
-use crate::publish_checks::main::key_sources::key_sources;
 use crate::publish_checks::main::marked_rows::marked_rows;
 use crate::publish_checks::main::older_rows::older_rows;
 use crate::publish_checks::main::refuse_null_keys::refuse_null_keys;
@@ -157,10 +156,9 @@ use arrow_array::Int64Array;
 use arrow_array::RecordBatch;
 use arrow_array::StringArray;
 use arrow_array::TimestampMicrosecondArray;
-use arrow_array::cast::AsArray;
 use arrow_array::new_null_array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
-use arrow_cast::{CastOptions, cast, cast_with_options};
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::Field;
 use arrow_schema::Schema;
 use chrono::DateTime;
@@ -325,34 +323,17 @@ fn row_ids(table: &TablePlan, batch: &RecordBatch) -> Result<Option<Vec<String>>
     key_row_ids(batch, &key).map(Some)
 }
 
-/// Under a merge, the ordinal each of `batch`'s rows is staged with, which its child rows carry so a dropped repeated row's leave with it: a files source's `_sqlload_source_row` when the merge ranks by it, otherwise from `first`, as `_sqlload_row` numbers them; `None` without a merge.
+/// Under a merge, the ordinal each of `batch`'s rows is staged with, which its child rows carry so a dropped repeated row's leave with it: from `first`, as `_sqlload_row` numbers them; `None` without a merge.
 fn root_ordinals(
     table: &TablePlan,
     batch: &RecordBatch,
     first: i64,
 ) -> Result<Option<Vec<i64>>, String> {
-    let WriteMode::Merge { dedupe, .. } = &table.mode else {
+    let WriteMode::Merge { .. } = &table.mode else {
         return Ok(None);
     };
     let rows = i64::try_from(batch.num_rows()).unwrap_or(i64::MAX);
-    let Some(dedupe) = dedupe
-        .as_ref()
-        .filter(|dedupe| dedupe.ordinal != MERGE_ROW_COLUMN)
-    else {
-        return Ok(Some((first..first + rows).collect()));
-    };
-    let column = batch
-        .column_by_name(&dedupe.ordinal)
-        .ok_or_else(|| format!("the staged rows have no {} column", dedupe.ordinal))?;
-    let ordinals =
-        cast(column, &arrow_schema::DataType::Int64).map_err(|error| error.to_string())?;
-    Ok(Some(
-        ordinals
-            .as_primitive::<arrow_array::types::Int64Type>()
-            .iter()
-            .map(|ordinal| ordinal.unwrap_or_default())
-            .collect(),
-    ))
+    Ok(Some((first..first + rows).collect()))
 }
 
 /// `batch` with `_sqlload_root_row` added last: each row's root row's ordinal, `roots`.
@@ -666,7 +647,7 @@ impl Publisher {
             committed_state,
             batch_bytes: options.batch_bytes.unwrap_or(BATCH_BYTES),
             files,
-            merged_file: None,
+            merged_files: Vec::new(),
             replaced: None,
             marked: None,
             older: 0,
@@ -1179,17 +1160,17 @@ impl Publisher {
         };
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
-        let merging_file = self.merged_file.is_some();
-        let file = self.merged_file.clone();
+        let merging_file = self.merged_files.len() == 1;
+        let files = self.merged_files.clone();
         let (ran, taken) = match self.pieces.piece {
-            true => (None, None),
+            true => (None, Vec::new()),
             false => (
                 commit_transform(&self.table, self.transform.as_mut()),
-                self.merged_file.take(),
+                std::mem::take(&mut self.merged_files),
             ),
         };
-        let mut merged = taken.map(|file| {
-            let record = (file, self.waiting_rows);
+        let mut merged = (!taken.is_empty()).then(|| {
+            let record = (taken, self.waiting_rows);
             with_transform(
                 &self.table,
                 merged_record(spec, (&self.load_id, self.commits + 1), record),
@@ -1238,7 +1219,7 @@ impl Publisher {
             committed: self.committed_rows,
         };
         if let (Some((key, setting)), NullKeys::Fail) = (checked_key(spec, &mode), spec.null_keys) {
-            refuse_null_keys(&checked, (key, setting), merging_file).await?;
+            refuse_null_keys(&checked, (key, setting), &files).await?;
         }
         if let WriteMode::Merge {
             unique_key,
@@ -1257,21 +1238,13 @@ impl Publisher {
         self.older += older_rows(&checked, &mode).await?;
         let replaced = match &mode {
             WriteMode::DeleteInsert { replace_key, .. } if !replace_key.is_empty() => {
-                let limit = file
-                    .as_ref()
-                    .map_or(REPLACED_KEYS_SHOWN as u64 + 1, |_| i64::MAX as u64);
+                let limit = REPLACED_KEYS_SHOWN as u64 + 1;
                 let mut values = staged_keys(&checked, (replace_key.as_slice(), limit)).await?;
-                if let Some(file) = file.as_deref() {
+                if !files.is_empty() {
                     let earlier = std::mem::take(&mut self.run_keys);
-                    self.run_keys = with_file_keys(&self.table, (file, &values), earlier)
-                        .map_err(LoaderError::Invalid)?;
-                    let named = (
-                        replace_key.as_slice(),
-                        SOURCE_FILE_COLUMN,
-                        merged_name(file),
-                    );
-                    let sources = key_sources(&checked, named).await?;
-                    listed_sources(&self.table, file, &sources).map_err(LoaderError::Invalid)?;
+                    self.run_keys =
+                        checked_file_keys(&self.table, (&checked, replace_key), (&files, earlier))
+                            .await?;
                 }
                 values.truncate(REPLACED_KEYS_SHOWN + 1);
                 Some((replace_key.clone(), values))
@@ -1675,8 +1648,11 @@ async fn feed(
                         .iter()
                         .filter_map(|index| planned.and_then(|files| files.get(*index)).cloned())
                         .collect();
-                    let merged = merging.then(|| merged_file_text(table, &files));
-                    publisher.merged_file = merged.clone();
+                    let merged = match merging {
+                        true => merged_file_text(table, &files),
+                        false => Vec::new(),
+                    };
+                    publisher.merged_files = merged.clone();
                     if table.spec.after_load != AfterLoad::Keep {
                         publisher.fed_files.extend(unarchived(table, &files));
                     }
@@ -1724,9 +1700,9 @@ async fn feed(
                         .await?;
                         publisher.cut(range).await
                     };
-                    fed_group.await.map_err(|error| match &merged {
-                        Some(name) => in_file(name, error),
-                        None => error,
+                    fed_group.await.map_err(|error| match merged.as_slice() {
+                        [name] => in_file(name, error),
+                        _ => error,
                     })?;
                 }
             }
@@ -1815,7 +1791,7 @@ async fn feed(
     (publisher, fed)
 }
 
-/// Whether `table` loads a files source's files one commit and run record per file: a merge, or `delete_insert` by `replace_key` (see [`logs_files`]).
+/// Whether `table` loads a files source's files in order, each commit's run record naming its files: a merge, or `delete_insert` by `replace_key` (see [`logs_files`]).
 pub(crate) fn records_files(table: &TablePlan) -> bool {
     table.files.is_some() && logs_files(&table.spec)
 }

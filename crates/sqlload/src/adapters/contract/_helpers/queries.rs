@@ -2,6 +2,7 @@
 
 use chrono::NaiveDateTime;
 
+use crate::adapters::contract::_helpers::promote::same_value;
 use crate::adapters::contract::constants::{
     MAX_INSERT_ROWS, MAX_INSERT_SQL_BYTES, STAGING_SUFFIX, STAGING_TIME_DIGITS, STAGING_TIME_FORMAT,
 };
@@ -288,18 +289,33 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
             "SELECT DISTINCT {} AS example FROM {from} ORDER BY 1 LIMIT {limit}",
             examples(&names_of(columns), true)
         ),
-        CheckQuery::KeySources {
+        CheckQuery::KeyFiles {
             key,
-            staged,
             file_column,
-            file,
+            held_by,
         } => {
-            let values = examples(&names_of(key), true);
+            let values = key_text(adapter, key);
             let column = adapter.render_identifier(file_column);
+            let length = adapter.render_text_cast(&format!("length({column})"));
+            let held = held_by.map_or_else(String::new, |held_by| {
+                format!(
+                    " WHERE {values} IN (SELECT {values} FROM {})",
+                    adapter.render_qualified_name(held_by)
+                )
+            });
             format!(
-                "SELECT DISTINCT {column} AS example FROM {from} WHERE {values} IN (SELECT {values} FROM {}) AND {column} <> {} ORDER BY 1",
-                adapter.render_qualified_name(staged),
-                adapter.render_loader_value_literal(file)
+                "SELECT DISTINCT {length} || ':' || {column} || {values} AS example FROM {from}{held} ORDER BY 1"
+            )
+        }
+        CheckQuery::NullKeyFiles(columns, file_column) => {
+            let missing: Vec<String> = names_of(columns)
+                .iter()
+                .map(|name| format!("{name} IS NULL"))
+                .collect();
+            format!(
+                "SELECT DISTINCT {} AS example FROM {from} WHERE {} ORDER BY 1",
+                adapter.render_identifier(file_column),
+                missing.join(" OR ")
             )
         }
         CheckQuery::NullKeyExamples(columns) => {
@@ -312,4 +328,57 @@ pub(crate) fn check_query<A: SqlAdapter + ?Sized>(
             )
         }
     }
+}
+
+/// `key`'s columns of a row as one text, each `NULL` for a NULL, joined by `, `.
+fn key_text<A: SqlAdapter + ?Sized>(adapter: &A, key: &[String]) -> String {
+    let texts: Vec<String> = key
+        .iter()
+        .map(|column| {
+            let name = adapter.render_identifier(column);
+            format!("COALESCE({}, 'NULL')", adapter.render_text_cast(&name))
+        })
+        .collect();
+    texts.join(" || ', ' || ")
+}
+
+/// `DELETE FROM staging` of each row whose `key` columns, compared as typed and a NULL matching a NULL, a row of a later one of `files` (its `file_column`, in order) holds too.
+pub(crate) fn superseded_delete<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    staging: &TableName,
+    (key, file_column): (&[String], &str),
+    files: &[&str],
+) -> String {
+    let column = adapter.render_identifier(file_column);
+    let listed: Vec<String> = files
+        .iter()
+        .enumerate()
+        .map(|(at, file)| format!("({}, {at})", adapter.render_loader_value_literal(file)))
+        .collect();
+    let order = |alias: &str| {
+        format!(
+            "(SELECT __sqlload_order FROM (VALUES {}) AS __sqlload_files (__sqlload_file, __sqlload_order) WHERE __sqlload_file = {alias}.{column})",
+            listed.join(", ")
+        )
+    };
+    let matched: Vec<String> = key
+        .iter()
+        .map(|name| {
+            let name = adapter.render_identifier(name);
+            same_value(
+                (
+                    format!("__sqlload_later.{name}"),
+                    format!("__sqlload_earlier.{name}"),
+                ),
+                true,
+            )
+        })
+        .collect();
+    let staged = adapter.render_qualified_name(staging);
+    format!(
+        "DELETE FROM {staged} AS __sqlload_earlier WHERE EXISTS (SELECT 1 FROM {staged} AS __sqlload_later WHERE {} AND {} > {})",
+        matched.join(" AND "),
+        order("__sqlload_later"),
+        order("__sqlload_earlier")
+    )
 }

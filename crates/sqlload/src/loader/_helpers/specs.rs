@@ -320,7 +320,7 @@ pub(crate) fn build_spec(
         && !(strategy == WriteStrategy::Merge
             || (strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty()))
     {
-        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
+        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies in turn; {strategy} loads them without an order, so remove it"));
     }
     let own_strategy = strategy_origin == SettingOrigin::Table && !keyed;
     let overlapping = layered(
