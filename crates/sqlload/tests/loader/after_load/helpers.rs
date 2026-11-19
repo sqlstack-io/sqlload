@@ -167,7 +167,7 @@ fn zip_archive(members: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
-/// Write `test_case`'s files into its folder of `bucket` at `endpoint`, list the source's `drop/` files, rewrite its `rewritten` ones, run its `after_load` on the listed files, and return the report as `action status files failed` and every file left in its folder as `key=contents`, sorted.
+/// Write `test_case`'s files into its folder of the S3 `bucket` at `endpoint`, list the source's `drop/` files, rewrite its `rewritten` ones, run its `after_load` on the listed files, and return the report as `action status files failed` and every file left in its folder as `key=contents`, sorted.
 pub(crate) async fn run_s3_after_load(
     (endpoint, bucket): (&str, &str),
     test_case: &S3AfterLoadTestCase,
@@ -178,6 +178,14 @@ pub(crate) async fn run_s3_after_load(
         endpoint: Some(endpoint.to_owned()),
         profile: None,
     };
+    run_store_after_load(store, test_case).await
+}
+
+/// [`run_s3_after_load`] in any bucket `store`.
+pub(crate) async fn run_store_after_load(
+    store: StoreKind,
+    test_case: &S3AfterLoadTestCase,
+) -> Result<(String, Vec<String>), String> {
     let open = |prefix: String| {
         open_folder(&Location {
             store: store.clone(),

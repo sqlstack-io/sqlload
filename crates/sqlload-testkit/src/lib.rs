@@ -1,4 +1,4 @@
-//! Test doubles for sqlload: a fake Snowflake service, Redpanda, Postgres, MySQL and SQL Server containers, configurations and an exporter harness.
+//! Test doubles for sqlload: a fake Snowflake service, a fake GCS server, Redpanda, Postgres, MySQL and SQL Server containers, configurations and an exporter harness.
 
 #![forbid(unsafe_code)]
 
@@ -7,6 +7,7 @@ pub mod configs;
 pub mod doc_pages;
 pub mod fake_bigquery;
 pub mod fake_databricks;
+pub mod fake_gcs;
 pub mod fake_sheets;
 pub mod fake_snowflake;
 pub mod harness;

@@ -161,3 +161,11 @@ pub(crate) struct SecretCurrentTestCase {
     pub(crate) wanted: (&'static [&'static str], bool),
     pub(crate) expected_current: bool,
 }
+
+pub(crate) struct GcsAccessTestCase {
+    pub(crate) description: &'static str,
+    /// The connection's HMAC key ID and secret, if it has one.
+    pub(crate) hmac: Option<(&'static str, &'static str)>,
+    /// The secrets map key, the secret's statement and its parameters; `None` for no access.
+    pub(crate) expected_access: Option<(&'static str, &'static str, &'static [&'static str])>,
+}

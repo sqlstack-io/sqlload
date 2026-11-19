@@ -1,10 +1,10 @@
 ---
 title: "Load files"
-description: "Load Parquet, CSV, JSON or NDJSON files from a local folder, S3 or an SFTP server, load only new files or new partitions, and let the warehouse read the files itself."
+description: "Load Parquet, CSV, JSON or NDJSON files from a local folder, S3, Google Cloud Storage or an SFTP server, load only new files or new partitions, and let the warehouse read the files itself."
 ---
 
 A files source loads every file under a folder into one table. This guide loads a local folder,
-then S3 and an SFTP server, and shows when the warehouse reads the files itself. Every setting is
+then S3, Google Cloud Storage and an SFTP server, and shows when the warehouse reads the files itself. Every setting is
 on the [Files source](/docs/sources/files/) page.
 
 ## Load a folder
@@ -129,6 +129,23 @@ SQLLoad finds AWS credentials in the environment, the shared credentials file, w
 the instance or container role. See the [`s3` connection](/docs/configuration/#s3) for the order,
 `profile` and custom endpoints.
 
+## Load files from Google Cloud Storage
+
+A `gcs` connection names a bucket, and the source is the same as for S3:
+
+```toml
+[connections.lake]
+kind = "gcs"
+bucket = "example-bucket"
+service_account_key = "${ENV:GCS_KEY}"
+hmac_key_id = "GOOG1EXAMPLE"
+hmac_secret = "${ENV:GCS_HMAC_SECRET}"
+```
+
+Without `service_account_key`, SQLLoad uses Google's application default credentials. The HMAC
+key is optional: DuckDB and MotherDuck read Parquet in GCS themselves only with one. See the
+[`gcs` connection](/docs/configuration/#gcs).
+
 ## Load files from an SFTP server
 
 An `sftp` connection reads files from an SFTP server, such as a partner's daily drop:
@@ -169,7 +186,7 @@ SQLLoad. `plan` names the route on each table's `route` line:
 
 | Destination | Reads the files itself |
 |-------------|------------------------|
-| DuckDB | Parquet in S3 or a local folder, with `read_parquet`. |
+| DuckDB | Parquet in S3, GCS (with an HMAC key) or a local folder, with `read_parquet`. |
 | Snowflake | Parquet, JSON, NDJSON and CSV under the `url` of an `external_stage` load method, with `COPY`. |
 | ClickHouse | Parquet in S3, with `s3()`. |
 

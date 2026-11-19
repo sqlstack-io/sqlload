@@ -129,9 +129,9 @@ use crate::snowflake_source::main::read_catalog::read_catalog as read_snowflake_
 use crate::snowflake_source::main::unload_files::unload_files;
 use crate::snowflake_source::main::unload_rows::unload_rows;
 use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
-use crate::ssh_tunnel::models::SshTunnel;
+use crate::store_paths::main::connection_store::connection_store;
 use crate::store_paths::main::resolve_location::resolve_location;
-use crate::store_paths::models::{Location, StoreKind};
+use crate::store_paths::models::Location;
 
 /// The sources the plan running now has finished checking, which only the line `plan` shows on a terminal reads.
 pub(crate) static PLANNED_SOURCES: std::sync::atomic::AtomicUsize =
@@ -151,45 +151,15 @@ pub(crate) fn files_location(
     project: &ProjectConfig,
     source: &SourceConfig,
 ) -> Result<Location, LoaderError> {
-    let store = match project.connections.get(&source.connection) {
-        Some(ConnectionConfig::S3 {
-            bucket,
-            region,
-            endpoint,
-            profile,
-        }) => StoreKind::S3 {
-            bucket: bucket.clone(),
-            region: region.clone(),
-            endpoint: endpoint.clone(),
-            profile: profile.clone(),
-        },
-        Some(ConnectionConfig::Filesystem { root }) => StoreKind::Filesystem { root: root.clone() },
-        Some(ConnectionConfig::Sftp {
-            host,
-            port,
-            user,
-            private_key_file,
-            private_key_passphrase,
-            password,
-            known_hosts,
-        }) => StoreKind::Sftp {
-            server: Box::new(SshTunnel {
-                host: host.clone(),
-                port: *port,
-                user: user.clone(),
-                private_key_file: private_key_file.clone(),
-                private_key_passphrase: private_key_passphrase.clone(),
-                password: password.clone(),
-                known_hosts: Some(known_hosts.clone()),
-            }),
-            root: String::new(),
-        },
-        _ => {
-            return Err(LoaderError::Invalid(format!(
-                "connection {:?} is not an s3, filesystem or sftp connection",
-                source.connection
-            )));
-        }
+    let Some(store) = project
+        .connections
+        .get(&source.connection)
+        .and_then(connection_store)
+    else {
+        return Err(LoaderError::Invalid(format!(
+            "connection {:?} is not an s3, gcs, filesystem or sftp connection",
+            source.connection
+        )));
     };
     let path = source.path.as_deref().unwrap_or_default();
     resolve_location(Some((source.connection.as_str(), &store)), path)

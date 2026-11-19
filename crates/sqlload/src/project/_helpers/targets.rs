@@ -78,7 +78,7 @@ pub(crate) fn stage_problems(
     problems
 }
 
-/// Whether target `name` writes files (its connection is s3 or filesystem).
+/// Whether target `name` writes files (its connection is s3, gcs or filesystem).
 pub(crate) fn is_files_target(project: &ProjectConfig, name: &str) -> bool {
     project
         .targets
@@ -145,7 +145,7 @@ pub(crate) fn target_problems(
             }
             if files_settings {
                 problems.push(format!(
-                    "{place} path, format, compression, csv, single_file and max_footer_reads are for targets on an s3 or filesystem connection"
+                    "{place} path, format, compression, csv, single_file and max_footer_reads are for targets on an s3, gcs or filesystem connection"
                 ));
             }
         }
@@ -164,7 +164,10 @@ pub(crate) fn target_problems(
             "{place} connection {:?} is a {kind} connection; targets load into {} or write files to {}",
             target.connection,
             WAREHOUSE_CONNECTION_KINDS.join(", "),
-            FILES_CONNECTION_KINDS.join(" or ")
+            FILES_CONNECTION_KINDS
+                .split_last()
+                .map(|(last, rest)| format!("{} or {last}", rest.join(", ")))
+                .unwrap_or_default()
         )),
     }
     problems
@@ -184,7 +187,7 @@ pub(crate) fn destination_kind_problems(
     let mut problems: Vec<String> = Vec::new();
     if sets_path && !files_target {
         problems.push(format!(
-            "{place} destination_path is for targets on an s3 or filesystem connection"
+            "{place} destination_path is for targets on an s3, gcs or filesystem connection"
         ));
     }
     if source.schema.is_some() && files_target {

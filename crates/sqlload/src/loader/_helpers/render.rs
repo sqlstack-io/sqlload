@@ -45,7 +45,8 @@ use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::{FilesFormat, OutputCompression};
-use crate::routing::models::{Route, Step, Store};
+use crate::routing::constants::LOADER_READS_BECAUSE;
+use crate::routing::models::{FileFormat, Route, Step, Store};
 use crate::row_batches::main::flatten_lines::flatten_lines;
 use crate::row_batches::models::Unnest;
 use crate::run_log::main::describe_state::describe_state;
@@ -677,10 +678,18 @@ pub(crate) fn load_item(table: &TablePlan) -> PlanItem {
             "changed columns move to the end of the column order",
         ));
     }
-    let why_shown =
+    let staged_why =
         (table.stage.is_some() && spec.files.is_some() && !is_direct(table.route.as_ref()))
             || spec.warehouse_source.is_some();
-    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !why_shown);
+    let archived = archived_reason(spec, table.files.as_ref()).filter(|_| !staged_why);
+    let why_shown = staged_why
+        || table.route.as_ref().is_some_and(|route| {
+            route.reason.starts_with(LOADER_READS_BECAUSE)
+                && archived.as_ref().is_none_or(|note| !route.reason.contains(note))
+                && route.steps.iter().any(|step| {
+                    matches!(step, Step::UseFiles(files) if files.format == FileFormat::Parquet)
+                })
+        });
     details.extend(table.route.as_ref().map(|route| {
         let text = route_text(table, route);
         detail(

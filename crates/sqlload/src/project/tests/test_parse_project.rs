@@ -312,7 +312,7 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a warehouse target takes no path",
             text: "[targets.other]\nconnection = \"wh\"\nloader_schema = \"RAW\"\npath = \"{table}/\"\n",
-            expected_message: "[targets.other] path, format, compression, csv, single_file and max_footer_reads are for targets on an s3 or filesystem connection",
+            expected_message: "[targets.other] path, format, compression, csv, single_file and max_footer_reads are for targets on an s3, gcs or filesystem connection",
         },
         ParseProjectErrorTestCase {
             description: "a files target takes no loader_schema",
@@ -480,6 +480,11 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[connections.lake] profile is empty; omit it",
         },
         ParseProjectErrorTestCase {
+            description: "an HMAC key's ID without its secret signs nothing",
+            text: "[connections.lake]\nkind = \"gcs\"\nbucket = \"b\"\nhmac_key_id = \"GOOG1E\"\n",
+            expected_message: "[connections.lake] hmac_key_id and hmac_secret go together",
+        },
+        ParseProjectErrorTestCase {
             description: "an odbc connection needs a connection string or a DSN",
             text: "[connections.erp]\nkind = \"odbc\"\n",
             expected_message: "[connections.erp] needs connection_string, or dsn",
@@ -617,17 +622,17 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
         ParseProjectErrorTestCase {
             description: "a target cannot load into an HTTP API",
             text: "[connections.api]\nkind = \"http\"\nbase_url = \"https://api.example.com\"\n[targets.other]\nconnection = \"api\"\nloader_schema = \"RAW\"\n",
-            expected_message: "is a http connection; targets load into snowflake, databricks, bigquery, clickhouse, duckdb, motherduck, postgres or write files to s3 or filesystem",
+            expected_message: "is a http connection; targets load into snowflake, databricks, bigquery, clickhouse, duckdb, motherduck, postgres or write files to s3, gcs or filesystem",
         },
         ParseProjectErrorTestCase {
             description: "destination_path needs a files target",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\ndestination_path = \"{table}/\"\n",
-            expected_message: "[sources.app] destination_path is for targets on an s3 or filesystem connection",
+            expected_message: "[sources.app] destination_path is for targets on an s3, gcs or filesystem connection",
         },
         ParseProjectErrorTestCase {
             description: "a table's destination_path needs a files target too",
             text: "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\n[sources.app.tables.\"public.a\"]\ndestination_path = \"{table}/\"\n",
-            expected_message: "[sources.app] destination_path is for targets on an s3 or filesystem connection",
+            expected_message: "[sources.app] destination_path is for targets on an s3, gcs or filesystem connection",
         },
         ParseProjectErrorTestCase {
             description: "a source schema is for warehouse targets",

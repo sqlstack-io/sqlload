@@ -76,7 +76,7 @@ const NOV_6_ESCAPED: ParquetFile = ParquetFile {
     extra: Some("w"),
 };
 
-const APPEND_RUNS: &[FilesRun] = &[
+pub(crate) const APPEND_RUNS: &[FilesRun] = &[
     FilesRun {
         files: &[NOV_3, NOV_4],
         expected_error: "",
@@ -88,7 +88,7 @@ const APPEND_RUNS: &[FilesRun] = &[
 ];
 
 /// Rows, distinct source files, and the newest `extra`; a column added in later files is NULL for older rows.
-const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_source_file) || ',' || count(extra) || ',' || max(day) FROM raw.scores";
+pub(crate) const APPEND_CHECK: &str = "SELECT count(*) || ',' || count(DISTINCT _sqlload_source_file) || ',' || count(extra) || ',' || max(day) FROM raw.scores";
 
 /// `0` while the table was never created.
 const NO_TABLE: &str =
@@ -1958,15 +1958,16 @@ fn given_an_append_parquet_table_with_move_to_when_reloading_then_each_archived_
             score: 2.0,
             extra: None,
         }],
-        expected_plan: "route   read parquet into Arrow -> DuckDB takes Arrow (--reload also reads the files after_load moved to",
+        expected_plan: "--reload also reads the files after_load moved to",
         expected_rows: "1:1.0,2:2.0",
     }];
     for test_case in &test_cases {
         let (plan, rows) = run_archived_reload(test_case)?;
         assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
-        assert!(
-            plan.contains(test_case.expected_plan),
-            "{}:\n{plan}",
+        assert_eq!(
+            plan.matches(test_case.expected_plan).count(),
+            1,
+            "{}, said once:\n{plan}",
             test_case.description
         );
     }

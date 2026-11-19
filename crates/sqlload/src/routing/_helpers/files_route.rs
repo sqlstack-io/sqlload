@@ -49,7 +49,7 @@ pub(crate) fn warehouse_reads(
     }
 }
 
-/// Files for a destination that does not read them itself: in place where it can, otherwise read by SQLLoad, except files it reads only itself ([`WriterAccepts::must_pull`]), which fail.
+/// Files for a destination that does not read them itself: in place where it can, otherwise read by SQLLoad, except files it reads only itself ([`WriterAccepts::must_pull`]), which fail; the reason names what keeps the destination from reading them only when it could have.
 pub(crate) fn other_reads(
     reader: &ReaderOffer,
     writer: &WriterAccepts,
@@ -65,23 +65,27 @@ pub(crate) fn other_reads(
             ],
             reason: "the files already exist and the destination reads them itself".to_owned(),
         }),
-        (_, Some(reason), _) | (true, None, Some(reason)) => loader_reads(
+        (true, Some(reason), _) | (true, None, Some(reason)) => loader_reads(
             files,
             writer,
             overrides,
             &format!("{LOADER_READS_BECAUSE} {reason}"),
         ),
-        (false, None, Some(reason)) if must_pull(writer, files).is_some() => loader_reads(
-            files,
-            writer,
-            overrides,
-            &format!("{LOADER_READS_BECAUSE} {reason}"),
-        ),
+        (false, Some(reason), _) | (false, None, Some(reason))
+            if must_pull(writer, files).is_some() =>
+        {
+            loader_reads(
+                files,
+                writer,
+                overrides,
+                &format!("{LOADER_READS_BECAUSE} {reason}"),
+            )
+        }
         (false, None, None) if must_pull(writer, files).is_some() => Err(RouteError::Uncovered {
             location: files.store.to_string(),
             reason: must_pull(writer, files).unwrap_or_default(),
         }),
-        (false, None, _) => loader_reads(
+        (false, _, _) => loader_reads(
             files,
             writer,
             overrides,

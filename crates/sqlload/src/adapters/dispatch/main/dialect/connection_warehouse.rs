@@ -17,9 +17,9 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. } => {
             Some((Warehouse::DuckDb, None))
         }
-        ConnectionConfig::S3 { .. } | ConnectionConfig::Filesystem { .. } => {
-            Some((Warehouse::Parquet, None))
-        }
+        ConnectionConfig::S3 { .. }
+        | ConnectionConfig::Gcs { .. }
+        | ConnectionConfig::Filesystem { .. } => Some((Warehouse::Parquet, None)),
         ConnectionConfig::Postgres { database, .. } => {
             Some((Warehouse::Postgres, Some(database.clone())))
         }

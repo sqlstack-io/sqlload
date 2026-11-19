@@ -2,11 +2,12 @@
 
 use crate::adapters::dispatch::main::session::check_destination::check_destination;
 use crate::adapters::dispatch::main::session::connect_destination::connect_destination;
+use crate::file_store::main::gcs_key_source::gcs_key_source;
 use crate::file_store::main::s3_key_source::s3_key_source;
 use crate::loader::main::_check_source::check_source;
 use crate::project::models::{ConnectionConfig, ProjectConfig};
 
-/// One line per check (`ok`, `warn` or `fail`), and whether nothing failed: where each S3 connection's keys come from, then each target and source; `connect = false` skips them.
+/// One line per check (`ok`, `warn` or `fail`), and whether nothing failed: where each S3 connection's keys and each GCS connection's credentials come from, then each target and source; `connect = false` skips them.
 pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<String>, bool) {
     let mut lines = vec![format!(
         "ok    config  {} connections, {} targets, {} sources",
@@ -32,11 +33,19 @@ pub async fn debug_project(project: &ProjectConfig, connect: bool) -> (Vec<Strin
     }
     let mut ok = true;
     for (name, connection) in &project.connections {
-        let ConnectionConfig::S3 { profile, .. } = connection else {
-            continue;
+        let found = match connection {
+            ConnectionConfig::S3 { profile, .. } => {
+                s3_key_source(profile.as_deref()).map(|source| format!("S3 keys from {source}"))
+            }
+            ConnectionConfig::Gcs {
+                service_account_key,
+                ..
+            } => gcs_key_source(service_account_key.is_some())
+                .map(|source| format!("GCS credentials from {source}")),
+            _ => continue,
         };
-        lines.push(match s3_key_source(profile.as_deref()) {
-            Ok(source) => format!("ok    connection {name}  S3 keys from {source}"),
+        lines.push(match found {
+            Ok(source) => format!("ok    connection {name}  {source}"),
             Err(error) => {
                 ok = false;
                 format!("fail  connection {name}  {error}")

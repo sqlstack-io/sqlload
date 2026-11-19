@@ -93,6 +93,15 @@ $ sqlload plan
         └── route  DuckDB reads directly from s3://example-bucket/events/ (nothing through the loader)
 ```
 
+### Parquet files in GCS
+
+Parquet files in a [`gcs` connection](/docs/configuration/#gcs) with an HMAC key (`hmac_key_id`
+and `hmac_secret`) load the same way: MotherDuck's servers read `gs://` with a session-only secret
+made from that key, and `plan` reads the first file on MotherDuck's servers first. Without an HMAC
+key SQLLoad reads the files, as MotherDuck takes no service-account key. The key's service account
+needs `roles/storage.objectViewer` on the bucket, and MotherDuck's servers read it from their own
+network, so a VPC Service Controls perimeter around the bucket keeps them out.
+
 The route loads the same values as SQLLoad's reader, and goes through SQLLoad's reader for the
 same reasons as on [DuckDB](/docs/targets/duckdb/), such as CSV or JSON files, masked columns or a
 custom S3 endpoint, which MotherDuck's servers don't reach. Each batch fails unless MotherDuck

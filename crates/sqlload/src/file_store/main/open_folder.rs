@@ -5,6 +5,9 @@ use std::sync::Arc;
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
+use crate::auth::models::Secret;
+use crate::file_store::_helpers::aws_keys::environment_variable;
+use crate::file_store::_helpers::gcs_keys::gcs_builder;
 use crate::file_store::errors::StoreError;
 use crate::file_store::main::s3_builder::s3_builder;
 use crate::file_store::models::{OpenFolder, SftpStore};
@@ -12,7 +15,7 @@ use crate::http::main::install_tls_provider::install_tls_provider;
 use crate::store_paths::main::local_store_root::local_store_root;
 use crate::store_paths::models::{Location, StoreKind};
 
-/// A client for `location`'s store (an SFTP server is connected to on first use); S3 credentials come from `AWS_*` variables, the shared credentials file, web identity or the instance/container role.
+/// A client for `location`'s store (an SFTP server is connected to on first use); S3 credentials come from `AWS_*` variables, the shared credentials file, web identity or the instance/container role; GCS credentials from the connection's key, else Google's application default credentials.
 pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
     let failed = |source: object_store::Error| StoreError::Open {
         location: location.to_string(),
@@ -35,6 +38,27 @@ pub fn open_folder(location: &Location) -> Result<OpenFolder, StoreError> {
             .map_err(|reason| {
                 failed(object_store::Error::Generic {
                     store: "S3",
+                    source: reason.into(),
+                })
+            })?
+            .build()
+            .map_err(failed)?,
+        ),
+        StoreKind::Gcs {
+            bucket,
+            service_account_key,
+            endpoint,
+            ..
+        } => Arc::new(
+            gcs_builder(
+                bucket,
+                service_account_key.as_ref().map(Secret::expose),
+                endpoint.as_deref(),
+                &environment_variable,
+            )
+            .map_err(|reason| {
+                failed(object_store::Error::Generic {
+                    store: "GCS",
                     source: reason.into(),
                 })
             })?

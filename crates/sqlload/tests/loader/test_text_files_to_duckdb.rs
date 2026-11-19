@@ -99,18 +99,18 @@ const PATTERN_FILES: &[TextFile] = &[
     },
 ];
 
-const PATTERN_SETTINGS: &str = "format = \"csv\"\ncsv = { delimiter = \"|\" }\npattern = \"file_*.txt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\norder = \"path\"\n";
+pub(crate) const PATTERN_SETTINGS: &str = "format = \"csv\"\ncsv = { delimiter = \"|\" }\npattern = \"file_*.txt\"\nwrite_strategy = \"merge\"\nunique_key = [\"id\"]\norder = \"path\"\n";
 
-const PATTERN_RUNS: &[TextFilesRun] = &[TextFilesRun {
+pub(crate) const PATTERN_RUNS: &[TextFilesRun] = &[TextFilesRun {
     files: PATTERN_FILES,
     expected_error: "",
     expected_plan: "2 new of 2 matching file_*.txt, 1 other file ignored",
 }];
 
 /// Each row's key, value and the name of the file it came from.
-const PATTERN_CHECK: &str = "SELECT string_agg(id || v || '@' || regexp_extract(_sqlload_source_file, '[^/]+$'), ',' ORDER BY id) FROM raw.scores";
+pub(crate) const PATTERN_CHECK: &str = "SELECT string_agg(id || v || '@' || regexp_extract(_sqlload_source_file, '[^/]+$'), ',' ORDER BY id) FROM raw.scores";
 
-const PATTERN_RESULT: &str = "1a@file_1.txt,2B@file_2.txt,3c@file_2.txt";
+pub(crate) const PATTERN_RESULT: &str = "1a@file_1.txt,2B@file_2.txt,3c@file_2.txt";
 
 /// `code,amount` rows: 10,000 sampled ones with numeric codes, then an alphanumeric code and one with leading zeros.
 const CODES_AFTER_SAMPLE: TextFile = TextFile {

@@ -9,6 +9,15 @@ pub enum StoreKind {
         /// The shared credentials file's profile to take keys from, over `AWS_PROFILE`.
         profile: Option<String>,
     },
+    /// A Google Cloud Storage bucket, read with `service_account_key`, else Google's application default credentials.
+    Gcs {
+        bucket: String,
+        service_account_key: Option<crate::auth::models::Secret>,
+        /// A custom endpoint (tests).
+        endpoint: Option<String>,
+        /// The connection's HMAC key, with which DuckDB and MotherDuck read the bucket themselves.
+        hmac: Option<HmacKey>,
+    },
     /// A directory on the machine SQLLoad runs on.
     Filesystem { root: String },
     /// A folder on an SFTP server: below `/` when `root` is `/`, otherwise below the user's login folder (`root` empty).
@@ -29,6 +38,7 @@ impl std::fmt::Display for Location {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.store {
             StoreKind::S3 { bucket, .. } => write!(formatter, "s3://{bucket}/{}", self.prefix),
+            StoreKind::Gcs { bucket, .. } => write!(formatter, "gs://{bucket}/{}", self.prefix),
             StoreKind::Filesystem { root } => {
                 write!(formatter, "{}/{}", root.trim_end_matches('/'), self.prefix)
             }
@@ -42,4 +52,11 @@ impl std::fmt::Display for Location {
             },
         }
     }
+}
+
+/// An HMAC key for a GCS bucket's S3-compatible API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HmacKey {
+    pub key_id: String,
+    pub secret: crate::auth::models::Secret,
 }
