@@ -180,7 +180,7 @@ def test_a_failing_transform_fails_its_file_which_neither_commits_nor_moves(tmp_
 	assert query(project, "SELECT id FROM RAW.metrics ORDER BY id") == [("1",)]
 
 
-def test_a_merge_still_merges_files_oldest_first_with_a_record_each(tmp_path: Path) -> None:
+def test_a_merge_still_merges_files_oldest_first_recording_each_file(tmp_path: Path) -> None:
 	settings = 'write_strategy = "merge"\nunique_key = ["id"]\n'
 	project = make_project(tmp_path, RETURNS["dicts"], settings=settings)
 	now = time.time()
@@ -189,8 +189,8 @@ def test_a_merge_still_merges_files_oldest_first_with_a_record_each(tmp_path: Pa
 	give(project, "c.csv", "id,v\n1,middle\n3,c\n", modified=now - 100)
 	load(project)
 	assert query(project, "SELECT id, v FROM RAW.metrics ORDER BY id") == [(1, "newest"), (2, "b"), (3, "c")]
-	merged = query(project, "SELECT count(*) FROM RAW._sqlload_runs WHERE note = 'files source merge'")
-	assert merged == [(3,)]
+	merged = query(project, "SELECT count(*), sum(json_array_length(record_json, '$.files')) FROM RAW._sqlload_runs WHERE note = 'files source merge'")
+	assert merged == [(1, 3)]
 
 
 #: A second module registering a transform as `metric_rows` too, and one as `tidy`.

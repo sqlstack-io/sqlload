@@ -57,6 +57,8 @@ mod test_debug_project;
 mod test_duckdb_source;
 #[path = "loader/test_file_store.rs"]
 mod test_file_store;
+#[path = "loader/test_files_batches.rs"]
+mod test_files_batches;
 #[path = "loader/test_files_round_trip.rs"]
 mod test_files_round_trip;
 #[path = "loader/test_files_to_clickhouse.rs"]

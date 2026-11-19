@@ -383,12 +383,12 @@ old one in one commit at the end; until then readers see the old table.
 - `append`, `replace` and `delete_insert` tables read the files in batches, as a first load does. A
   `delete_insert` with a [`replace_key`](#replacing-rows-by-a-key) refuses `--reload`.
 - `merge` tables reload too, on DuckDB targets (Postgres targets refuse `--reload` for
-  every table). Each file merges into the new table on its own, as a load merges them: files merged
+  every table). The files merge into the new table in batches, as a load merges them: files merged
   before go in the order they merged, matched by name and version, or for a file under `move_to`
   by name, so a file `after_load` moved keeps its place; files never merged follow, oldest
   modified first, and so does a new file in `path` named as one `move_to` holds, whose rows then
   win over the older copy's. The new
-  table's file record (a reset, then one record per file) is written in the commit that swaps it
+  table's file record (a reset, then one record per batch, naming its files) is written in the commit that swaps it
   in, so a reload that fails part way leaves the old table and its file record as they were. After
   a reload, the next load reads only files added since. `plan` shows
   `merge (unique_key: …) into a new table, swapped in at the end (--reload)`. A `merge` table with `unnest` is refused, since its child tables aren't rebuilt:
@@ -453,9 +453,9 @@ Without `pattern`, a folder of `.txt` files fails `plan` with the suffixes it lo
 |----------|-------|
 | `append` | Only files not loaded yet, by `_sqlload_source_file`. A file rewritten in place since it loaded fails the table, with the fix. So does a listed file loaded without its version (an empty `_sqlload_source_version`, as in rows loaded before SQLLoad recorded it), since whether it was rewritten can't be told: `--reload` loads the table again and records every file's version. `plan` refuses an `append` table that excludes `_sqlload_source_version`, as it refuses one excluding `_sqlload_source_file`. |
 | `delete_insert` with a partition `cursor_column` (from `partition_columns` or `path_columns`) | The newest loaded partition and everything after it, replacing those partitions whole. A file that changed since it loaded whose partition lies below that range fails the table, as does a new file below it in a partition the table holds; see below. |
-| `delete_insert` with a `replace_key` | Only files not loaded yet, or changed since, one at a time, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
+| `delete_insert` with a `replace_key` | Only files not loaded yet, or changed since, oldest modified first, each replacing the rows of the `replace_key` values it holds. |
 | `replace` | Every file, swapped in as a new table. |
-| `merge` with a `unique_key` | Only files not merged yet, one at a time, oldest modified first. Under `--reload` (DuckDB), every file again, one at a time, into a new table swapped in at the end; see [Reloading a files table](#reloading-a-files-table). |
+| `merge` with a `unique_key` | Only files not merged yet, oldest modified first. Under `--reload` (DuckDB), every file again, in the same order, into a new table swapped in at the end; see [Reloading a files table](#reloading-a-files-table). |
 
 A files source needs a `write_strategy`, from the source or its table entry: `plan` refuses it
 otherwise. Files report no primary key, so a `merge` names its `unique_key` columns.
@@ -475,7 +475,9 @@ loaded  raw.events_log      1 row  0.0s
 ```
 
 Large loads commit at 1,000 files or about 1 GB. Under `delete_insert` a partition is never split
-across commits.
+across commits. A `merge`, or `delete_insert` by `replace_key`, commits consecutive files together,
+in order, and ends with the same rows as committing them one by one: the newest file wins a key
+several of them hold.
 
 `delete_insert` on a partition cursor fails the table when a listed file changed since
 it loaded but its partition lies below the range the load reads, such as a monthly file sent again
@@ -516,12 +518,14 @@ again as a matter of course, use a [`replace_key`](#replacing-rows-by-a-key).
 ### Replacing rows by a key
 
 `delete_insert` with a `replace_key` and no `cursor_column` loads each new or changed
-file in its own commit, oldest modified first, then path. Each commit deletes the rows holding a
-`replace_key` value the file holds, then inserts the file's rows. A file sent again corrected
+file, oldest modified first, then path, up to 1,000 files or about 1 GB per commit. Each file
+replaces the rows holding a `replace_key` value it holds with its own rows, as if it committed on
+its own. A file sent again corrected
 replaces its version whole, lines it dropped included, and leaves other versions alone. One file
-must hold all of a value's rows. Before each commit, SQLLoad finds the files the table's rows of
-the commit's values came from, by `_sqlload_source_file`. When one of them is still in the folder,
-or loaded earlier in the same run, the table fails, naming both files: two files of the folder
+must hold all of a value's rows. Before each commit, SQLLoad finds, for each of its files, the files the table's
+rows of the file's values came from, by `_sqlload_source_file`. When one of them is still in the
+folder, or loaded earlier in the same run, the table fails, naming both files, and the commit,
+with every file in it, rolls back: two files of the folder
 holding one value, such as the parts of an export split into part files, would leave only the
 later one's rows. The error names the fixes: put all of a value's rows in one file; or, when newer
 files restate older ones, set `on_overlapping_files = "last_wins"` (below), or remove the older file
@@ -549,11 +553,11 @@ $ sqlload plan -v
     ├── source  files  lake/finance/le/  csv, compression by file name
 …
     ├── files   1 new of 1 listed
-    └── batch   1 file, one commit each, oldest modified first (ties by path), each recorded in the run log
+    └── batch   1 file, 1 commit, oldest modified first (ties by path), each recorded in the run log
 ```
 
-It picks files as [merging files](#merging-files) does: each commit records its file and version in
-`_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
+It picks files as [merging files](#merging-files) does: each commit records its files and versions
+in `_sqlload_runs`, and loads into DuckDB and Postgres targets so far. `--reload`, `state = "logged"`
 and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 
 #### When newer files restate older ones
@@ -561,7 +565,8 @@ and a `cursor_column` are refused. `after_load` applies to it, as to `merge`.
 A feed whose deliveries overlap, each restating the end of the period before, holds one value in
 two files on purpose. `on_overlapping_files = "last_wins"` (default `"fail"`) lets the file last in
 `order` replace the values it holds, even while an earlier file holding them is still in the
-folder. Each file still loads in its own commit, so the earlier file's other values stay:
+folder. Each file replaces only the values it holds, so the earlier file's other values stay, in
+one commit or across several:
 
 ```text
 sales/
@@ -584,6 +589,9 @@ on_overlapping_files = "last_wins"
 ```
 
 Set `order = "path"` when the names sort by date, as here; by default the file modified last wins.
+Under `"last_wins"` files commit together into DuckDB and PostgreSQL; into other warehouses, or
+for a table that excludes `_sqlload_source_row`, whose rows carry no number to tell which of them a
+later file in the same commit replaces, each file loads in its own commit.
 A file that comes before one already loaded, such as an older file sent late, or with
 `order = "path"` one rewritten while the later file isn't, still fails rather than take back the
 later file's values. By modified time a rewritten file sorts last and replaces them, and files
@@ -596,12 +604,16 @@ elsewhere: a [merge](#merging-files) already lets the last file win each key.
 ### Merging files
 
 `merge` upserts each new file on its `unique_key`. A load merges
-its files in order of their modified time, then path, one commit each, so a key that several of them
-carry ends with the value from the file modified last. A file that turns up after others merged, even
-with an older modified time, merges after them. Each commit also records that file and its version in
-`_sqlload_runs`, in the same transaction, and later loads skip the files recorded there. If a file
-fails, the files before it stay merged, and the error names the file that failed. The next load
-continues from that file.
+its files in order of their modified time, then path, so a key that several of them carry ends with
+the value from the file modified last. Consecutive files merge in one commit, up to 1,000 files or
+about 1 GB, with the same rows as merging them one by one. A file that turns up after others
+merged, even with an older modified time, merges after them. Each commit also records its files
+and their versions in `_sqlload_runs`, in the same transaction, and later loads skip the files
+recorded there. If a commit fails, it rolls back with all its files and the commits before it
+stay merged; a file that fails to read or convert is named in the error. The next load continues
+from that commit's first file. With
+`on_duplicate_keys = "fail"`, each file merges in its own commit, so a key repeated across files
+isn't refused.
 
 ```toml
 [sources.prices]
@@ -622,8 +634,8 @@ unique_key = ["sku"]
   sorts last wins a repeated key whatever the modified times. Landing steps often rewrite modified
   times: unzipping (Python's `zipfile` stamps the time it extracts), `cp`, `gsutil` and sync tools
   all do. Use it when names carry a sortable date, such as `export_2026-11-14.csv`; dates need ISO
-  order and zero padding (`2026-11-09`, not `2026-11-9`). `plan` names it: `3 files, one commit
-  each, in path order`. It applies to `delete_insert` by `replace_key` too, and to `--reload`.
+  order and zero padding (`2026-11-09`, not `2026-11-9`). `plan` names it: `3 files, 1 commit,
+  in path order`. It applies to `delete_insert` by `replace_key` too, and to `--reload`.
 - Stores that keep modified times to the second, as SFTP does, and the members of one ZIP archive,
   which share the archive's time, fall back to path order for files from the same second.
 - A file that holds one `unique_key` value in more than one row
@@ -631,11 +643,7 @@ unique_key = ["sku"]
   [Repeated keys](/docs/concepts/write-strategies/#repeated-keys). With
   `on_duplicate_keys = "fail"`, such a file fails instead, naming the key's columns
   and examples, before anything of it merges. Rows whose key holds NULLs are
-  collapsed too, a NULL matching a NULL. The
-  order of a file's rows comes from `_sqlload_source_row`: when `exclude_columns` drops it, a file
-  repeating a key fails instead, `plan` says so, and `newest_by` is refused. That
-  includes a file repeating a key with NULLs in it, even under the default
-  `on_duplicate_keys`.
+  collapsed too, a NULL matching a NULL.
 - Merging files loads into DuckDB and Postgres targets so far, and MotherDuck through its DuckDB
   connection, which isn't tested live. `state = "logged"` and a `cursor_column` are refused: the
   run log, not a cursor, picks the files. To merge every file again, drop the table (a table

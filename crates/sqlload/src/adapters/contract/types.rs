@@ -14,7 +14,7 @@ use crate::adapters::contract::_helpers::promote::{
 };
 use crate::adapters::contract::_helpers::queries::{
     check_query, child_tables_query, cursor_query, insert_rows, loaded_files_query,
-    staging_tables_query, staging_time, stale_staging,
+    staging_tables_query, staging_time, stale_staging, superseded_delete,
 };
 use crate::adapters::contract::_helpers::recreate::recreate_statements;
 use crate::adapters::contract::_helpers::schema::{
@@ -271,6 +271,26 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// The query `check` runs on `relation`, returning its values as text.
     fn render_check_query(&self, relation: &TableName, check: CheckQuery<'_>) -> String {
         check_query(self, relation, check)
+    }
+
+    /// Whether [`render_superseded_delete`](Self::render_superseded_delete) runs here, so a files source's `delete_insert` by `replace_key` under `on_overlapping_files = "last_wins"` can commit many files at once; elsewhere it commits each file on its own.
+    fn deletes_superseded_rows(&self) -> bool {
+        false
+    }
+
+    /// A statement deleting from `staging` each row whose `key` values (converted as the table takes them, a NULL matching a NULL) a row of a later one of `files` (`file_column`, in order) holds too; `row_column` numbers each file's rows.
+    fn render_superseded_delete(
+        &self,
+        staging: &TableName,
+        (key, file_column, row_column): (&[&DesiredColumn], &str, &str),
+        files: &[&str],
+    ) -> String {
+        superseded_delete(self, staging, (key, file_column, row_column), files)
+    }
+
+    /// The length of text `expression` in characters.
+    fn render_text_length(&self, expression: &str) -> String {
+        format!("length({expression})")
     }
 
     /// A query returning a row when `table` holds one.
@@ -543,7 +563,7 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         false
     }
 
-    /// Whether a files source may `merge` into this warehouse, file by file with a run record in each file's commit (tested on DuckDB and Postgres so far).
+    /// Whether a files source may `merge` into this warehouse, in file order with a run record naming each commit's files (tested on DuckDB and Postgres so far).
     fn merges_files(&self) -> bool {
         false
     }

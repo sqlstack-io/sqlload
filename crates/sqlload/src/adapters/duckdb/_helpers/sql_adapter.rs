@@ -44,6 +44,10 @@ impl SqlAdapter for DuckDbSql {
         true
     }
 
+    fn deletes_superseded_rows(&self) -> bool {
+        true
+    }
+
     fn parses_variant_pins(&self) -> bool {
         true
     }

@@ -42,6 +42,11 @@ impl SqlAdapter for ClickHouseSql {
         Warehouse::ClickHouse
     }
 
+    /// `length` counts bytes here.
+    fn render_text_length(&self, expression: &str) -> String {
+        format!("lengthUTF8({expression})")
+    }
+
     fn max_identifier_length(&self) -> Option<usize> {
         Some(255)
     }

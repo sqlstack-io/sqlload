@@ -29,7 +29,7 @@ pub(crate) struct PulledFile {
     pub constants: Vec<(String, Option<String>)>,
 }
 
-/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns. Into MotherDuck (`remote`) the files are read on its servers.
+/// `INSERT INTO into` every one of `columns` from the Parquet `files`, matched by name so a file that lacks a column gives NULL. A column comes from the file's constants when it has one of that name (a list of every file's value, indexed by the row's `file_index`: no join, so DuckDB streams the rows into the table instead of holding them), otherwise from the files when at least one of them holds it (`in_files`, each column with its name in the files, which `naming`, `rename` or numbering may have changed: `f."Order ID"` loads into `order_id`), and is cast to its type; `_sqlload_source_row` counts each file's rows from 1, and a merge's `_sqlload_row` numbers the rows in file order, then by row, so the last row of a key is the newest file's; the load id and load time are the batch's; any other column is NULL. Every file must carry the same constant columns. Into MotherDuck (`remote`) the files are read on its servers.
 pub(crate) fn pull_insert(
     into: &TableName,
     (columns, in_files): (&[DesiredColumn], &[(String, String)]),
@@ -57,6 +57,12 @@ pub(crate) fn pull_insert(
                 (Some(MetadataRole::LoadId), _) => cast(literal(load_id), column),
                 (Some(MetadataRole::LoadedAt), _) => cast(literal(loaded_at), column),
                 (None, SOURCE_ROW_COLUMN) => cast("f.file_row_number + 1".to_owned(), column),
+                (None, MERGE_ROW_COLUMN) => cast(
+                    format!(
+                        "CAST(f.file_index AS BIGINT) * {UNLOADED_FILE_ROWS} + f.file_row_number"
+                    ),
+                    column,
+                ),
                 (_, name)
                     if files
                         .first()

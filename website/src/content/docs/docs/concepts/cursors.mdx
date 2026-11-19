@@ -232,7 +232,7 @@ and `merge` publish once per run (last row below). `plan -v` of one table shows 
 | `batch_size = "1d"` (date or timestamp cursor) or `batch_size = 1000` (integer cursor) | One cursor window at a time, up to 100,000 windows (32,767 for a Snowflake table read through an unload). |
 | A Postgres table whose `cursor_column` leads an index, without `batch_size` | About every 1 GB, reading in cursor order (NULLs first), only between distinct cursor values. `batch_size = "none"` opts out. |
 | Other cursor tables, text cursors, and `append` without a cursor or logged state | Once per read, since committing part of an unordered read could skip or duplicate rows. |
-| Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. |
+| Files sources | At 1,000 files or about 1 GB; under `delete_insert` a partition is never split. A `merge`, or `delete_insert` by `replace_key`, commits consecutive files together, in order, recording them in the run log; with `on_duplicate_keys = "fail"` a merge commits each file. |
 | `replace` and `--reload` | Once, at the end: the new table is swapped in. |
 | `delete_insert` into ClickHouse in windows or cursor order, and `append` and `merge` | Once, at the end: everything read is staged and published together. A merge also commits every 10 million waiting rows, and with `on_duplicate_keys = "fail"` it commits each batch. A stopped run publishes nothing after its last commit, so split a long backfill with `--end-cursor`. |
 

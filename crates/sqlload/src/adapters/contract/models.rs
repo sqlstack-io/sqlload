@@ -165,8 +165,8 @@ pub struct WriteStatementsRequest<'a> {
     pub hashed: &'a [String],
     /// The batches went straight into `staging`, built in the table's shape: the write only swaps it in, so no row is written twice, then re-creates these indexes.
     pub built: Option<&'a [String]>,
-    /// The load id column and this load's id, whose rows a `delete_insert`'s deletes keep: the load committed some in pieces before.
-    pub spared_load: Option<(&'a str, &'a str)>,
+    /// The load id column and this load's id, whose rows a `delete_insert`'s deletes keep: the load committed some in pieces before. With a file column (a files source under `on_overlapping_files = "last_wins"`), a `replace_key` delete keeps only those of the same file as the staged rows of their value, so a later file replaces an earlier one's rows its earlier pieces committed.
+    pub spared_load: Option<(&'a str, &'a str, Option<&'a str>)>,
 }
 
 /// What a table rebuilt beside itself must keep, where the warehouse cannot copy it (DuckDB).
@@ -322,13 +322,14 @@ pub enum CheckQuery<'a> {
     KeyDuplicateExamples(&'a [String]),
     /// Up to five values of these columns, in order, of rows holding a NULL in any of them, each as its columns' text (`NULL` for a NULL) joined by `, `.
     NullKeyExamples(&'a [String]),
+    /// The distinct values of the column named second among rows holding a NULL in any of the first, in order: the files whose rows have NULL keys.
+    NullKeyFiles(&'a [String], &'a str),
     /// Up to this many distinct values of these columns, in order, each as its columns' text (`NULL` for a NULL) joined by `, `.
     KeyValues(&'a [String], u64),
-    /// The distinct values of `file_column` among the relation's rows whose `key` values (as `KeyValues` gives them) a row of `staged` holds, other than `file`, in order: the files a commit's key values already come from.
-    KeySources {
+    /// The distinct pairs of `file_column` and `key` values (as `KeyValues` gives them) among the relation's rows, only those whose values a row of `held_by` holds when set, in order, each as the file's length in characters, `:`, the file, then the values: which files hold which key values.
+    KeyFiles {
         key: &'a [String],
-        staged: &'a TableName,
         file_column: &'a str,
-        file: &'a str,
+        held_by: Option<&'a TableName>,
     },
 }
