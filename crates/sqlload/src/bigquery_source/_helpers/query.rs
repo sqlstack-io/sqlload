@@ -8,8 +8,12 @@ pub(crate) fn quote_identifier(name: &str) -> String {
     format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"))
 }
 
-/// `SELECT <read columns> FROM <the query or table> [WHERE <filter>]`; the table is `project.dataset.table` in one pair of backticks, and the query a `subquery`.
-pub(crate) fn select_query(project: &str, request: &BigQueryReadRequest<'_>) -> String {
+/// `SELECT <read columns> FROM <the query or table> [FOR SYSTEM_TIME AS OF ...] [WHERE <filter>]`; the table is `project.dataset.table` in one pair of backticks, read as of `as_of` (milliseconds) when given, and the query a `subquery`.
+pub(crate) fn select_query(
+    project: &str,
+    request: &BigQueryReadRequest<'_>,
+    as_of: Option<i64>,
+) -> String {
     let columns: Vec<&str> = request
         .columns
         .iter()
@@ -22,11 +26,14 @@ pub(crate) fn select_query(project: &str, request: &BigQueryReadRequest<'_>) -> 
             request.table.schema, request.table.name
         )),
     };
+    let instant = as_of
+        .map(|millis| format!(" FOR SYSTEM_TIME AS OF TIMESTAMP_MILLIS({millis})"))
+        .unwrap_or_default();
     let filter = request
         .filter
         .map(|filter| format!(" WHERE {filter}"))
         .unwrap_or_default();
-    format!("SELECT {} FROM {from}{filter}", columns.join(", "))
+    format!("SELECT {} FROM {from}{instant}{filter}", columns.join(", "))
 }
 
 /// `SELECT COUNT(*) FROM <the query or table> WHERE <filter>`, the table and query written as `select_query` writes them: how many rows `filter` selects.

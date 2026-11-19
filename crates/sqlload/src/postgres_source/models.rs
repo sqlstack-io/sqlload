@@ -39,6 +39,8 @@ pub struct SourceTable {
     pub comment: Option<String>,
     /// The primary key and unique constraints the database lists for a table whose driver reported no primary key (ODBC, from `INFORMATION_SCHEMA`), which point at the driver's key lookup; empty otherwise.
     pub listed_keys: Vec<ListedKey>,
+    /// A BigQuery table's location when query jobs on its connection run in another: the Storage Read API reads it from anywhere, but a query job can't; `None` otherwise.
+    pub other_location: Option<String>,
 }
 
 /// A key constraint the database lists: `PRIMARY KEY` or `UNIQUE`, and its columns in order.
@@ -62,6 +64,7 @@ impl SourceTable {
             estimated_bytes: -1,
             comment: None,
             listed_keys: Vec::new(),
+            other_location: None,
         }
     }
 

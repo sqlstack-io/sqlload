@@ -22,6 +22,7 @@ fn given_a_table_or_query_when_selecting_it_then_names_are_backquoted_in_the_cat
         estimated_bytes: -1,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     };
     let columns = [ReadColumn {
         name: "id".to_owned(),
@@ -100,6 +101,7 @@ fn given_a_string_column_when_reading_it_then_a_non_binary_collation_is_compared
             estimated_bytes: -1,
             comment: None,
             listed_keys: Vec::new(),
+            other_location: None,
         };
         let columns = read_columns(&table, &BTreeMap::new()).unwrap_or_default();
         let expression = columns.first().map(|column| column.expression.as_str());

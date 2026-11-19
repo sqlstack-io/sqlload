@@ -23,18 +23,12 @@ pub(crate) fn should_unload(reader: &ReaderOffer, read_via: ReadVia) -> Result<b
     }
 }
 
-/// Have the destination select the rows itself where it writes through the source's own connection; otherwise unload the source to Parquet, letting the destination load it directly when it can reach the files, or the files downloaded unchanged from an internal stage, and nothing needs SQLLoad to read them (masking, checks). An unload to a store the destination reads only itself ([`WriterAccepts::must_pull`]) but can't reach fails, never read back by SQLLoad.
+/// Unload the source to Parquet, letting the destination load it directly when it can reach the files, or the files downloaded unchanged from an internal stage, and nothing needs SQLLoad to read them (masking, checks). An unload to a store the destination reads only itself ([`WriterAccepts::must_pull`]) but can't reach fails, never read back by SQLLoad.
 pub(crate) fn unload_route(
     reader: &ReaderOffer,
     writer: &WriterAccepts,
     overrides: RouteOverrides,
 ) -> Result<Route, RouteError> {
-    if reader.selected_by_destination && reader.needs_loader.is_none() {
-        return Ok(Route {
-            steps: vec![Step::DestinationSelects],
-            reason: "the destination writes through the source's own connection, so it selects the rows itself; no data leaves the warehouse".to_owned(),
-        });
-    }
     let stores = ordered_stores(&reader.unload_to, overrides.stage)?;
     let unblocked = reader.direct_blocked.is_none() && reader.needs_loader.is_none();
     if let Some(store) = stores

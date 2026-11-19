@@ -1,18 +1,15 @@
 //! A files batch loaded by BigQuery querying the source's own Parquet files in GCS.
 
-use serde_json::{Value, json};
-
 use crate::adapters::bigquery::_helpers::dialect::pull::{
     PulledFile, PulledGroup, pull_queries, unread_name,
 };
+use crate::adapters::bigquery::_helpers::write::insert_job::insert_job;
 use crate::adapters::bigquery::main::plan::_direct_problem::direct_problem;
 use crate::adapters::bigquery::models::BigQueryWriter;
 use crate::adapters::contract::main::_batch_direct_problem::batch_direct_problem;
 use crate::adapters::contract::main::_footer_rows::footer_rows;
 use crate::adapters::contract::models::{DirectBatch, DirectLoaded, TableName};
 use crate::adapters::contract::types::TableWriter;
-use crate::bigquery_api::main::load_job::load_job;
-use crate::bigquery_api::models::BigQueryClient;
 use crate::files_source::constants::{SOURCE_FILE_COLUMN, SOURCE_VERSION_COLUMN};
 use crate::files_source::main::normal_value::normal_value;
 use crate::files_source::models::{BatchFooters, DataFile};
@@ -66,7 +63,13 @@ impl BigQueryWriter {
         );
         let mut rows = 0;
         for (query, definitions) in queries {
-            rows += query_files(&self.destination.api, query, definitions).await?;
+            rows += insert_job(
+                &self.destination.api,
+                &query,
+                Some(definitions),
+                "this batch's files from GCS",
+            )
+            .await?;
         }
         let expected = footer_rows(batch.footers);
         if rows != expected {
@@ -162,41 +165,4 @@ fn footer_fields(footers: &BatchFooters, data: &DataFile) -> Vec<String> {
         .iter()
         .map(|field| field.name().clone())
         .collect()
-}
-
-/// Run one query job inserting files in GCS, its temporary external tables `definitions`: the rows it inserted. A job BigQuery fails, or whose count is not a number, fails the batch.
-async fn query_files(
-    api: &BigQueryClient,
-    query: String,
-    definitions: Value,
-) -> Result<u64, LoaderError> {
-    let job = json!({
-        "jobReference": {
-            "projectId": api.project,
-            "jobId": format!("sqlload_files_{}", uuid::Uuid::new_v4().simple()),
-            "location": api.location,
-        },
-        "configuration": {"query": {
-            "query": query,
-            "useLegacySql": false,
-            "tableDefinitions": definitions,
-        }},
-    });
-    let resource = load_job(api, &job, None).await?;
-    let error = &resource["status"]["errorResult"];
-    if !error.is_null() {
-        return Err(LoaderError::Invalid(format!(
-            "BigQuery could not load this batch's files from GCS: {}: {}",
-            error["reason"].as_str().unwrap_or_default(),
-            error["message"].as_str().unwrap_or_default()
-        )));
-    }
-    let affected = resource["statistics"]["query"]["numDmlAffectedRows"]
-        .as_str()
-        .unwrap_or_default();
-    affected.parse().map_err(|_| {
-        LoaderError::Invalid(format!(
-            "BigQuery's query job reported {affected:?} inserted rows, not a count; the batch is not committed"
-        ))
-    })
 }

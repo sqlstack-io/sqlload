@@ -15,3 +15,6 @@ pub const READ_API_TABLES: &[&str] = &["TABLE"];
 
 /// The precision and scale of a `NUMERIC` column declared without them.
 pub const NUMERIC_DEFAULT: (u8, u8) = (38, 9);
+
+/// BigQuery types SQLLoad's reader converts: records and ranges to JSON, geographies to their WKT text.
+pub const CONVERTED_TYPES: [&str; 3] = ["STRUCT", "RANGE", "GEOGRAPHY"];

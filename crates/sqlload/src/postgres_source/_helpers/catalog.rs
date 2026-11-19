@@ -77,6 +77,7 @@ pub(crate) fn tables_from_rows(
                     split_pages: row.get(13),
                     comment: row.get(12),
                     listed_keys,
+                    other_location: None,
                 }
             });
         table.columns.push(column_from_row(row));

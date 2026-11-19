@@ -173,7 +173,7 @@ Errors (1)
 							<div class="step-text">
 								<span class="num">02 · Load</span>
 								<h3>Bulk copy, not row inserts</h3>
-								<p>Files in S3 load into Snowflake straight from an external stage, and Parquet in S3 into Databricks through an external location. Parquet loads into DuckDB through DuckDB's own reader, Parquet in S3 or Google Cloud Storage into MotherDuck on its servers, and Parquet in Google Cloud Storage into BigQuery as a temporary external table. Snowflake tables load into Snowflake on the same connection, or through an external stage that covers the unload, without leaving Snowflake. Snowflake tables unloaded to S3 load into DuckDB, Databricks and ClickHouse with no row passing through SQLLoad. Rows are staged as Parquet and copied in bulk.</p>
+								<p>Files in S3 load into Snowflake straight from an external stage, and Parquet in S3 into Databricks through an external location. Parquet loads into DuckDB through DuckDB's own reader, Parquet in S3 or Google Cloud Storage into MotherDuck on its servers, and Parquet in Google Cloud Storage into BigQuery as a temporary external table. Snowflake tables load into Snowflake on the same connection, or through an external stage that covers the unload, without leaving Snowflake, and BigQuery tables into BigQuery on the same connection. Snowflake tables unloaded to S3 load into DuckDB, Databricks and ClickHouse with no row passing through SQLLoad. Rows are staged as Parquet and copied in bulk.</p>
 								<p class="more"><a href="/docs/targets/">Load methods and routes →</a></p>
 							</div>
 <pre class="terminal"><span class="cmd">sqlload plan</span>

@@ -66,6 +66,7 @@ fn orders(_: &crate::project::models::SourceConfig) -> Vec<SourceTable> {
         split_pages: None,
         comment: None,
         listed_keys: Vec::new(),
+        other_location: None,
     }]
 }
 

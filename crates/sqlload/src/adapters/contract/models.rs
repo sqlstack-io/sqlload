@@ -287,6 +287,8 @@ pub struct DirectBatch<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct UnloadedBatch<'a> {
     pub source: UnloadedSource<'a>,
+    /// A merge's `unique_key`; empty for any other write mode.
+    pub merge_key: &'a [String],
     /// The columns the rows hold, as they are read.
     pub read: &'a [ReadColumn],
     /// The table's columns as the load writes them.
