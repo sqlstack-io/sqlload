@@ -235,6 +235,7 @@ fn given_a_motherduck_connection_when_opening_then_the_targets_database_wins_and
         let connection = ConnectionConfig::MotherDuck {
             database: test_case.connection_database.map(str::to_owned),
             token: Some(Secret(String::new())),
+            load_method: None,
         };
         let error = open_motherduck(&connection, test_case.target_database, (None, None))
             .err()
@@ -374,7 +375,12 @@ fn given_a_motherduck_destination_when_routing_then_it_reads_parquet_only_from_o
         let mut destination = open_duckdb(":memory:", None).map_err(|error| error.to_string())?;
         destination.motherduck = test_case.motherduck;
         let accepts = writer_accepts(&Destination::DuckDb(destination), None);
-        assert!(accepts.arrow, "{}", test_case.description);
+        assert_eq!(
+            (accepts.arrow, accepts.rows_into.is_some()),
+            (!test_case.motherduck, test_case.motherduck),
+            "{}: DuckDB takes Arrow, MotherDuck zstd Parquet chunks",
+            test_case.description
+        );
         assert_eq!(
             (accepts.pulls_from, accepts.pull_formats),
             (test_case.expected_pulls_from, vec![FileFormat::Parquet]),

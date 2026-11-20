@@ -49,6 +49,7 @@ TOKEN = "tok&en=#1"
 #: database read-only, so a source's bridges (one per table) can hold it at once as MotherDuck allows.
 STAND_IN = r'''
 import os
+import re
 import sys
 import urllib.parse
 
@@ -71,6 +72,10 @@ class Cursor:
 
     def execute(self, sql, params=None):
         log(sql)
+        for path in [*(params or []), *re.findall(r"'([^']+[.]parquet)'", sql)]:
+            if str(path).endswith(".parquet") and os.path.exists(path):
+                found = _connect().execute("SELECT DISTINCT compression FROM parquet_metadata(?)", [path]).fetchall()
+                log("-- parquet " + ",".join(sorted(row[0] for row in found)))
         if os.environ.get("MD_DIE_ON") and os.environ["MD_DIE_ON"] in sql:
             sys.stderr.write(f"the stand-in for MotherDuck ended the bridge, signed in as {os.environ['MD_EXPECTED_TOKEN']}\n")
             sys.stderr.flush()
@@ -302,7 +307,7 @@ def test_given_the_bridge_ends_mid_load_when_loading_then_the_table_fails_keeps_
 	give(project, "rows", [{"id": 1, "v": "a"}])
 	load(project)
 	give(project, "rows", [{"id": 1, "v": "A"}, {"id": 2, "v": "b"}])
-	done = sqlload(project, "load", MD_DIE_ON="read_parquet")
+	done = sqlload(project, "load", MD_DIE_ON="(FORMAT parquet)")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "the MotherDuck bridge on" in done.stdout + done.stderr
 	assert "the stand-in for MotherDuck ended the bridge, signed in as <redacted>" in done.stdout + done.stderr
@@ -401,13 +406,13 @@ cloud.table(description="Rows.", name="failing", write_strategy="replace"{send})
 """
 
 
-def inserts_between_reads(log: Path) -> list[int]:
-	"""How many INSERTs reached MotherDuck before the first `-- read` note, then after each."""
+def chunks_between_reads(log: Path) -> list[int]:
+	"""How many chunks of rows reached MotherDuck before the first `-- read` note, then after each."""
 	counts = [0]
 	for line in log.read_text().splitlines():
 		if line.startswith("-- read"):
 			counts.append(0)
-		elif line.startswith("INSERT"):
+		elif line.startswith("COPY"):
 			counts[-1] += 1
 	return counts
 
@@ -423,7 +428,7 @@ def test_given_send_when_a_table_loads_in_windows_then_at_commit_sends_each_wind
 	project = make_project(tmp_path, MARKED.replace("{send}", send))
 	log = tmp_path / "statements.log"
 	load(project, "windowed", "--start-cursor", "0", "--end-cursor", "3", MD_LOG=str(log))
-	counts = inserts_between_reads(log)
+	counts = chunks_between_reads(log)
 	if expected_before_first_read is None:
 		assert counts[0] >= 1, log.read_text()
 	else:
@@ -431,6 +436,33 @@ def test_given_send_when_a_table_loads_in_windows_then_at_commit_sends_each_wind
 	assert cloud(project, "SELECT n, part, count(*) FROM raw.cloud__windowed GROUP BY ALL ORDER BY ALL") == [
 		(n, part, 100000) for n in range(3) for part in range(2)
 	]
+
+
+PAGED = """
+import pyarrow as pa
+
+
+def paged(ctx):
+    for page in range(400):
+        yield pa.table({"id": list(range(page * 50, page * 50 + 50)), "doc": ['{"page": %d}' % page] * 50})
+
+
+cloud.table(description="Rows.", name="paged", write_strategy="merge", unique_key="id", columns={"doc": "json"}{send})(paged)
+"""
+
+
+@pytest.mark.parametrize("send", ["", ", send='per_batch'"], ids=["at_commit", "per_batch"])
+def test_given_a_source_yielding_small_pages_when_loading_into_motherduck_then_the_rows_go_in_one_zstd_parquet_chunk(
+	tmp_path: Path, send: str
+) -> None:
+	project = make_project(tmp_path, PAGED.replace("{send}", send))
+	log = tmp_path / "statements.log"
+	load(project, "paged", MD_LOG=str(log))
+	lines = log.read_text().splitlines()
+	staged = [line for line in lines if "read_parquet" in line or line.startswith("COPY")]
+	assert (len(staged), sorted({line for line in lines if line.startswith("-- parquet")})) == (1, ["-- parquet ZSTD"]), log.read_text()
+	assert staged[0].startswith('COPY "shop"."raw".'), staged
+	assert cloud(project, "SELECT count(*), count(DISTINCT id), max(doc.page::INT) FROM raw.cloud__paged") == [(20000, 20000, 399)]
 
 
 def test_given_send_at_commit_when_a_read_fails_part_way_then_nothing_reaches_motherduck_and_no_held_file_stays(tmp_path: Path) -> None:
@@ -443,7 +475,7 @@ def test_given_send_at_commit_when_a_read_fails_part_way_then_nothing_reaches_mo
 	done = sqlload(project, "load", "failing", MD_LOG=str(log))
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "the API went away" in done.stdout
-	assert inserts_between_reads(log) == [0, 0], log.read_text()
+	assert chunks_between_reads(log) == [0, 0], log.read_text()
 	assert list((project / "held").iterdir()) == []
 
 
@@ -459,6 +491,7 @@ def test_given_send_when_planning_then_each_table_says_how_its_rows_are_sent(tmp
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert "send    at commit: staged locally, then one burst" in done.stdout, done.stdout
 	assert "send    n/a: DuckDB reads the files itself" in done.stdout, done.stdout
+	assert "read as Arrow -> zstd Parquet, about 122,880 rows a file -> MotherDuck COPY" in done.stdout, done.stdout
 
 
 SLOW_VARIANT = "MotherDuck runs DuckDB 1.5, which stores VARIANT unshredded: queries on its fields can be much slower than on JSON until MotherDuck moves to DuckDB 2.0; json_type = \"json\" keeps JSON"

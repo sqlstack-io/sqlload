@@ -58,6 +58,7 @@ loader_schema = "raw"
 |-----|---------|
 | `database` | The MotherDuck database, with or without `md:`. Required, here or in the target. It can't hold the token. |
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
+| `load_method` | How rows reach MotherDuck: `{ type = "local" }` (default) or `{ type = "external_stage", … }`. See [Staging in a bucket](#staging-in-a-bucket). |
 
 A target's `database` overrides the connection's, so one connection can serve, say, a `shop_dev`
 and a `shop` database. The database must exist. MotherDuck attaches the account's other databases
@@ -69,9 +70,51 @@ connection installs MotherDuck's DuckDB extension into `~/.duckdb`, which needs 
 
 ## How data arrives
 
-SQLLoad writes each batch to a temporary Parquet file on this machine, and the separate process
-inserts it with `read_parquet` inside the batch's transaction, then the file is removed. `plan` names
-the route for every table.
+SQLLoad gathers the rows into chunks of about 122,880 rows, DuckDB's row group size, however small
+the pages a source yields (an API's pages of 50 rows, say). It writes each chunk to a temporary zstd
+Parquet file on this machine, and the separate process loads it with `COPY` inside the batch's
+transaction, then the file is removed. `VARIANT` columns are typed `JSON` in the file, so they load
+parsed. `plan` names the route for every table:
+
+```console
+$ sqlload plan -v
+…
+    ├── route   read as Arrow -> zstd Parquet, about 122,880 rows a file -> MotherDuck COPY
+```
+
+### Staging in a bucket
+
+With `load_method = { type = "external_stage", … }` on the connection, SQLLoad writes each chunk
+under an S3 or GCS prefix instead, and MotherDuck's servers read the chunks there in the commit
+(`read_parquet` with `MD_RUN = REMOTE`), so this machine only uploads to the bucket. It suits a
+flaky or slow uplink to MotherDuck, a machine beside the bucket, or keeping the loaded files as an
+archive. The default, `{ type = "local" }`, sends the chunks from this machine as above:
+
+```toml
+[connections.shop]
+kind = "motherduck"
+database = "shop"
+load_method = { type = "external_stage", url = "s3://example-bucket/motherduck/" }
+```
+
+| Key | Meaning |
+|-----|---------|
+| `url` | The prefix, `s3://bucket/prefix/` or `gs://bucket/prefix/`. Chunks go in a folder named for the load id, then one for the table. |
+| `connection` | An [`s3`](/docs/configuration/#s3) or [`gcs`](/docs/configuration/#gcs) connection to the bucket, for its region, profile and keys. Required for `gs://`: MotherDuck reads GCS only with the connection's HMAC key. Without it, S3 keys come from the environment, the shared credentials file or the AWS credential chain. |
+| `keep_staged_files` | Keep each chunk once MotherDuck has read it, as an archive of what was sent. Default `false`: SQLLoad removes them. A chunk of a batch that fails before MotherDuck reads it into its table is always removed; on a table loaded through a staging table, such as a `merge`, the chunks are read into the staging table first, so a commit that fails after that keeps them. |
+
+SQLLoad writes with the bucket's keys, and MotherDuck's servers read with the same keys, as a
+secret that lasts only for the load's session, as for [Parquet files in S3](#parquet-files-in-s3).
+`plan` writes a one-row file under the prefix, has MotherDuck's servers read it, and removes it; it
+fails each table with the fix when either step fails, and never falls back to sending from this
+machine. A custom S3 endpoint is refused, since MotherDuck's servers can't reach it. Each batch
+fails unless MotherDuck reports loading as many rows as the chunks' footers hold. A load that is killed leaves its chunks under its load id; a lifecycle rule on the prefix removes such leftovers:
+
+```console
+$ sqlload plan -v
+…
+    ├── route   read as Arrow -> zstd Parquet, about 122,880 rows a file -> s3://example-bucket/motherduck/ -> MotherDuck reads them on its servers
+```
 
 ### Parquet files in S3
 
