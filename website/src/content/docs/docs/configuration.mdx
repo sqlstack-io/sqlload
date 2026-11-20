@@ -264,7 +264,7 @@ http  shop  rate_limit 10/s, max_in_flight 4, retries 5, auth bearer
 | Key | Applies to | Meaning |
 |-----|------------|---------|
 | `connection` | all | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres`, `duckdb`, `s3` or `filesystem` connection, or a `motherduck` connection. |
-| `loader_schema` | warehouses, required | The schema for tables whose source sets no `schema`; a BigQuery target's dataset, a ClickHouse target's database. |
+| `loader_schema` | warehouses, required | The schema for tables whose source sets no `destination_schema`; a BigQuery target's dataset, a ClickHouse target's database. |
 | `database` | warehouses except ClickHouse | Overrides the connection's database. |
 | `path` | files | Each table's folder template, with `{source}`, `{schema}`, `{table}`, `{cursor}` and `{cursor:date}`. Default `{source}/{table}/`. |
 | `format` | files | `parquet` (default), or `csv`. |
@@ -286,8 +286,8 @@ http  shop  rate_limit 10/s, max_in_flight 4, retries 5, auth bearer
 | `connection` | all | The connection the source reads. |
 | `description` | all | The source's description; a files source's table description. |
 | `destination` | all | The target; `default_target` when omitted. |
-| `schema` | warehouse targets | The destination schema; the target's `loader_schema` when omitted. |
-| `table_name` | all | The destination name template, with `{source}`, `{schema}` and `{table}`. Default `{source}__{table}`, or `{source}` for files. |
+| `destination_schema` | warehouse targets | The schema the source's tables land in; the target's `loader_schema` when omitted. The schema they are read from is chosen by `include`. |
+| `table_name` | all | The destination name template, with `{source}`, `{schema}` (the source schema) and `{table}`. Default `{source}__{table}`, or `{source}` for files. |
 | `destination_path` | files targets | The folder template for this source's tables, overriding the target's `path`. |
 | `include`, `exclude` | postgres, postgres_cdc, snowflake, odbc, bigquery, databricks | `schema.table` patterns to sync and to leave out (`dataset.table` for bigquery). |
 | `new_tables` | postgres | `sync` (default), `skip` or `fail`. See [Sources](/docs/sources/postgres/#choosing-tables). |
@@ -339,7 +339,7 @@ matches rows on the primary key, and a `unique_key` must lie within it.
 
 ## Table settings
 
-Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"]` entry for one.
+Set on a source for all its tables, or in a `[sources.NAME.tables."schema.table"]` entry for one. The `schema` in an entry's name is the source schema; where tables land is the source's `destination_schema`.
 
 | Key | Default | Meaning |
 |-----|---------|---------|

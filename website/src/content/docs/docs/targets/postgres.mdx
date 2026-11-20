@@ -33,7 +33,7 @@ loader_schema = "reporting"
 | `password` | Use `${ENV:NAME}`. |
 | `sslmode`, `sslrootcert`, `sslcert`, `sslkey` | TLS, as libpq takes it. See [TLS](/docs/sources/postgres/#tls). |
 
-The target's `loader_schema` is the schema tables load into; a source's `schema` overrides it. The
+The target's `loader_schema` is the schema tables load into; a source's `destination_schema` overrides it. The
 target's `database` overrides the connection's.
 
 `sqlload debug` shows the target's user, database, server version and what protects the

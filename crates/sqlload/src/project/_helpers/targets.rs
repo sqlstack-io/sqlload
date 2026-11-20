@@ -190,9 +190,9 @@ pub(crate) fn destination_kind_problems(
             "{place} destination_path is for targets on an s3, gcs or filesystem connection"
         ));
     }
-    if source.schema.is_some() && files_target {
+    if source.destination_schema.is_some() && files_target {
         problems.push(format!(
-            "{place} schema is for warehouse targets; a files target places tables with path or destination_path"
+            "{place} destination_schema is for warehouse targets; a files target places tables with path or destination_path"
         ));
     }
     problems
