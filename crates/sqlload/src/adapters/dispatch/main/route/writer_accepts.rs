@@ -4,7 +4,9 @@ use crate::adapters::databricks::main::stage::_writer_accepts::writer_accepts as
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::main::stage::_writer_accepts::writer_accepts as snowflake_accepts;
 use crate::adapters::snowflake::models::StageRoute;
+#[cfg(feature = "duckdb")]
 use crate::memory_budget::constants::DUCKDB_ROW_GROUP_ROWS;
+#[cfg(feature = "duckdb")]
 use crate::number_text::main::thousands::thousands;
 use crate::routing::models::WriterAccepts;
 use crate::routing::models::{FileFormat, Store};
@@ -14,10 +16,17 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) if duckdb.motherduck => WriterAccepts {
-            rows_into: Some(format!(
-                "zstd Parquet, about {} rows a file -> MotherDuck COPY",
-                thousands(DUCKDB_ROW_GROUP_ROWS)
-            )),
+            rows_into: Some(match &duckdb.stage {
+                None => format!(
+                    "zstd Parquet, about {} rows a file -> MotherDuck COPY",
+                    thousands(DUCKDB_ROW_GROUP_ROWS)
+                ),
+                Some(stage) => format!(
+                    "zstd Parquet, about {} rows a file -> {} -> MotherDuck reads them on its servers",
+                    thousands(DUCKDB_ROW_GROUP_ROWS),
+                    stage.folder.location
+                ),
+            }),
             pulls_from: vec![
                 Store::ObjectStore("s3://".to_owned()),
                 Store::ObjectStore("gs://".to_owned()),

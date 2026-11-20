@@ -998,6 +998,9 @@ impl Publisher {
                     return Ok(());
                 }
                 self.writer.settle_rows().await?;
+                if let Some(statement) = self.pieces.statement.take() {
+                    execute(&self.destination, vec![statement]).await?;
+                }
                 self.writer.load_batch(&target).await?;
                 self.writer.next_batch();
                 if self.direct || self.builds {

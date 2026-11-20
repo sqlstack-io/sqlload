@@ -117,6 +117,7 @@ DuckDB 1.5 process: install `sqlload[motherduck]`; see [MotherDuck](/docs/target
 |-----|---------|
 | `database` | The MotherDuck database, with or without `md:`. Required, here or in the target. It can't hold the token. |
 | `token` | A MotherDuck access token. Use `${ENV:NAME}`. Default: the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable. |
+| `load_method` | `{ type = "local" }` (default): zstd Parquet chunks sent from this machine. `{ type = "external_stage", url = "s3://…" \| "gs://…", connection = "…", keep_staged_files = false }`: chunks written to a bucket, which MotherDuck's servers read. See [Staging in a bucket](/docs/targets/motherduck/#staging-in-a-bucket). |
 
 ### `s3`
 

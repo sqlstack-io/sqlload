@@ -1,20 +1,27 @@
-//! DuckDB's write session: Arrow appends, in one transaction per batch when the batch goes straight into the table or a build table, and checkpoints under the memory budget.
+//! DuckDB's write session: Arrow appends (or a MotherDuck `external_stage`'s chunks), in one transaction per batch when the batch goes straight into the table or a build table, and checkpoints under the memory budget.
 
 use arrow_array::RecordBatch;
 
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::adapters::contract::models::WriteTarget;
+use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::duckdb::constants::{
     CHECKPOINT_BUSY, CHECKPOINT_RETRY, CHECKPOINT_STATEMENT, CHECKPOINT_WAIT,
 };
 use crate::adapters::duckdb::main::_append_batch::append_batch;
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
-use crate::adapters::duckdb::models::DuckDbWriter;
+use crate::adapters::duckdb::main::_open_bucket::open_bucket;
+use crate::adapters::duckdb::main::_pull_files::pull_files;
+use crate::adapters::duckdb::models::{DuckDbSql, DuckDbWriter, ExternalStage};
+use crate::adapters::motherduck_bridge::main::_chunk_parquet::chunk_parquet;
 use crate::column_types::main::is_variant::is_variant;
+use crate::file_store::main::delete_files::delete_files;
+use crate::file_store::main::write_file::write_file;
 use crate::loader::errors::LoaderError;
 use crate::memory_budget::main::large_values::large_values;
 use crate::memory_budget::models::DuckDbShare;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 impl TableWriter for DuckDbWriter {
@@ -27,6 +34,9 @@ impl TableWriter for DuckDbWriter {
         target: &WriteTarget<'_>,
         batch: RecordBatch,
     ) -> Result<(), LoaderError> {
+        if let Some(stage) = self.destination.stage.clone() {
+            return self.write_chunk(&stage, target, batch).await;
+        }
         let into = target.staging.unwrap_or(target.table);
         if self.destination.memory.is_some()
             && let Some(rows) = large_values(&batch)
@@ -62,9 +72,11 @@ impl TableWriter for DuckDbWriter {
     }
 
     async fn load_batch(&mut self, _target: &WriteTarget<'_>) -> Result<(), LoaderError> {
+        self.load_chunks().await?;
         if self.open_transaction {
             execute_statements(&self.destination, vec![COMMIT_STATEMENT.to_owned()]).await?;
             self.open_transaction = false;
+            self.remove_chunks(true).await;
         }
         Ok(())
     }
@@ -72,7 +84,7 @@ impl TableWriter for DuckDbWriter {
     fn next_batch(&mut self) {}
 
     async fn settle_rows(&mut self) -> Result<(), LoaderError> {
-        Ok(())
+        self.load_chunks().await
     }
 
     fn reopen_rows(&mut self) {}
@@ -84,6 +96,7 @@ impl TableWriter for DuckDbWriter {
         {
             tracing::warn!(%error, "cannot roll back the open batch");
         }
+        self.remove_chunks(false).await;
     }
 
     async fn remove_batch_files(&mut self, _target: &WriteTarget<'_>) {}
@@ -125,4 +138,123 @@ impl TableWriter for DuckDbWriter {
                 });
         Ok(())
     }
+}
+
+impl DuckDbWriter {
+    /// Write `batch` to `stage` as one zstd Parquet chunk (`VARIANT` columns typed `JSON`), which waits there for [`Self::load_chunks`]; the batch's transaction, when it goes straight into the table or a build table, opens only when MotherDuck reads them, right after the bucket's secret is set, so it never reads with keys set before a long upload.
+    pub(in crate::adapters) async fn write_chunk(
+        &mut self,
+        stage: &Arc<ExternalStage>,
+        target: &WriteTarget<'_>,
+        batch: RecordBatch,
+    ) -> Result<(), LoaderError> {
+        let into = target.staging.unwrap_or(target.table);
+        let names: Vec<String> = (batch.schema().fields().iter())
+            .map(|field| DuckDbSql.render_identifier(field.name()))
+            .collect();
+        let insert = format!(
+            "INSERT INTO {} ({list}) SELECT {list} FROM read_parquet(",
+            DuckDbSql.render_qualified_name(into),
+            list = names.join(", ")
+        );
+        if insert != self.staged.insert {
+            self.load_chunks().await?;
+            self.staged.insert = insert;
+        }
+        self.staged.transaction = target.direct || target.builds;
+        let json: Vec<String> = (target.write_columns.iter())
+            .filter(|column| is_variant(&column.column_type))
+            .map(|column| column.name.clone())
+            .collect();
+        let rows = batch.num_rows() as u64;
+        let body = tokio::task::spawn_blocking(move || {
+            let mut body: Vec<u8> = Vec::new();
+            chunk_parquet(&mut body, &batch, &json).map(|()| body)
+        })
+        .await
+        .map_err(|error| LoaderError::Invalid(format!("the Parquet thread failed: {error}")))?
+        .map_err(LoaderError::Invalid)?;
+        self.staged.written += 1;
+        let key = format!(
+            "{}/{}/{}-{}.parquet",
+            target.load_id,
+            key_safe(&format!("{}.{}", into.schema, into.table)),
+            target.batch,
+            self.staged.written
+        );
+        write_file(&stage.folder, &key, body.into())
+            .await
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
+        self.staged.waiting.push((key, rows));
+        Ok(())
+    }
+
+    /// Have MotherDuck's servers read the waiting chunks into their table (`MD_RUN = REMOTE`), failing unless it reports as many rows as their footers hold. Outside a transaction the rows are in, and the files go now; inside one, once it commits ([`Self::remove_chunks`]).
+    pub(in crate::adapters) async fn load_chunks(&mut self) -> Result<(), LoaderError> {
+        let Some(stage) = self.destination.stage.clone() else {
+            return Ok(());
+        };
+        if self.staged.waiting.is_empty() {
+            return Ok(());
+        }
+        if !self.open_transaction {
+            open_bucket(&self.destination, &stage.folder.location.store).await?;
+        }
+        if self.staged.transaction && !self.open_transaction {
+            execute_statements(&self.destination, vec![BEGIN_STATEMENT.to_owned()]).await?;
+            self.open_transaction = true;
+        }
+        let waiting = std::mem::take(&mut self.staged.waiting);
+        let urls: Vec<String> = (waiting.iter())
+            .map(|(key, _)| {
+                DuckDbSql.render_loader_value_literal(&format!("{}{key}", stage.folder.location))
+            })
+            .collect();
+        let insert = format!(
+            "{}[{}], hive_partitioning = false, MD_RUN = REMOTE)",
+            self.staged.insert,
+            urls.join(", ")
+        );
+        let keys: Vec<String> = waiting.iter().map(|(key, _)| key.clone()).collect();
+        self.staged.loaded.extend(keys);
+        let rows = pull_files(&self.destination, insert).await?;
+        let expected: u64 = waiting.iter().map(|(_, rows)| rows).sum();
+        if rows != expected {
+            return Err(LoaderError::Invalid(format!(
+                "MotherDuck loaded {rows} rows from the chunks staged in {}, but their footers hold {expected}; the batch is not committed",
+                stage.folder.location
+            )));
+        }
+        if !self.open_transaction {
+            self.remove_chunks(true).await;
+        }
+        Ok(())
+    }
+
+    /// Remove the chunks MotherDuck read once they `committed`, unless the stage keeps them, and always those of a batch that failed (read or still waiting); a file that cannot be removed is only logged.
+    pub(in crate::adapters) async fn remove_chunks(&mut self, committed: bool) {
+        let Some(stage) = self.destination.stage.clone() else {
+            return;
+        };
+        let mut keys = std::mem::take(&mut self.staged.loaded);
+        keys.extend(self.staged.waiting.drain(..).map(|(key, _)| key));
+        if (stage.keep && committed) || keys.is_empty() {
+            return;
+        }
+        if let Err(error) = delete_files(&stage.folder, &keys).await {
+            tracing::warn!(stage = %stage.folder.location, %error, "staged chunks were left in the external_stage");
+        }
+    }
+}
+
+/// `name` as a part of an object key that `read_parquet` never takes for a glob: letters, digits, `_`, `-` and `.` as they are, any other byte as `~` and its hex.
+fn key_safe(name: &str) -> String {
+    name.bytes()
+        .map(
+            |byte| match byte.is_ascii_alphanumeric() || b"_-.".contains(&byte) {
+                true => char::from(byte).to_string(),
+                false => format!("~{byte:02x}"),
+            },
+        )
+        .collect()
 }

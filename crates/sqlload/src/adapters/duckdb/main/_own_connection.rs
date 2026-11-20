@@ -60,5 +60,6 @@ pub(in crate::adapters) fn own_connection(
         own_limit: destination.own_limit,
         unflushed: destination.unflushed.clone(),
         secrets: destination.secrets.clone(),
+        stage: destination.stage.clone(),
     })
 }

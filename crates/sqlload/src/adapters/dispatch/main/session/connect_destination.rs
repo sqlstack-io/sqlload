@@ -6,7 +6,7 @@ use crate::adapters::contract::models::TableName;
 use crate::adapters::databricks::main::session::_connect_databricks::connect_databricks;
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
-use crate::adapters::duckdb::main::_open_destination::open_destination;
+use crate::adapters::duckdb::main::_open_target::open_target;
 use crate::adapters::files::models::FilesDestination;
 use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
 use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
@@ -27,13 +27,9 @@ pub async fn connect_destination(
         .ok_or_else(|| LoaderError::Invalid(format!("target {name:?} does not exist")))?;
     let destination = match project.connections.get(&target.connection) {
         #[cfg(feature = "duckdb")]
-        Some(
-            connection @ (ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }),
-        ) => Destination::DuckDb(open_destination(
-            connection,
-            target.database.as_deref(),
-            project.memory.budget,
-        )?),
+        Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
+            Destination::DuckDb(open_target(project, target)?)
+        }
         #[cfg(not(feature = "duckdb"))]
         Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
             return Err(LoaderError::Invalid(format!(
