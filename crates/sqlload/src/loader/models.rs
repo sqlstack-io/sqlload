@@ -1193,6 +1193,8 @@ pub struct Publisher {
     pub transform: Option<(TransformRun, usize)>,
     /// Under `send = "at_commit"`, the batches held locally until their commit sends them; `None` when each batch is sent as it is read.
     pub spool: Option<crate::commit_spool::models::Spool>,
+    /// Rows staged but not yet written, merged into one batch first (see [`Pending`]).
+    pub pending: Pending,
     /// The commit being cut into pieces under DuckDB's memory share.
     pub pieces: Pieces,
 }
@@ -1206,6 +1208,17 @@ pub enum Cuts {
     Between(Vec<String>),
     /// Nowhere, and why.
     Never(&'static str),
+}
+
+/// Rows a table staged that its writer hasn't taken yet: a source that yields a page at a time, such as `sl.http`, has its pages merged into one batch of up to about 122,880 rows ([`DUCKDB_ROW_GROUP_ROWS`](crate::memory_budget::constants::DUCKDB_ROW_GROUP_ROWS)) or [`COALESCED_BYTES`](crate::loader::constants::COALESCED_BYTES), so a target gets one write for them, not one per page.
+#[derive(Debug, Default)]
+pub struct Pending {
+    /// The batch number they belong to.
+    pub batch: u64,
+    pub batches: Vec<arrow_array::RecordBatch>,
+    pub rows: u64,
+    /// Their Arrow memory.
+    pub bytes: usize,
 }
 
 /// A table's commits cut into pieces, each holding no more large values (those DuckDB keeps in memory until a checkpoint) than DuckDB's share commits at once.
