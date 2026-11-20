@@ -1,7 +1,8 @@
 use toml::Value;
 
 use crate::project::constants::{
-    PYTHON_SETTING_KEYS, PYTHON_SOURCE_KEYS, SOURCE_ONLY_KEYS, TABLE_ONLY_KEYS, TABLE_SETTING_KEYS,
+    PYTHON_SETTING_KEYS, PYTHON_SOURCE_KEYS, RENAMED_SCHEMA_KEY, SOURCE_ONLY_KEYS, TABLE_ONLY_KEYS,
+    TABLE_SETTING_KEYS,
 };
 use crate::similar_names::main::nearest_name::nearest_name;
 
@@ -54,11 +55,12 @@ fn keys_problems(
         let Some(source) = source.as_table() else {
             continue;
         };
-        problems.extend(unknown_in(
-            source.keys(),
-            source_keys,
-            &place(source_name, None),
-        ));
+        let source_place = place(source_name, None);
+        problems.extend(source.keys().filter(|key| *key == RENAMED_SCHEMA_KEY).map(|_| {
+            format!("{source_place}: schema was renamed destination_schema (the schema tables land in); the source schema goes in include, such as \"dbo.*\"")
+        }));
+        let keys = source.keys().filter(|key| *key != RENAMED_SCHEMA_KEY);
+        problems.extend(unknown_in(keys, source_keys, &source_place));
         let tables = source.get("tables").and_then(Value::as_table);
         for (table_name, table) in tables.into_iter().flatten() {
             let keys = table.as_table().map(|table| table.keys());

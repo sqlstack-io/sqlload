@@ -48,13 +48,16 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "test_loader_route",
 ];
 
+/// The source key `destination_schema` replaced; `plan` refuses it, naming the new key.
+pub const RENAMED_SCHEMA_KEY: &str = "schema";
+
 /// Keys only a source may use.
 pub const SOURCE_ONLY_KEYS: &[&str] = &[
     "kind",
     "connection",
     "description",
     "destination",
-    "schema",
+    "destination_schema",
     "include",
     "exclude",
     "new_tables",
@@ -103,7 +106,7 @@ pub const PYTHON_SOURCE_KEYS: &[&str] = &[
     "connection",
     "description",
     "destination",
-    "schema",
+    "destination_schema",
     "table_name",
     "destination_path",
     "exclude_columns",

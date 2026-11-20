@@ -64,10 +64,10 @@ loader_schema = "raw"
 | Key | Meaning |
 |-----|---------|
 | `connection` | A `snowflake`, `databricks`, `bigquery`, `clickhouse`, `postgres` or `duckdb` connection, or a `motherduck` connection. |
-| `loader_schema` | The schema for tables whose source sets no `schema`. Required. |
+| `loader_schema` | The schema for tables whose source sets no `destination_schema`. Required. |
 | `database` | Overrides the connection's database. Not for ClickHouse. |
 
-A source's `schema` overrides `loader_schema` for its tables. A DuckDB connection's `database` is
+A source's `destination_schema` overrides `loader_schema` for its tables. A DuckDB connection's `database` is
 a file path, or `:memory:`. A Snowflake connection also needs a `load_method`; see
 [Snowflake](/docs/targets/snowflake/). A Postgres target uses the same connection kind as a
 Postgres source.

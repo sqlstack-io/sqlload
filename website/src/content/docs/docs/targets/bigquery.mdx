@@ -35,7 +35,7 @@ loader_schema = "raw"
 | `service_account_key` | The key file's JSON text, not its path. Required. |
 | `project` | The project tables load into and jobs run in. Default: the key's own project. |
 
-The target's `loader_schema` is the dataset tables load into; a source's `schema` overrides it.
+The target's `loader_schema` is the dataset tables load into; a source's `destination_schema` overrides it.
 `sqlload apply` creates the dataset when it doesn't exist.
 
 Pass the key through the environment, so it stays out of `sqlload.toml`:
