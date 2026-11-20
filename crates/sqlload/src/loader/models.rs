@@ -1142,6 +1142,10 @@ pub struct Publisher {
     pub builds: bool,
     /// The indexes to re-create on the build table once it is swapped in.
     pub indexes: Vec<String>,
+    /// A table planned from its data that this load creates (see [`created_at_commit`](crate::loader::_helpers::publish::created_at_commit)): it is created at the first commit with every column seen by then.
+    pub new_table: bool,
+    /// The `created ...` line of a table created at its first commit, until its load reports it.
+    pub changes: Vec<String>,
     pub staging: Option<TableName>,
     /// The batch being filled, from 1.
     pub batch: u64,
