@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.81.0](https://github.com/sqlstack-io/sqlload/compare/v0.80.0...v0.81.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **plan:** plan no longer fails a table that has no description, and contract generate --write no longer refuses such a table.
+* **files:** a failing file rolls back every file of its commit, and a run record of a files merge or delete_insert by replace_key lists all the files of its commit. Excluding _sqlload_source_row no longer makes a files merge refuse repeated keys or newest_by.
+
+### Features
+
+* **files:** merge and delete_insert by replace_key commit many files at once ([938fabd](https://github.com/sqlstack-io/sqlload/commit/938fabda4f10c17ebe7c22e5b6019f04bdf5bb31))
+* **http:** sl.page_number(page_size=N) ends at a short page ([938fabd](https://github.com/sqlstack-io/sqlload/commit/938fabda4f10c17ebe7c22e5b6019f04bdf5bb31))
+* **plan:** table descriptions are optional ([938fabd](https://github.com/sqlstack-io/sqlload/commit/938fabda4f10c17ebe7c22e5b6019f04bdf5bb31))
+
 ## [0.80.0](https://github.com/sqlstack-io/sqlload/compare/v0.79.0...v0.80.0) (2026-11-19)
 
 
