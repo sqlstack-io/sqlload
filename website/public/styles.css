@@ -883,9 +883,9 @@ footer a {
 	text-wrap: balance;
 }
 
-/* The panel starts level with the headline and ends level with the buttons. */
+/* The panel starts level with the headline and is as tall as its tallest tab. */
 .hero .hero-visual {
-	align-self: stretch;
+	align-self: start;
 	margin-top: 42px;
 }
 
