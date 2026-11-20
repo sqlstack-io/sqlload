@@ -23,6 +23,33 @@ pub struct DuckDbDestination {
     pub unflushed: Arc<std::sync::atomic::AtomicU64>,
     /// The secret set on the database for each bucket, by bucket, shared by every table's connection: tables setting one at the same time conflict, so each is set before a table opens its transaction, and again only when it [is no longer current](crate::adapters::duckdb::_helpers::pull_sql::secret_current).
     pub secrets: Arc<tokio::sync::Mutex<std::collections::HashMap<String, SetSecret>>>,
+    /// A MotherDuck target's `external_stage`; `None` sends each chunk from this machine.
+    pub stage: Option<Arc<ExternalStage>>,
+}
+
+/// Where a MotherDuck target's `external_stage` writes each chunk as zstd Parquet, which MotherDuck's servers read in the commit.
+#[cfg(feature = "duckdb")]
+#[derive(Debug)]
+pub struct ExternalStage {
+    pub folder: crate::file_store::models::OpenFolder,
+    /// Keep each chunk's file after its commit.
+    pub keep: bool,
+    /// Whether SQLLoad writes the prefix and MotherDuck reads it, checked once for the destination's tables.
+    pub checked: tokio::sync::OnceCell<Result<(), String>>,
+}
+
+/// The chunks a table wrote to its [`ExternalStage`] that MotherDuck hasn't read yet, and those read inside the open transaction, whose files go after it commits.
+#[cfg(feature = "duckdb")]
+#[derive(Debug, Default)]
+pub struct StagedChunks {
+    /// The `INSERT INTO … SELECT … FROM` the waiting chunks load with, up to their file list.
+    pub insert: String,
+    /// Each waiting chunk's key under the stage, with its rows.
+    pub waiting: Vec<(String, u64)>,
+    /// Chunks loaded in the open transaction.
+    pub loaded: Vec<String>,
+    /// Chunks written by this table so far, naming the next.
+    pub written: u64,
 }
 
 /// A bucket's secret as it was set: a hash of its statement and parameters, never the keys themselves; whether DuckDB resolved its keys through the AWS credential chain, once, when it was set; and when.
@@ -55,4 +82,6 @@ pub struct DuckDbWriter {
     pub destination: DuckDbDestination,
     /// A transaction is open on the table's connection.
     pub open_transaction: bool,
+    /// Under an [`ExternalStage`], its chunks.
+    pub staged: Box<StagedChunks>,
 }

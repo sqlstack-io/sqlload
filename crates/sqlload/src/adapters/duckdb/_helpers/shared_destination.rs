@@ -19,5 +19,6 @@ pub(in crate::adapters::duckdb) fn shared_destination(
         own_limit: None,
         unflushed: Arc::default(),
         secrets: Arc::default(),
+        stage: None,
     })
 }

@@ -129,3 +129,14 @@ pub(crate) fn parse_with_python(
     .map(|project| read(&project))
     .map_err(|error| error.to_string())
 }
+
+/// An `s3` connection to the bucket `lake`, in `eu-west-1`.
+pub(crate) const LAKE: &str =
+    "[connections.lake]\nkind = \"s3\"\nbucket = \"lake\"\nregion = \"eu-west-1\"\n";
+
+/// A project loading into MotherDuck connection `md` with `load_method`, and the connections in `more`.
+pub(crate) fn md_stage(load_method: &str, more: &str) -> String {
+    format!(
+        "[connections.md]\nkind = \"motherduck\"\ndatabase = \"shop\"\nload_method = {load_method}\n{more}[targets.dev]\nconnection = \"md\"\nloader_schema = \"raw\"\n"
+    )
+}

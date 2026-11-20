@@ -1,8 +1,13 @@
+use crate::auth::models::Secret;
+use crate::project::main::motherduck_stage::motherduck_stage;
 use crate::project::main::parse_project::parse_project;
 use crate::project::tests::helpers::{
     CONNECTIONS, FILES_PROJECT, PROJECT, SNOWFLAKE_SOURCE, environment,
 };
+use crate::project::tests::helpers::{LAKE, md_stage};
+use crate::project::tests::test_types::MotherDuckStageTestCase;
 use crate::project::tests::test_types::{ParseProjectErrorTestCase, ParseProjectTestCase};
+use crate::store_paths::models::{HmacKey, Location, StoreKind};
 
 const CONSTANT_SOURCES: &str = r#"
 [sources.app]
@@ -866,6 +871,130 @@ fn given_column_names_on_a_sheets_source_when_every_table_using_them_is_headerle
             .unwrap_or_default();
         assert_eq!(
             error, test_case.expected_message,
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_motherduck_external_stage_when_parsing_then_it_stages_in_a_bucket_motherduck_reads() {
+    let s3 = |bucket: &str, region: Option<&str>| StoreKind::S3 {
+        bucket: bucket.to_owned(),
+        region: region.map(str::to_owned),
+        endpoint: None,
+        profile: None,
+    };
+    let at = |store: StoreKind| Location {
+        store,
+        prefix: "md/".to_owned(),
+    };
+    let test_cases = [
+        MotherDuckStageTestCase {
+            description: "an s3 prefix, keys from the environment",
+            text: md_stage("{ type = \"external_stage\", url = \"s3://lake/md/\" }", ""),
+            expected_stage: Some(Some((at(s3("lake", None)), false))),
+            expected_error: "",
+        },
+        MotherDuckStageTestCase {
+            description: "an s3 prefix with an s3 connection's settings, kept",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"s3://lake/md/\", connection = \"lake\", keep_staged_files = true }",
+                LAKE,
+            ),
+            expected_stage: Some(Some((at(s3("lake", Some("eu-west-1"))), true))),
+            expected_error: "",
+        },
+        MotherDuckStageTestCase {
+            description: "a gs prefix with a gcs connection's HMAC key",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"gs://lake/md/\", connection = \"gcs\" }",
+                "[connections.gcs]\nkind = \"gcs\"\nbucket = \"lake\"\nhmac_key_id = \"K\"\nhmac_secret = \"S\"\n",
+            ),
+            expected_stage: Some(Some((
+                at(StoreKind::Gcs {
+                    bucket: "lake".to_owned(),
+                    service_account_key: None,
+                    endpoint: None,
+                    hmac: Some(HmacKey {
+                        key_id: "K".to_owned(),
+                        secret: Secret("S".to_owned()),
+                    }),
+                }),
+                false,
+            ))),
+            expected_error: "",
+        },
+        MotherDuckStageTestCase {
+            description: "local sends from this machine",
+            text: md_stage("{ type = \"local\" }", ""),
+            expected_stage: Some(None),
+            expected_error: "",
+        },
+        MotherDuckStageTestCase {
+            description: "gs needs a gcs connection's HMAC key",
+            text: md_stage("{ type = \"external_stage\", url = \"gs://lake/md/\" }", ""),
+            expected_stage: None,
+            expected_error: "[connections.md] load_method url \"gs://lake/md/\": MotherDuck reads GCS only with an HMAC key; set connection to a gcs connection with hmac_key_id and hmac_secret",
+        },
+        MotherDuckStageTestCase {
+            description: "a custom endpoint is out of MotherDuck's reach",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"s3://lake/md/\", connection = \"lake\" }",
+                "[connections.lake]\nkind = \"s3\"\nbucket = \"lake\"\nendpoint = \"http://localhost:9000\"\n",
+            ),
+            expected_stage: None,
+            expected_error: "[connections.md] load_method stages in a bucket with a custom endpoint, which MotherDuck's servers don't reach: stage in AWS S3 or GCS",
+        },
+        MotherDuckStageTestCase {
+            description: "a local folder is no stage",
+            text: md_stage("{ type = \"external_stage\", url = \"/tmp/md/\" }", ""),
+            expected_stage: None,
+            expected_error: "[connections.md] load_method url \"/tmp/md/\" must be an s3:// or gs:// URL, which MotherDuck's servers read",
+        },
+        MotherDuckStageTestCase {
+            description: "the connection must be a bucket's",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"s3://lake/md/\", connection = \"files\" }",
+                "[connections.files]\nkind = \"filesystem\"\nroot = \"/data\"\n",
+            ),
+            expected_stage: None,
+            expected_error: "[connections.md] load_method connection \"files\" must name an s3 or gcs connection to the bucket of \"s3://lake/md/\"",
+        },
+        MotherDuckStageTestCase {
+            description: "the connection's bucket must be the url's",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"s3://other/md/\", connection = \"lake\" }",
+                LAKE,
+            ),
+            expected_stage: None,
+            expected_error: "[connections.md] load_method url \"s3://other/md/\":",
+        },
+        MotherDuckStageTestCase {
+            description: "an unknown setting is refused",
+            text: md_stage(
+                "{ type = \"external_stage\", url = \"s3://lake/md/\", name = \"N\" }",
+                "",
+            ),
+            expected_stage: None,
+            expected_error: "unknown field `name`",
+        },
+    ];
+    for test_case in test_cases {
+        let found = parse_project(&test_case.text, &|_| None)
+            .map_err(|error| error.to_string())
+            .and_then(|project| motherduck_stage(&project, "md"));
+        assert_eq!(
+            found.as_ref().ok(),
+            test_case.expected_stage.as_ref(),
+            "{}: {found:?}",
+            test_case.description
+        );
+        assert!(
+            found
+                .err()
+                .unwrap_or_default()
+                .contains(test_case.expected_error),
             "{}",
             test_case.description
         );

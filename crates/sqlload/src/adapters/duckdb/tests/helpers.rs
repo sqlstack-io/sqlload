@@ -129,8 +129,10 @@ pub(crate) fn pulled_unloaded(reported: u64, with_files: bool) -> Result<(String
             own_limit: None,
             unflushed: Arc::default(),
             secrets: Arc::default(),
+            stage: None,
         },
         open_transaction: false,
+        staged: Default::default(),
     };
     let files = UnloadedFiles {
         folder: Location {
