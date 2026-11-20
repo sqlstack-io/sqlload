@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.83.0](https://github.com/sqlstack-io/sqlload/compare/v0.82.0...v0.83.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **project:** a source's `schema` key is now `destination_schema`, in sqlload.toml and in `sl.source(...)`. A source that still sets `schema` fails `plan` with a message naming the new key; the schema tables are read from is still chosen by `include`.
+
+### Features
+
+* **loader:** create a new staged Python table at its first commit, with SQLLoad's columns last ([4ace960](https://github.com/sqlstack-io/sqlload/commit/4ace96071fcab7dbc8615f01c84ba5709d4b6fa3))
+* **project:** rename a source's schema key to destination_schema ([4ace960](https://github.com/sqlstack-io/sqlload/commit/4ace96071fcab7dbc8615f01c84ba5709d4b6fa3))
+
 ## [0.82.0](https://github.com/sqlstack-io/sqlload/compare/v0.81.0...v0.82.0) (2026-11-20)
 
 
