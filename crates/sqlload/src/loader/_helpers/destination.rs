@@ -54,18 +54,18 @@ use crate::loader::_helpers::publish::{staged_columns, write_target};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{ReadPart, read_source};
 use crate::loader::_helpers::table_plan::blocked_plan;
-use crate::loader::constants::{CATALOG_CONFLICT, CATALOG_CONFLICT_TRIES};
+use crate::loader::constants::{CATALOG_CONFLICT, CATALOG_CONFLICT_TRIES, COALESCED_BYTES};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
 use crate::loader::models::{CommitRange, Publisher};
-use crate::loader::models::{Cuts, Pieces, RowGroupSeen};
+use crate::loader::models::{Cuts, Pending, Pieces, RowGroupSeen};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
 };
 use crate::masking::main::mask_batch::mask_batch;
 use crate::memory_budget::constants::{
     DUCKDB_COMMIT_PERCENT, DUCKDB_ROW_GROUP_PERCENT, DUCKDB_ROW_GROUP_ROWS, HOLDING_DIVISOR,
-    LARGE_VALUE_BYTES, STAGED_COPIES,
+    LARGE_VALUE_BYTES, STAGED_COPIES, TABLE_SHARE_PARTS,
 };
 use crate::memory_budget::main::large_values::large_values;
 use crate::memory_budget::main::needed_budget::needed_budget;
@@ -91,6 +91,7 @@ use crate::table_lease::main::release_lease::release_lease;
 use crate::table_lease::models::Lease;
 use arrow_array::RecordBatch;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
+use arrow_select::concat::concat_batches;
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -1341,12 +1342,49 @@ impl Publisher {
         if let Some(spool) = self.spool.as_mut() {
             return spool.hold(self.batch, &batch).map_err(LoaderError::Invalid);
         }
+        self.write_merged(self.batch, batch).await
+    }
+
+    /// Hold `batch`, rows of batch `number`, with the rows before it, writing those first when the batch number or columns change or `batch` would take them past [`DUCKDB_ROW_GROUP_ROWS`] rows or [`COALESCED_BYTES`] (or less: the batch's bytes, or under a memory budget the part of the table's share a source batch takes); and write them all once they reach either.
+    async fn write_merged(&mut self, number: u64, batch: RecordBatch) -> Result<(), LoaderError> {
+        let (rows, bytes) = (batch.num_rows() as u64, batch.get_array_memory_size());
+        let part = table_memory().map(|watched| {
+            usize::try_from(watched.guard.budget.table_share / TABLE_SHARE_PARTS)
+                .unwrap_or(usize::MAX)
+        });
+        let most = (COALESCED_BYTES.min(self.batch_bytes)).min(part.unwrap_or(usize::MAX));
+        let joins = (self.pending.batches.first())
+            .is_none_or(|first| first.schema() == batch.schema())
+            && self.pending.batch == number
+            && self.pending.rows + rows <= DUCKDB_ROW_GROUP_ROWS
+            && self.pending.bytes + bytes <= most;
+        if !joins {
+            self.write_pending().await?;
+        }
+        self.pending.batch = number;
+        self.pending.rows += rows;
+        self.pending.bytes += bytes;
+        self.pending.batches.push(batch);
+        if self.pending.rows >= DUCKDB_ROW_GROUP_ROWS || self.pending.bytes >= most {
+            self.write_pending().await?;
+        }
+        Ok(())
+    }
+
+    /// Write the rows held back (see [`Self::write_merged`]) as one batch, before anything reads, commits or alters what they go into.
+    pub(in crate::loader) async fn write_pending(&mut self) -> Result<(), LoaderError> {
+        let pending = std::mem::take(&mut self.pending);
+        let Some(first) = pending.batches.first() else {
+            return Ok(());
+        };
+        let batch = concat_batches(&first.schema(), &pending.batches)
+            .map_err(|error| LoaderError::Invalid(error.to_string()))?;
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
             self.staging.as_ref(),
             &columns,
-            ((&self.load_id, self.batch), (self.direct, self.builds)),
+            ((&self.load_id, pending.batch), (self.direct, self.builds)),
         );
         self.writer.write_batch(&target, batch).await
     }
@@ -1444,6 +1482,7 @@ impl Publisher {
 
     /// Run a marker statement in the transaction the batch's rows commit in: the open one, or under `send = "at_commit"`, whose rows open it only as they are sent, the one that sends them.
     async fn in_last_transaction(&mut self, statement: String) -> Result<(), LoaderError> {
+        self.write_pending().await?;
         match self.spool.is_some() && self.batch_rows > 0 {
             true => self.pieces.statement = Some(statement),
             false => execute(&self.destination, vec![statement]).await?,
@@ -1456,6 +1495,7 @@ impl Publisher {
         if !self.pieces.unfinished {
             return;
         }
+        self.pending = Pending::default();
         self.writer.rollback_batch().await;
         let spec = &self.table.spec;
         let statements = unfinished_recovery(
@@ -1619,6 +1659,28 @@ impl Publisher {
         (batch, files): (u64, &[std::path::PathBuf]),
         loads: bool,
     ) -> Result<(), LoaderError> {
+        let written = 'write: {
+            for file in files {
+                let reader = match held_rows(file) {
+                    Ok(reader) => reader,
+                    Err(error) => break 'write Err(LoaderError::Invalid(error)),
+                };
+                for rows in reader {
+                    let rows = match rows {
+                        Ok(rows) => rows,
+                        Err(error) => break 'write Err(LoaderError::Invalid(error.to_string())),
+                    };
+                    if let Err(error) = self.write_merged(batch, rows).await {
+                        break 'write Err(error);
+                    }
+                }
+                let _ = std::fs::remove_file(file);
+            }
+            self.write_pending().await
+        };
+        if written.is_err() {
+            self.pending = Pending::default();
+        }
         let columns = staged_columns(&self.table);
         let target = write_target(
             &self.table,
@@ -1627,21 +1689,8 @@ impl Publisher {
             ((&self.load_id, batch), (self.direct, self.builds)),
         );
         let sent = 'send: {
-            for file in files {
-                let reader = match held_rows(file) {
-                    Ok(reader) => reader,
-                    Err(error) => break 'send Err(LoaderError::Invalid(error)),
-                };
-                for rows in reader {
-                    let rows = match rows {
-                        Ok(rows) => rows,
-                        Err(error) => break 'send Err(LoaderError::Invalid(error.to_string())),
-                    };
-                    if let Err(error) = self.writer.write_batch(&target, rows).await {
-                        break 'send Err(error);
-                    }
-                }
-                let _ = std::fs::remove_file(file);
+            if let Err(error) = written {
+                break 'send Err(error);
             }
             if !loads {
                 break 'send Ok(());

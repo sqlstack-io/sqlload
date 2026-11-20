@@ -2,12 +2,14 @@
 
 use arrow_array::RecordBatch;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::{Compression, ZstdLevel};
+use parquet::file::properties::WriterProperties;
 
 use crate::adapters::motherduck_bridge::errors::BridgeError;
 use crate::adapters::motherduck_bridge::main::run_statement::run_statement;
 use crate::adapters::motherduck_bridge::models::BridgeConnection;
 
-/// Run `insert`, whose one `?` is the path of a Parquet file holding `batch` (such as `INSERT INTO t (a) SELECT a FROM read_parquet(?)`), on `connection`. The file is a temporary one on this machine, which DuckDB reads there and removed once the statement ends: the bridge's DuckDB is another version than SQLLoad's, so Arrow cannot cross between them in memory.
+/// Run `insert`, whose one `?` is the path of a zstd Parquet file holding `batch` (such as `INSERT INTO t (a) SELECT a FROM read_parquet(?)`), on `connection`. The file is a temporary one on this machine, which DuckDB reads there and removed once the statement ends: the bridge's DuckDB is another version than SQLLoad's, so Arrow cannot cross between them in memory.
 pub(in crate::adapters) async fn append_batch(
     connection: &BridgeConnection,
     insert: String,
@@ -22,7 +24,11 @@ pub(in crate::adapters) async fn append_batch(
         let mut writer = ArrowWriter::try_new(
             file.reopen().map_err(|error| error.to_string())?,
             batch.schema(),
-            None,
+            Some(
+                WriterProperties::builder()
+                    .set_compression(Compression::ZSTD(ZstdLevel::default()))
+                    .build(),
+            ),
         )
         .map_err(|error| error.to_string())?;
         writer.write(&batch).map_err(|error| error.to_string())?;

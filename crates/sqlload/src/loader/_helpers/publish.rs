@@ -109,6 +109,7 @@ use crate::loader::models::CommitRule;
 use crate::loader::models::FilesSink;
 use crate::loader::models::FilesSource;
 use crate::loader::models::FolderSwap;
+use crate::loader::models::Pending;
 use crate::loader::models::Pieces;
 use crate::loader::models::Publisher;
 use crate::loader::models::ReplacedKeys;
@@ -658,6 +659,7 @@ impl Publisher {
             transform: None,
             spool,
             pieces: Pieces::default(),
+            pending: Pending::default(),
         };
         publisher.create_marker_table().await?;
         Ok(publisher)
@@ -910,6 +912,7 @@ impl Publisher {
             }
             give_back(leased_folder(sink), &sink.lease).await;
         }
+        self.pending = Pending::default();
         self.writer.rollback_batch().await;
         let warehouse = self.table.spec.warehouse;
         if let Some(staging) = &self.staging {
@@ -952,6 +955,7 @@ impl Publisher {
 
     /// Wait until every row sent without files is in the staging table; under `send = "at_commit"`, the held rows are sent first, before a schema change makes them unlike the rows after it: the batches that ended are loaded, and the open batch's rows written, leaving it open for its end to load or commit as it would have.
     pub(crate) async fn settle_rows(&mut self) -> Result<(), LoaderError> {
+        self.write_pending().await?;
         if let Some(spool) = self.spool.as_mut() {
             let ended = spool.take_ended(self.batch);
             let open = spool.take_open_files(self.batch);
@@ -970,6 +974,7 @@ impl Publisher {
 
     /// Load the batch where it goes: `COPY` its staged files (straight into the table, committing, or into the staging table) and remove them; DuckDB commits a straight batch's transaction. Then start the next batch.
     pub(crate) async fn flush_batch(&mut self) -> Result<(), LoaderError> {
+        self.write_pending().await?;
         match self.spool.is_some() {
             true if self.batch_rows == 0 => return Ok(()),
             true if self.direct => Box::pin(self.send_held()).await?,

@@ -7,6 +7,9 @@ pub const RELOAD_FIX: &str = "run it once with --reload";
 /// The same on a Postgres target, which never drops and recreates a table.
 pub const KEPT_TABLES_COLUMN_FIX: &str = "SQLLoad never drops and recreates a Postgres table (--reload), so add the column with ALTER TABLE, then empty the table or fill the column, and load again";
 
+/// The most Arrow memory of rows a table holds back to write together (see [`Pending`](crate::loader::models::Pending)), or the batch's own bytes when smaller.
+pub const COALESCED_BYTES: usize = 64 * 1024 * 1024;
+
 /// Rows per batch read from a database source.
 pub const SOURCE_BATCH_ROWS: usize = 65_536;
 
