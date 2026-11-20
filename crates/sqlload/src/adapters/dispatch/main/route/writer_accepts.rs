@@ -4,15 +4,20 @@ use crate::adapters::databricks::main::stage::_writer_accepts::writer_accepts as
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::snowflake::main::stage::_writer_accepts::writer_accepts as snowflake_accepts;
 use crate::adapters::snowflake::models::StageRoute;
+use crate::memory_budget::constants::DUCKDB_ROW_GROUP_ROWS;
+use crate::number_text::main::thousands::thousands;
 use crate::routing::models::WriterAccepts;
 use crate::routing::models::{FileFormat, Store};
 
-/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself, MotherDuck Parquet in S3 or GCS on its servers, and ClickHouse Parquet in S3, BigQuery Parquet in GCS), or what its stage route takes.
+/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself; MotherDuck takes zstd Parquet chunks it `COPY`s, and reads Parquet in S3 or GCS on its servers; and ClickHouse Parquet in S3, BigQuery Parquet in GCS), or what its stage route takes.
 pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
     match destination {
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) if duckdb.motherduck => WriterAccepts {
-            arrow: true,
+            rows_into: Some(format!(
+                "zstd Parquet, about {} rows a file -> MotherDuck COPY",
+                thousands(DUCKDB_ROW_GROUP_ROWS)
+            )),
             pulls_from: vec![
                 Store::ObjectStore("s3://".to_owned()),
                 Store::ObjectStore("gs://".to_owned()),

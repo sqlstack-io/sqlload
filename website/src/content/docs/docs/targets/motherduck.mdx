@@ -69,9 +69,17 @@ connection installs MotherDuck's DuckDB extension into `~/.duckdb`, which needs 
 
 ## How data arrives
 
-SQLLoad writes each batch to a temporary Parquet file on this machine, and the separate process
-inserts it with `read_parquet` inside the batch's transaction, then the file is removed. `plan` names
-the route for every table.
+SQLLoad gathers the rows into chunks of about 122,880 rows, DuckDB's row group size, however small
+the pages a source yields (an API's pages of 50 rows, say). It writes each chunk to a temporary zstd
+Parquet file on this machine, and the separate process loads it with `COPY` inside the batch's
+transaction, then the file is removed. `VARIANT` columns are typed `JSON` in the file, so they load
+parsed. `plan` names the route for every table:
+
+```console
+$ sqlload plan -v
+…
+    ├── route   read as Arrow -> zstd Parquet, about 122,880 rows a file -> MotherDuck COPY
+```
 
 ### Parquet files in S3
 
