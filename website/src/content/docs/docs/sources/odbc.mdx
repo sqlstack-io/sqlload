@@ -250,7 +250,8 @@ When both ways fail, the error shows both of the driver's errors.
 `include` and `exclude` are `schema.table` patterns, matched without regard to case (`*` matches
 any text). SQLLoad loads the tables and views the driver reports that match. For a database without
 schemas, the patterns match the table name alone. A `[sources.erp.tables."schema.table"]` entry sets
-options for one table; on its own, it doesn't add the table.
+options for one table; on its own, it doesn't add the table. These patterns choose what is read; the
+schema the tables land in is the source's `destination_schema`, or the target's `loader_schema`.
 
 A source needs at least one `include` pattern or one query table. Every table needs a
 `write_strategy`, from its entry or the source, and a `merge` table a `unique_key`: its columns, or

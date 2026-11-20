@@ -475,9 +475,9 @@ pub struct SourceConfig {
     /// The target to load into; `default_target` when omitted.
     #[serde(default)]
     pub destination: Option<String>,
-    /// The destination schema; the target's `loader_schema` when omitted.
+    /// The schema the source's tables land in; the target's `loader_schema` when omitted. The source schema is chosen by `include`.
     #[serde(default)]
-    pub schema: Option<String>,
+    pub destination_schema: Option<String>,
     /// Source tables to sync, as `schema.table` patterns (database sources).
     #[serde(default)]
     pub include: Vec<String>,

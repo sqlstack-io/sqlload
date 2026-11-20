@@ -229,7 +229,7 @@ def c_small(ctx):
     yield {"id": 3}
 
 
-fresh = sl.source("fresh", schema="NEW_SCHEMA", write_strategy="append")
+fresh = sl.source("fresh", destination_schema="NEW_SCHEMA", write_strategy="append")
 for number in range(8):
     def _one(ctx, number=number):
         yield {"id": number}
@@ -594,7 +594,7 @@ def test_given_a_state_changed_in_place_without_assigning_when_the_run_ends_then
 def test_given_a_first_load_with_no_rows_when_its_schema_is_new_then_no_schema_is_created(project: Path) -> None:
 	(project / "sources" / "empty.py").write_text(
 		"import sqlload as sl\n"
-		"empty = sl.source('empty', schema='NEVER_MADE')\n"
+		"empty = sl.source('empty', destination_schema='NEVER_MADE')\n"
 		"@empty.table(description='Test table.', write_strategy='append')\n"
 		"def nothing(ctx):\n"
 		"    return\n"
@@ -603,6 +603,15 @@ def test_given_a_first_load_with_no_rows_when_its_schema_is_new_then_no_schema_i
 	done = sqlload(project, "load", "empty__nothing")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert query(project, "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'NEVER_MADE'") == []
+
+
+def test_given_a_source_setting_schema_when_planning_then_it_fails_naming_destination_schema(project: Path) -> None:
+	(project / "sources" / "old.py").write_text(
+		"import sqlload as sl\nold = sl.source('old', schema='RAW_OLD')\n@old.table(description='Test table.')\ndef t(ctx):\n    yield {'id': 1}\n"
+	)
+	done = sqlload(project, "plan", "old__t")
+	assert done.returncode != 0, done.stdout
+	assert "sl.source() got schema=; use destination_schema=" in done.stdout + done.stderr
 
 
 def test_given_shaping_when_declaring_a_python_table_then_it_is_refused_as_an_unknown_setting(project: Path) -> None:

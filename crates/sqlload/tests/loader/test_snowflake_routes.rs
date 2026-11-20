@@ -401,7 +401,7 @@ fn given_a_snowflake_target_when_planning_and_loading_then_rows_take_the_route_i
         RouteTestCase {
             description: "a stage goes in the target's loader schema, whatever schema the table loads into, and apply creates only that one for it",
             stage: MANAGED,
-            settings: "schema = \"OTHER\"\nwrite_strategy = \"append\"\ntest_loader_route = true",
+            settings: "destination_schema = \"OTHER\"\nwrite_strategy = \"append\"\ntest_loader_route = true",
             prepare: integration,
             expected_plan: &["\"DB\".\"RAW\".\"_SQLLOAD_STAGE\""],
             expected_sent: &[
