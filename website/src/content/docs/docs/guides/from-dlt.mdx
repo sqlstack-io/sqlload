@@ -23,7 +23,7 @@ what dlt 1.32.0 loads from the same files. For how the two differ in design, see
 
 | dlt | SQLLoad |
 | --- | --- |
-| `dlt.pipeline(destination=..., dataset_name="shop")` | A [target](/docs/configuration/#targets) in `sqlload.toml`, with `loader_schema = "shop"`. There is no pipeline working directory. |
+| `dlt.pipeline(destination=..., dataset_name="shop")` | A [target](/docs/configuration/#targets) in `sqlload.toml`, with `loader_schema = "shop"`; a source's `destination_schema` puts its tables in another. There is no pipeline working directory. |
 | `@dlt.source` | `sl.source(...)` in Python, or a `[sources.<name>]` entry for a database or files. |
 | `@dlt.resource` | `@source.table` in Python, or a table of a source. |
 | A resource's table name | `{source}__{table}` by default. `table_name = "{table}"` on the source names it as dlt does. |

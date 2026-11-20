@@ -847,7 +847,7 @@ pub(crate) fn source_target(
         });
     }
     let schema = source
-        .schema
+        .destination_schema
         .clone()
         .or_else(|| target.loader_schema.clone())
         .ok_or_else(|| format!("target {name:?} has no loader_schema"))?;
