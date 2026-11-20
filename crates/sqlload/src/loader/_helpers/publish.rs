@@ -147,6 +147,7 @@ use crate::schema_plan::constants::{
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::TableAction;
 use crate::snowflake_source::main::select_query::select_query;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::take_lease::take_lease;
@@ -175,6 +176,13 @@ fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
         && table.logged.is_none()
         && writer.writes_directly()
         && (!table.route.as_ref().is_some_and(Route::pulls_unloaded) || unloads_directly(writer))
+}
+
+/// Whether `table` is a table planned from its data (a Python table, or one of its child tables) that its load creates in a SQL destination: it is created at its first commit rather than its first batch, so the columns its later batches bring come before the `_sqlload_*` metadata.
+pub(crate) fn created_at_commit(table: &TablePlan) -> bool {
+    table.schema.action == TableAction::Create
+        && table.spec.python.is_some()
+        && table.output.is_none()
 }
 
 /// Where the batches go, from the publisher's fields: `staging` when there is one, and `columns` as the staged batches carry them.
@@ -547,15 +555,20 @@ impl Publisher {
             }
             _ => None,
         };
+        let new_table = created_at_commit(&table);
         let direct = files.is_none()
+            && !new_table
             && table.spec.checks.is_none()
             && table.spec.unnest == Unnest::None
             && !table.spec.root_rows
             && writes_directly(&table, &writer);
         let at_end = matches!(table.mode, WriteMode::Replace | WriteMode::Recreate);
         let keeps_tables = sql_adapter(table.spec.warehouse).keeps_tables();
-        let builds =
-            at_end && files.is_none() && !keeps_tables && !sends_rows(table.stage.as_ref());
+        let builds = at_end
+            && files.is_none()
+            && !new_table
+            && !keeps_tables
+            && !sends_rows(table.stage.as_ref());
         let mut shape: Option<TableShape> = None;
         let staging = match direct || files.is_some() {
             true => None,
@@ -626,6 +639,8 @@ impl Publisher {
             at_end,
             builds,
             indexes: shape.map(|shape| shape.indexes).unwrap_or_default(),
+            new_table,
+            changes: Vec::new(),
             table,
             destination,
             run,
@@ -792,14 +807,6 @@ impl Publisher {
         }
     }
 
-    /// The `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
-    pub(crate) fn child_changes(&mut self) -> Vec<String> {
-        self.children
-            .as_mut()
-            .map(|children| std::mem::take(&mut children.changes))
-            .unwrap_or_default()
-    }
-
     /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, with the zstd files `send = "at_commit"` holds for it, which come within a few percent of that Parquet, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
         let bytes = match (self.writer.staged_bytes(), &self.spool) {
@@ -873,6 +880,7 @@ impl Publisher {
             }
             _ => {}
         }
+        self.create_table().await?;
         if let Some(rebuild) = &self.rebuild {
             swap_rebuild(&self.table, &self.destination, rebuild).await?;
         }
@@ -1166,6 +1174,10 @@ impl Publisher {
             true => piece_mode(&self.table.mode),
             false => commit_mode(&self.table.mode, self.waiting_range.take()),
         };
+        let mode = match (self.new_table, mode) {
+            (true, WriteMode::Replace | WriteMode::Recreate) => WriteMode::Append,
+            (_, mode) => mode,
+        };
         let warehouse = spec.warehouse;
         let runs = runs_table(&spec.destination);
         let merging_file = self.merged_files.len() == 1;
@@ -1287,6 +1299,7 @@ impl Publisher {
             false => 0,
         };
         let guarded = statements.split_off(first);
+        self.create_table().await?;
         if !statements.is_empty() {
             execute(&self.destination, statements).await?;
         }
@@ -1574,7 +1587,7 @@ pub(crate) async fn publish_table(
     };
     Ok(TableLoaded {
         rows,
-        changes: publisher.child_changes(),
+        changes: publisher.take_changes(),
         note: marked(table, (rows, publisher.marked))
             .or_else(|| older_note(table, publisher.older)),
         after_load: report,

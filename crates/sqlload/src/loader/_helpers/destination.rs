@@ -54,6 +54,7 @@ use crate::loader::_helpers::publish::{staged_columns, write_target};
 use crate::loader::_helpers::resolve::display_name;
 use crate::loader::_helpers::sources::{ReadPart, read_source};
 use crate::loader::_helpers::table_plan::blocked_plan;
+use crate::loader::_helpers::table_plan::{change_lines, schema_statements};
 use crate::loader::constants::{CATALOG_CONFLICT, CATALOG_CONFLICT_TRIES, COALESCED_BYTES};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
@@ -662,6 +663,28 @@ pub(crate) async fn replace_files(
 }
 
 impl Publisher {
+    /// The lines not yet reported: the table's own `created ...` (once [created at its first commit](Self::create_table)), then the `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
+    pub(crate) fn take_changes(&mut self) -> Vec<String> {
+        let mut changes = std::mem::take(&mut self.changes);
+        if let Some(children) = self.children.as_mut() {
+            changes.append(&mut children.changes);
+        }
+        changes
+    }
+
+    /// Create a [new table](Publisher::new_table) before its first commit writes to it (or at the end of a load that wrote none), with the columns planned by then and its `created ...` line kept for the load to report; nothing once it exists.
+    pub(in crate::loader) async fn create_table(&mut self) -> Result<(), LoaderError> {
+        if !self.new_table || self.table.schema.action != TableAction::Create {
+            return Ok(());
+        }
+        if let Some(statements) = schema_statements(&self.table) {
+            execute_ddl(&self.destination, statements).await?;
+            self.changes.extend(change_lines(&self.table));
+        }
+        self.table.schema.action = TableAction::Unchanged;
+        Ok(())
+    }
+
     /// Add a batch to the commit's files, starting them (and marking the commit as writing) on its first batch.
     pub(crate) async fn stage_files(&mut self, batch: RecordBatch) -> Result<(), LoaderError> {
         let writer = match self.files.as_mut().and_then(|sink| sink.writer.take()) {

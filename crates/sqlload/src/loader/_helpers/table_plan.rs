@@ -897,6 +897,22 @@ async fn plan_table_once(
     })
 }
 
+/// The schema changes the load made, one line each, as `apply` would print them.
+pub(crate) fn change_lines(table: &TablePlan) -> Vec<String> {
+    let name = sql_adapter(table.spec.warehouse).render_display_name(&table.spec.destination);
+    match &table.schema.action {
+        TableAction::Create => vec![format!(
+            "created  {name}  {} columns",
+            table.schema.write_columns.len()
+        )],
+        TableAction::Alter(changes) => changes
+            .iter()
+            .map(|change| format!("altered  {name}  {change}"))
+            .collect(),
+        TableAction::Recreate | TableAction::Unchanged => Vec::new(),
+    }
+}
+
 /// The statements that bring the table's schema in line with its plan, a created or rebuilt table getting its description as its comment; `None` when there is nothing to run: unchanged, rebuilt by the load itself, or a files target.
 pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
     let spec = &table.spec;
