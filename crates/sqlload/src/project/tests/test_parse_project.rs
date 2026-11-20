@@ -695,12 +695,17 @@ fn given_an_invalid_project_when_parsing_then_every_problem_is_named() {
             expected_message: "[sources.app] destination_path is for targets on an s3, gcs or filesystem connection",
         },
         ParseProjectErrorTestCase {
-            description: "a source schema is for warehouse targets",
+            description: "a source's destination schema is for warehouse targets",
             text: concat!(
                 "[connections.lake]\nkind = \"filesystem\"\nroot = \"/data\"\n[targets.lake]\nconnection = \"lake\"\n",
-                "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ndestination = \"lake\"\ninclude = [\"*\"]\nschema = \"RAW\"\n"
+                "[sources.app]\nkind = \"postgres\"\nconnection = \"pg\"\ndestination = \"lake\"\ninclude = [\"*\"]\ndestination_schema = \"RAW\"\n"
             ),
-            expected_message: "[sources.app] schema is for warehouse targets",
+            expected_message: "[sources.app] destination_schema is for warehouse targets",
+        },
+        ParseProjectErrorTestCase {
+            description: "a source's schema key is gone: the error names destination_schema, and include for the source schema",
+            text: "[sources.erp]\nkind = \"postgres\"\nconnection = \"pg\"\ninclude = [\"*\"]\nschema = \"raw_erp\"\n",
+            expected_message: "[sources.erp]: schema was renamed destination_schema (the schema tables land in); the source schema goes in include, such as \"dbo.*\"",
         },
         ParseProjectErrorTestCase {
             description: "a sheet range the source's column_names reach that keeps its header row is refused",

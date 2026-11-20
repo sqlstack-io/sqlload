@@ -75,10 +75,10 @@ SOURCE_SETTINGS: frozenset[str] = frozenset(
 		"connection",
 		"destination",
 		"destination_path",
+		"destination_schema",
 		"exclude_columns",
 		"mask_key",
 		"parallel_tables",
-		"schema",
 		"table_name",
 	}
 )
@@ -166,6 +166,8 @@ def _docstring(function: TableFunction) -> str | None:
 def source(name: str, *, description: str | None = None, **settings: Any) -> Source:
 	"""A source tables attach to with `@<source>.table(...)`; `settings` are its connection,
 	destination and the defaults its tables share."""
+	if "schema" in settings:
+		raise TypeError("sl.source() got schema=; use destination_schema=")
 	_check_settings(settings, TABLE_SETTINGS | SOURCE_SETTINGS, "source")
 	if not isinstance(settings.get("parallel_tables", False), bool):
 		raise TypeError(f"source {name}: parallel_tables must be True or False")
