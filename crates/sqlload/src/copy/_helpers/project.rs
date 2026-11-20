@@ -172,7 +172,7 @@ fn source_settings(
         "description".to_owned(),
         Value::String(format!("Copied from {}.", source.described)),
     );
-    settings.extend(schema.map(|schema| ("schema".to_owned(), Value::String(schema))));
+    settings.extend(schema.map(|schema| ("destination_schema".to_owned(), Value::String(schema))));
     settings.extend(table_settings(request, !FILE_KINDS.contains(&kind(source))));
     match kind(source) {
         "postgres" => {

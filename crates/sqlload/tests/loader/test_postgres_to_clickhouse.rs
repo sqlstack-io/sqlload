@@ -119,7 +119,7 @@ write_strategy = "replace"
 kind = "postgres"
 connection = "app_pg"
 include = ["public.stores"]
-schema = "legacy"
+destination_schema = "legacy"
 write_strategy = "replace"
 
 [sources.old.tables."public.stores"]

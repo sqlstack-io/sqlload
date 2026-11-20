@@ -126,6 +126,27 @@ def test_given_no_project_when_copying_a_folder_then_its_rows_load_and_print_tom
 	assert copied(tmp_path) == [(1, "open"), (2, "shut")]
 
 
+def test_given_destination_schema_on_a_source_when_loading_then_tables_land_there_named_by_their_source_schema(tmp_path: Path) -> None:
+	import duckdb
+
+	with duckdb.connect(str(tmp_path / "shop.duckdb")) as connection:
+		connection.execute("CREATE SCHEMA erp; CREATE TABLE erp.orders AS SELECT 1 AS id")
+	project = (
+		f'[connections.src]\nkind = "duckdb"\ndatabase = "{tmp_path / "shop.duckdb"}"\n[connections.wh]\nkind = "duckdb"\ndatabase = "{tmp_path / "wh.duckdb"}"\n'
+		'[targets.dev]\nconnection = "wh"\nloader_schema = "RAW"\n'
+		'[sources.erp]\nkind = "duckdb"\nconnection = "src"\ninclude = ["erp.*"]\ndestination_schema = "raw_erp"\ntable_name = "{schema}__{table}"\nwrite_strategy = "replace"\n'
+	)
+	(tmp_path / "sqlload.toml").write_text(project)
+	done = run("load", "-c", str(tmp_path / "sqlload.toml"))
+	assert done.returncode == 0, done.stdout + done.stderr
+	with duckdb.connect(str(tmp_path / "wh.duckdb"), read_only=True) as connection:
+		assert connection.execute("SELECT id FROM raw_erp.erp__orders").fetchall() == [(1,)]
+	(tmp_path / "sqlload.toml").write_text(project.replace("destination_schema =", "schema ="))
+	planned = run("plan", "-c", str(tmp_path / "sqlload.toml"))
+	assert planned.returncode != 0, planned.stdout
+	assert 'schema was renamed destination_schema (the schema tables land in); the source schema goes in include, such as "dbo.*"' in planned.stdout + planned.stderr
+
+
 def test_given_a_literal_password_in_a_uri_when_the_copy_fails_then_no_output_shows_it(tmp_path: Path) -> None:
 	done = run("copy", "postgresql://app:hunter2-secret@127.0.0.1:1/shop#public.accounts", f"duckdb://{tmp_path / 'wh.duckdb'}#RAW.ACCOUNTS", "-c", str(tmp_path / "sqlload.toml"))
 	assert done.returncode == 75, "a refused connection is worth retrying"
