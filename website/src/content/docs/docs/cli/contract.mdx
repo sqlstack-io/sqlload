@@ -85,8 +85,6 @@ Run contract generate --write to update sqlload.toml.
   declared columns the table lacks.
 - Python tables are never edited: the report prints the whole `columns={...}` to paste into the
   decorator.
-- A table found by an `include` pattern with no description isn't written, since its new entry
-  would need one.
 - A database or files table declares only columns its source has, spelled as the source spells
   them. Masked columns stay under `mask`.
 - Adopted columns become pinned types, so a CSV or JSON source converts them while reading.

@@ -59,7 +59,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             ..
         } => {
             let spared = |table: &str| {
-                request.spared_load.map(|(column, load_id)| {
+                request.spared_load.map(|(column, load_id, _)| {
                     format!(
                         "{table}{} IS DISTINCT FROM {}",
                         adapter.render_identifier(column),
@@ -78,10 +78,18 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
                 }
             };
             let keyed = (!replace_key.is_empty()).then(|| {
-                let (keys, join) = replaced_keys(adapter, request, &values, replace_key);
-                let spared = spared("__target.")
-                    .map(|condition| format!(" AND {condition}"))
-                    .unwrap_or_default();
+                let (mut keys, join) = replaced_keys(adapter, request, &values, replace_key);
+                let by_file = request.spared_load.and_then(|(_, _, file)| file);
+                let by_file = by_file.map(|file| adapter.render_identifier(file));
+                if let Some(file) = &by_file {
+                    keys.push_str(&format!(", {file} AS __sqlload_spared_file"));
+                }
+                let spared = spared("__target.").map_or_else(String::new, |condition| match &by_file {
+                    Some(file) => format!(
+                        " AND ({condition} OR __target.{file} IS DISTINCT FROM __source.__sqlload_spared_file)"
+                    ),
+                    None => format!(" AND {condition}"),
+                });
                 format!(
                     "DELETE FROM {target} AS __target USING (SELECT DISTINCT {keys} FROM {source}) AS __source WHERE {join}{spared}"
                 )

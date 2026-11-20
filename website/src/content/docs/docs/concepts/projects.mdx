@@ -109,13 +109,12 @@ source's `schema`, or the target's `loader_schema`.
 
 ## Descriptions
 
-Every table SQLLoad writes needs a description, which becomes the destination table's comment.
-`plan` fails for a table without one and says where to add it:
+A table's description becomes the destination table's comment. Descriptions are optional: a table
+without one loads with no comment.
 
 | Table | Description from |
 |-------|------------------|
-| A Postgres table with its own `[sources.app.tables."public.orders"]` entry, or named exactly in `include` | `description = "..."` in that entry |
-| A Postgres table found by an `include` pattern | The source table's comment (`COMMENT ON TABLE`), if any; none is needed |
+| A Postgres table | `description = "..."` in its `[sources.app.tables."public.orders"]` entry, or else the source table's comment (`COMMENT ON TABLE`) |
 | A files source | The source's own `description` |
 | A Python table | `description="..."`, or the function's docstring |
 

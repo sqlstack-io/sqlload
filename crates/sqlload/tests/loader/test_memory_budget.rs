@@ -1,12 +1,13 @@
 //! Rows of 1 MiB loaded into a DuckDB file under a memory budget that gives DuckDB a `memory_limit` of 256MB, which one commit of 300 of them overflows.
 
-use crate::helpers::run_async;
+use crate::helpers::{duckdb_text, run_async};
 use crate::memory_helpers::{
-    FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER, NEW_BODY_TRIPPED, OFF,
-    OFF_DUCKDB_2TB, OFF_DUCKDB_256MB, OFF_PLAN, OFF_TRIPPED, OLDER_MARKER, PLAN, REPEATED_KEY,
-    SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases, run_wide_load, wide_postgres,
+    BUDGET, FEW_WIDE_ROWS, KILLED, LOAD, NEW_BODY, NEW_BODY_KILLED, NEW_BODY_LATER,
+    NEW_BODY_TRIPPED, OFF, OFF_DUCKDB_2TB, OFF_DUCKDB_256MB, OFF_PLAN, OFF_TRIPPED, OLDER_MARKER,
+    PLAN, REPEATED_KEY, SMALL_ROWS, WIDE_THEN_SMALL, expected_loads, missing_phrases,
+    run_wide_load, wide_postgres,
 };
-use crate::test_types::WideLoadTestCase;
+use crate::test_types::{RestatedPiecesTestCase, WideLoadTestCase};
 
 #[test]
 fn given_300_rows_of_1_mib_when_loading_them_with_a_256mb_duckdb_limit_then_every_strategy_loads_them_in_pieces()
@@ -499,4 +500,77 @@ fn given_memory_limit_off_when_loading_1_mib_rows_then_they_commit_whole_without
         }
         Ok(())
     })
+}
+
+#[test]
+fn given_a_later_file_restating_a_value_an_earlier_piece_committed_when_loading_under_a_budget_then_the_later_file_replaces_it()
+-> Result<(), String> {
+    let test_cases = [
+        RestatedPiecesTestCase {
+            description: "files committed together, cut into pieces, keep only the later file's row of 1",
+            settings: "",
+            expected_result: "70:1:new",
+        },
+        RestatedPiecesTestCase {
+            description: "files committed one at a time, the later one cut into pieces, keep only its row of 1",
+            settings: "exclude_columns = [\"_sqlload_source_row\"]\n",
+            expected_result: "70:1:new",
+        },
+    ];
+    let body = "x".repeat(1 << 20);
+    let rows = |ids: std::ops::RangeInclusive<u32>| -> String {
+        ids.map(|id| format!("{id},{body}\n")).collect()
+    };
+    let files = [
+        ("c.csv", format!("id,v\n{}", rows(1..=40)), 1_000),
+        ("a.csv", format!("id,v\n{}1,new\n", rows(41..=70)), 2_000),
+    ];
+    for test_case in &test_cases {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let folder = directory.path().join("in");
+        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+        for (name, text, modified_secs) in &files {
+            let path = folder.join(name);
+            std::fs::write(&path, text).map_err(|error| error.to_string())?;
+            let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(*modified_secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|opened| opened.set_modified(modified))
+                .map_err(|error| error.to_string())?;
+        }
+        let database = directory.path().join("restated.duckdb");
+        let config = directory.path().join("sqlload.toml");
+        std::fs::write(
+            &config,
+            format!(
+                "[connections.files]\nkind = \"filesystem\"\nroot = \"{}\"\n\n[connections.local]\nkind = \"duckdb\"\ndatabase = \"{}\"\n\n[targets.dev]\nconnection = \"local\"\nloader_schema = \"raw\"\n\n[sources.restated]\nkind = \"files\"\nconnection = \"files\"\npath = \"in/\"\nformat = \"csv\"\nwrite_strategy = \"delete_insert\"\nreplace_key = [\"id\"]\non_overlapping_files = \"last_wins\"\n{}",
+                directory.path().display(),
+                database.display(),
+                test_case.settings
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_sqlload"))
+            .arg("--config")
+            .arg(&config)
+            .args(["--no-color", "load", "--memory-limit", BUDGET])
+            .output()
+            .map_err(|error| error.to_string())?;
+        let output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result = duckdb_text(
+            &database,
+            "SELECT count(*) || ':' || count(*) FILTER (WHERE id = 1) || ':' || string_agg(v, ',') FILTER (WHERE length(v) < 10) FROM raw.restated",
+        )?;
+        assert_eq!(
+            result, test_case.expected_result,
+            "{}:\n{output}",
+            test_case.description
+        );
+    }
+    Ok(())
 }

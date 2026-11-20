@@ -320,7 +320,7 @@ pub(crate) fn build_spec(
         && !(strategy == WriteStrategy::Merge
             || (strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty()))
     {
-        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies one at a time; {strategy} loads them without an order, so remove it"));
+        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies in turn; {strategy} loads them without an order, so remove it"));
     }
     let own_strategy = strategy_origin == SettingOrigin::Table && !keyed;
     let overlapping = layered(
@@ -773,50 +773,6 @@ fn cdc_key_problems(table: &SourceTable, unique_key: &[String]) -> Vec<String> {
             outside.join(", ")
         )],
     }
-}
-
-/// Why a table someone wrote is blocked without a description they wrote, with where to give it; `None` when it has one, or when it was discovered (matched by an `include` pattern, not named), which takes the source's own table comment or none (D203). Python tables, files sources (described by the source's own `description`), `[sources.*.tables]` entries and tables named exactly in `include` are written.
-pub(crate) fn missing_description(
-    source_name: &str,
-    source: &SourceConfig,
-    table: &SourceTable,
-) -> Option<String> {
-    let qualified = table.qualified_name();
-    let entry = source.tables.get(&qualified);
-    let written =
-        !source.discovers_tables() || entry.is_some() || source.include.contains(&qualified);
-    let described = [
-        entry.and_then(|entry| entry.description.as_deref()),
-        source
-            .description
-            .as_deref()
-            .filter(|_| matches!(source.kind, SourceKind::Files | SourceKind::GoogleSheets)),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|text| !text.trim().is_empty());
-    let fix = match source.kind {
-        SourceKind::Python => {
-            "no description; add description=\"...\" to its table declaration, or a docstring to its function".to_owned()
-        }
-        SourceKind::Files => {
-            format!("no description; add description = \"...\" under [sources.{source_name}]")
-        }
-        SourceKind::GoogleSheets => format!(
-            "no description; add description = \"...\" under [sources.{source_name}.tables.{qualified}], or under [sources.{source_name}] for every table"
-        ),
-        SourceKind::Postgres
-        | SourceKind::PostgresCdc
-        | SourceKind::Snowflake
-        | SourceKind::Odbc
-        | SourceKind::BigQuery
-        | SourceKind::Databricks
-        | SourceKind::DuckDb
-        | SourceKind::MotherDuck => format!(
-            "no description; add description = \"...\" under [sources.{source_name}.tables.\"{qualified}\"]"
-        ),
-    };
-    (written && !described).then_some(fix)
 }
 
 fn glob(pattern: &str) -> Result<Glob, String> {

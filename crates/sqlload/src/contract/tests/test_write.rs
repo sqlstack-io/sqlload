@@ -29,12 +29,11 @@ fn given_a_project_file_when_writing_adoptions_then_only_the_tables_columns_chan
             ],
         },
         WriteTestCase {
-            description: "a table with no entry and no description is not written, since the entry would block it",
+            description: "a table with no entry and no description gets an entry holding only its columns",
             text: "[sources.app]\nkind = \"postgres\"\ninclude = [\"public.*\"]\n",
             table_description: "",
             expected_lines: &[
-                "",
-                "[sources.app.tables.\"public.orders\"]: columns not written: a table entry needs a description and this table has none; add description = \"...\" there, then rerun contract generate --write",
+                "[sources.app]\nkind = \"postgres\"\ninclude = [\"public.*\"]\n\n[sources.app.tables.\"public.orders\".columns]\namount = \"float\"\nstatus = \"text\"\n",
             ],
         },
         WriteTestCase {

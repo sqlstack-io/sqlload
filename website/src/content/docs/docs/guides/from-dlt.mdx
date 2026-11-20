@@ -107,7 +107,7 @@ How `rest_api` settings map:
   OAuth2 password grant, which dlt's `rest_api` has no auth type for ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L89-L94)), is
   `{ kind = "oauth2_password", token_url = "..." }`; see [OAuth2](/docs/sources/python/#oauth2).
 - Paginators: `json_link` is `sl.next_link("$.next")`, `header_link` is `sl.link_header()`,
-  `offset` is `sl.offset(limit=...)`, `page_number` is `sl.page_number()`, `cursor` is
+  `offset` is `sl.offset(limit=...)`, `page_number` is `sl.page_number()` (add `page_size=` to end at a short page rather than an empty one), `cursor` is
   `sl.cursor(pointer, param)`, and `single_page` is `sl.single()`. dlt's `auto` guesses one
   ([config_setup.py](https://github.com/dlt-hub/dlt/blob/90c0cea1f7b59795de91824be466c99efca0f574/dlt/sources/rest_api/config_setup.py#L75-L87)); SQLLoad never does.
 - `data_selector` is `select`, as a path from `$`.

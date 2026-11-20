@@ -195,26 +195,20 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "app__noted=Noted it's here.,app__plain=null",
         },
         ScenarioTestCase {
-            description: "a table entry without a description fails the plan with where to add one",
+            description: "a table entry whose description is empty loads, with no comment, even over the source table's own",
             setup: "CREATE TABLE public.listed (id int8 PRIMARY KEY); COMMENT ON TABLE public.listed IS 'Only the source says so.';",
             settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.listed\"]\ndescription = \"\"\n",
-            runs: &[ScenarioRun {
-                expected_error: "app__listed\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.listed\"]",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
+            runs: &[OK],
+            check_query: "SELECT string_agg(table_name || '=' || coalesce(comment, 'null'), ',' ORDER BY table_name) FROM duckdb_tables() WHERE schema_name = 'raw'",
+            expected_result: "app__listed=null",
         },
         ScenarioTestCase {
-            description: "a table named in include without a description fails the plan",
-            setup: "CREATE TABLE public.named (id int8 PRIMARY KEY);",
-            settings: "include = [\"public.named\"]\nwrite_strategy = \"replace\"\n",
-            runs: &[ScenarioRun {
-                expected_error: "app__named\n    └── reason  no description; add description = \"...\" under [sources.app.tables.\"public.named\"]",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
+            description: "tables named in include need no table entry: one without a comment loads with none, one with its source comment carries it",
+            setup: "CREATE TABLE public.named (id int8 PRIMARY KEY); CREATE TABLE public.noted (id int8 PRIMARY KEY); COMMENT ON TABLE public.noted IS 'Noted here.';",
+            settings: "include = [\"public.named\", \"public.noted\"]\nwrite_strategy = \"replace\"\n",
+            runs: &[OK],
+            check_query: "SELECT string_agg(table_name || '=' || coalesce(comment, 'null'), ',' ORDER BY table_name) FROM duckdb_tables() WHERE schema_name = 'raw'",
+            expected_result: "app__named=null,app__noted=Noted here.",
         },
         ScenarioTestCase {
             description: "--reload rebuilds a table whose source type changed incompatibly",

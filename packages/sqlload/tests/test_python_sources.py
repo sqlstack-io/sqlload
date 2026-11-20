@@ -458,10 +458,6 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 		("import sqlload as sl\na = sl.source('a', write_strategy='replace')\nb = sl.source('b', write_strategy='replace')\na.table(description='Test table.', name='t')(lambda ctx: [])\nb.table(description='Test table.', name='t')(lambda ctx: [])\n", "Python table t is declared twice"),
 		("import sqlload as sl\nshop = sl.source('shop', write_strategy='replace', connection='nope')\n", "Python source shop (sources/shop.py) connection \"nope\" is not a [connections] entry"),
 		(
-			"import sqlload as sl\n@sl.table(write_strategy='replace')\ndef t(ctx):\n    yield {}\n",
-			"t\n    └── reason  no description; add description=\"...\" to its table declaration, or a docstring to its function",
-		),
-		(
 			"import sqlload as sl\nshop = sl.source('shop')\n@shop.table(description='Test table.')\ndef t(ctx):\n    yield {}\n",
 			't (kind = "python"): no write_strategy is set on the table or its source, and SQLLoad doesn\'t choose one\n    └── fix     set write_strategy = "replace" in sl.source("shop", ...) for all its tables, or in @shop.table(...) for this one',
 		),
@@ -470,7 +466,7 @@ def test_given_python_tables_when_planning_then_the_plan_says_where_columns_come
 			't (kind = "python"): unique_key = "{primary_key}" merges on the primary key the source reports, and a python source reports none\n    └── fix     name the key columns',
 		),
 	],
-	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection", "no description", "no write_strategy", "primary_key placeholder"],
+	ids=["import error", "unknown setting", "bad value", "duplicate table", "unknown connection", "no write_strategy", "primary_key placeholder"],
 )
 def test_given_bad_python_sources_when_planning_then_the_project_fails_closed(tmp_path: Path, module: str, message: str) -> None:
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=module)
@@ -1024,6 +1020,11 @@ def stores(ctx):
 def standalone(ctx):
     '''A table described by its docstring.'''
     yield {"id": 1}
+
+
+@sl.table(write_strategy="replace")
+def bare(ctx):
+    yield {"id": 1}
 """
 
 
@@ -1031,9 +1032,9 @@ def test_given_table_name_settings_when_loading_then_tables_are_named_from_them(
 	project = make_project(tmp_path, DUCKDB_PROJECT, "", module=NAMED_MODULE)
 	load(project)
 	tables = query(project, "SELECT table_name FROM information_schema.tables ORDER BY table_name")
-	assert tables == [("api_orders",), ("shop_stores_v2",), ("standalone",)]
+	assert tables == [("api_orders",), ("bare",), ("shop_stores_v2",), ("standalone",)]
 	comments = query(project, "SELECT table_name, comment FROM duckdb_tables() ORDER BY table_name")
-	assert comments == [("api_orders", "Test table."), ("shop_stores_v2", "Test table."), ("standalone", "A table described by its docstring.")]
+	assert comments == [("api_orders", "Test table."), ("bare", None), ("shop_stores_v2", "Test table."), ("standalone", "A table described by its docstring.")]
 
 
 @pytest.mark.parametrize("entry", [".", "..", "sources/../.."], ids=["root", "parent", "escape"])

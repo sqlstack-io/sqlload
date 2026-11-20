@@ -22,7 +22,6 @@ use crate::loader::_helpers::destination::folder_claims;
 use crate::loader::_helpers::run_log::kept_numbered;
 use crate::loader::_helpers::sources::scoped_tables;
 use crate::loader::_helpers::specs::ColumnSelection;
-use crate::loader::_helpers::specs::missing_description;
 use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
     ColumnChoices, SourceContext, build_spec, column_selection, layered, pinned_types,
@@ -1148,7 +1147,7 @@ pub(crate) fn spec_names(spec: &TableSpec) -> [String; 3] {
     ]
 }
 
-/// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says, and a table without a description is blocked.
+/// `planned`, the selected tables of one source, added to `plan`, which is returned (`unselected` and `found`, the destinations and options, tell whether this is the source's first load): a table that appeared after the source's first load (`first_load`: none of its tables, selected or not, existed yet) and is not named exactly in `include` is skipped or fails as `new_tables` says.
 pub(crate) async fn admit_tables(
     mut plan: ProjectPlan,
     (source_name, source): (&String, &SourceConfig),
@@ -1162,7 +1161,7 @@ pub(crate) async fn admit_tables(
             table.schema = blocked_plan(vec![problem.clone()]);
         }
     }
-    for mut table in planned {
+    for table in planned {
         let spec = &table.spec;
         let qualified = spec.source_table.qualified_name();
         let is_new = !first_load && !table.exists && !spec.approved;
@@ -1191,13 +1190,7 @@ pub(crate) async fn admit_tables(
                 ));
                 plan.problems.push(problem);
             }
-            _ => {
-                if let Some(problem) = missing_description(source_name, source, &spec.source_table)
-                {
-                    table.schema = blocked_plan(vec![problem]);
-                }
-                plan.tables.push(table);
-            }
+            _ => plan.tables.push(table),
         }
     }
     Ok(plan)

@@ -35,6 +35,7 @@ use crate::adapters::snowflake::models::StageRoute;
 use crate::batch_plan::main::file_groups::file_groups;
 use crate::batch_plan::main::ignored_batch::ignored_batch;
 use crate::batch_plan::main::ignored_concurrency::ignored_concurrency;
+use crate::batch_plan::main::ordered_groups::ordered_groups;
 use crate::batch_plan::main::split_windows::split_windows;
 use crate::batch_plan::models::{FileGroup, WindowSplit};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
@@ -90,7 +91,7 @@ use crate::project::models::BatchStep;
 use crate::project::models::MaskMethod;
 use crate::project::models::WriteStrategy;
 use crate::project::models::{FilesFormat, OutputEncoding};
-use crate::project::models::{NullCursor, OnDuplicateKeys};
+use crate::project::models::{NullCursor, OnDuplicateKeys, OnOverlappingFiles};
 use crate::publish_checks::main::check_column_problems::check_column_problems;
 use crate::routing::main::plan_route::plan_route;
 use crate::routing::models::FileFormat;
@@ -304,56 +305,6 @@ fn unwritten_column(
     columns
         .filter_map(|name| newest_by_problem(adapter, &schema.write_columns, name))
         .next()
-}
-
-/// `mode` and `schema` once `unordered_merge` checked how a files merge orders its rows: its warning added, or the plan blocked by its problem.
-fn ordered_mode(mode: WriteMode, mut schema: SchemaPlan) -> (WriteMode, SchemaPlan) {
-    match unordered_merge(mode, &schema) {
-        Ok((mode, warning)) => {
-            schema.warnings.extend(warning);
-            (mode, schema)
-        }
-        Err(problem) => (WriteMode::Append, blocked_plan(vec![problem])),
-    }
-}
-
-/// `mode` for a files merge whose rows are ranked by `_sqlload_source_row` when that column is not written (excluded, or left out by the contract), so no row is known to be last: without `newest_by`, repeated keys fail as before 0.39.0, with a warning saying why; with it, the problem, as ties need that order.
-fn unordered_merge(
-    mode: WriteMode,
-    schema: &SchemaPlan,
-) -> Result<(WriteMode, Option<String>), String> {
-    let WriteMode::Merge {
-        unique_key,
-        dedupe: Some(dedupe),
-        not_null_keys,
-    } = &mode
-    else {
-        return Ok((mode, None));
-    };
-    if schema.blocked.is_some() {
-        return Ok((mode, None));
-    }
-    let ordered = dedupe.ordinal != SOURCE_ROW_COLUMN
-        || schema
-            .write_columns
-            .iter()
-            .any(|column| column.name == SOURCE_ROW_COLUMN);
-    match (ordered, dedupe.newest_by.is_empty()) {
-        (true, _) => Ok((mode, None)),
-        (false, false) => Err(format!(
-            "newest_by breaks ties by row order, which a files merge takes from {SOURCE_ROW_COLUMN}; stop excluding it"
-        )),
-        (false, true) => Ok((
-            WriteMode::Merge {
-                unique_key: unique_key.clone(),
-                dedupe: None,
-                not_null_keys: not_null_keys.clone(),
-            },
-            Some(format!(
-                "{SOURCE_ROW_COLUMN} is not written, so a file's rows have no order to pick the last of a repeated key by: a file repeating its unique_key fails; write {SOURCE_ROW_COLUMN} to keep its last row instead"
-            )),
-        )),
-    }
 }
 
 /// A table's columns and schema plan once more during its load, when its source shows new columns; nothing else about its plan is read or checked again. `known` is the live columns when they are known to be current (a Python table's first batch, just after plan); otherwise one read of them, except that a files target has no SQL to read them with and keeps `stale`, what plan saw.
@@ -864,7 +815,7 @@ async fn plan_table_once(
     };
     let source_filter = source_filter.filter(|_| spec.files.is_none());
     schema.warnings.extend(resnapshot_warning(spec, options));
-    let (mode, mut schema) = ordered_mode(captured_mode(spec, mode), schema);
+    let mode = captured_mode(spec, mode);
     let exists = live.is_some();
     schema = checked_columns(spec, schema);
     if schema.blocked.is_none() {
@@ -913,6 +864,7 @@ async fn plan_table_once(
         read_columns: &read_columns,
         files: files.as_ref(),
         mode: &mode,
+        write_columns: &schema.write_columns,
     });
     let commits = match commits {
         Ok(commits) => commits,
@@ -1138,7 +1090,7 @@ pub(crate) fn reader_offer(
     }
 }
 
-/// One commit per file, in the order planned: a files source's merge, or `delete_insert` by `replace_key`, applies each file on its own, so a key repeated across files ends with the newest file's value (or rows).
+/// One commit per file, in the order planned: a files source's merge under `on_duplicate_keys = "fail"`, which refuses a key repeated within one file but not across files, checks each file on its own; and a `delete_insert` by `replace_key` under `on_overlapping_files = "last_wins"` without `_sqlload_source_row`, whose rows of one file a later file of a batch replaces can't be told apart from its other rows by number.
 fn one_file_each(count: usize) -> Vec<FileGroup> {
     (0..count)
         .map(|index| FileGroup {
@@ -1251,10 +1203,7 @@ fn write_mode(
             unique_key: spec.unique_key.clone(),
             not_null_keys: spec.not_null_keys.clone(),
             dedupe: (spec.on_duplicate_keys == OnDuplicateKeys::Dedupe).then(|| MergeDedupe {
-                ordinal: match spec.files.is_some() {
-                    true => SOURCE_ROW_COLUMN.to_owned(),
-                    false => MERGE_ROW_COLUMN.to_owned(),
-                },
+                ordinal: MERGE_ROW_COLUMN.to_owned(),
                 newest_by: spec.newest_by.clone(),
             }),
         },
@@ -1680,6 +1629,8 @@ pub(crate) struct CommitRequest<'a> {
     pub(crate) read_columns: &'a [ReadColumn],
     pub(crate) files: Option<&'a FilesRead>,
     pub(crate) mode: &'a WriteMode,
+    /// The columns the table writes, which say whether a files source's rows carry their number in their file.
+    pub(crate) write_columns: &'a [DesiredColumn],
 }
 
 /// The commits of a table's load: a files source's batches of whole partitions; a cursor table's `batch_size` windows; an ordered Postgres read (an index leads with a non-text cursor) committing along the way; the whole read for any other cursor table, since committing part of an unordered read could skip rows the next run never reads, for `batch_size = "none"`, and for `append` without a cursor or logged state, which would have nowhere to resume from; about every 1 GB for other tables without a cursor.
@@ -1694,8 +1645,18 @@ pub(crate) fn commit_rule(request: &CommitRequest<'_>) -> Result<CommitRule, Str
             } => Some(cursor_column.as_str()),
             _ => None,
         };
-        if matches!(request.mode, WriteMode::Merge { .. }) || keyed {
+        let numbered = request
+            .write_columns
+            .iter()
+            .any(|column| column.name == SOURCE_ROW_COLUMN);
+        let unbatched_last_wins = keyed
+            && spec.on_overlapping_files == OnOverlappingFiles::LastWins
+            && !(numbered && sql_adapter(spec.warehouse).deletes_superseded_rows());
+        if matches!(request.mode, WriteMode::Merge { dedupe: None, .. }) || unbatched_last_wins {
             return Ok(CommitRule::FileGroups(one_file_each(files.files.len())));
+        }
+        if matches!(request.mode, WriteMode::Merge { .. }) || keyed {
+            return Ok(CommitRule::FileGroups(ordered_groups(&files.files)));
         }
         return Ok(CommitRule::FileGroups(file_groups(&files.files, by_value)));
     }

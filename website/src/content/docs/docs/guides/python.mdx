@@ -112,7 +112,8 @@ The table loads into `shop__orders`: `{source}__{table}`, unless the source or t
 `table_name`. A `@sl.table` declared without a source keeps its own name. Table names are unique
 across the project.
 
-A table's description is `description=`, or else the function's docstring; `plan` requires one.
+A table's description, its destination table's comment, is `description=`, or else the function's
+docstring. Both are optional.
 Every declaring function and setting is under [Declaring](/docs/sources/python/#declaring) in the
 Python API.
 

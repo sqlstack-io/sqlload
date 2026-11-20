@@ -264,7 +264,7 @@ pub(crate) fn merged_file_round_trip(
     let record = crate::loader::_helpers::run_log::merged_record(
         spec,
         ("load-1", 1),
-        (format!("{name}|{version}"), 2),
+        (vec![format!("{name}|{version}")], 2),
     );
     let text = serde_json::to_string(&record).map_err(|error| error.to_string())?;
     let decoded = crate::run_log::main::decode_runs::decode_runs(&[text]);
