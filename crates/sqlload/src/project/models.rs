@@ -122,6 +122,25 @@ pub enum LoadMethod {
     Insert {},
 }
 
+/// How a MotherDuck connection's rows get into MotherDuck; a stage it cannot use fails at plan, never falling back.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MotherDuckLoadMethod {
+    /// zstd Parquet chunks sent from this machine, each loaded with `COPY`.
+    Local {},
+    /// zstd Parquet chunks written under an S3 or GCS prefix, which MotherDuck's servers read in the commit (`MD_RUN = REMOTE`).
+    ExternalStage {
+        /// The prefix, `s3://bucket/prefix/` or `gs://bucket/prefix/`.
+        url: String,
+        /// An `s3` or `gcs` connection to the bucket, whose credentials SQLLoad writes with and MotherDuck reads with; required for `gs://`, whose HMAC key MotherDuck reads with. Without it, S3 keys come from the environment, the shared credentials file or the AWS credential chain.
+        #[serde(default)]
+        connection: Option<String>,
+        /// Keep each chunk's file after its commit.
+        #[serde(default)]
+        keep_staged_files: bool,
+    },
+}
+
 /// How to reach one system.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -273,6 +292,9 @@ pub enum ConnectionConfig {
         /// The access token; the `motherduck_token` or `MOTHERDUCK_TOKEN` environment variable when unset.
         #[serde(default)]
         token: Option<crate::auth::models::Secret>,
+        /// How rows get into MotherDuck; `local` when unset.
+        #[serde(default)]
+        load_method: Option<MotherDuckLoadMethod>,
     },
     /// A database reached through an ODBC driver: a connection string, or a DSN with an optional user and password.
     Odbc {

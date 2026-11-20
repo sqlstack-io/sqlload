@@ -45,3 +45,13 @@ pub(crate) struct ConnectionVariablesTestCase {
     pub(crate) connection: &'static str,
     pub(crate) expected_variables: &'static [&'static str],
 }
+
+/// A MotherDuck connection's `load_method` and where it stages.
+pub(crate) struct MotherDuckStageTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: String,
+    /// The stage and whether it keeps its files (`Some(None)` for a `local` load); `None` when the project is refused.
+    pub(crate) expected_stage: Option<Option<(crate::store_paths::models::Location, bool)>>,
+    /// Text the error message must contain; empty when there is none.
+    pub(crate) expected_error: &'static str,
+}

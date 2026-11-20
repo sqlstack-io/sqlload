@@ -1480,10 +1480,10 @@ impl Publisher {
         Ok(())
     }
 
-    /// Run a marker statement in the transaction the batch's rows commit in: the open one, or under `send = "at_commit"`, whose rows open it only as they are sent, the one that sends them.
+    /// Run a marker statement in the transaction the batch's rows commit in: with rows, once the flush that loads them has them in (under `send = "at_commit"` they open it only as they are sent, and a MotherDuck `external_stage` only as MotherDuck reads them), just before it commits; without, now.
     async fn in_last_transaction(&mut self, statement: String) -> Result<(), LoaderError> {
         self.write_pending().await?;
-        match self.spool.is_some() && self.batch_rows > 0 {
+        match self.batch_rows > 0 {
             true => self.pieces.statement = Some(statement),
             false => execute(&self.destination, vec![statement]).await?,
         }
@@ -1695,11 +1695,6 @@ impl Publisher {
             if !loads {
                 break 'send Ok(());
             }
-            if let Some(statement) = self.pieces.statement.take()
-                && let Err(error) = execute(&self.destination, vec![statement]).await
-            {
-                break 'send Err(error);
-            }
             if self.direct || self.builds {
                 match self
                     .check_row_group(target.staging.unwrap_or(target.table))
@@ -1713,6 +1708,11 @@ impl Publisher {
                 break 'send Err(error);
             }
             if let Err(error) = self.writer.settle_rows().await {
+                break 'send Err(error);
+            }
+            if let Some(statement) = self.pieces.statement.take()
+                && let Err(error) = execute(&self.destination, vec![statement]).await
+            {
                 break 'send Err(error);
             }
             self.writer.load_batch(&target).await

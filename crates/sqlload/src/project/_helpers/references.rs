@@ -16,6 +16,7 @@ use crate::project::constants::{
     MAX_BATCH_CONCURRENCY, MAX_POSTGRES_NAME_BYTES, MIN_BATCH_INTERVAL, SHAREABLE_CONNECTION_KINDS,
     STAGE_NAME_PARTS, TABLE_PLACEHOLDER,
 };
+use crate::project::main::motherduck_stage::motherduck_stage;
 use crate::project::models::{
     CdcMode, ConnectionConfig, ConstantColumns, Deletes, ProjectConfig, RenameSetting,
     SourceConfig, SourceKind, TableSettings, WriteStrategy,
@@ -43,6 +44,7 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
             .values()
             .any(|target| target.connection == *name);
         problems.extend(stage_problems(name, connection, targeted));
+        problems.extend(motherduck_stage(project, name).err());
         problems.extend(odbc_connection_problems(name, connection));
         if let ConnectionConfig::S3 {
             profile: Some(profile),

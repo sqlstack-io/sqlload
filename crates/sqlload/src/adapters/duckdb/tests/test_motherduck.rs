@@ -235,6 +235,7 @@ fn given_a_motherduck_connection_when_opening_then_the_targets_database_wins_and
         let connection = ConnectionConfig::MotherDuck {
             database: test_case.connection_database.map(str::to_owned),
             token: Some(Secret(String::new())),
+            load_method: None,
         };
         let error = open_motherduck(&connection, test_case.target_database, (None, None))
             .err()

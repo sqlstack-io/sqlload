@@ -3,11 +3,13 @@
 use crate::adapters::contract::models::{TableName, WriteMode};
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
+use crate::adapters::duckdb::main::_stage_problems::stage_problems;
+#[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_variant_problems::variant_problems;
 use crate::adapters::postgres::main::session::_write_problems::write_problems as postgres_write_problems;
 use crate::loader::errors::LoaderError;
 
-/// Why `mode` cannot run against `table` (`exists` when it does) (problems), and what it may fail on (warnings); `variants` when the table has `VARIANT` columns, which MotherDuck needs a recent enough DuckDB for. None where the warehouse's writes need nothing of the table or its server.
+/// Why `mode` cannot run against `table` (`exists` when it does) (problems), and what it may fail on (warnings); `variants` when the table has `VARIANT` columns, which MotherDuck needs a recent enough DuckDB for; and a MotherDuck `external_stage` SQLLoad cannot write or MotherDuck cannot read. None where the warehouse's writes need nothing of the table or its server.
 pub async fn write_problems(
     destination: &Destination,
     table: &TableName,
@@ -20,7 +22,14 @@ pub async fn write_problems(
             postgres_write_problems(postgres, table, (mode, exists)).await
         }
         #[cfg(feature = "duckdb")]
-        Destination::DuckDb(duckdb) if variants => Ok(variant_problems(duckdb).await),
+        Destination::DuckDb(duckdb) => {
+            let (mut problems, warnings) = match variants {
+                true => variant_problems(duckdb).await,
+                false => (Vec::new(), Vec::new()),
+            };
+            problems.extend(stage_problems(duckdb).await);
+            Ok((problems, warnings))
+        }
         _ => Ok((Vec::new(), Vec::new())),
     }
 }

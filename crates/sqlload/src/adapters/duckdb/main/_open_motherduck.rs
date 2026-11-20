@@ -17,7 +17,10 @@ pub(crate) fn open_motherduck(
     target_database: Option<&str>,
     (python, memory): (Option<&str>, Option<DuckDbShare>),
 ) -> Result<DuckDbDestination, DuckDbError> {
-    let ConnectionConfig::MotherDuck { database, token } = connection else {
+    let ConnectionConfig::MotherDuck {
+        database, token, ..
+    } = connection
+    else {
         return Err(DuckDbError::MotherDuck(format!(
             "a {} connection is not a MotherDuck one",
             connection.kind()
@@ -52,5 +55,6 @@ pub(crate) fn open_motherduck(
         own_limit: None,
         unflushed: Arc::default(),
         secrets: Arc::default(),
+        stage: None,
     })
 }
