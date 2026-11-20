@@ -188,6 +188,22 @@ def growing(ctx):
     yield pa.table({"id": [3], "b": [2], "c": [1]})
 
 
+def late(ctx):
+    for page in range(1, 9):
+        rows = [{"id": page * 10 + n, "a": page, "c": page if page >= 7 else None} for n in range(3)]
+        yield pa.Table.from_pylist([{**row, "b": page} if page >= 3 else row for row in rows])
+
+
+for strategy, keys in [("merge", {"unique_key": ["id"]}), ("append", {}), ("replace", {}), ("delete_insert", {"replace_key": ["id"]})]:
+    api.table(description="Test table.", name=f"late_{strategy}", write_strategy=strategy, **keys)(late)
+
+
+@api.table(description="Test table.", write_strategy="append", cursor_column="id", cursor_start="0", batch_size=3)
+def late_windowed(ctx):
+    for i in range(max(int(ctx.cursor_value), 1), min(int(ctx.cursor_end), 7)):
+        yield {"id": i, "late": i} if i >= 4 else {"id": i}
+
+
 def wait_for(name):
     deadline = time.monotonic() + 20
     while not (HERE / "data" / name).exists():
@@ -435,11 +451,34 @@ def test_given_append_without_a_cursor_when_a_rerun_follows_a_failure_then_no_ro
 	failed = sqlload(project, "load", "--batch-bytes", "1", "api__appended")
 	assert failed.returncode != 0, failed.stdout
 	assert "one commit for the whole read (append without a cursor" in sqlload(project, "plan", "--batch-bytes", "1", "api__appended").stdout
-	assert query(project, 'SELECT count(*) FROM "RAW"."api__appended"') == [(0,)]
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'api__appended'") == [(0,)]
 	fail(project, -1)
 	done = sqlload(project, "load", "--batch-bytes", "1", "api__appended")
 	assert done.returncode == 0, done.stdout + done.stderr
 	assert sorted(rows_loaded(project, "appended")) == sorted(EVERY_ROW)
+
+
+def column_names(project: Path, table: str) -> list[str]:
+	return [name for (name,) in query(project, f"SELECT column_name FROM information_schema.columns WHERE table_name = 'api__{table}' ORDER BY ordinal_position")]
+
+
+@pytest.mark.parametrize("strategy", ["merge", "append", "replace", "delete_insert"])
+def test_given_a_new_table_whose_columns_first_hold_values_on_later_pages_when_loading_in_one_commit_then_the_metadata_columns_come_last(
+	project: Path, strategy: str
+) -> None:
+	done = sqlload(project, "load", f"api__late_{strategy}")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, f"late_{strategy}") == ["id", "a", "c", "b", "_sqlload_load_id", "_sqlload_loaded_at"]
+	assert query(project, f'SELECT count(*), count(b), count(c) FROM "RAW"."api__late_{strategy}"') == [(24, 18, 6)]
+	assert f"created  RAW.api__late_{strategy}  6 columns" in done.stdout, done.stdout
+	assert "altered" not in done.stdout, done.stdout
+
+
+def test_given_a_windowed_first_load_when_a_column_first_shows_after_the_first_commit_then_it_is_appended_after_the_metadata(project: Path) -> None:
+	done = sqlload(project, "load", "--end-cursor", "7", "api__late_windowed")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, "late_windowed") == ["id", "_sqlload_load_id", "_sqlload_loaded_at", "late"]
+	assert query(project, 'SELECT id, late FROM "RAW"."api__late_windowed" ORDER BY id') == [(1, None), (2, None), (3, None), (4, 4), (5, 5), (6, 6)]
 
 
 def test_given_columns_added_over_batches_when_loading_then_each_change_reads_the_live_columns_once(project: Path) -> None:

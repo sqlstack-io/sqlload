@@ -34,6 +34,7 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::main::named_batch::named_batch;
 use crate::load_naming::models::{Compat, LoadedNames, MetadataRole, NameMemo, RenameColumn};
+use crate::loader::_helpers::publish::created_at_commit;
 use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
 use crate::loader::_helpers::resolve::{KnownNames, host_rename, resolve_known};
@@ -827,9 +828,9 @@ impl PythonFeed {
         let state = self.state.clone();
         let publisher = self.publisher(load).await?;
         let rows = publisher.finish(state).await?;
-        let children = publisher.child_changes();
+        let changes = publisher.take_changes();
         let replaced_keys = publisher.replaced.clone();
-        self.changes.extend(children);
+        self.changes.extend(changes);
         Box::pin(record_numbered(&self.table, load.destination)).await?;
         Ok(TableLoaded {
             rows,
@@ -975,7 +976,7 @@ impl PythonFeed {
         }
     }
 
-    /// Plan the table for the data seen so far and bring the table (and the staging table) in line: created on the first batch, altered as later batches add or widen columns; columns that only held NULL wait for a typed value, or become text at the end (`settle`).
+    /// Plan the table for the data seen so far and bring the table (and the staging table) in line: created at its first commit with the columns seen by then (see [`created_at_commit`]), altered as later batches add or widen columns; columns that only held NULL wait for a typed value, or become text at the end (`settle`).
     pub(crate) async fn plan_data(
         &mut self,
         load: &PythonLoad<'_>,
@@ -1020,6 +1021,9 @@ impl PythonFeed {
             .is_none()
             .then_some(self.table.live.as_deref());
         let replanned = replan(load, &self.table, (&data, known, &self.names), destination).await?;
+        if let Some(publisher) = self.publisher.as_mut() {
+            self.changes.append(&mut publisher.changes);
+        }
         let old = staged_columns(&self.table);
         let changes = bring_in_line(
             (load.destination, self.publisher.as_mut()),
@@ -1288,7 +1292,7 @@ fn table_read(
     }
 }
 
-/// Bring a table planned from its data in line with `replanned`, through `publisher`'s connection once it is open (`destination` before): its schema changes run, and an open publisher's rows so far are settled and its staging table altered from the `old` staged columns, before it takes the new plan. Returns the `created ...` and `altered ...` lines.
+/// Bring a table planned from its data in line with `replanned`, through `publisher`'s connection once it is open (`destination` before): its schema changes run (a table the load creates waits for its first commit, see [`created_at_commit`]), and an open publisher's rows so far are settled and its staging table altered from the `old` staged columns, before it takes the new plan. Returns the `created ...` and `altered ...` lines.
 pub(crate) async fn bring_in_line(
     (destination, publisher): (&Destination, Option<&mut Publisher>),
     (old, replanned): (&[DesiredColumn], &TablePlan),
@@ -1298,7 +1302,13 @@ pub(crate) async fn bring_in_line(
         Some(publisher) => &publisher.destination,
         None => destination,
     };
-    if let Some(statements) = schema_statements(replanned) {
+    if created_at_commit(replanned) {
+        if publisher.is_none() {
+            let adapter = sql_adapter(replanned.spec.warehouse);
+            let schema = adapter.render_create_schema(&replanned.spec.destination);
+            execute_ddl(destination, vec![schema]).await?;
+        }
+    } else if let Some(statements) = schema_statements(replanned) {
         execute_ddl(destination, statements).await?;
         changes.extend(change_lines(replanned));
     }
@@ -1592,6 +1602,7 @@ impl ChildTables {
             .filter_map(|feed| feed.publisher.as_mut())
         {
             publisher.cut(CommitRange::Planned).await?;
+            self.changes.append(&mut publisher.changes);
         }
         Ok(())
     }
@@ -1657,6 +1668,7 @@ impl ChildTables {
             }
             if let Some(publisher) = &mut feed.publisher {
                 publisher.finish(None).await?;
+                self.changes.append(&mut publisher.changes);
             }
         }
         Ok(())
@@ -1983,9 +1995,13 @@ impl ChildFeed {
             schema: columns.schema,
             ..self.table.clone()
         };
+        let mut changes = (self.publisher.as_mut())
+            .map(|publisher| std::mem::take(&mut publisher.changes))
+            .unwrap_or_default();
         let old = staged_columns(&self.table);
-        let changes =
-            bring_in_line((destination, self.publisher.as_mut()), (&old, &replanned)).await?;
+        changes.extend(
+            bring_in_line((destination, self.publisher.as_mut()), (&old, &replanned)).await?,
+        );
         self.table = TablePlan {
             live: replanned.live.clone().or(self.table.live.clone()),
             ..replanned
