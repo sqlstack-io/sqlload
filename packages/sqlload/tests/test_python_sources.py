@@ -1616,7 +1616,7 @@ def test_given_a_python_table_repeating_a_merge_key_when_it_must_fail_then_the_l
 	done = sqlload(project, "load")
 	assert done.returncode == 1, done.stdout + done.stderr
 	assert "the loaded rows repeat its unique_key: 1 value of (id) appears in more than one row, such as (1)" in done.stdout + done.stderr, done.stdout + done.stderr
-	assert query(project, 'SELECT count(*) FROM "RAW"."shop__rows"') == [(0,)]
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
 
 
 @pytest.mark.parametrize(
@@ -1673,7 +1673,7 @@ def test_given_source_level_dedupe_settings_when_loading_then_only_its_merge_tab
 	assert "the loaded rows repeat its unique_key" in done.stdout + done.stderr, done.stdout + done.stderr
 	assert query(project, 'SELECT count(*) FROM "RAW"."shop__log"') == [(3,)]
 	assert query(project, 'SELECT id, v FROM "RAW"."shop__kept"') == [(1, "c")]
-	assert query(project, 'SELECT count(*) FROM "RAW"."shop__strict"') == [(0,)]
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__strict'") == [(0,)]
 
 
 def test_given_a_source_that_fails_on_repeated_keys_when_a_table_sets_newest_by_then_that_table_keeps_its_newest_row(tmp_path: Path) -> None:

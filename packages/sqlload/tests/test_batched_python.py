@@ -188,6 +188,22 @@ def growing(ctx):
     yield pa.table({"id": [3], "b": [2], "c": [1]})
 
 
+def late(ctx):
+    for page in range(1, 9):
+        rows = [{"id": page * 10 + n, "a": page, "c": page if page >= 7 else None} for n in range(3)]
+        yield pa.Table.from_pylist([{**row, "b": page} if page >= 3 else row for row in rows])
+
+
+for strategy, keys in [("merge", {"unique_key": ["id"]}), ("delete_insert", {"replace_key": ["id"]}), ("append", {"checks": {"not_null": ["id"]}}), ("append_direct", {})]:
+    api.table(description="Test table.", name=f"late_{strategy}", write_strategy=strategy.removesuffix("_direct"), **keys)(late)
+
+
+@api.table(description="Test table.", write_strategy="append", cursor_column="id", cursor_start="0", batch_size=3)
+def late_windowed(ctx):
+    for i in range(max(int(ctx.cursor_value), 1), min(int(ctx.cursor_end), 7)):
+        yield {"id": i, "late": i} if i >= 4 else {"id": i}
+
+
 def wait_for(name):
     deadline = time.monotonic() + 20
     while not (HERE / "data" / name).exists():
@@ -442,6 +458,36 @@ def test_given_append_without_a_cursor_when_a_rerun_follows_a_failure_then_no_ro
 	assert sorted(rows_loaded(project, "appended")) == sorted(EVERY_ROW)
 
 
+def column_names(project: Path, table: str) -> list[str]:
+	return [name for (name,) in query(project, f"SELECT column_name FROM information_schema.columns WHERE table_name = 'api__{table}' ORDER BY ordinal_position")]
+
+
+@pytest.mark.parametrize("strategy", ["merge", "delete_insert", "append"])
+def test_given_a_new_staged_table_whose_columns_first_hold_values_on_later_pages_when_loading_in_one_commit_then_the_metadata_columns_come_last(
+	project: Path, strategy: str
+) -> None:
+	done = sqlload(project, "load", f"api__late_{strategy}")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, f"late_{strategy}") == ["id", "a", "c", "b", "_sqlload_load_id", "_sqlload_loaded_at"]
+	assert query(project, f'SELECT count(*), count(b), count(c) FROM "RAW"."api__late_{strategy}"') == [(24, 18, 6)]
+	assert f"created  RAW.api__late_{strategy}  6 columns" in done.stdout, done.stdout
+	assert "altered" not in done.stdout, done.stdout
+
+
+def test_given_an_append_written_straight_into_its_new_table_when_columns_first_hold_values_later_then_they_follow_the_metadata(project: Path) -> None:
+	done = sqlload(project, "load", "api__late_append_direct")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, "late_append_direct") == ["id", "a", "_sqlload_load_id", "_sqlload_loaded_at", "b", "c"]
+	assert query(project, 'SELECT count(*), count(b), count(c) FROM "RAW"."api__late_append_direct"') == [(24, 18, 6)]
+
+
+def test_given_a_windowed_first_load_when_a_column_first_shows_after_the_first_commit_then_it_is_appended_after_the_metadata(project: Path) -> None:
+	done = sqlload(project, "load", "--end-cursor", "7", "api__late_windowed")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, "late_windowed") == ["id", "_sqlload_load_id", "_sqlload_loaded_at", "late"]
+	assert query(project, 'SELECT id, late FROM "RAW"."api__late_windowed" ORDER BY id') == [(1, None), (2, None), (3, None), (4, 4), (5, 5), (6, 6)]
+
+
 def test_given_columns_added_over_batches_when_loading_then_each_change_reads_the_live_columns_once(project: Path) -> None:
 	done = sqlload(project, "load", "api__growing", env={"RUST_LOG": "sqlload=debug"})
 	assert done.returncode == 0, done.stdout + done.stderr
@@ -591,6 +637,41 @@ def orders(ctx):
     yield pa.table({"id": [1, 2], "items": [[{"sku": "a"}, {"sku": "b"}], []], "tags": [["x"], None]})
     yield [{"id": 3, "items": [{"sku": "c", "qty": 2}], "tags": ["y", "z"]}]
 """
+
+
+STAGED_UNNEST_MODULE = """
+import sqlload as sl
+
+api = sl.source("api")
+
+
+@api.table(description="Test table.", write_strategy="merge", unique_key=["id"], unnest=["items"])
+def merged(ctx):
+    yield [{"id": 1, "items": [{"sku": "a"}]}]
+    yield [{"id": 2, "items": [{"sku": "b"}], "late": 2}]
+
+
+@api.table(description="Test table.", write_strategy="delete_insert", cursor_column="id", cursor_start="0", unnest=["items"])
+def replaced(ctx):
+    yield [{"id": 1, "items": [{"sku": "a"}]}]
+    yield [{"id": 2, "items": [{"sku": "b"}], "late": 2}]
+"""
+
+
+@pytest.mark.parametrize("table", ["merged", "replaced"])
+def test_given_a_staged_parent_dropped_while_its_child_table_remains_when_loading_again_then_the_parent_is_created_with_its_metadata_last(
+	project: Path, table: str
+) -> None:
+	(project / "sources" / "api.py").write_text(STAGED_UNNEST_MODULE)
+	first = sqlload(project, "load", f"api__{table}")
+	assert first.returncode == 0, first.stdout + first.stderr
+	with duckdb.connect(str(project / "wh.duckdb")) as connection:
+		connection.execute(f'DROP TABLE "RAW".api__{table}')
+	done = sqlload(project, "load", f"api__{table}")
+	assert done.returncode == 0, done.stdout + done.stderr
+	assert column_names(project, table) == ["id", "late", "_sqlload_load_id", "_sqlload_loaded_at", "_sqlload_row_id"]
+	linked = query(project, f'SELECT o.id, i.sku FROM "RAW".api__{table} o JOIN "RAW".api__{table}__items i ON i._sqlload_parent_id = o._sqlload_row_id ORDER BY o.id')
+	assert linked == [(1, "a"), (2, "b")]
 
 
 def test_given_unnest_when_loading_a_python_table_then_its_lists_become_child_tables_linked_by_id(project: Path) -> None:
