@@ -147,6 +147,7 @@ use crate::schema_plan::constants::{
 use crate::schema_plan::models::ColumnOrigin;
 use crate::schema_plan::models::DesiredColumn;
 use crate::schema_plan::models::LiveColumn;
+use crate::schema_plan::models::TableAction;
 use crate::snowflake_source::main::select_query::select_query;
 use crate::table_lease::main::lease_now::lease_now;
 use crate::table_lease::main::take_lease::take_lease;
@@ -175,6 +176,25 @@ fn writes_directly(table: &TablePlan, writer: &Writer) -> bool {
         && table.logged.is_none()
         && writer.writes_directly()
         && (!table.route.as_ref().is_some_and(Route::pulls_unloaded) || unloads_directly(writer))
+}
+
+/// Whether `table` is a table planned from its data (a Python table, or one of its child tables) that its load creates in a SQL destination, and whose rows load through a staging table anyway: a merge, a `delete_insert`, or an append that stages (logged state, checks, child tables, or a merge parent's child table). It is created at its first commit rather than its first batch, so the columns its later batches bring come before the `_sqlload_*` metadata. Other appends (including ones a warehouse writer stages internally) and `replace` (`--reload`) builds keep creating it at the first batch.
+pub(crate) fn created_at_commit(table: &TablePlan) -> bool {
+    let spec = &table.spec;
+    let stages = match table.mode {
+        WriteMode::Merge { .. } | WriteMode::DeleteInsert { .. } => true,
+        WriteMode::Append => {
+            table.logged.is_some()
+                || spec.checks.is_some()
+                || spec.unnest != Unnest::None
+                || spec.root_rows
+        }
+        _ => false,
+    };
+    stages
+        && table.schema.action == TableAction::Create
+        && spec.python.is_some()
+        && table.output.is_none()
 }
 
 /// Where the batches go, from the publisher's fields: `staging` when there is one, and `columns` as the staged batches carry them.
@@ -547,6 +567,7 @@ impl Publisher {
             }
             _ => None,
         };
+        let new_table = created_at_commit(&table);
         let direct = files.is_none()
             && table.spec.checks.is_none()
             && table.spec.unnest == Unnest::None
@@ -626,6 +647,8 @@ impl Publisher {
             at_end,
             builds,
             indexes: shape.map(|shape| shape.indexes).unwrap_or_default(),
+            new_table,
+            changes: Vec::new(),
             table,
             destination,
             run,
@@ -792,14 +815,6 @@ impl Publisher {
         }
     }
 
-    /// The `created ...`, `altered ...` and `loaded ...` lines of the child tables filled so far.
-    pub(crate) fn child_changes(&mut self) -> Vec<String> {
-        self.children
-            .as_mut()
-            .map(|children| std::mem::take(&mut children.changes))
-            .unwrap_or_default()
-    }
-
     /// Whether the batch holds about 1 GB (Parquet staged on Snowflake, with the zstd files `send = "at_commit"` holds for it, which come within a few percent of that Parquet, Arrow elsewhere), where a size-cut table may end it.
     pub(crate) fn full(&self) -> bool {
         let bytes = match (self.writer.staged_bytes(), &self.spool) {
@@ -853,6 +868,9 @@ impl Publisher {
             || matches!(self.table.mode, WriteMode::MarkMissing(_))
             || self.leftover_deletes()
             || self.pieces.unfinished;
+        if !pending {
+            self.create_table().await?;
+        }
         if let Some(children) = self.children.as_mut().filter(|_| self.direct || !pending) {
             Box::pin(children.finish(
                 (&self.table, (&self.load_id, &self.loaded_at)),
@@ -1261,6 +1279,7 @@ impl Publisher {
             }
             _ => None,
         };
+        self.create_table().await?;
         if let Some(children) = &mut self.children {
             match last {
                 true => {
@@ -1574,7 +1593,7 @@ pub(crate) async fn publish_table(
     };
     Ok(TableLoaded {
         rows,
-        changes: publisher.child_changes(),
+        changes: publisher.take_changes(),
         note: marked(table, (rows, publisher.marked))
             .or_else(|| older_note(table, publisher.older)),
         after_load: report,

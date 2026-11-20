@@ -114,9 +114,9 @@ fn given_python_sources_when_parsing_the_project_then_they_join_it_under_the_sam
         ParsePythonProjectTestCase {
             description: "a None setting from Python is refused",
             toml: "",
-            sources: r#"[{"name": "a", "module": "sources/a.py", "settings": {"schema": null, "tables": {}}}]"#,
+            sources: r#"[{"name": "a", "module": "sources/a.py", "settings": {"destination_schema": null, "tables": {}}}]"#,
             read: |_| String::new(),
-            expected_value: Err("schema is None; leave the setting out instead"),
+            expected_value: Err("destination_schema is None; leave the setting out instead"),
         },
     ];
     for test_case in test_cases {

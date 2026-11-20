@@ -32,8 +32,8 @@ loader_schema = "raw"
 | `password` | The user's password. Use `${ENV:NAME}`. |
 | `secure` | `true` for HTTPS. Default: `false`. |
 
-The target's `loader_schema` is the ClickHouse database tables load into; a source's `schema`
-overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
+The target's `loader_schema` is the ClickHouse database tables load into; a source's
+`destination_schema` overrides it. ClickHouse has no level above its databases, so a ClickHouse target takes no
 `database`, and `plan` refuses one. `sqlload apply` creates the database when it doesn't exist.
 
 SQLLoad is tested against ClickHouse 25.3, 25.8 and 26.10.

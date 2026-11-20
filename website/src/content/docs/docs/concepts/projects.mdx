@@ -105,7 +105,7 @@ Destination tables are named from a template with `{source}`, `{schema}` and `{t
 | Files | `{source}` (a files source is one table) | `events` |
 
 Set `table_name` on the source, or `name` on one table, to change it. The table goes into the
-source's `schema`, or the target's `loader_schema`.
+source's `destination_schema`, or the target's `loader_schema`.
 
 ## Descriptions
 
@@ -130,6 +130,15 @@ Every loaded table gets columns that say where each row came from:
 | `_sqlload_source_version` | files sources | The file's version when it was loaded. |
 | `_sqlload_source_row` | files sources | The row's number in its file, from 1. BigQuery doesn't report a row's position in its file, so a BigQuery table that writes it has SQLLoad read the files; [exclude it](/docs/targets/bigquery/#parquet-in-google-cloud-storage) to have BigQuery load them itself. |
 | `_sqlload_source_row` | Google Sheets tables | The row's number in the sheet, as Google Sheets numbers it: a range starting at `A3` starts at 3, and a skipped empty row leaves a gap. Not on a table with a `transform`. |
+
+They come after the table's own columns when SQLLoad creates the table. A Python table planned
+from its data is created at its first commit, with every column its rows brought by then, when its
+rows load through a staging table: `merge`, `delete_insert`, and an `append` with checks, logged
+state or child tables. An `append` written straight into the table, and a `replace`, create it at
+the first batch. A column first seen after the table exists, such as on a later page of a direct
+`append`, in a later `batch_size` window, after a commit of about 1 GB, or on a later run, is added
+after SQLLoad's columns: column order follows the order columns arrived in, and
+`sqlload load --reload` rebuilds the table with SQLLoad's columns last.
 
 `plan` lists them as `+ _sqlload_load_id, _loaded_at`. Files sources use `_sqlload_source_file`
 to load each file once under `append`. SQLLoad's own columns never count as differences in
