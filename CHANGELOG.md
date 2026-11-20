@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.82.0](https://github.com/sqlstack-io/sqlload/compare/v0.81.0...v0.82.0) (2026-11-20)
+
+
+### Features
+
+* **motherduck:** stage chunks in S3 or GCS with load_method = external_stage ([1520a43](https://github.com/sqlstack-io/sqlload/commit/1520a430a898a2b5dca2e7361e7c59cb804cd028))
+
+
+### Performance Improvements
+
+* **loader:** merge small pages into row-group chunks and write zstd bridge Parquet ([1520a43](https://github.com/sqlstack-io/sqlload/commit/1520a430a898a2b5dca2e7361e7c59cb804cd028))
+* **motherduck:** load each chunk with COPY, VARIANT columns typed JSON in the file ([1520a43](https://github.com/sqlstack-io/sqlload/commit/1520a430a898a2b5dca2e7361e7c59cb804cd028))
+
+
+### Documentation
+
+* **website:** size the home page terminal to its tallest tab ([#359](https://github.com/sqlstack-io/sqlload/issues/359)) ([1129d38](https://github.com/sqlstack-io/sqlload/commit/1129d38d45846d83b6a6615eefcbb4985ed101c9))
+
 ## [0.81.0](https://github.com/sqlstack-io/sqlload/compare/v0.80.0...v0.81.0) (2026-11-20)
 
 
