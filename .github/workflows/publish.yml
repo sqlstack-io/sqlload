@@ -451,6 +451,17 @@ jobs:
         shell: bash
         run: bash .github/scripts/assert_sdist_sources.sh dist
 
+      # sqlload pins sqlload-api at its own version, so sqlload-api goes up first: `pip install sqlload==<version>`
+      # resolves as soon as sqlload is listed.
+      - name: Set sqlload-api's files apart
+        run: mkdir dist-api && mv dist/sqlload_api-* dist-api/
+
+      - name: Publish sqlload-api to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-api
+          skip-existing: true
+
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:

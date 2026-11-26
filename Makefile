@@ -68,12 +68,13 @@ verify: check-ci test
 bench-perf:
 	cargo bench -p sqlload-benches --bench hot_paths --quiet -- $(BENCH_ARGS)
 
-# The sqlload wheel, built from this tree with release settings, in the harness's environment.
+# The sqlload wheel, built from this tree with release settings, in the harness's environment, with the sqlload-api it
+# pins installed from this tree too (it reaches PyPI only with the release).
 bench-wheel:
 	cd benchmarks && uv sync --quiet --locked $(BENCH_GROUPS)
 	rm -rf benchmarks/.wheels
 	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/benchmarks/.venv $(CURDIR)/benchmarks/.venv/bin/maturin build --release --quiet --out $(CURDIR)/benchmarks/.wheels
-	uv pip install --quiet --python benchmarks/.venv/bin/python --reinstall --no-deps benchmarks/.wheels/*.whl
+	uv pip install --quiet --python benchmarks/.venv/bin/python --reinstall --no-deps ./packages/sqlload-api benchmarks/.wheels/*.whl
 
 # Compares sqlload with dlt and ingestr (needs Docker); on demand, not in CI. Results go to
 # BENCH_OUT; BENCH_ARGS takes the harness's options (see benchmarks/README.md).
