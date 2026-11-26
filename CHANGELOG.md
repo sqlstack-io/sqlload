@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.86.0](https://github.com/sqlstack-io/sqlload/compare/v0.85.0...v0.86.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* PythonSource, TableRead and ProjectConfig are #[non_exhaustive]; build PythonSource and TableRead with their new constructors.
+
+### Features
+
+* publish the Python host as the sqlload-python-host crate ([#368](https://github.com/sqlstack-io/sqlload/issues/368)) ([a67c058](https://github.com/sqlstack-io/sqlload/commit/a67c058dc2b6aa74aca03505826260010a3349a6))
+
 ## [0.85.0](https://github.com/sqlstack-io/sqlload/compare/v0.84.0...v0.85.0) (2026-11-26)
 
 
