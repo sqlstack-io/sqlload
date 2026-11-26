@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.84.0](https://github.com/sqlstack-io/sqlload/compare/v0.83.0...v0.84.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **loader:** under on_schema_change = "fail", a JSON or CSV files table that pins a key no sampled file holds (one only older files have) now fails plan; before, plan only noted it. Parquet tables with such a pin, which failed plan under every setting, now load it as NULL unless on_schema_change = "fail".
+
+### Features
+
+* **loader:** declared columns missing from the data follow on_schema_change ([#364](https://github.com/sqlstack-io/sqlload/issues/364)) ([7509c0d](https://github.com/sqlstack-io/sqlload/commit/7509c0dbdc6787b9aa14ff74fcd7f01a32acd505))
+
 ## [0.83.0](https://github.com/sqlstack-io/sqlload/compare/v0.82.0...v0.83.0) (2026-11-20)
 
 
