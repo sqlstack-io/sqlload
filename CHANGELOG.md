@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.85.0](https://github.com/sqlstack-io/sqlload/compare/v0.84.0...v0.85.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* load through a connection the caller owns, and move the request-describing Python API into sqlload-api ([#366](https://github.com/sqlstack-io/sqlload/issues/366))
+
+### Features
+
+* load through a connection the caller owns, and move the request-describing Python API into sqlload-api ([#366](https://github.com/sqlstack-io/sqlload/issues/366)) ([1ccba3e](https://github.com/sqlstack-io/sqlload/commit/1ccba3e7e1d3a413c603d38460935b1e528da500))
+
 ## [0.84.0](https://github.com/sqlstack-io/sqlload/compare/v0.83.0...v0.84.0) (2026-11-26)
 
 
