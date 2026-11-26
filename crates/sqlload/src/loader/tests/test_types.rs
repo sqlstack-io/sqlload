@@ -298,3 +298,11 @@ pub(crate) struct SelectedReaderTestCase {
     /// Why SQLLoad reads the rows instead, as `plan` shows it.
     pub(crate) expected_reason: Option<&'static str>,
 }
+
+pub(crate) struct MissingColumnsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) missing: &'static [&'static str],
+    pub(crate) on_schema_change: crate::project::models::OnSchemaChange,
+    /// The warnings, or the problem under `"fail"`.
+    pub(crate) expected_result: Result<&'static [&'static str], &'static str>,
+}

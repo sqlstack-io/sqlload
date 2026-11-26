@@ -34,6 +34,7 @@ use crate::load_naming::main::metadata_name::metadata_name;
 use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::main::named_batch::named_batch;
 use crate::load_naming::models::{Compat, LoadedNames, MetadataRole, NameMemo, RenameColumn};
+use crate::loader::_helpers::destination::unpublished_on_error;
 use crate::loader::_helpers::publish::created_at_commit;
 use crate::loader::_helpers::publish::replaces_roots;
 use crate::loader::_helpers::publish::staged_columns;
@@ -41,6 +42,7 @@ use crate::loader::_helpers::resolve::{KnownNames, host_rename, resolve_known};
 use crate::loader::_helpers::run_log::{log_empty_run, record_numbered, run_entry};
 use crate::loader::_helpers::specs::is_child_column;
 use crate::loader::_helpers::specs::null_cursor_problem;
+use crate::loader::_helpers::specs::python_missing;
 use crate::loader::_helpers::table_plan::append_problem;
 use crate::loader::_helpers::table_plan::change_lines;
 use crate::loader::_helpers::table_plan::replan_columns;
@@ -782,13 +784,13 @@ impl PythonFeed {
                 rows: 0,
                 changes: Vec::new(),
                 note: Some(NO_DATA_NOTE.to_owned()),
-                after_load: None,
-                replaced_keys: None,
-                transforms: Vec::new(),
-                names: Vec::new(),
                 warnings: std::mem::take(&mut self.warnings),
+                ..TableLoaded::default()
             });
         }
+        let found = python_missing(&load.table.spec, &self.merged, self.rows);
+        let (missing, warned) = unpublished_on_error((self, load), found).await?;
+        self.warnings.extend(warned);
         let unsettled = self.publisher.is_none()
             || self
                 .merged
@@ -826,6 +828,7 @@ impl PythonFeed {
             transforms: Vec::new(),
             names: name_lines(&self.names.columns),
             warnings: std::mem::take(&mut self.warnings),
+            missing_columns: missing,
         })
     }
 

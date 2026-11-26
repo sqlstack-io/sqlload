@@ -249,6 +249,8 @@ pub struct TableSpec {
     pub parses: BTreeMap<String, ColumnParse>,
     /// The zone of the times without an offset that a parse without its own `tz` reads, and whose setting it is; `None` reads them as UTC.
     pub timezone: Option<(chrono_tz::Tz, SettingOrigin)>,
+    /// The declared columns the data lacks, as `columns` names them: a files table's pins no sampled file holds, found at plan. Each loads as NULL at its declared type, with a warning, unless `on_schema_change = "fail"` refuses the table; never dropped. A Python table's are found only as it loads (see [`TableLoaded::missing_columns`]).
+    pub missing_columns: Vec<String>,
 }
 
 impl TableSpec {
@@ -428,8 +430,10 @@ pub struct FilesSource {
     pub encoding: FilesEncoding,
     /// Column names and patterns JSON and CSV reads check keys and headers against.
     pub checks: TextChecks,
-    /// Notes `plan` shows on the table, such as pinned columns no sampled file has.
+    /// Notes `plan` shows on the table, such as loader columns dropped from the files.
     pub notes: Vec<String>,
+    /// The columns `columns` pins that no sampled file holds, as `columns` names them; `on_schema_change` decides whether the table loads them as NULL (see [`TableSpec::missing_columns`]).
+    pub unsampled: Vec<String>,
     /// `copy_to_internal_stage`: files no external stage reads are uploaded unchanged to an internal stage, and loaded from there by the warehouse.
     pub copy_to_internal_stage: bool,
     /// How each file is read for its table's `transform`; `None` without one, when `table`'s columns are the files'.
@@ -710,6 +714,20 @@ pub struct UnreadSharing {
 }
 
 impl ProjectPlan {
+    /// Each table that can load whose declared columns the data lacks, with those columns, which load as NULL; a Python table's are known only once it loads.
+    pub fn missing_columns(&self) -> Vec<MissingColumns> {
+        self.tables
+            .iter()
+            .filter(|table| {
+                table.schema.blocked.is_none() && !table.spec.missing_columns.is_empty()
+            })
+            .map(|table| MissingColumns {
+                table: table.outcome_name(),
+                columns: table.spec.missing_columns.clone(),
+            })
+            .collect()
+    }
+
     /// Whether everything that stops the plan is something a rerun may get past: no table is blocked, and every problem is a source that could not be reached.
     pub fn only_retryable_problems(&self) -> bool {
         self.tables
@@ -935,6 +953,14 @@ impl TableOutcome {
         }
     }
 
+    /// The declared columns the data lacked, which loaded as NULL; none when the table failed.
+    pub fn missing_columns(&self) -> Vec<String> {
+        match &self.loaded {
+            Ok(loaded) => loaded.missing_columns.clone(),
+            Err(_) => Vec::new(),
+        }
+    }
+
     /// Whether this table needs nothing a rerun cannot give it: it loaded, or its failure is retryable.
     pub fn passes_on_rerun(&self) -> bool {
         match &self.loaded {
@@ -967,8 +993,10 @@ pub struct TableLoaded {
     pub transforms: Vec<crate::python_sources::models::TransformTime>,
     /// A line per column `rename` named or numbering numbered.
     pub names: Vec<String>,
-    /// What the load warns of: a Python table's rows outside the cursor window it skipped or loaded.
+    /// What the load warns of: a Python table's rows outside the cursor window it skipped or loaded, and declared columns the data lacked.
     pub warnings: Vec<String>,
+    /// The declared columns the data lacked, which loaded as NULL at their declared types: a files table's from its plan, a Python table's from the rows it yielded.
+    pub missing_columns: Vec<String>,
 }
 
 /// What a load's reads need to run a table's `transform`: the host, and where each call's time goes.
@@ -1443,6 +1471,9 @@ pub struct PlanView {
     pub skipped: Vec<PlanItem>,
     pub errors: Vec<PlanItem>,
     pub warnings: Vec<PlanItem>,
+    /// Each table to load whose declared columns the data lacks, which load as NULL; left out when there is none. A Python table's are known only once it loads.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_columns: Vec<MissingColumns>,
     /// How long each connection and discovery took before the plan.
     pub phases: Vec<PhaseTiming>,
     /// The run's memory budget and how it is shared.
@@ -1450,6 +1481,15 @@ pub struct PlanView {
     /// Whether `plan` shows `memory` without `-v`: it asks for something.
     #[serde(skip)]
     pub memory_asks: bool,
+}
+
+/// A table's declared columns that the data lacks, as `plan --json` lists them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MissingColumns {
+    /// The table, named as a load's result names it.
+    pub table: String,
+    /// The columns, as `columns` names them.
+    pub columns: Vec<String>,
 }
 
 /// One line of the tally `apply` and `load` end with: `created`, `altered`, `loaded` or `failed`, the object, and what happened.
@@ -1569,6 +1609,9 @@ pub struct TableResult {
     /// What the load warns of, such as rows outside a cursor window; left out when there is nothing.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// The declared columns the data lacked, which loaded as NULL at their declared types; left out when there is none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_columns: Vec<String>,
     /// The most memory the process held while the table loaded, in bytes; only under `--memory-per-table`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peak_memory_bytes: Option<u64>,

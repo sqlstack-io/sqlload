@@ -132,6 +132,7 @@ fn given_a_plan_view_when_printing_it_then_it_follows_the_sqb_plan_layout() {
             skipped: Vec::new(),
             errors: plan_items(test_case.errors),
             warnings: plan_items(test_case.warnings),
+            missing_columns: Vec::new(),
             phases: Vec::new(),
             memory: test_case.memory.map(str::to_owned),
             memory_asks: false,

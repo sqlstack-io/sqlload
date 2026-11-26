@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -886,6 +887,96 @@ def test_given_a_pin_added_to_an_existing_table_when_planning_then_the_add_colum
 	planned = sqlload(project, "plan")
 	assert planned.returncode == 0, planned.stderr
 	assert "add column  code varchar(8) -> VARCHAR  (the length limit is not enforced)" in planned.stdout, planned.stdout
+
+
+@pytest.mark.parametrize(
+	"settings",
+	["write_strategy='append'", "write_strategy='append', on_schema_change='ignore'"],
+	ids=["append_new_columns", "ignore"],
+)
+def test_given_a_declared_column_no_row_has_when_loading_then_it_loads_as_null_at_its_declared_type_with_a_warning(tmp_path: Path, settings: str) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, f"shop.table(description='Test table.', {settings}, columns={{'coupon': 'date'}})(rows)\n")
+	give(project, "rows", [{"id": 1}, {"id": 2}])
+	done = load(project, "--json")
+	table = json.loads(done.stdout)["tables"][0]
+	assert table["missing_columns"] == ["coupon"], done.stdout
+	assert table["warnings"] == ["declared column coupon is in none of the rows, so it loaded as NULL"], done.stdout
+	assert query(project, 'SELECT count(*), count(coupon) FROM "RAW"."shop__rows"') == [(2, 0)]
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'coupon'") == [("DATE",)]
+
+
+def test_given_a_declared_column_no_row_has_and_on_schema_change_fail_when_loading_then_the_table_fails_and_nothing_loads(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', on_schema_change='fail', columns={'coupon': 'date'})(rows)\n")
+	give(project, "rows", [{"id": 1}, {"id": 2}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert 'declared column coupon is in none of the rows and on_schema_change = "fail"' in done.stdout + done.stderr, done.stdout + done.stderr
+	assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+
+
+@pytest.mark.parametrize(
+	("first", "expected_rows"),
+	[(None, None), ([{"id": 1, "coupon": "2026-01-01"}], [(1, date(2026, 1, 1))])],
+	ids=["first load", "existing table"],
+)
+def test_given_a_replace_whose_rows_lack_a_declared_column_under_on_schema_change_fail_when_loading_then_the_old_table_stays_as_it_was(
+	tmp_path: Path, first: list[dict[str, Any]] | None, expected_rows: list[tuple[Any, ...]] | None
+) -> None:
+	tables = "shop.table(description='Test table.', write_strategy='replace', {settings}columns={{'coupon': 'date'}})(rows)\n"
+	project = make_project(tmp_path, DUCKDB_PROJECT, tables.format(settings=""))
+	if first is not None:
+		give(project, "rows", first)
+		load(project)
+	(project / "sources" / "shop.py").write_text(SHOP_MODULE.replace("{tables}", tables.format(settings="on_schema_change='fail', ")))
+	give(project, "rows", [{"id": 7}, {"id": 8}])
+	done = sqlload(project, "load")
+	assert done.returncode == 1, done.stdout + done.stderr
+	assert 'declared column coupon is in none of the rows and on_schema_change = "fail"' in done.stdout + done.stderr, done.stdout + done.stderr
+	if expected_rows is None:
+		assert query(project, "SELECT count(*) FROM information_schema.tables WHERE table_name = 'shop__rows'") == [(0,)]
+	else:
+		assert query(project, 'SELECT id, coupon FROM "RAW"."shop__rows" ORDER BY id') == expected_rows
+
+
+FILES_SOURCE = """
+[connections.drop]
+kind = "filesystem"
+root = "drop"
+
+[sources.events]
+kind = "files"
+connection = "drop"
+path = "events/"
+format = "ndjson"
+description = "Test table."
+write_strategy = "append"
+
+[sources.events.tables.events]
+columns = { coupon = "date" }
+"""
+
+
+def test_given_a_files_table_declaring_a_column_no_file_has_when_planning_and_loading_with_json_then_both_list_it(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT + FILES_SOURCE, "")
+	(project / "drop" / "events").mkdir(parents=True)
+	(project / "drop" / "events" / "part-0.ndjson").write_text('{"id": 1}\n')
+	planned = sqlload(project, "plan", "--json", "events")
+	assert planned.returncode == 0, planned.stdout + planned.stderr
+	missing = json.loads(planned.stdout)["missing_columns"]
+	assert [entry["columns"] for entry in missing] == [["coupon"]], planned.stdout
+	done = load(project, "--json", "events")
+	table = json.loads(done.stdout)["tables"][0]
+	assert (table["table"], table["missing_columns"]) == (missing[0]["table"], ["coupon"]), done.stdout
+	assert table["warnings"] == ["declared column coupon is in none of the sampled files, so rows without it load as NULL"], done.stdout
+
+
+def test_given_a_declared_column_only_null_in_every_row_when_loading_then_it_keeps_its_declared_type_without_a_warning(tmp_path: Path) -> None:
+	project = make_project(tmp_path, DUCKDB_PROJECT, "shop.table(description='Test table.', write_strategy='append', on_schema_change='fail', columns={'coupon': 'date'})(rows)\n")
+	give(project, "rows", [{"id": 1, "coupon": None}, {"id": 2, "coupon": None}])
+	done = load(project, "--json")
+	table = json.loads(done.stdout)["tables"][0]
+	assert ("missing_columns" in table, "warnings" in table) == (False, False), done.stdout
+	assert query(project, "SELECT data_type FROM information_schema.columns WHERE table_name = 'shop__rows' AND column_name = 'coupon'") == [("DATE",)]
 
 
 @pytest.mark.parametrize(

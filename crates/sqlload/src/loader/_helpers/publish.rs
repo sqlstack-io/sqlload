@@ -1601,6 +1601,7 @@ pub(crate) async fn publish_table(
         transforms,
         names: name_lines(&table.spec.names.columns),
         warnings: Vec::new(),
+        missing_columns: Vec::new(),
     })
 }
 

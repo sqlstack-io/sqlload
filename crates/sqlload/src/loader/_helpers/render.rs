@@ -1,7 +1,6 @@
 use crate::load_naming::main::name_lines::name_lines;
 use crate::load_naming::models::NameChange;
 use crate::loader::constants::{FIX_LABEL, REASON_LABEL, ROUTE_LABEL, SOURCE_LABEL};
-use crate::loader::models::UnreadSource;
 use crate::project::models::CheckName;
 use crate::row_deletes::main::deletes_note::deletes_note;
 use crate::run_log::models::RunEvent;
@@ -37,7 +36,7 @@ use crate::loader::constants::{
 use crate::loader::models::{
     CommitRule, FilesOutput, FilesSource, ObjectChange, PlanDetail, PlanItem, PlanView,
     ProjectPlan, PythonTable, RunReport, RunResult, RunSummary, SourceEnd, TableOutcome, TablePlan,
-    TableResult, TableSpec, TallyLine, WarehouseRoute, WarehouseSource, WholeReason,
+    TableResult, TableSpec, TallyLine, UnreadSource, WarehouseRoute, WarehouseSource, WholeReason,
 };
 use crate::number_text::main::thousands::thousands;
 use crate::project::models::BatchStep;
@@ -1349,6 +1348,7 @@ fn sections(plan: &ProjectPlan, text: bool) -> PlanView {
             .map(|warning| error_item(warning, &[]))
             .chain(ready.iter().filter_map(|table| warning_item(table)))
             .collect(),
+        missing_columns: plan.missing_columns(),
     }
 }
 
@@ -1525,6 +1525,7 @@ fn table_result(outcome: &TableOutcome) -> TableResult {
             Ok(loaded) => loaded.warnings.clone(),
             Err(_) => Vec::new(),
         },
+        missing_columns: outcome.missing_columns(),
         peak_memory_bytes: outcome.peak_memory_bytes,
     }
 }

@@ -66,6 +66,7 @@ use crate::loader::_helpers::sources::plan_files;
 use crate::loader::_helpers::sources::{FilesPlanRequest, LoadedSource, with_live_types};
 use crate::loader::_helpers::specs::files_read_columns;
 use crate::loader::constants::CHECKS_LOADER_WARNING;
+use crate::loader::constants::FILES_MISSING_COLUMN;
 use crate::loader::constants::KEPT_TABLES_RELOAD_PROBLEM;
 use crate::loader::constants::RANGE_NEEDS_CURSOR;
 use crate::loader::errors::LoaderError;
@@ -104,6 +105,7 @@ use crate::routing::models::Store;
 use crate::row_batches::models::Unnest;
 use crate::schema_plan::constants::{CDC_PREFIX, CDC_UNCHANGED_COLUMN, MERGE_ROW_COLUMN};
 use crate::schema_plan::main::metadata_columns::metadata_columns;
+use crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings;
 use crate::schema_plan::main::plan_schema::plan_schema;
 use crate::schema_plan::models::Blocked;
 use crate::schema_plan::models::ColumnChange;
@@ -220,6 +222,24 @@ pub(crate) fn blocked_plan(reasons: Vec<String>) -> SchemaPlan {
     }
 }
 
+/// `plan` with the declared columns its files table's sampled files lack as its spec's `missing_columns`, each a warning as it loads as NULL; under `on_schema_change = "fail"` the table is blocked instead. A table blocked already, and any other, is returned as it is.
+fn with_missing_columns(mut plan: TablePlan) -> TablePlan {
+    let unsampled = match &plan.spec.files {
+        Some(files) if !files.unsampled.is_empty() && plan.schema.blocked.is_none() => {
+            files.unsampled.clone()
+        }
+        _ => return plan,
+    };
+    match missing_columns_warnings(&unsampled, FILES_MISSING_COLUMN, plan.spec.on_schema_change) {
+        Ok(warnings) => {
+            plan.schema.warnings.extend(warnings);
+            plan.spec.missing_columns = unsampled;
+        }
+        Err(problem) => plan.schema = blocked_plan(vec![problem]),
+    }
+    plan
+}
+
 /// A table that cannot load, for `reasons`.
 pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan {
     TablePlan {
@@ -244,7 +264,7 @@ pub(crate) fn blocked_table(spec: &TableSpec, reasons: Vec<String>) -> TablePlan
     }
 }
 
-/// One table's plan against its live destination table; a Python table's live columns count as its source's, since it has no catalog. A setting naming no column blocks the table after its live table is read, so a table that exists still counts as existing for `new_tables` and the first-load check.
+/// One table's plan against its live destination table; a Python table's live columns count as its source's, since it has no catalog, and a files table's declared columns its sampled files lack follow `on_schema_change`. A setting naming no column blocks the table after its live table is read, so a table that exists still counts as existing for `new_tables` and the first-load check.
 pub(crate) async fn plan_table(
     spec: &TableSpec,
     destination: &Destination,
@@ -273,7 +293,8 @@ pub(crate) async fn plan_table(
     plan.schema.warnings.extend(ignored_batch(&plan));
     plan.schema.warnings.extend(ignored_concurrency(&plan));
     let plan = with_run_log(plan, destination, options.reload || options.ranged()).await?;
-    with_transform_version(plan, destination).await
+    let plan = with_transform_version(plan, destination).await?;
+    Ok(with_missing_columns(plan))
 }
 
 /// Why the plan cannot write `spec` as `schema` plans it, when nothing blocked it first: its `cursor_column`, when `unwritten_cursor` names it, or a `newest_by` column is not among the columns written, or has no order. A Python table's columns are known only once it yields, so its `newest_by` is not checked here.

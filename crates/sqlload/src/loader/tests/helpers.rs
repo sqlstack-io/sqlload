@@ -679,6 +679,7 @@ fn files_spec(store: StoreKind) -> Result<TableSpec, String> {
         encoding: FilesEncoding::default(),
         checks: TextChecks::default(),
         notes: Vec::new(),
+        unsampled: Vec::new(),
         copy_to_internal_stage: false,
         transform: None,
         archive: None,

@@ -4,12 +4,13 @@ use crate::adapters::dispatch::models::Destination;
 use crate::batch_plan::main::source_readers::source_readers;
 use crate::loader::_helpers::publish::publish_table;
 use crate::loader::_helpers::sources::open_source;
-use crate::loader::constants::NO_PYTHON_HOST;
+use crate::loader::constants::{FILES_MISSING_COLUMN, NO_PYTHON_HOST};
 use crate::loader::errors::LoaderError;
 use crate::loader::main::_load_python::load_python;
 use crate::loader::models::{LoadRun, PythonLoad, SourceReader, TableLoaded, TablePlan};
 use crate::row_deletes::main::apply_tombstones::apply_tombstones;
 use crate::row_deletes::main::scan_plan::scan_plan;
+use crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings;
 use crate::time_text::main::now_utc_text::now_utc_text;
 
 /// Load one table; returns its name as reported and what the load did.
@@ -47,10 +48,8 @@ pub(in crate::loader) async fn load_one(
             let reader = open_source(project, source, source_readers(planned)).await?;
             let loaded = publish_table(&reader, planned, (destination, run)).await?;
             let note = marked_rows(&reader, planned, (destination, run), loaded.note.clone());
-            TableLoaded {
-                note: note.await?,
-                ..loaded
-            }
+            let note = note.await?;
+            with_files_missing(planned, TableLoaded { note, ..loaded })
         }
     };
     Ok((name, loaded))
@@ -78,4 +77,17 @@ async fn marked_rows(
         .chain(tombstones)
         .collect();
     Ok((!notes.is_empty()).then(|| notes.join(" ")))
+}
+
+/// What a files table's load did, `loaded`, with the declared columns its plan found missing and their warnings.
+fn with_files_missing(planned: &TablePlan, mut loaded: TableLoaded) -> TableLoaded {
+    let spec = &planned.spec;
+    let warnings = missing_columns_warnings(
+        &spec.missing_columns,
+        FILES_MISSING_COLUMN,
+        spec.on_schema_change,
+    );
+    loaded.warnings.extend(warnings.unwrap_or_default());
+    loaded.missing_columns = spec.missing_columns.clone();
+    loaded
 }

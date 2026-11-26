@@ -2,14 +2,17 @@ use crate::column_types::models::ColumnType;
 use crate::column_types::models::Warehouse;
 use crate::load_naming::models::Naming;
 use crate::loader::_helpers::python::fitting_type;
+use crate::loader::constants::FILES_MISSING_COLUMN;
 use crate::loader::tests::helpers::{
     crossed_schema, inferred_columns, integer_code, live_paths, lower_case_rows, problems_for,
     spelling,
 };
 use crate::loader::tests::test_types::{
     ChildPathsTestCase, DeclaredProblemsTestCase, FittingTypeTestCase, InferredTableTestCase,
-    SourceSpellingTestCase,
+    MissingColumnsTestCase, SourceSpellingTestCase,
 };
+use crate::project::models::OnSchemaChange;
+use crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings;
 
 #[test]
 fn given_an_inferred_and_a_live_type_when_choosing_then_the_live_type_wins_when_the_values_fit() {
@@ -288,4 +291,61 @@ fn given_live_child_tables_when_reading_their_paths_then_each_warehouses_spellin
         assert_eq!(found, test_case.expected_paths, "{}", test_case.description);
     }
     Ok(())
+}
+
+#[test]
+fn given_declared_columns_the_data_lacks_when_on_schema_change_decides_then_each_warns_or_the_table_fails()
+ {
+    let test_cases = [
+        MissingColumnsTestCase {
+            description: "append_new_columns loads each as NULL, with a warning",
+            missing: &["coupon", "region"],
+            on_schema_change: OnSchemaChange::AppendNewColumns,
+            expected_result: Ok(&[
+                "declared column coupon is in none of the sampled files, so rows without it load as NULL",
+                "declared column region is in none of the sampled files, so rows without it load as NULL",
+            ]),
+        },
+        MissingColumnsTestCase {
+            description: "ignore loads it as NULL too, with a warning",
+            missing: &["coupon"],
+            on_schema_change: OnSchemaChange::Ignore,
+            expected_result: Ok(&[
+                "declared column coupon is in none of the sampled files, so rows without it load as NULL",
+            ]),
+        },
+        MissingColumnsTestCase {
+            description: "fail refuses the table",
+            missing: &["coupon"],
+            on_schema_change: OnSchemaChange::Fail,
+            expected_result: Err(
+                "declared column coupon is in none of the sampled files and on_schema_change = \"fail\"; add it to the data, or remove it from columns",
+            ),
+        },
+        MissingColumnsTestCase {
+            description: "fail with nothing missing refuses nothing",
+            missing: &[],
+            on_schema_change: OnSchemaChange::Fail,
+            expected_result: Ok(&[]),
+        },
+    ];
+    for test_case in test_cases {
+        let missing: Vec<String> = test_case
+            .missing
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        let warned =
+            missing_columns_warnings(&missing, FILES_MISSING_COLUMN, test_case.on_schema_change);
+        let actual = warned
+            .as_ref()
+            .map(|lines| lines.iter().map(String::as_str).collect::<Vec<&str>>())
+            .map_err(String::as_str);
+        assert_eq!(
+            actual,
+            test_case.expected_result.map(<[&str]>::to_vec),
+            "{}",
+            test_case.description
+        );
+    }
 }
