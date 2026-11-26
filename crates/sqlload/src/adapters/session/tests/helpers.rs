@@ -338,7 +338,7 @@ pub(crate) fn refused_commit(
     Ok((next, rows_at(&target, LOADED_ROWS)?))
 }
 
-/// Write one batch of two rows (`id`, `name`) through a writer on `warehouse`'s session, then load the batch: every call the session got, the writer's folder written `<folder>`.
+/// Write one batch of two rows (`id`, `name`) through a writer on `warehouse`'s session, then load the batch: every call the session got, the writer's folder written `<folder>` (and on Windows the separator after it `/`), as plain or as a SQL literal writes it.
 pub(crate) fn written_batch(warehouse: Warehouse) -> Result<Vec<String>, String> {
     let caller = Arc::new(RecordingCaller::default());
     let calls = caller.calls.clone();
@@ -405,9 +405,15 @@ pub(crate) fn written_batch(warehouse: Warehouse) -> Result<Vec<String>, String>
         })
     })?;
     let calls = calls.lock().map_err(|_| "poisoned".to_owned())?.clone();
+    // A SQL literal doubles a Windows path's backslashes, the separator before the file name among them.
+    let escaped = folder.replace('\\', "\\\\");
     Ok(calls
         .into_iter()
-        .map(|call| call.replace(&folder, "<folder>"))
+        .map(|call| {
+            call.replace(&escaped, "<folder>")
+                .replace(&folder, "<folder>")
+                .replace("<folder>\\\\", "<folder>/")
+        })
         .collect())
 }
 
