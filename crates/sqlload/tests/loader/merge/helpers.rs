@@ -258,44 +258,6 @@ pub(crate) async fn run_replace_key_loads(
     Ok(rows)
 }
 
-/// Plan and load `public.estimates` from Postgres on `postgres_port` (reached by `source`) into an in-memory DuckDB with `settings` added to its `delete_insert` by `replace_key`: the load's error, empty when it loads, and how many tables named `app__estimates` the target holds afterwards.
-pub(crate) async fn replace_key_outcome(
-    (source, postgres_port): (&tokio_postgres::Client, u16),
-    settings: &str,
-) -> Result<(String, Option<String>), String> {
-    let text = estimates_project(
-        ("kind = \"duckdb\"\ndatabase = \":memory:\"", "raw"),
-        postgres_port,
-        settings,
-    );
-    source
-        .batch_execute(ESTIMATES_SETUP)
-        .await
-        .map_err(|error| error.to_string())?;
-    let project = described_project(&text).await?;
-    let destinations = connect_targets(&project)
-        .await
-        .map_err(|error| error.to_string())?;
-    let destination = destinations
-        .get("dev")
-        .ok_or_else(|| "no dev destination".to_owned())?;
-    let error = load_selected(&project, &destinations, &[])
-        .await
-        .err()
-        .unwrap_or_default();
-    let tables = single_text(
-        destination,
-        "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'app__estimates'".to_owned(),
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    source
-        .batch_execute("DROP TABLE public.estimates")
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok((error, tables))
-}
-
 /// The rows `target.check_query` returns after each rule of `RULES`, loaded from Postgres on `postgres_port` into `target`, each from a fresh table; `""` where it returns none.
 pub(crate) async fn run_dedupe_rules(
     target: &DedupeTargetTestCase,

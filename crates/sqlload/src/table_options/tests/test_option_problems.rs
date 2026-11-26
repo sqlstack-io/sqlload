@@ -62,7 +62,7 @@ fn given_table_options_that_do_not_combine_when_parsing_a_toml_project_then_pars
             target: DUCKDB,
             source: POSTGRES_TABLE,
             settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"version\"]\ncursor_column = \"updated_at\"\n",
-            expected_problem: "[sources.s.tables.\"public.t\"]: cursor_column updated_at does not apply to delete_insert by replace_key",
+            expected_problem: "[sources.s.tables.\"public.t\"]: cursor_column updated_at does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost. Fix: drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
         },
         TomlOptionsTestCase {
             description: "an empty cursor_column list",
@@ -104,7 +104,14 @@ fn given_table_options_that_do_not_combine_when_parsing_a_toml_project_then_pars
             target: DUCKDB,
             source: POSTGRES_TABLE,
             settings: "write_strategy = \"append\"\ncursor_column = \"updated_at\"\nnull_cursor = \"include\"\n",
-            expected_problem: "[sources.s.tables.\"public.t\"]: null_cursor = \"include\" reads the rows whose updated_at is NULL on every run, and append would append them again",
+            expected_problem: "[sources.s.tables.\"public.t\"]: null_cursor = \"include\" reads the rows whose updated_at is NULL on every run, and append would append them again on every run, duplicating them; use write_strategy = \"merge\" with a unique_key",
+        },
+        TomlOptionsTestCase {
+            description: "null_cursor include on a delete_insert",
+            target: DUCKDB,
+            source: POSTGRES_TABLE,
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"updated_at\"\nnull_cursor = \"include\"\n",
+            expected_problem: "[sources.s.tables.\"public.t\"]: null_cursor = \"include\" reads the rows whose updated_at is NULL on every run, and they sit outside every cursor range delete_insert replaces, so it would insert them again on every run, duplicating them; use write_strategy = \"merge\" with a unique_key, or set null_cursor = \"ignore\" to skip them",
         },
         TomlOptionsTestCase {
             description: "on_duplicate_keys on an append",
@@ -132,7 +139,7 @@ fn given_table_options_that_do_not_combine_when_parsing_a_toml_project_then_pars
             target: DUCKDB,
             source: POSTGRES_TABLE,
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\nnewest_by = \"updated_at\"\nmask = { updated_at = \"hash\" }\n",
-            expected_problem: "[sources.s.tables.\"public.t\"]: newest_by column updated_at is masked",
+            expected_problem: "[sources.s.tables.\"public.t\"]: newest_by column updated_at is masked, so its values cannot say which row is newer",
         },
         TomlOptionsTestCase {
             description: "newest_by with on_duplicate_keys fail",
@@ -280,6 +287,20 @@ fn given_table_options_that_do_not_combine_when_parsing_a_toml_project_then_pars
             source: FILES_SOURCE,
             settings: "write_strategy = \"merge\"\nunique_key = [\"id\"]\non_overlapping_files = \"last_wins\"\n",
             expected_problem: "[sources.s]: on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value; a merge already lets the last file win each unique_key",
+        },
+        TomlOptionsTestCase {
+            description: "on_overlapping_files on a files append",
+            target: DUCKDB,
+            source: FILES_SOURCE,
+            settings: "write_strategy = \"append\"\non_overlapping_files = \"fail\"\n",
+            expected_problem: "[sources.s]: on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value; append replaces no key values, so remove it",
+        },
+        TomlOptionsTestCase {
+            description: "on_overlapping_files on a files delete_insert by cursor",
+            target: DUCKDB,
+            source: FILES_SOURCE,
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\non_overlapping_files = \"last_wins\"\n",
+            expected_problem: "[sources.s]: on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value; this delete_insert replaces a cursor range, not key values, so remove it, or set replace_key",
         },
         TomlOptionsTestCase {
             description: "after_load on a replace",

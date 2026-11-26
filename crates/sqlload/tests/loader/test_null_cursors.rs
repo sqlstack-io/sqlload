@@ -212,8 +212,7 @@ null_cursor = "ignore"
 }
 
 #[test]
-fn given_a_null_cursor_rule_when_planning_then_the_reads_line_names_it_and_include_is_refused_where_it_would_duplicate_rows()
--> Result<(), String> {
+fn given_a_null_cursor_rule_when_planning_then_the_reads_line_names_it() -> Result<(), String> {
     let test_cases = [
         NullCursorPlanTestCase {
             description: "by default the reads line says a NULL cursor fails the load, as the source reports updated_at nullable",
@@ -234,16 +233,6 @@ fn given_a_null_cursor_rule_when_planning_then_the_reads_line_names_it_and_inclu
             description: "a coalesced cursor names both columns",
             settings: "write_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = [\"updated_at\", \"created_at\"]",
             expected_plan: "reads coalesce(updated_at, created_at): first run, everything (NULL cursors: fail the load)",
-        },
-        NullCursorPlanTestCase {
-            description: "null_cursor = \"include\" on append is refused, as every run would append the NULL rows again",
-            settings: "write_strategy = \"append\"\ncursor_column = \"updated_at\"\nnull_cursor = \"include\"",
-            expected_plan: "null_cursor = \"include\" reads the rows whose updated_at is NULL on every run, and append would append them again on every run, duplicating them; use write_strategy = \"merge\" with a unique_key",
-        },
-        NullCursorPlanTestCase {
-            description: "null_cursor = \"include\" on delete_insert is refused, as no range it replaces holds the NULL rows",
-            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"updated_at\"\nnull_cursor = \"include\"",
-            expected_plan: "null_cursor = \"include\" reads the rows whose updated_at is NULL on every run, and they sit outside every cursor range delete_insert replaces, so it would insert them again on every run, duplicating them; use write_strategy = \"merge\" with a unique_key, or set null_cursor = \"ignore\" to skip them",
         },
         NullCursorPlanTestCase {
             description: "coalescing a timestamp with text is refused",
