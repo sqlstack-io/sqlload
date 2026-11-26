@@ -262,6 +262,15 @@ impl SqlAdapter for SnowflakeSql {
         )
     }
 
+    /// In UTC, as SQLLoad's own Snowflake sessions are, so `TIMESTAMP_TZ` values are stored at `+00:00`.
+    fn render_session_setup(&self) -> Vec<String> {
+        vec!["ALTER SESSION SET TIMEZONE = 'UTC'".to_owned()]
+    }
+
+    fn render_autocommit_check(&self) -> Option<String> {
+        Some("SHOW PARAMETERS LIKE 'AUTOCOMMIT' IN SESSION".to_owned())
+    }
+
     /// A caller's session uploads each batch's Parquet files to the user's stage with `PUT`, then `COPY`s them in together.
     fn session_rows(&self) -> SessionRows {
         SessionRows::StagedParquet

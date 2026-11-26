@@ -682,6 +682,16 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         (self.render_create_table(runs, columns), None)
     }
 
+    /// The statements a caller's session runs when it opens, so it reads and writes as SQLLoad's own sessions do.
+    fn render_session_setup(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The query a caller's session answers with its autocommit setting, as its first row's second value (`true` or `false`); `None` where the server does not hold it.
+    fn render_autocommit_check(&self) -> Option<String> {
+        None
+    }
+
     /// How a batch's rows reach the staging table through a caller's session.
     fn session_rows(&self) -> SessionRows {
         SessionRows::CallerLoadsParquet

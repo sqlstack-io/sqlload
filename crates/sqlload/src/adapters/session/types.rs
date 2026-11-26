@@ -27,7 +27,7 @@ pub trait CallerSession: Send + Sync + std::fmt::Debug {
 
 /// The caller's connection to the warehouse a target loads into, which opens SQLLoad's sessions on it.
 pub trait CallerConnection: Send + Sync + std::fmt::Debug {
-    /// A new session, in autocommit, whose current database is the one tables load into, as the caller's own work on the warehouse would use; never one the caller is using for other work at the same time.
+    /// A new session, in autocommit, whose current database is the one tables load into, never one the caller uses for other work at the same time; its last handle may drop on one of SQLLoad's async workers, so dropping it must not block for long.
     fn open(&self) -> Result<Arc<dyn CallerSession>, SessionError>;
 
     /// What the connection connects as, for the line a destination check prints, such as `alice as LOADER, warehouse LOAD_WH`.

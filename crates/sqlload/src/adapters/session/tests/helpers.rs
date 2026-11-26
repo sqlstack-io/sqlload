@@ -94,6 +94,8 @@ impl CallerConnection for RecordingCaller {
     fn open(&self) -> Result<Arc<dyn CallerSession>, SessionError> {
         Ok(Arc::new(RecordingSession {
             calls: self.calls.clone(),
+            autocommit: self.autocommit,
+            references: self.references.clone(),
         }))
     }
 
@@ -109,7 +111,15 @@ impl CallerSession for RecordingSession {
 
     fn query_text(&self, query: &str) -> Result<Vec<Vec<Option<String>>>, SessionError> {
         record(&self.calls, query.to_owned())?;
-        Ok(Vec::new())
+        let answer = self
+            .autocommit
+            .filter(|_| query.contains("AUTOCOMMIT"))
+            .map(|value| vec![Some("AUTOCOMMIT".to_owned()), Some(value.to_owned())]);
+        let references = query
+            .contains("pg_constraint con")
+            .then(|| self.references.clone())
+            .unwrap_or_default();
+        Ok(answer.into_iter().chain(references).collect())
     }
 
     fn copy_in(&self, statement: &str, data: &[u8]) -> Result<(), SessionError> {
@@ -436,4 +446,86 @@ pub(crate) fn caller_parse_problem(project: &str) -> Option<String> {
         (Warehouse::DuckDb, Arc::new(RecordingCaller::default())),
     )
     .err()
+}
+
+/// Why a session on `warehouse` that says its autocommit is `autocommit` is refused when it opens; `None` when it opens.
+pub(crate) fn autocommit_refusal(
+    warehouse: Warehouse,
+    autocommit: Option<&'static str>,
+) -> Result<Option<String>, String> {
+    let caller = Arc::new(RecordingCaller {
+        calls: Arc::default(),
+        autocommit,
+        references: Vec::new(),
+    });
+    let connection = SessionConnection {
+        warehouse,
+        motherduck: false,
+        database: Some("analytics".to_owned()),
+        caller,
+    };
+    on_load_stack(move || {
+        Ok(runtime()?
+            .block_on(connect_session(&connection, None))
+            .err()
+            .map(|error| error.to_string()))
+    })
+}
+
+/// What the checks before a write refuse and warn of, for a `replace` (else a `delete_insert`) into an existing Postgres table through a caller's session, when one foreign key references it with `reference`: its action, whether it is deferred, and whether it is the table's own.
+pub(crate) fn reference_checks(
+    (action, deferred, own): (&str, bool, bool),
+    replace: bool,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    use crate::adapters::contract::models::WriteMode;
+    use crate::adapters::dispatch::main::session::write_problems::write_problems;
+    use crate::adapters::dispatch::models::Destination;
+
+    let text = |value: &str| Some(value.to_owned());
+    let flag = |value: bool| Some(value.to_string());
+    let caller = Arc::new(RecordingCaller {
+        calls: Arc::default(),
+        autocommit: None,
+        references: vec![vec![
+            text("shop.order_lines"),
+            text("order_lines_order_fkey"),
+            text(action),
+            flag(deferred),
+            flag(own),
+        ]],
+    });
+    let connection = SessionConnection {
+        warehouse: Warehouse::Postgres,
+        motherduck: false,
+        database: None,
+        caller,
+    };
+    let table = TableName {
+        database: None,
+        schema: "shop".to_owned(),
+        table: "orders".to_owned(),
+    };
+    let mode = match replace {
+        true => WriteMode::Replace,
+        false => WriteMode::DeleteInsert {
+            cursor_column: Some("updated_at".to_owned()),
+            from: None,
+            to: None,
+            values: Vec::new(),
+            replace_key: Vec::new(),
+            not_null_keys: Vec::new(),
+        },
+    };
+    on_load_stack(move || {
+        runtime()?.block_on(async {
+            let destination = Destination::Session(Box::new(
+                connect_session(&connection, None)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            ));
+            write_problems(&destination, &table, (&mode, true, false))
+                .await
+                .map_err(|error| error.to_string())
+        })
+    })
 }

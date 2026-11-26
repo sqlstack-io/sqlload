@@ -6,8 +6,13 @@ use crate::adapters::contract::models::{TableName, WriteMode};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::postgres::_helpers::null_keys::{index_problem, version_problem};
 use crate::adapters::postgres::_helpers::session::{query_error, session};
+use crate::adapters::postgres::_helpers::write_checks::{
+    nullable_keys, reference_outcome, sorted_key,
+};
 use crate::adapters::postgres::constants::{KEY_INDEX_SQL, REFERENCES_SQL, SERVER_VERSION_SQL};
-use crate::adapters::postgres::models::{KeyIndexes, PostgresDestination, PostgresSql};
+use crate::adapters::postgres::models::{
+    KeyIndexes, PostgresDestination, PostgresSql, ReferenceRow,
+};
 use crate::loader::errors::LoaderError;
 
 /// Why `mode` cannot run against `table` (`exists` when it does), and what it may fail on: `merge` needs a unique index `ON CONFLICT` can use on exactly its key, which treats NULLs as equal (Postgres 15 and later) when a key column may hold NULL (the source says it may, and an existing table does not declare it NOT NULL), so a row with a NULL key matches the one the table holds; `replace` and `delete_insert` delete rows, which a foreign key with `ON DELETE CASCADE`, `SET NULL` or `SET DEFAULT` would carry into its own table (refused), and one checked at once (any `RESTRICT`) would refuse while its rows reference them (warned); a table's reference to itself only matters to `delete_insert`, since `replace` deletes every row.
@@ -33,16 +38,7 @@ pub(in crate::adapters) async fn write_problems(
                 true => Some(key_indexes(client, &stored, unique_key).await?),
                 false => None,
             };
-            let nullable: Vec<&str> = mode
-                .matched_keys()
-                .into_iter()
-                .filter_map(|(key, nullable)| nullable.then_some(key))
-                .filter(|key| {
-                    indexes.as_ref().is_none_or(|indexes| {
-                        !indexes.not_null.contains(&PostgresSql.stored_name(key))
-                    })
-                })
-                .collect();
+            let nullable = nullable_keys(mode, indexes.as_ref());
             if !nullable.is_empty() {
                 let row = client
                     .query_one(SERVER_VERSION_SQL, &[])
@@ -63,7 +59,23 @@ pub(in crate::adapters) async fn write_problems(
             ))
         }
         WriteMode::Replace | WriteMode::DeleteInsert { .. } if exists => {
-            reference_problems(client, (&schema, &name), mode).await
+            let rows = client
+                .query(REFERENCES_SQL, &[&schema, &name])
+                .await
+                .map_err(query_error)?
+                .iter()
+                .map(|row| {
+                    Ok(ReferenceRow {
+                        referencing: row.try_get(0)?,
+                        constraint: row.try_get(1)?,
+                        action: row.try_get(2)?,
+                        deferred: row.try_get(3)?,
+                        own: row.try_get(4)?,
+                    })
+                })
+                .collect::<Result<Vec<ReferenceRow>, tokio_postgres::Error>>()
+                .map_err(query_error)?;
+            Ok(reference_outcome(&rows, (&schema, &name), mode))
         }
         _ => Ok((Vec::new(), Vec::new())),
     }
@@ -75,11 +87,7 @@ async fn key_indexes(
     table: &TableName,
     unique_key: &[String],
 ) -> Result<KeyIndexes, LoaderError> {
-    let mut key: Vec<String> = unique_key
-        .iter()
-        .map(|column| PostgresSql.stored_name(column))
-        .collect();
-    key.sort();
+    let key = sorted_key(unique_key);
     let row = client
         .query_one(KEY_INDEX_SQL, &[&table.schema, &table.table, &key])
         .await
@@ -91,45 +99,4 @@ async fn key_indexes(
         drops: row.try_get(3).map_err(query_error)?,
         not_null: row.try_get(4).map_err(query_error)?,
     })
-}
-
-/// The foreign keys referencing `schema.name` that a write deleting its rows would carry into their tables (problems), or that would refuse it while their rows reference the rows it deletes (warnings); `replace` skips the table's own.
-async fn reference_problems(
-    client: &Client,
-    (schema, name): (&str, &str),
-    mode: &WriteMode,
-) -> Result<(Vec<String>, Vec<String>), LoaderError> {
-    let strategy = match mode {
-        WriteMode::Replace => "replace",
-        _ => "delete_insert",
-    };
-    let rows = client
-        .query(REFERENCES_SQL, &[&schema, &name])
-        .await
-        .map_err(query_error)?;
-    let (mut problems, mut warnings) = (Vec::new(), Vec::new());
-    for row in rows {
-        let referencing: String = row.try_get(0).map_err(query_error)?;
-        let constraint: String = row.try_get(1).map_err(query_error)?;
-        let action: String = row.try_get(2).map_err(query_error)?;
-        let deferred: bool = row.try_get(3).map_err(query_error)?;
-        let own: bool = row.try_get(4).map_err(query_error)?;
-        let carried = match action.as_str() {
-            "c" => Some("ON DELETE CASCADE deletes"),
-            "n" => Some("ON DELETE SET NULL changes"),
-            "d" => Some("ON DELETE SET DEFAULT changes"),
-            _ => None,
-        };
-        match (carried, deferred, action.as_str(), own && matches!(mode, WriteMode::Replace)) {
-            (_, _, _, true) => {}
-            (Some(effect), _, _, _) => problems.push(format!(
-                "{referencing} references {schema}.{name} ({constraint}), and its {effect} its rows when {strategy} deletes the rows it replaces; SQLLoad refuses to change another table, so change the constraint's ON DELETE action, or load with merge"
-            )),
-            (None, true, "a", _) => {}
-            (None, _, _, _) => warnings.push(format!(
-                "{referencing} references {schema}.{name} ({constraint}), so {strategy} fails while any of its rows reference a row it deletes"
-            )),
-        }
-    }
-    Ok((problems, warnings))
 }

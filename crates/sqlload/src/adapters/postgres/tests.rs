@@ -8,3 +8,5 @@ mod helpers;
 mod null_keys;
 #[path = "tests/test_types.rs"]
 mod test_types;
+#[path = "tests/test_write_checks.rs"]
+mod write_checks;

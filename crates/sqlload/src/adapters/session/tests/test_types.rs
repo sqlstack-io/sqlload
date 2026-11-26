@@ -21,16 +21,21 @@ pub(crate) struct DuckDbSession {
     pub(crate) fail_on: Option<String>,
 }
 
-/// A caller's connection that runs nothing and records every call: statements, queries, `COPY` input (its signature) and Parquet loads.
+/// A caller's connection that runs nothing and records every call: statements, queries, `COPY` input (its signature) and Parquet loads; it answers a question about autocommit with `autocommit`.
 #[derive(Debug, Default)]
 pub(crate) struct RecordingCaller {
     pub(crate) calls: Calls,
+    pub(crate) autocommit: Option<&'static str>,
+    /// The rows it answers a query of the catalog's constraints with.
+    pub(crate) references: Vec<Vec<Option<String>>>,
 }
 
 /// One session of a [`RecordingCaller`].
 #[derive(Debug)]
 pub(crate) struct RecordingSession {
     pub(crate) calls: Calls,
+    pub(crate) autocommit: Option<&'static str>,
+    pub(crate) references: Vec<Vec<Option<String>>>,
 }
 
 pub(crate) struct SessionLoadTestCase {
@@ -94,4 +99,24 @@ pub(crate) struct AttachedNameTestCase {
     pub(crate) project: &'static str,
     /// Why the project does not parse; `None` when it does.
     pub(crate) expected_problem: Option<&'static str>,
+}
+
+pub(crate) struct AutocommitTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    /// What the session says its autocommit is, if asked.
+    pub(crate) autocommit: Option<&'static str>,
+    /// Why the session is refused; `None` when it opens.
+    pub(crate) expected_refusal: Option<&'static str>,
+}
+
+pub(crate) struct ReferenceCheckTestCase {
+    pub(crate) description: &'static str,
+    /// The foreign key referencing the table: its `ON DELETE` action (`confdeltype`), whether it is deferred, and whether the table references itself.
+    pub(crate) reference: (&'static str, bool, bool),
+    /// Whether the write is a `replace` (else a `delete_insert`).
+    pub(crate) replace: bool,
+    /// What the check refuses, and what it warns of, each as a part of its line.
+    pub(crate) expected_problem: Option<&'static str>,
+    pub(crate) expected_warning: Option<&'static str>,
 }

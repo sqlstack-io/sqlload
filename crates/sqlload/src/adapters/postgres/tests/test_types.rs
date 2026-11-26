@@ -53,3 +53,17 @@ pub(crate) struct NullKeysProblemTestCase {
     /// Text the problem holds; `None` when the merge can run.
     pub(crate) expected_problem: Option<&'static str>,
 }
+
+pub(crate) struct BoundTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) sql: &'static str,
+    pub(crate) values: &'static [&'static str],
+    /// The SQL with its placeholders filled, or why it cannot be.
+    pub(crate) expected: Result<&'static str, &'static str>,
+}
+
+pub(crate) struct TextArrayTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) text: &'static str,
+    pub(crate) expected_elements: &'static [&'static str],
+}

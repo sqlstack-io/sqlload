@@ -48,10 +48,11 @@ loads, holding that table's temporary tables and transactions, and drops it when
 done. A session must:
 
 - run each statement in autocommit; SQLLoad sends `BEGIN`, `COMMIT` and `ROLLBACK` itself, and
-  rolls back when a statement inside a transaction fails;
+  rolls back when a statement inside a transaction fails, a failed `COMMIT` included. A Snowflake
+  session with autocommit off is refused when it opens;
 - have the database tables load into as its current database (DuckDB);
-- allow SQLLoad to set session parameters, so it must not be one your program uses for other work
-  at the same time.
+- allow SQLLoad to set session parameters (a Snowflake session runs in UTC, as SQLLoad's own do),
+  so it must not be one your program uses for other work at the same time.
 
 How rows reach the warehouse depends on the warehouse:
 

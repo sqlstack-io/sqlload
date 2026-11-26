@@ -6,7 +6,9 @@ use crate::adapters::dispatch::models::Destination;
 use crate::adapters::duckdb::main::_stage_problems::stage_problems;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_variant_problems::variant_problems;
+use crate::adapters::postgres::main::session::_session_write_problems::session_write_problems as session_postgres_write_problems;
 use crate::adapters::postgres::main::session::_write_problems::write_problems as postgres_write_problems;
+use crate::column_types::models::Warehouse;
 use crate::loader::errors::LoaderError;
 
 /// Why `mode` cannot run against `table` (`exists` when it does) (problems), and what it may fail on (warnings); `variants` when the table has `VARIANT` columns, which MotherDuck needs a recent enough DuckDB for; and a MotherDuck `external_stage` SQLLoad cannot write or MotherDuck cannot read. None where the warehouse's writes need nothing of the table or its server.
@@ -20,6 +22,9 @@ pub async fn write_problems(
     match destination {
         Destination::Postgres(postgres) => {
             postgres_write_problems(postgres, table, (mode, exists)).await
+        }
+        Destination::Session(session) if session.connection.warehouse == Warehouse::Postgres => {
+            session_postgres_write_problems(session, table, (mode, exists)).await
         }
         #[cfg(feature = "duckdb")]
         Destination::DuckDb(duckdb) => {

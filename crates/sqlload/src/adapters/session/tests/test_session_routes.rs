@@ -1,8 +1,11 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::adapters::session::tests::helpers::{caller_parse_problem, written_batch};
+use crate::adapters::session::tests::helpers::{
+    autocommit_refusal, caller_parse_problem, reference_checks, written_batch,
+};
 use crate::adapters::session::tests::test_types::{
-    AttachedNameTestCase, DescribeQueryTestCase, DescribedTypeTestCase, SessionRouteTestCase,
+    AttachedNameTestCase, AutocommitTestCase, DescribeQueryTestCase, DescribedTypeTestCase,
+    ReferenceCheckTestCase, SessionRouteTestCase,
 };
 use crate::column_types::models::Warehouse;
 
@@ -11,9 +14,11 @@ fn given_a_session_on_each_warehouse_when_a_batch_loads_then_its_rows_reach_the_
  {
     let test_cases = [
         SessionRouteTestCase {
-            description: "Snowflake puts the file on the user stage, copies it into staging and removes it",
+            description: "Snowflake checks autocommit, runs in UTC, puts the file on the user stage, copies it into staging and removes it",
             warehouse: Warehouse::Snowflake,
             expected_calls: &[
+                "SHOW PARAMETERS LIKE 'AUTOCOMMIT' IN SESSION",
+                "ALTER SESSION SET TIMEZONE = 'UTC'",
                 "PUT 'file://<folder>/part-00001.parquet' @~/sqlload/load1/00001/ AUTO_COMPRESS = FALSE OVERWRITE = TRUE",
                 "COPY INTO \"ANALYTICS\".\"RAW\".\"ORDERS__SQLLOAD_STAGING_1\" FROM @~/sqlload/load1/00001/ FILES = ('part-00001.parquet')",
                 "REMOVE @~/sqlload/load1/00001/",
@@ -190,6 +195,92 @@ fn given_a_callers_connection_attached_to_a_project_when_it_parses_then_targets_
                 .unwrap_or_default()
                 .contains(test_case.expected_problem.unwrap_or_default()),
             "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_callers_session_with_autocommit_off_when_it_opens_then_sqlload_refuses_it() {
+    let test_cases = [
+        AutocommitTestCase {
+            description: "a Snowflake session with autocommit off is refused",
+            warehouse: Warehouse::Snowflake,
+            autocommit: Some("false"),
+            expected_refusal: Some("the caller's Snowflake session has autocommit off"),
+        },
+        AutocommitTestCase {
+            description: "a Snowflake session with autocommit on opens",
+            warehouse: Warehouse::Snowflake,
+            autocommit: Some("true"),
+            expected_refusal: None,
+        },
+        AutocommitTestCase {
+            description: "a Postgres session is not asked, as the server does not hold it",
+            warehouse: Warehouse::Postgres,
+            autocommit: Some("false"),
+            expected_refusal: None,
+        },
+    ];
+    for test_case in test_cases {
+        let refusal = autocommit_refusal(test_case.warehouse, test_case.autocommit)
+            .unwrap_or_else(|error| panic!("{}: {error}", test_case.description));
+        assert_eq!(
+            refusal.is_some(),
+            test_case.expected_refusal.is_some(),
+            "{}: {refusal:?}",
+            test_case.description
+        );
+        assert!(
+            refusal
+                .unwrap_or_default()
+                .contains(test_case.expected_refusal.unwrap_or_default()),
+            "{}",
+            test_case.description
+        );
+    }
+}
+
+#[test]
+fn given_a_foreign_key_referencing_a_postgres_table_when_a_write_through_a_callers_session_deletes_rows_then_it_is_checked_as_on_sqlloads_own_session()
+ {
+    let test_cases = [
+        ReferenceCheckTestCase {
+            description: "ON DELETE CASCADE would change another table, so replace is refused",
+            reference: ("c", false, false),
+            replace: true,
+            expected_problem: Some("ON DELETE CASCADE deletes its rows when replace deletes"),
+            expected_warning: None,
+        },
+        ReferenceCheckTestCase {
+            description: "a restricting key is warned of, as delete_insert fails while it holds rows",
+            reference: ("r", false, false),
+            replace: false,
+            expected_problem: None,
+            expected_warning: Some(
+                "so delete_insert fails while any of its rows reference a row it deletes",
+            ),
+        },
+        ReferenceCheckTestCase {
+            description: "replace ignores the table's reference to itself",
+            reference: ("c", false, true),
+            replace: true,
+            expected_problem: None,
+            expected_warning: None,
+        },
+    ];
+    for test_case in test_cases {
+        let (problems, warnings) = reference_checks(test_case.reference, test_case.replace)
+            .unwrap_or_else(|error| panic!("{}: {error}", test_case.description));
+        let found = |lines: &[String], part: Option<&str>| {
+            part.map_or(lines.is_empty(), |part| {
+                lines.len() == 1 && lines[0].contains(part)
+            })
+        };
+        assert!(
+            found(&problems, test_case.expected_problem)
+                && found(&warnings, test_case.expected_warning),
+            "{}: {problems:?} {warnings:?}",
             test_case.description
         );
     }
