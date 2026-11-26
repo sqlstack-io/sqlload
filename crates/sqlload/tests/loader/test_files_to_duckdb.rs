@@ -678,25 +678,6 @@ fn given_csv_files_when_merging_into_duckdb_then_the_newest_modified_file_wins_a
                 expected_result: "1:wed,2:mon,3:wed|1",
             },
             FilesMergeTestCase {
-                description: "order = \"path\" on an append table, which loads files without an order, is refused at plan",
-                settings: "write_strategy = \"append\"\norder = \"path\"\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[MergeFile {
-                        key: "a.csv",
-                        contents: "id,v\n1,a\n",
-                        modified_secs: 1_000,
-                    }],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "order = \"path\" orders the files a merge or a delete_insert by replace_key applies in turn; append loads them without an order, so remove it",
-                    expected_plan: "",
-                }],
-                check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'",
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
                 description: "by default a file repeating a key merges its last row of that key",
                 settings: MERGE_SETTINGS,
                 steps: &[MergeStep {
@@ -1646,51 +1627,6 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
     run_async(|| async move {
         let test_cases = [
             FilesMergeTestCase {
-                description: "replace_key with merge",
-                settings: "write_strategy = \"merge\"\nunique_key = [\"line\"]\nreplace_key = [\"le_version\"]\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[LE_P01],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; merge does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key (merge matches rows one by one on unique_key)",
-                    expected_plan: "",
-                }],
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
-                description: "replace_key with append",
-                settings: "write_strategy = \"append\"\nreplace_key = [\"le_version\"]\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[LE_P01],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; append does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
-                    expected_plan: "",
-                }],
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
-                description: "replace_key with replace",
-                settings: "write_strategy = \"replace\"\nreplace_key = [\"le_version\"]\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[LE_P01],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; replace does not delete by it └── fix set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key",
-                    expected_plan: "",
-                }],
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
                 description: "a replace_key column the table doesn't have",
                 settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"version\"]\n",
                 steps: &[MergeStep {
@@ -1706,21 +1642,6 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                 expected_result: "0",
             },
             FilesMergeTestCase {
-                description: "delete_insert with neither a cursor nor a replace_key",
-                settings: "write_strategy = \"delete_insert\"\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[LE_P01],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key └── fix set cursor_column, or replace_key = [\"version\"]",
-                    expected_plan: "",
-                }],
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
                 description: "a files source's replace_key excluding _sqlload_source_file, which it finds a value's other files by",
                 settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\nexclude_columns = [\"_sqlload_source_file\"]\n",
                 steps: &[MergeStep {
@@ -1730,21 +1651,6 @@ fn given_replace_key_when_planning_a_table_it_does_not_suit_then_plan_refuses_it
                     loads: true,
                     reload: false,
                     expected_error: "_sqlload_source_file must be loaded: delete_insert uses it to find the files a replace_key value's rows come from; stop excluding it",
-                    expected_plan: "",
-                }],
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
-                description: "a files source's replace_key with a cursor_column",
-                settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\npath_columns = \"le_{file_version}.csv\"\ncursor_column = \"file_version\"\n",
-                steps: &[MergeStep {
-                    before: &[],
-                    files: &[LE_P01],
-                    removed: &[],
-                    loads: true,
-                    reload: false,
-                    expected_error: "cursor_column file_version does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log └── fix remove cursor_column",
                     expected_plan: "",
                 }],
                 check_query: NO_TABLE,

@@ -3,16 +3,9 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Schema};
 
-use crate::adapters::contract::models::{ChangeApply, TableName, WriteMode};
+use crate::adapters::contract::models::{TableName, WriteMode};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
-use crate::adapters::files::constants::{CURSOR_PLACEHOLDER_START, TABLE_PLACEHOLDER};
 use crate::bigquery_source::constants::BIGQUERY_SOURCE;
-use crate::cdc::constants::{
-    BATCH_INTERVAL, CDC_FILES_PROBLEM, CDC_TARGETS_PROBLEM, FILES_BATCH_INTERVAL,
-};
-use crate::column_parse::main::column_parse::column_parse;
-use crate::column_parse::main::time_zone::time_zone;
-use crate::column_parse::models::ColumnParse;
 use crate::column_types::main::arrow_field::arrow_field;
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::main::parse_type::parse_type;
@@ -22,15 +15,12 @@ use crate::duckdb_source::constants::{DUCKDB_SOURCE, MOTHERDUCK_SOURCE};
 use crate::files_source::main::constant_columns::constant_columns;
 use crate::files_source::main::path_template::path_template;
 use crate::files_source::models::FileColumn;
-use crate::files_source::models::{
-    AfterLoad, FilesOrder, FilesTable, PathValues, SourceFormat, StoredRead, TextChecks,
-};
+use crate::files_source::models::{FilesTable, PathValues, SourceFormat, StoredRead, TextChecks};
 use crate::load_naming::main::loaded_name::loaded_name;
-use crate::load_naming::models::{Compat, LoadedNames, NameRules, Naming};
+use crate::load_naming::models::{LoadedNames, NameRules, Naming};
 use crate::loader::_helpers::destination::read_as_text;
 use crate::loader::_helpers::python::field_type;
 use crate::loader::_helpers::resolve::{NameRule, ResolvedTarget};
-use crate::loader::_helpers::run_log::overlapping_files_problem;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
@@ -39,27 +29,20 @@ use crate::loader::constants::{
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
-    CdcSpec, CursorSpec, FilesTransform, SettingOrigin, TableLayout, TableSpec, WarehouseRoute,
-    WarehouseSource,
+    CursorSpec, FilesTransform, TableSpec, WarehouseRoute, WarehouseSource,
 };
 use crate::loader::models::{SourceReader, TablePlan};
 use crate::masking::models::MaskRules;
 use crate::postgres_source::models::{PgType, SourceColumn, SourceTable};
 use crate::postgres_source::models::{ReadColumn, WireType};
-use crate::project::constants::DEFAULT_MAX_DEPTH;
-use crate::project::main::table_flatten::table_flatten;
 use crate::project::models::{
-    CdcMode, CursorBounds, Deletes, Lookback, LookbackFrom, MaskMethod, NullCursor, NullKeys,
-    OnDuplicateKeys, PathsSetting, ProjectConfig, SourceConfig, SourceKind, StateMode,
+    NullCursor, NullKeys, PathsSetting, ProjectConfig, SourceConfig, SourceKind, StateMode,
     TableOverride, TableSettings, UnloadStage, WriteStrategy,
 };
-use crate::publish_checks::main::check_problems::check_problems;
 use crate::python_sources::types::PythonHost;
 use crate::routing::models::Store;
 use crate::row_batches::constants::FLATTEN_SEPARATOR;
 use crate::row_batches::main::merge_schema::merge_schema;
-use crate::row_batches::models::{Flatten, Unnest};
-use crate::row_deletes::main::deletes_problems::deletes_problems;
 use crate::row_deletes::main::deletes_spec::deletes_spec;
 use crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
@@ -67,6 +50,11 @@ use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::snowflake_source::constants::USER_STAGE_FOLDER;
+use crate::table_options::main::layered::layered;
+use crate::table_options::main::placeholder_problem::placeholder_problem;
+use crate::table_options::main::table_options::table_options;
+use crate::table_options::main::table_strategy::table_strategy;
+use crate::table_options::models::{OptionContext, OptionTarget, TableOptions, TableStrategy};
 use globset::{Glob, GlobMatcher, GlobSet, GlobSetBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -225,64 +213,44 @@ pub(crate) fn build_spec(
 ) -> Result<TableSpec, Vec<String>> {
     let settings = &overrides.settings;
     let defaults = &context.source.defaults;
-    let cursor = cursor(settings, defaults);
-    let deletes = layered(&settings.deletes, &defaults.deletes);
-    let cdc = cdc_spec(context, deletes.map(|(value, _)| value));
-    let (strategy, strategy_origin) = match (
-        layered(&settings.write_strategy, &defaults.write_strategy),
-        &cdc,
-    ) {
-        (Some(set), _) => set,
-        (None, Some(_)) => (WriteStrategy::Append, SettingOrigin::Source),
-        (None, None) => {
+    let target = option_target(context.target);
+    let options_context = OptionContext {
+        name: context.name,
+        source: context.source,
+        target: &target,
+    };
+    let chosen = match table_strategy(&options_context, overrides) {
+        Ok(chosen) => chosen,
+        Err(cursor) => {
             return Err(vec![missing_strategy_problem(
                 context,
                 table,
-                cursor.as_ref(),
+                cursor.as_deref(),
             )]);
         }
     };
-    let merges = strategy == WriteStrategy::Merge && cdc.is_none();
-    let replace_key: Vec<String> = layered(&settings.replace_key, &defaults.replace_key)
-        .filter(|(_, origin)| {
-            *origin == SettingOrigin::Table
-                || strategy == WriteStrategy::DeleteInsert
-                || strategy_origin != SettingOrigin::Table
-        })
-        .map(|(key, _)| key)
-        .unwrap_or_default();
-    let keyed = strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty();
     let (unique_key, key_from_primary_key) =
-        match table_key(context, table, (settings, defaults), merges) {
+        match table_key(context, table, (settings, defaults), chosen.merges) {
             Ok(key) => key,
             Err(problem) => return Err(vec![problem]),
         };
-    let (strategy, mut problems) = match &cdc {
-        Some(cdc) if !sql_adapter(context.target.warehouse).captures_changes(cdc.apply) => (
-            WriteStrategy::Append,
-            vec![
-                match sql_adapter(context.target.warehouse).runs_sql() {
-                    true => CDC_TARGETS_PROBLEM,
-                    false => CDC_FILES_PROBLEM,
-                }
-                .to_owned(),
-            ],
-        ),
-        Some(_) => (WriteStrategy::Append, cdc_key_problems(table, &unique_key)),
-        None => (
-            strategy,
-            strategy_problems(strategy, (&unique_key, &replace_key), cursor.as_ref()),
-        ),
-    };
-    problems.extend(replace_key_problems(context, cursor.as_ref(), keyed));
+    let (options, mut problems) = table_options(&options_context, overrides, &chosen, &unique_key);
+    if let Some(cdc) = &chosen.cdc
+        && sql_adapter(context.target.warehouse).captures_changes(cdc.apply)
+    {
+        problems.extend(cdc_key_problems(table, &unique_key));
+    }
+    let TableStrategy {
+        cursor,
+        cdc,
+        strategy_origin,
+        replace_key,
+        keyed,
+        ..
+    } = chosen;
+    let strategy = options.strategy;
     problems.extend(column_reference_problems(table, overrides));
     problems.extend(typed_parse_problems(context.source.kind, table, overrides));
-    problems.extend(cursor_problems(
-        context,
-        (settings, defaults),
-        strategy,
-        cursor.as_ref(),
-    ));
     let constants = match table_constants(context, table, (settings, defaults), &columns.excluded) {
         Ok(constants) => constants,
         Err(found) => {
@@ -301,76 +269,12 @@ pub(crate) fn build_spec(
                 format!("constant column {name} cannot be the cursor_column: it holds one value")
             }),
     );
-    let table_sorts = settings.newest_by.is_some();
-    let on_duplicate_keys = layered(&settings.on_duplicate_keys, &defaults.on_duplicate_keys)
-        .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_sorts));
-    let table_fails = on_duplicate_keys == Some((OnDuplicateKeys::Fail, SettingOrigin::Table));
-    let newest_by = layered(&settings.newest_by, &defaults.newest_by)
-        .filter(|(_, origin)| *origin == SettingOrigin::Table || (merges && !table_fails))
-        .map(|(value, _)| value);
-    let (newest_by, found) = dedupe_settings(
-        strategy,
-        &unique_key,
-        (
-            on_duplicate_keys.map(|(value, _)| value),
-            newest_by.as_deref(),
-        ),
-        overrides,
-    );
-    problems.extend(found);
-    if context.source.order == FilesOrder::Path
-        && !(strategy == WriteStrategy::Merge
-            || (strategy == WriteStrategy::DeleteInsert && !replace_key.is_empty()))
-    {
-        problems.push(format!("order = \"path\" orders the files a merge or a delete_insert by replace_key applies in turn; {strategy} loads them without an order, so remove it"));
-    }
-    let own_strategy = strategy_origin == SettingOrigin::Table && !keyed;
-    let overlapping = layered(
-        &settings.on_overlapping_files,
-        &defaults.on_overlapping_files,
-    );
-    let overlapping = overlapping
-        .filter(|(_, origin)| !own_strategy || *origin == SettingOrigin::Table)
-        .map(|(value, _)| value);
-    let files = context.source.kind == SourceKind::Files;
-    problems.extend(overlapping.and_then(|_| overlapping_files_problem(files, strategy, keyed)));
     let matched_key = match keyed {
         true => &replace_key,
         false => &unique_key,
     };
-    let (null_keys, not_null_keys, found) = key_nulls(
-        (table, &constants),
-        (strategy, matched_key, keyed),
-        layered(&settings.null_keys, &defaults.null_keys)
-            .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || keyed)
-            .map(|(value, _)| value),
-    );
-    problems.extend(found);
-    let deletes = deletes
-        .filter(|(_, origin)| *origin == SettingOrigin::Table || merges || cdc.is_some())
-        .map(|(value, _)| value);
-    let checks = layered(&settings.checks, &defaults.checks).map(|(value, _)| value);
-    problems.extend(checks.iter().flat_map(|checks| {
-        let target = (context.target.path.is_some(), deletes.is_some());
-        check_problems(checks, (strategy, target.0, target.1))
-    }));
+    let (null_keys, not_null_keys) = key_nulls((table, &constants), matched_key, options.null_keys);
     let batch = layered(&settings.batch_size, &defaults.batch_size).map(|(value, _)| value);
-    let uses_key = strategy == WriteStrategy::Merge;
-    problems.extend(overrides.mask.keys().filter_map(|masked| {
-        let is_cursor = cursor.as_ref().is_some_and(|cursor| cursor.names(masked));
-        let is_key = (uses_key && unique_key.contains(masked)) || replace_key.contains(masked);
-        (is_cursor || is_key).then(|| {
-            format!("mask {masked}: a masked column cannot be the cursor_column or part of the unique_key or replace_key")
-        })
-    }));
-    if context.source.mask_key.is_none()
-        && overrides
-            .mask
-            .values()
-            .any(|method| *method == MaskMethod::Hmac)
-    {
-        problems.push("mask uses \"hmac\" but the source sets no mask_key (for example mask_key = \"${ENV:MASK_KEY}\")".to_owned());
-    }
     let files_description = match context.source.kind {
         SourceKind::Files | SourceKind::GoogleSheets => context.source.description.as_deref(),
         _ => None,
@@ -385,33 +289,22 @@ pub(crate) fn build_spec(
     let contract = layered(&settings.contract, &defaults.contract)
         .map(|(value, _)| value)
         .unwrap_or_default();
-    let (nesting, found) = nesting(context, overrides, strategy);
-    problems.extend(found);
-    let unnests = !matches!(nesting.unnest, Unnest::None);
-    let kind = (strategy, context.source.kind);
-    problems.extend(deletes_problems(
-        deletes,
-        kind,
-        context.target.warehouse,
-        unnests,
-    ));
     let from = overrides.deletes_from.as_ref();
-    let (deletes, checks) = deletes_spec((deletes.filter(|_| cdc.is_none()), from), checks);
-    if keyed && !matches!(nesting.unnest, Unnest::None) {
-        problems.push("replace_key does not carry child tables yet, whose rows hang off the replaced rows by their ids. Fix: drop unnest, or use write_strategy = \"merge\" on a unique_key".to_owned());
-    }
-    problems.extend(after_load_problems(context, (strategy, keyed)));
-    let layout = table_layout(settings, defaults);
+    let (deletes, checks) = deletes_spec(
+        (options.deletes.filter(|_| cdc.is_none()), from),
+        options.checks,
+    );
     let is_duckdb = sql_adapter(context.target.warehouse).parses_variant_pins();
-    problems.extend(sql_adapter(context.target.warehouse).layout_problems(&layout));
-    let parses = table_parses(overrides).unwrap_or_else(|found| {
-        problems.extend(found);
-        BTreeMap::new()
-    });
-    let timezone = table_timezone((settings, defaults)).unwrap_or_else(|problem| {
-        problems.push(problem);
-        None
-    });
+    let TableOptions {
+        on_duplicate_keys,
+        newest_by,
+        overlapping,
+        nesting,
+        layout,
+        parses,
+        timezone,
+        ..
+    } = options;
     if !problems.is_empty() {
         return Err(problems);
     }
@@ -575,39 +468,6 @@ pub(crate) fn build_spec(
     })
 }
 
-/// The table's `parse` entries read, or their problems; a column cannot be both pinned in `columns` and parsed, as `parse` gives its type.
-fn table_parses(overrides: &TableOverride) -> Result<BTreeMap<String, ColumnParse>, Vec<String>> {
-    let mut problems: Vec<String> = Vec::new();
-    let mut parses: BTreeMap<String, ColumnParse> = BTreeMap::new();
-    for (column, setting) in &overrides.parse {
-        match column_parse(setting) {
-            Ok(_) if overrides.columns.contains_key(column) => problems.push(format!(
-                "parse {column}: the column is also pinned in columns, and parse gives its type; drop the pin"
-            )),
-            Ok(parse) => {
-                parses.insert(column.clone(), parse);
-            }
-            Err(problem) => problems.push(format!("parse {column}: {problem}")),
-        }
-    }
-    match problems.is_empty() {
-        true => Ok(parses),
-        false => Err(problems),
-    }
-}
-
-/// The table's `timezone` (its own, else its source's) and where it is set, or why it is not an IANA zone.
-fn table_timezone(
-    (settings, defaults): (&TableSettings, &TableSettings),
-) -> Result<Option<(chrono_tz::Tz, SettingOrigin)>, String> {
-    match layered(&settings.timezone, &defaults.timezone) {
-        Some((name, origin)) => time_zone(&name)
-            .map(|zone| Some((zone, origin)))
-            .map_err(|problem| format!("timezone: {problem}")),
-        None => Ok(None),
-    }
-}
-
 /// The table's `constant_columns` (its own map, else its source's), each with its type for the target and its value as text; or why they cannot load: a name the source table already has among its loaded columns, ignoring case, a type with no Arrow type or one the target cannot load, or an array. A files source's are checked as before by its reader, which fills them and replaces a file column of the same name (`plan` notes it).
 fn table_constants(
     context: &SourceContext<'_>,
@@ -716,42 +576,6 @@ fn warehouse_source(
                     == Some(&source.connection)
                     && source.warehouse.is_none(),
             },
-        }
-    })
-}
-
-/// The table's layout, each field layered table over source; `table_settings` merged, the table's value winning per setting.
-fn table_layout(table: &TableSettings, source: &TableSettings) -> TableLayout {
-    let mut table_settings = source.table_settings.clone().unwrap_or_default();
-    table_settings.extend(table.table_settings.clone().unwrap_or_default());
-    TableLayout {
-        engine: layered(&table.engine, &source.engine).map(|(value, _)| value),
-        order_by: layered(&table.order_by, &source.order_by).map(|(value, _)| value),
-        partition_by: layered(&table.partition_by, &source.partition_by).map(|(value, _)| value),
-        primary_key: layered(&table.primary_key, &source.primary_key).map(|(value, _)| value),
-        table_settings,
-    }
-}
-
-/// A `postgres_cdc` source's stream settings, with the default slot and publication names.
-fn cdc_spec(context: &SourceContext<'_>, deletes: Option<Deletes>) -> Option<CdcSpec> {
-    let source = context.source;
-    (source.kind == SourceKind::PostgresCdc).then(|| {
-        let default_name = format!("sqlload_{}", context.name.to_lowercase());
-        CdcSpec {
-            apply: match (source.cdc_mode, deletes.unwrap_or(Deletes::Soft)) {
-                (CdcMode::Changelog, _) => ChangeApply::Changelog,
-                (CdcMode::Merge, Deletes::Soft) => ChangeApply::SoftDeletes,
-                (CdcMode::Merge, Deletes::Hard) => ChangeApply::HardDeletes,
-            },
-            slot: source.slot.clone().unwrap_or_else(|| default_name.clone()),
-            publication: source.publication.clone().unwrap_or(default_name),
-            batch_interval: source.batch_interval.unwrap_or(
-                match sql_adapter(context.target.warehouse).runs_sql() {
-                    true => BATCH_INTERVAL,
-                    false => FILES_BATCH_INTERVAL,
-                },
-            ),
         }
     })
 }
@@ -875,56 +699,6 @@ pub(crate) fn destination_name(template: &str, source: &str, table: &SourceTable
         .replace("{table}", &table.name)
 }
 
-/// A table's value if set, otherwise its source's.
-pub(crate) fn layered<T: Clone>(
-    table: &Option<T>,
-    source: &Option<T>,
-) -> Option<(T, SettingOrigin)> {
-    match (table, source) {
-        (Some(value), _) => Some((value.clone(), SettingOrigin::Table)),
-        (None, Some(value)) => Some((value.clone(), SettingOrigin::Source)),
-        (None, None) => None,
-    }
-}
-
-/// The cursor a table's settings describe, if any.
-pub(crate) fn cursor(table: &TableSettings, source: &TableSettings) -> Option<CursorSpec> {
-    let (columns, _) = layered(&table.cursor_column, &source.cursor_column)?;
-    let (column, coalesce) = columns.split_first()?;
-    Some(CursorSpec {
-        column: column.clone(),
-        coalesce: coalesce.to_vec(),
-        null_cursor: layered(&table.null_cursor, &source.null_cursor)
-            .map(|(value, _)| value)
-            .unwrap_or_default(),
-        out_of_range: layered(
-            &table.on_cursor_out_of_range,
-            &source.on_cursor_out_of_range,
-        )
-        .map(|(value, _)| value)
-        .unwrap_or_default(),
-        start: layered(&table.cursor_start, &source.cursor_start).map(|(value, _)| value),
-        lookback: match layered(&table.lookback, &source.lookback) {
-            Some((Lookback::Duration(duration), _)) => Some(duration),
-            _ => None,
-        },
-        lookback_units: match layered(&table.lookback, &source.lookback) {
-            Some((Lookback::Units(units), _)) => Some(units),
-            _ => None,
-        },
-        lookahead: layered(&table.lookahead, &source.lookahead).map(|(value, _)| value),
-        from_now: layered(&table.lookback_from, &source.lookback_from)
-            .is_some_and(|(value, _)| value == LookbackFrom::Now),
-        inclusive: layered(
-            &table.append_cursor_inclusive,
-            &source.append_cursor_inclusive,
-        )
-        .is_some_and(|(value, _)| value),
-        literals: layered(&table.cursor_bounds, &source.cursor_bounds)
-            .is_some_and(|(value, _)| value == CursorBounds::Literals),
-    })
-}
-
 /// A table's `unique_key` (table over source) and whether a `merge` takes it from the primary key its source reports, set as `"{primary_key}"`. A `merge` table without one gets none, so it is refused; `"{primary_key}"` on it is refused for a source that reports no keys, and for a table whose source reports none. A table that doesn't merge (a `postgres_cdc` table included) keeps the primary key its source reports unless it names columns: it only orders and identifies rows (a ClickHouse table's sorting key, a CDC table's merge key), so a source's `"{primary_key}"` never fails it.
 fn table_key(
     context: &SourceContext<'_>,
@@ -933,6 +707,12 @@ fn table_key(
     merges: bool,
 ) -> Result<(Vec<String>, bool), String> {
     let set = layered(&settings.unique_key, &defaults.unique_key).map(|(key, _)| key);
+    let qualified = table.qualified_name();
+    if let Some(problem) =
+        placeholder_problem(context.source.kind, &qualified, set.as_deref(), merges)
+    {
+        return Err(problem);
+    }
     let placeholder = set
         .as_ref()
         .is_some_and(|key| key.iter().any(|column| column == PRIMARY_KEY_PLACEHOLDER));
@@ -940,24 +720,7 @@ fn table_key(
         None if merges => Ok((Vec::new(), false)),
         None => Ok((table.primary_key.clone(), false)),
         Some(key) if !placeholder => Ok((key, false)),
-        Some(key) if key.len() > 1 => Err(format!(
-            "{}: unique_key {PRIMARY_KEY_PLACEHOLDER:?} stands for the whole primary key, so it can't be listed with other columns; set unique_key = {PRIMARY_KEY_PLACEHOLDER:?} or name every key column",
-            table.qualified_name()
-        )),
         Some(_) if !merges => Ok((table.primary_key.clone(), false)),
-        Some(_)
-            if matches!(
-                context.source.kind,
-                SourceKind::Python | SourceKind::Files | SourceKind::GoogleSheets
-            ) =>
-        {
-            Err(format!(
-                "{} (kind = \"{}\"): unique_key = {PRIMARY_KEY_PLACEHOLDER:?} merges on the primary key the source reports, and a {} source reports none. Fix: name the key columns, such as unique_key = [\"id\"]",
-                table.qualified_name(),
-                context.source.kind.name(),
-                context.source.kind.name()
-            ))
-        }
         Some(_) if table.primary_key.is_empty() => Err(no_primary_key_problem(context, table)),
         Some(_) => match nullable_key_problem(context, table) {
             Some(problem) => Err(problem),
@@ -1089,67 +852,12 @@ fn no_primary_key_problem(context: &SourceContext<'_>, table: &SourceTable) -> S
     )
 }
 
-/// The `newest_by` columns of a merge, and the problems with `on_duplicate_keys` and `newest_by` (a source's apply only to its merge tables, and either one set on a table drops the other from its source): both are for `merge`, `newest_by` names columns that are neither in the key, masked nor repeated, and has nothing to pick under `on_duplicate_keys = "fail"`.
-fn dedupe_settings(
-    strategy: WriteStrategy,
-    unique_key: &[String],
-    (on_duplicate_keys, newest_by): (Option<OnDuplicateKeys>, Option<&[String]>),
-    overrides: &TableOverride,
-) -> (Vec<String>, Vec<String>) {
-    let mut problems: Vec<String> = Vec::new();
-    if strategy != WriteStrategy::Merge {
-        problems.extend(
-            [
-                on_duplicate_keys.map(|_| "on_duplicate_keys"),
-                newest_by.map(|_| "newest_by"),
-            ]
-            .into_iter()
-            .flatten()
-            .map(|name| format!("{name} is for write_strategy = \"merge\", which matches rows on unique_key; {strategy} keeps every row")),
-        );
-        return (Vec::new(), problems);
-    }
-    let Some(columns) = newest_by else {
-        return (Vec::new(), problems);
-    };
-    if columns.is_empty() {
-        problems.push("newest_by names a column, or a list compared in order, such as newest_by = \"updated_at\"".to_owned());
-    }
-    for (index, column) in columns.iter().enumerate() {
-        if columns[..index].contains(column) {
-            problems.push(format!(
-                "newest_by names {column} twice; name each column once"
-            ));
-        }
-        if unique_key
-            .iter()
-            .any(|key| key.eq_ignore_ascii_case(column))
-        {
-            problems.push(format!("newest_by column {column} is in the unique_key, so it is the same in every row it would compare; name another column"));
-        }
-        if overrides.mask.contains_key(column) {
-            problems.push(format!(
-                "newest_by column {column} is masked, so its values cannot say which row is newer"
-            ));
-        }
-    }
-    if on_duplicate_keys == Some(OnDuplicateKeys::Fail) {
-        problems.push("newest_by picks the newest of the rows repeating a key, but on_duplicate_keys = \"fail\" keeps none; set one of them".to_owned());
-    }
-    (columns.to_vec(), problems)
-}
-
-/// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when `keyed`) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included); and the problem with `null_keys` set on a table that matches no key.
+/// A table's `null_keys` (as set, else the default) and the columns of `unique_key` (the key it matches rows on: a merge's `unique_key`, a `delete_insert`'s `replace_key` when keyed) whose values are never NULL, so they compare with `=`: the source table's columns it declares NOT NULL and constant columns, or every key column under `null_keys = "fail"`, which refuses a commit holding a NULL in one (a `postgres_cdc` table's key, which its merge matches on, included).
 fn key_nulls(
     (table, constants): (&SourceTable, &[(String, ColumnType, String)]),
-    (strategy, unique_key, keyed): (WriteStrategy, &[String], bool),
+    unique_key: &[String],
     null_keys: Option<NullKeys>,
-) -> (NullKeys, Vec<String>, Vec<String>) {
-    let problems: Vec<String> = null_keys
-        .filter(|_| strategy != WriteStrategy::Merge && !keyed)
-        .map(|_| format!("null_keys is for write_strategy = \"merge\", which matches rows on unique_key, and \"delete_insert\" with a replace_key; {strategy} keeps every row"))
-        .into_iter()
-        .collect();
+) -> (NullKeys, Vec<String>) {
     let null_keys = null_keys.unwrap_or_default();
     let never_null = |key: &String| {
         null_keys == NullKeys::Fail
@@ -1163,180 +871,7 @@ fn key_nulls(
         .filter(|key| never_null(key))
         .cloned()
         .collect();
-    (null_keys, not_null, problems)
-}
-
-/// Why a `delete_insert` by `replace_key` (`keyed`) cannot load where `context` puts it: a files target replaces whole partition folders; a files source picks its files from the run log, not by a cursor; and on any other source a cursor would read part of a key value's rows while the commit deletes all of them, losing those the read never returned.
-fn replace_key_problems(
-    context: &SourceContext<'_>,
-    cursor: Option<&CursorSpec>,
-    keyed: bool,
-) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    if !keyed {
-        return problems;
-    }
-    if context.target.path.is_some() {
-        problems.push("replace_key deletes rows by key in a database table, and a files target replaces whole partition folders. Fix: load into a database target, or drop replace_key and use a partition cursor_column".to_owned());
-    }
-    match (cursor, context.source.kind) {
-        (Some(cursor), SourceKind::Files) => problems.push(format!(
-            "cursor_column {} does not apply to a files source's delete_insert by replace_key, which reads each new or changed file once, oldest first, from the run log. Fix: remove cursor_column, or drop replace_key to replace partitions by the cursor",
-            cursor.column
-        )),
-        (Some(cursor), _) => problems.push(format!(
-            "cursor_column {} does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost. Fix: drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
-            cursor.column
-        )),
-        (None, _) => {}
-    }
-    problems
-}
-
-/// Problems with a strategy and the keys and cursor it is given.
-pub(crate) fn strategy_problems(
-    strategy: WriteStrategy,
-    (unique_key, replace_key): (&[String], &[String]),
-    cursor: Option<&CursorSpec>,
-) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    match (strategy, cursor) {
-        (WriteStrategy::Merge, _) if unique_key.is_empty() => problems.push(format!(
-            "write_strategy = \"merge\" needs a unique_key: the key columns, such as unique_key = [\"id\"], or unique_key = {PRIMARY_KEY_PLACEHOLDER:?} for the primary key the source reports"
-        )),
-        (WriteStrategy::Append, Some(cursor))
-            if cursor.lookback.is_some() || cursor.lookback_units.is_some() =>
-        {
-            problems.push(
-                "lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge"
-                    .to_owned(),
-            )
-        }
-        (WriteStrategy::Replace, Some(_)) => problems.push(
-            "write_strategy = \"replace\" reloads the whole table, so it takes no cursor_column".to_owned(),
-        ),
-        (WriteStrategy::DeleteInsert, None) if replace_key.is_empty() => problems.push(
-            "write_strategy = \"delete_insert\" replaces a cursor range or the rows of the key values it reads, so it needs a cursor_column or a replace_key. Fix: set cursor_column, or replace_key = [\"version\"] to replace every row of each version a load reads".to_owned(),
-        ),
-        _ => {}
-    }
-    if !replace_key.is_empty() && strategy != WriteStrategy::DeleteInsert {
-        let merge = match strategy {
-            WriteStrategy::Merge => " (merge matches rows one by one on unique_key)",
-            _ => "",
-        };
-        problems.push(format!(
-            "replace_key is for write_strategy = \"delete_insert\", which replaces the rows holding the key values a load reads; {strategy} does not delete by it. Fix: set write_strategy = \"delete_insert\" to replace those rows whole, or drop replace_key{merge}"
-        ));
-    }
-    if let Some(cursor) = cursor.filter(|cursor| cursor.from_now && cursor.lookback_units.is_some())
-    {
-        problems.push(format!(
-            "lookback_from = \"now\" counts lookback back from the time of the run, so {} needs a duration lookback, such as lookback = \"1d\", not a number of cursor units",
-            cursor.label()
-        ));
-    }
-    if let Some(cursor) = cursor.filter(|cursor| {
-        cursor.from_now && cursor.lookback.is_none() && cursor.lookback_units.is_none()
-    }) {
-        problems.push(format!(
-            "lookback_from = \"now\" counts lookback back from now, so {} needs a lookback",
-            cursor.label()
-        ));
-    }
-    problems
-}
-
-/// Why the table's cursor columns and `null_cursor` cannot apply: an empty or repeating `cursor_column` list; a coalesced cursor where its value is one column's (a files source's partition or path column, a Python table's field, a files target's partitions, `delete_insert`'s replaced range); `null_cursor` on a table entry without a cursor; and `null_cursor = "include"`, which reads the NULL-cursor rows on every run, on anything but `merge`.
-fn cursor_problems(
-    context: &SourceContext<'_>,
-    (settings, defaults): (&TableSettings, &TableSettings),
-    strategy: WriteStrategy,
-    cursor: Option<&CursorSpec>,
-) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    let listed = layered(&settings.cursor_column, &defaults.cursor_column).map(|(value, _)| value);
-    if listed.as_ref().is_some_and(Vec::is_empty) {
-        problems.push("cursor_column = [] names no column; name one, or list the columns to coalesce, such as [\"updated_at\", \"created_at\"]".to_owned());
-    }
-    let listed = listed.unwrap_or_default();
-    for (index, column) in listed.iter().enumerate() {
-        if listed[..index]
-            .iter()
-            .any(|earlier| earlier.eq_ignore_ascii_case(column))
-        {
-            problems.push(format!(
-                "cursor_column lists {column} twice; list each column once"
-            ));
-            break;
-        }
-    }
-    if layered(&settings.null_cursor, &defaults.null_cursor)
-        .is_some_and(|(_, origin)| origin == SettingOrigin::Table)
-        && cursor.is_none()
-    {
-        problems.push("null_cursor says what a cursor read does with rows whose cursor is NULL, but the table has no cursor_column; remove it".to_owned());
-    }
-    let out_of_range = layered(
-        &settings.on_cursor_out_of_range,
-        &defaults.on_cursor_out_of_range,
-    );
-    match (out_of_range, context.source.kind) {
-        (None, _) => {}
-        (Some(_), SourceKind::Python) if cursor.is_none() => problems.push("on_cursor_out_of_range says what a load does with rows outside the cursor window, but the table has no cursor_column; remove it".to_owned()),
-        (Some(_), SourceKind::Python) => {}
-        (Some(_), kind) => problems.push(format!(
-            "on_cursor_out_of_range checks the rows a Python table's function returns against its cursor window; SQLLoad filters a {} source's reads itself, so remove it",
-            kind.name()
-        )),
-    }
-    let Some(cursor) = cursor else {
-        return problems;
-    };
-    let label = cursor.label();
-    let coalesced = !cursor.coalesce.is_empty();
-    let one_column = match context.source.kind {
-        SourceKind::Files => Some(
-            "a files source's cursor is one partition or path column, the same in every row of a file",
-        ),
-        SourceKind::Python => Some(
-            "a Python table's cursor is one field of the rows it yields; yield the first set value as one field (such as row[\"updated_at\"] or row[\"created_at\"]) and name that field",
-        ),
-        _ if context.target.path.is_some() => {
-            Some("a files target partitions and reads its maximum by one cursor column")
-        }
-        _ if strategy == WriteStrategy::DeleteInsert => Some(
-            "delete_insert replaces the destination rows in a range of one cursor column; use merge, or name one column",
-        ),
-        _ => None,
-    };
-    if let Some(reason) = one_column.filter(|_| coalesced) {
-        problems.push(format!(
-            "cursor_column lists several columns to coalesce ({label}), but {reason}"
-        ));
-    }
-    if cursor.null_cursor == NullCursor::Include {
-        let refusal = match strategy {
-            WriteStrategy::Append => Some((
-                "append would append them again on every run, duplicating them",
-                format!(
-                    "use write_strategy = \"merge\" with a unique_key, or coalesce a column that is always set (such as cursor_column = [\"{}\", \"created_at\"]), or set null_cursor = \"ignore\" to skip them",
-                    cursor.column
-                ),
-            )),
-            WriteStrategy::DeleteInsert => Some((
-                "they sit outside every cursor range delete_insert replaces, so it would insert them again on every run, duplicating them",
-                "use write_strategy = \"merge\" with a unique_key, or set null_cursor = \"ignore\" to skip them".to_owned(),
-            )),
-            WriteStrategy::Merge | WriteStrategy::Replace => None,
-        };
-        if let Some((duplicates, fix)) = refusal {
-            problems.push(format!(
-                "null_cursor = \"include\" reads the rows whose {label} is NULL on every run, and {duplicates}; {fix}"
-            ));
-        }
-    }
-    problems
+    (null_keys, not_null)
 }
 
 /// How many of `table`'s source rows have a NULL cursor, which its read's bounds never select, when the table fails on them (`null_cursor` unset), counted by the database: `SELECT count(*) ... WHERE <cursor> IS NULL`. `None` when nothing is counted: the read has no bounds (a first run reads those rows too), `null_cursor` includes or skips them, the source reports a cursor column NOT NULL, or the source is not a database: a Python table's rows are counted as they arrive, and a files source's cursor is each file's path value, never NULL.
@@ -1409,236 +944,6 @@ pub(crate) fn null_cursor_problem(spec: &TableSpec, rows: u64) -> String {
     format!(
         "{rows} source {have} a NULL {label}, which an incremental read never selects, so {they} would never load; {fixes}"
     )
-}
-
-/// Why a files source's `after_load` cannot apply to its table: only `append`, `merge` and `delete_insert` by a `replace_key` (`keyed`) never read a loaded file again, and a files target commits its own way.
-fn after_load_problems(
-    context: &SourceContext<'_>,
-    (strategy, keyed): (WriteStrategy, bool),
-) -> Vec<String> {
-    let mut problems: Vec<String> = Vec::new();
-    if context.source.after_load == AfterLoad::Keep {
-        return problems;
-    }
-    if !matches!(strategy, WriteStrategy::Append | WriteStrategy::Merge) && !keyed {
-        problems.push(format!(
-            "after_load deletes or moves each file once it loads, so it needs write_strategy = \"append\" or \"merge\", or \"delete_insert\" with a replace_key; {strategy} reads loaded files again"
-        ));
-    }
-    if context.target.path.is_some() {
-        problems.push("after_load is for database targets so far, not a files target".to_owned());
-    }
-    problems
-}
-
-/// What a table's nesting settings come to.
-struct Nesting {
-    naming: Naming,
-    compat: Compat,
-    row_id: bool,
-    unnest: Unnest,
-    max_depth: u32,
-    flatten: Flatten,
-}
-
-/// The table's naming and compat (each its own, its source's, then its target's), whether its rows get an id (always under `compat = "dlt"`), its `unnest` (under `compat = "dlt"`, `"all"` for JSON and NDJSON files on a warehouse), `max_depth` and `flatten` (see [`table_flatten`]), and the problems with them: `unnest` names list fields by dotted paths whose ancestors it also names, no deeper than `max_depth`, that no column setting names, on a table whose writes can carry child tables.
-fn nesting(
-    context: &SourceContext<'_>,
-    overrides: &TableOverride,
-    strategy: WriteStrategy,
-) -> (Nesting, Vec<String>) {
-    let settings = &overrides.settings;
-    let defaults = &context.source.defaults;
-    let naming = table_naming((settings, defaults), context.target.naming);
-    let compat = table_compat((settings, defaults), context.target.compat);
-    let row_id = layered(&settings.row_id, &defaults.row_id).map(|(value, _)| value);
-    let max_depth = overrides.max_depth.unwrap_or(DEFAULT_MAX_DEPTH);
-    let mut problems: Vec<String> = Vec::new();
-    if compat == Compat::Dlt && row_id == Some(false) {
-        problems.push(
-            "row_id = false: compat = \"dlt\" gives every row its _dlt_id; drop row_id".to_owned(),
-        );
-    }
-    let json_files = context.source.kind == SourceKind::Files
-        && matches!(
-            context.source.format,
-            SourceFormat::Json | SourceFormat::Ndjson
-        );
-    let unnest = match &overrides.unnest {
-        None if compat == Compat::Dlt && json_files && context.target.path.is_none() => Unnest::All,
-        None => Unnest::None,
-        Some(PathsSetting::Paths(paths)) if paths.is_empty() => Unnest::None,
-        Some(PathsSetting::Word(word)) if word == UNNEST_ALL => Unnest::All,
-        Some(PathsSetting::Word(word)) => {
-            problems.push(format!(
-                "unnest = {word:?}: list the dotted paths of the list fields to unnest, or write \"{UNNEST_ALL}\""
-            ));
-            Unnest::None
-        }
-        Some(PathsSetting::Paths(paths)) => {
-            problems.extend(
-                paths
-                    .iter()
-                    .filter_map(|path| path_problem(path, paths, max_depth)),
-            );
-            problems.extend(column_setting_problems(context, overrides, paths));
-            Unnest::Paths(paths.clone())
-        }
-    };
-    let transform = settings.transform.is_some() || defaults.transform.is_some();
-    let (flatten, found) = table_flatten(
-        (context.source, Some(overrides)),
-        (compat, naming, transform),
-    );
-    problems.extend(found);
-    match unnest {
-        Unnest::None if overrides.max_depth.is_some() && flatten.is_none() => {
-            problems.push(
-                "max_depth limits the child tables unnest makes and the objects flatten flattens, and this table sets neither"
-                    .to_owned(),
-            );
-        }
-        Unnest::None => {}
-        Unnest::All | Unnest::Paths(_) => {
-            problems.extend(refused_writes(context, overrides, strategy));
-            if row_id == Some(false) {
-                problems.push("row_id = false: unnest gives every row an id, which its child rows name as their parent's; drop row_id".to_owned());
-            }
-        }
-    }
-    (
-        Nesting {
-            naming,
-            compat,
-            row_id: row_id.unwrap_or(compat == Compat::Dlt || unnest != Unnest::None),
-            unnest,
-            max_depth,
-            flatten,
-        },
-        problems,
-    )
-}
-
-/// How a table names what it loads: its own `naming`, else its source's, else its target's (`target`), else snake_case.
-pub(crate) fn table_naming(
-    (settings, defaults): (&TableSettings, &TableSettings),
-    target: Option<Naming>,
-) -> Naming {
-    layered(&settings.naming, &defaults.naming)
-        .map(|(value, _)| value)
-        .or(target)
-        .unwrap_or_default()
-}
-
-/// Whose names the columns a table's load adds take: its own `compat`, else its source's, else its target's (`target`), else SQLLoad's.
-pub(crate) fn table_compat(
-    (settings, defaults): (&TableSettings, &TableSettings),
-    target: Option<Compat>,
-) -> Compat {
-    layered(&settings.compat, &defaults.compat)
-        .map(|(value, _)| value)
-        .or(target)
-        .unwrap_or_default()
-}
-
-/// What is wrong with the `unnest` path `path` among `paths`: an empty part, a parent path not also listed, or more parts than `max_depth`.
-fn path_problem(path: &str, paths: &[String], max_depth: u32) -> Option<String> {
-    let parts: Vec<&str> = path.split('.').collect();
-    let parent = path.rsplit_once('.').map(|(parent, _)| parent);
-    let listed = parent.is_none_or(|parent| paths.iter().any(|listed| listed == parent));
-    match (parts.iter().any(|part| part.trim().is_empty()), listed) {
-        (true, _) => Some(format!(
-            "unnest {path:?}: a path names a field at each level, joined by \".\""
-        )),
-        (false, false) => Some(format!(
-            "unnest {path:?}: its parent list {:?} must be unnested too; add it",
-            parent.unwrap_or_default()
-        )),
-        (false, true) if parts.len() > max_depth as usize => Some(format!(
-            "unnest {path:?}: it is {} levels deep, past max_depth = {max_depth}; raise max_depth or drop it",
-            parts.len()
-        )),
-        (false, true) => None,
-    }
-}
-
-/// The top-level `unnest` fields a `mask`, `columns` or `exclude_columns` entry also names: unnesting takes the field out of the table, so that setting would silently stop applying.
-fn column_setting_problems(
-    context: &SourceContext<'_>,
-    overrides: &TableOverride,
-    paths: &[String],
-) -> Vec<String> {
-    let exclude: Vec<&String> = context
-        .source
-        .exclude_columns
-        .iter()
-        .chain(&overrides.exclude_columns)
-        .collect();
-    paths
-        .iter()
-        .filter(|path| !path.contains('.'))
-        .filter_map(|field| {
-            let excluded = matching_pattern(field, &exclude);
-            let setting = match (excluded, overrides.mask.contains_key(field), overrides.columns.contains_key(field)) {
-                (Some(pattern), _, _) => format!("exclude_columns {pattern}"),
-                (None, true, _) => "mask".to_owned(),
-                (None, false, true) => "columns".to_owned(),
-                (None, false, false) => return None,
-            };
-            Some(format!(
-                "unnest {field:?}: {setting} also names {field}, which unnesting moves to child tables; drop one of them"
-            ))
-        })
-        .collect()
-}
-
-/// The first of `patterns` matching `field`.
-fn matching_pattern<'a>(field: &str, patterns: &[&'a String]) -> Option<&'a String> {
-    patterns
-        .iter()
-        .find(|pattern| Glob::new(pattern).is_ok_and(|glob| glob.compile_matcher().is_match(field)))
-        .copied()
-}
-
-/// Why this table's writes cannot carry child tables yet: captured changes on a files target; on a files target, `"all"` (whose earlier child tables a load cannot find), a merge or `delete_insert` (which would rewrite a child table's files), and a path that would not give each child table a folder of its own (without `{table}`, or partitioned by the cursor, which child rows do not carry).
-fn refused_writes(
-    context: &SourceContext<'_>,
-    overrides: &TableOverride,
-    strategy: WriteStrategy,
-) -> Vec<String> {
-    let template = context.target.path.as_ref().map(|target_path| {
-        overrides
-            .destination_path
-            .as_ref()
-            .or(context.source.destination_path.as_ref())
-            .unwrap_or(target_path)
-    });
-    let files = |refused: bool, what: String| (template.is_some() && refused).then_some(what);
-    let all = matches!(&overrides.unnest, Some(PathsSetting::Word(word)) if word == UNNEST_ALL);
-    let rewrites = matches!(strategy, WriteStrategy::Merge | WriteStrategy::DeleteInsert);
-    let files_target = template.is_some();
-    let template = template.map(String::as_str).unwrap_or_default();
-    [
-        (context.source.kind == SourceKind::PostgresCdc && files_target)
-            .then(|| "kind = \"postgres_cdc\" on a files target".to_owned()),
-        files(all, "unnest = \"all\" on a files target (list the paths)".to_owned()),
-        files(
-            rewrites,
-            format!("write_strategy = \"{strategy}\" on a files target"),
-        ),
-        files(
-            !template.contains(TABLE_PLACEHOLDER),
-            format!("a files path without {TABLE_PLACEHOLDER} ({template:?}), as each child table needs its own folder"),
-        ),
-        files(
-            template.contains(CURSOR_PLACEHOLDER_START),
-            format!("a files path partitioned by the cursor ({template:?})"),
-        ),
-    ]
-    .into_iter()
-    .flatten()
-    .map(|what| format!("unnest does not yet write child tables with {what}; drop unnest, and its lists stay JSON columns"))
-    .collect()
 }
 
 /// A text column for each column `overrides` pins in `columns` or masks, one per name it loads as under `rule` (a pin and a mask may spell one column two ways), so a table whose files are gone still resolves with them.
@@ -1987,4 +1292,14 @@ pub(crate) fn transform_input(
             .collect(),
         sample: String::new(),
     })
+}
+
+/// What the table's options read of `target`.
+fn option_target(target: &ResolvedTarget) -> OptionTarget {
+    OptionTarget {
+        warehouse: target.warehouse,
+        path: target.path.clone(),
+        naming: target.naming,
+        compat: target.compat,
+    }
 }

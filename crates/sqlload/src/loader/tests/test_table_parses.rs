@@ -2,7 +2,7 @@ use crate::loader::tests::helpers::python_spec;
 use crate::loader::tests::test_types::TableParsesTestCase;
 
 #[test]
-fn given_a_table_s_parse_and_timezone_when_resolving_then_columns_take_their_loaded_names_and_bad_settings_fail_plan()
+fn given_a_table_s_parse_and_timezone_when_resolving_then_columns_take_their_loaded_names_and_bad_settings_fail_parse()
  {
     let test_cases = [
         TableParsesTestCase {
@@ -45,7 +45,7 @@ fn given_a_table_s_parse_and_timezone_when_resolving_then_columns_take_their_loa
             found.as_deref().map_err(|problem| test_case
                 .expected_outcome
                 .err()
-                .is_some_and(|expected| problem.contains(&expected.escape_debug().to_string()))),
+                .is_some_and(|expected| problem.contains(expected))),
             test_case.expected_outcome.map_err(|_| true),
             "{}: {found:?}",
             test_case.description

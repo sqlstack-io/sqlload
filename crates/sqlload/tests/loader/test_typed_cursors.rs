@@ -302,32 +302,6 @@ fn given_a_lookback_that_does_not_fit_the_cursor_when_planning_then_plan_refuses
                 check_query: "",
                 expected_outcomes: &["refused => "],
             },
-            TypedCursorTestCase {
-                description: "an integer lookback with append",
-                setup: FAMILIES,
-                settings: "include = [\"public.ledger\"]\n[sources.app.tables.\"public.ledger\"]\nwrite_strategy = \"append\"\ncursor_column = \"fiscal_year\"\nlookback = 1",
-                runs: &[TypedCursorRun {
-                    expected_plan: &[
-                        "lookback re-inserts the window on every run with append; use delete_insert (no key needed) or merge",
-                    ],
-                    ..PLAN_ONLY
-                }],
-                check_query: "",
-                expected_outcomes: &["refused => "],
-            },
-            TypedCursorTestCase {
-                description: "an integer lookback counted from now",
-                setup: FAMILIES,
-                settings: "include = [\"public.ledger\"]\n[sources.app.tables.\"public.ledger\"]\nwrite_strategy = \"delete_insert\"\ncursor_column = \"fiscal_year\"\nlookback = 1\nlookback_from = \"now\"",
-                runs: &[TypedCursorRun {
-                    expected_plan: &[
-                        "lookback_from = \"now\" counts lookback back from the time of the run, so fiscal_year needs a duration lookback, such as lookback = \"1d\", not a number of cursor units",
-                    ],
-                    ..PLAN_ONLY
-                }],
-                check_query: "",
-                expected_outcomes: &["refused => "],
-            },
         ];
         for test_case in &test_cases {
             let outcomes = run_typed_cursors(&client, postgres.port, test_case).await?;

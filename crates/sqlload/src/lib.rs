@@ -66,4 +66,5 @@ pub mod status;
 pub mod store_paths;
 pub mod streaming_api;
 pub mod table_lease;
+pub mod table_options;
 pub mod time_text;

@@ -24,8 +24,9 @@ use crate::project::models::{
 use crate::sheets_source::main::a1_range::a1_range;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::{Location, StoreKind};
+use crate::table_options::main::option_problems::option_problems;
 
-/// Problems with names one section uses to refer to another.
+/// Problems with names one section uses to refer to another, and with how each table's options combine.
 pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
     if let Some(default_target) = &project.default_target
@@ -89,6 +90,7 @@ pub(crate) fn reference_problems(project: &ProjectConfig) -> Vec<String> {
     for (name, source) in &project.sources {
         problems.extend(source_problems(project, name, source));
     }
+    problems.extend(option_problems(project));
     problems
 }
 

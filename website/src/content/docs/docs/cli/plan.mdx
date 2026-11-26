@@ -170,6 +170,27 @@ The sections, as `-v` shows them; without it, `Objects` counts a new table's col
 
 A table under `Errors` is left out; the others still run, and the command exits 1.
 
+### Settings that don't combine
+
+Settings that don't combine are found as SQLLoad reads `sqlload.toml` and the Python sources,
+before anything connects: a `merge` without a `unique_key`, a `cursor_column` on `replace`,
+`lookback` with `append`, or a setting for another strategy. Then nothing runs. Every such table is
+listed under `Errors` by its entry, and the command exits 1:
+
+```console
+$ sqlload plan
+Errors (2)
+├── [sources.app.tables."public.customers"]
+│   └── reason  write_strategy = "replace" reloads the whole table, so it takes no cursor_column
+└── [sources.app.tables."public.orders"]
+    └── reason  write_strategy = "merge" needs a unique_key: the key columns, such as unique_key = ["id"], or unique_key = "{primary_key}" for the primary key the source reports
+
+✗ Plan failed  2 errors
+```
+
+A source that sets them for all its tables and lists none is named by `[sources.NAME]`, and a
+Python table by its file, as `Python table orders (sources/shop.py)`.
+
 ## Connecting and discovering
 
 `plan`, and the plan `apply` and `load` start with, times each target's and source's
