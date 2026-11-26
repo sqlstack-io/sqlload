@@ -23,6 +23,7 @@ pub fn connection_warehouse(connection: &ConnectionConfig) -> Option<(Warehouse,
         ConnectionConfig::Postgres { database, .. } => {
             Some((Warehouse::Postgres, Some(database.clone())))
         }
+        ConnectionConfig::Session(session) => Some((session.warehouse, session.database.clone())),
         ConnectionConfig::Odbc { .. }
         | ConnectionConfig::GoogleSheets { .. }
         | ConnectionConfig::Http { .. }

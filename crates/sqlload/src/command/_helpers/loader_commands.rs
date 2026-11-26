@@ -212,8 +212,8 @@ async fn parsed_project(request: &LoaderRequest<'_>) -> Result<ProjectConfig, St
     let found = tokio::task::spawn_blocking(move || discovering.discover(&root, &paths))
         .await
         .map_err(|error| format!("Python discovery failed: {error}"))??;
-    let mut project =
-        parse_python_project(request.text, &lookup, &found).map_err(|error| error.to_string())?;
+    let mut project = parse_python_project(request.text, &lookup, (&found, BTreeMap::new()))
+        .map_err(|error| error.to_string())?;
     for (_, function) in transforms {
         if project.transforms.contains_key(&function) {
             continue;

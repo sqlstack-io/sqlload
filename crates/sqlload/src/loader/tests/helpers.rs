@@ -157,7 +157,7 @@ pub(crate) fn python_spec(settings: &str) -> Result<TableSpec, String> {
     let project = parse_python_project(
         "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n",
         &|_| None,
-        &python,
+        (&python, std::collections::BTreeMap::new()),
     )
     .map_err(|error| error.to_string())?;
     let source = &project.sources["s"];

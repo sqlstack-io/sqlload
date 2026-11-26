@@ -25,13 +25,16 @@ use crate::adapters::contract::_helpers::type_fit::type_fit;
 use crate::adapters::contract::_helpers::write::{
     mark_statement, marked_counts, replaced_rows, tombstone_statements, write_statements,
 };
+use crate::adapters::contract::main::_described_columns::described_columns;
 use crate::adapters::contract::main::_dropped_ordinals::dropped_ordinals;
 use crate::adapters::contract::main::_kept_row_ids::kept_row_ids;
 use crate::adapters::contract::main::_older_rows::older_rows;
 use crate::adapters::contract::main::_rekeyed_row_ids::rekeyed_row_ids;
+use crate::adapters::contract::main::_session_parquet::default_session_parquet;
 use crate::adapters::contract::models::{
     ChangeApply, ChangeWrite, CheckQuery, CursorQuery, CursorRead, CursorValue, MarkWrite,
-    TableName, TombstoneWrite, WriteMode, WriteStatementsRequest, WriteTarget,
+    SessionRows, SessionStage, TableName, TombstoneWrite, WriteMode, WriteStatementsRequest,
+    WriteTarget,
 };
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::loader::errors::LoaderError;
@@ -677,6 +680,59 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         columns: &[DesiredColumn],
     ) -> (String, Option<String>) {
         (self.render_create_table(runs, columns), None)
+    }
+
+    /// How a batch's rows reach the staging table through a caller's session.
+    fn session_rows(&self) -> SessionRows {
+        SessionRows::CallerLoadsParquet
+    }
+
+    /// The query a caller's session lists `table`'s columns with (in `database`, else the table's own), in order: each row its name, type, numeric precision and scale, character length and fractional-second digits, as many of these as the warehouse gives; `None` where no query lists them.
+    fn render_describe_table(&self, table: &TableName, database: Option<&str>) -> Option<String> {
+        let _ = (table, database);
+        None
+    }
+
+    /// The live columns of the rows [`Self::render_describe_table`]'s query gave, as text.
+    fn describe_text_rows(&self, rows: &[Vec<Option<String>>]) -> Result<Vec<LiveColumn>, String> {
+        described_columns(self, rows)
+    }
+
+    /// The statement adding the rows of the Parquet file at `file` (a path on this machine) to `table`, filling the columns `names`, read by name; `None` where the warehouse cannot read the machine's files.
+    fn render_insert_local_parquet(
+        &self,
+        table: &TableName,
+        names: &[String],
+        file: &str,
+    ) -> Option<String> {
+        let _ = (table, names, file);
+        None
+    }
+
+    /// One batch as the Parquet file a caller's session loads, given the columns it is loaded into.
+    fn session_parquet(
+        &self,
+        batch: &RecordBatch,
+        columns: &[DesiredColumn],
+    ) -> Result<Vec<u8>, String> {
+        default_session_parquet(batch, columns)
+    }
+
+    /// The statements of one step of a batch's files through the user's stage, for [`SessionRows::StagedParquet`]; none elsewhere.
+    fn render_session_stage(&self, stage: SessionStage<'_>) -> Vec<String> {
+        let _ = stage;
+        Vec::new()
+    }
+
+    /// The batch as a caller's session's `COPY ... FROM STDIN` into `table` loads it, given the columns it fills: the statement and its input, for [`SessionRows::CopyIn`]; `None` elsewhere.
+    fn session_copy_in(
+        &self,
+        table: &TableName,
+        batch: &RecordBatch,
+        columns: &[DesiredColumn],
+    ) -> Option<Result<(String, Vec<u8>), String>> {
+        let _ = (table, batch, columns);
+        None
     }
 }
 

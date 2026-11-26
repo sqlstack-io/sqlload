@@ -1,5 +1,6 @@
 pub(in crate::adapters) mod _batch_direct_problem;
 pub(in crate::adapters) mod _custom_endpoint;
+pub(in crate::adapters) mod _described_columns;
 pub(in crate::adapters) mod _dropped_ordinals;
 pub(in crate::adapters) mod _files_direct_problem;
 pub(in crate::adapters) mod _footer_rows;
@@ -9,6 +10,7 @@ pub(in crate::adapters) mod _older_rows;
 pub(in crate::adapters) mod _ranked_source;
 pub(in crate::adapters) mod _rebuilt_in_place;
 pub(in crate::adapters) mod _rekeyed_row_ids;
+pub(in crate::adapters) mod _session_parquet;
 pub mod bound_parameter;
 pub mod cursor_bound;
 pub mod cursor_from_now;

@@ -11,6 +11,7 @@ use crate::adapters::contract::models::{
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
+use crate::schema_plan::models::LiveColumn;
 
 impl SqlAdapter for BigQuerySql {
     fn warehouse(&self) -> Warehouse {
@@ -246,4 +247,85 @@ impl SqlAdapter for BigQuerySql {
             self.render_staging_filter(&format!("{STAGING_SUFFIX}_"))
         )
     }
+
+    /// From the dataset's `INFORMATION_SCHEMA.COLUMNS`, in the table's own project, else `database`: a caller's session has no `tables.get`.
+    fn render_describe_table(&self, table: &TableName, database: Option<&str>) -> Option<String> {
+        let project = table.database.as_deref().or(database)?;
+        Some(format!(
+            "SELECT column_name, data_type FROM {}.{}.INFORMATION_SCHEMA.COLUMNS WHERE table_name = {} ORDER BY ordinal_position",
+            self.render_identifier(project),
+            self.render_identifier(&table.schema),
+            self.render_loader_value_literal(&table.table)
+        ))
+    }
+
+    /// `INFORMATION_SCHEMA` writes sizes into the type (`NUMERIC(10, 2)`, `STRING(20)`) and spells records out (`STRUCT<id INT64>`): read as `tables.get` gives them, a record as `STRUCT`.
+    fn describe_text_rows(&self, rows: &[Vec<Option<String>>]) -> Result<Vec<LiveColumn>, String> {
+        rows.iter()
+            .map(|row| {
+                let name = row.first().cloned().flatten().unwrap_or_default();
+                let written = row.get(1).cloned().flatten().unwrap_or_default();
+                let live =
+                    described_type(&written).map_err(|error| format!("column {name}: {error}"))?;
+                Ok(LiveColumn {
+                    name,
+                    column_type: self.live_type(&live),
+                    fraction_digits: None,
+                })
+            })
+            .collect()
+    }
+}
+
+/// A type as `INFORMATION_SCHEMA.COLUMNS` writes it, as `tables.get` would give it: its base type with its sizes apart.
+fn described_type(written: &str) -> Result<LiveColumnType, String> {
+    let upper = written.trim().to_ascii_uppercase();
+    if upper.starts_with("STRUCT<") {
+        return Ok(LiveColumnType {
+            data_type: "STRUCT".to_owned(),
+            ..LiveColumnType::default()
+        });
+    }
+    if let Some(element) = upper
+        .strip_prefix("ARRAY<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        let element = match element.starts_with("STRUCT<") {
+            true => "STRUCT",
+            false => element.split('(').next().unwrap_or_default().trim(),
+        };
+        return Ok(LiveColumnType {
+            data_type: format!("ARRAY<{element}>"),
+            ..LiveColumnType::default()
+        });
+    }
+    let Some((base, sizes)) = upper.split_once('(') else {
+        return Ok(LiveColumnType {
+            data_type: upper,
+            ..LiveColumnType::default()
+        });
+    };
+    let sizes: Vec<i64> = sizes
+        .trim_end_matches(')')
+        .split(',')
+        .map(|size| {
+            size.trim().parse::<i64>().map_err(|error| {
+                format!("its type {written:?} has a size that is not a number: {error}")
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    let base = base.trim().to_owned();
+    Ok(match base.as_str() {
+        "STRING" | "BYTES" => LiveColumnType {
+            data_type: base,
+            char_length: sizes.first().copied(),
+            ..LiveColumnType::default()
+        },
+        _ => LiveColumnType {
+            data_type: base,
+            precision: sizes.first().copied(),
+            scale: sizes.get(1).copied(),
+            ..LiveColumnType::default()
+        },
+    })
 }

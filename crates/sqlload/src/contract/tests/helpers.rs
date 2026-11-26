@@ -38,8 +38,12 @@ fn first_spec(
 ) -> Result<TableSpec, String> {
     let python: Vec<PythonSource> =
         serde_json::from_str(python).map_err(|error| error.to_string())?;
-    let project =
-        parse_python_project(text, &|_| None, &python).map_err(|error| error.to_string())?;
+    let project = parse_python_project(
+        text,
+        &|_| None,
+        (&python, std::collections::BTreeMap::new()),
+    )
+    .map_err(|error| error.to_string())?;
     let resolved = resolve_tables(
         &project,
         source_name,
@@ -155,7 +159,7 @@ fn write(text: &str, description: &str) -> Result<Vec<String>, String> {
 /// The sources of a project with DuckDB targets `dev` and `test` and Snowflake target `prod` (source `orders` into `dev`, `events` into `prod`) whose own warehouse differs from `from`'s.
 pub(crate) fn other_warehouse_sources(from: Option<&str>) -> Vec<String> {
     let text = "[connections.wh]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n[connections.sf]\nkind = \"snowflake\"\naccount = \"acct\"\nuser = \"loader\"\nauth = { method = \"pat\", token = \"t\" }\ndatabase = \"DB\"\nload_method = { type = \"internal_user_stage\" }\n[connections.lake]\nkind = \"filesystem\"\nroot = \"/tmp\"\n[targets.dev]\nconnection = \"wh\"\nloader_schema = \"RAW\"\n[targets.test]\nconnection = \"wh\"\nloader_schema = \"TEST\"\n[targets.prod]\nconnection = \"sf\"\nloader_schema = \"RAW\"\n[sources.orders]\nkind = \"files\"\nconnection = \"lake\"\npath = \"o/\"\ndescription = \"O.\"\ndestination = \"dev\"\n[sources.events]\nkind = \"files\"\nconnection = \"lake\"\npath = \"e/\"\ndescription = \"E.\"\ndestination = \"prod\"\n";
-    parse_python_project(text, &|_| None, &[])
+    parse_python_project(text, &|_| None, (&[], std::collections::BTreeMap::new()))
         .map(|project| other_warehouse(&project, from))
         .unwrap_or_else(|error| vec![format!("error: {error}")])
 }

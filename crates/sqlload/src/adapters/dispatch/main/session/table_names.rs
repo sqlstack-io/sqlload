@@ -2,10 +2,11 @@
 
 use crate::adapters::dispatch::main::session::text_values::text_values;
 use crate::adapters::dispatch::models::Destination;
+use crate::adapters::session::errors::SessionErrorKind;
 use crate::bigquery_api::constants::NOT_FOUND;
 use crate::loader::errors::LoaderError;
 
-/// The names `query` lists from a schema's tables, none before the schema exists: BigQuery lists a dataset's tables in the dataset's own `INFORMATION_SCHEMA`, which is not found until the first load creates the dataset.
+/// The names `query` lists from a schema's tables, none before the schema exists: BigQuery lists a dataset's tables in the dataset's own `INFORMATION_SCHEMA`, which is not found until the first load creates the dataset (a caller's session says so as not found).
 pub async fn table_names(
     destination: &Destination,
     query: String,
@@ -15,6 +16,9 @@ pub async fn table_names(
             if matches!(destination, Destination::BigQuery(_))
                 && error.status() == Some(NOT_FOUND) =>
         {
+            Ok(Vec::new())
+        }
+        Err(LoaderError::Session(error)) if error.kind == SessionErrorKind::NotFound => {
             Ok(Vec::new())
         }
         found => found,

@@ -10,4 +10,5 @@ pub mod files;
 #[cfg(feature = "duckdb")]
 pub mod motherduck_bridge;
 pub mod postgres;
+pub mod session;
 pub mod snowflake;

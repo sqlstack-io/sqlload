@@ -6,6 +6,7 @@ use object_store::client::HttpErrorKind;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::errors::DuckDbError;
 use crate::adapters::files::errors::FilesDestinationError;
+use crate::adapters::session::errors::{SessionError, SessionErrorKind};
 use crate::file_store::errors::StoreError;
 use crate::files_source::errors::FilesError;
 use crate::http::constants::FIRST_SERVER_ERROR;
@@ -46,6 +47,9 @@ pub enum LoaderError {
     FilesDestination(#[from] FilesDestinationError),
     #[error(transparent)]
     Lease(#[from] LeaseError),
+    /// The caller's session, on a destination it provides, could not run a statement or take a file.
+    #[error(transparent)]
+    Session(#[from] SessionError),
     #[error("{0}")]
     Invalid(String),
     /// A Python table's read failed.
@@ -84,6 +88,7 @@ impl LoaderError {
                 }
             },
             Self::Read(error) => error.retryable,
+            Self::Session(error) => error.kind == SessionErrorKind::Transient,
             Self::Transient(_) | Self::Replan(_) => true,
             other => Self::transient_cause(other),
         }

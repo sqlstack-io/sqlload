@@ -3,11 +3,14 @@
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT, STAGING_SUFFIX};
 use crate::adapters::contract::main::_ranked_source::ranked_source;
 use crate::adapters::contract::models::{
-    ChangeApply, CursorValue, TableName, WriteMode, WriteStatementsRequest,
+    ChangeApply, CursorValue, SessionRows, TableName, WriteMode, WriteStatementsRequest,
 };
 use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::postgres::_helpers::copy_rows::copy_chunks;
 use crate::adapters::postgres::_helpers::type_names::{logical_type, portable_type, staging_type};
-use crate::adapters::postgres::constants::{BLOCK_QUOTE, TEMPORARY_SCHEMA, UNBOUNDED_NUMERIC};
+use crate::adapters::postgres::constants::{
+    BLOCK_QUOTE, DESCRIBE_TABLE_SQL, TEMPORARY_SCHEMA, UNBOUNDED_NUMERIC,
+};
 use crate::adapters::postgres::models::PostgresSql;
 use crate::column_types::models::{ColumnType, LiveColumnType, TypeFit, Warehouse, WarehouseType};
 use crate::schema_plan::models::DesiredColumn;
@@ -287,5 +290,39 @@ impl SqlAdapter for PostgresSql {
 
     fn render_binary_text(&self, expression: &str) -> String {
         format!("{expression} COLLATE \"C\"")
+    }
+
+    /// A caller's session copies the rows in with a binary `COPY ... FROM STDIN`, as Postgres's own writer does.
+    fn session_rows(&self) -> SessionRows {
+        SessionRows::CopyIn
+    }
+
+    /// [`DESCRIBE_TABLE_SQL`] with the schema and table as literals.
+    fn render_describe_table(&self, table: &TableName, _database: Option<&str>) -> Option<String> {
+        let (head, rest) = DESCRIBE_TABLE_SQL.split_once("$1")?;
+        let (middle, tail) = rest.split_once("$2")?;
+        Some(format!(
+            "{head}{}{middle}{}{tail}",
+            self.render_loader_value_literal(&self.stored_name(&table.schema)),
+            self.render_loader_value_literal(&self.stored_name(&table.table))
+        ))
+    }
+
+    fn session_copy_in(
+        &self,
+        table: &TableName,
+        batch: &arrow_array::RecordBatch,
+        columns: &[DesiredColumn],
+    ) -> Option<Result<(String, Vec<u8>), String>> {
+        let names: Vec<String> = columns
+            .iter()
+            .map(|column| self.render_identifier(&column.name))
+            .collect();
+        let statement = format!(
+            "COPY {} ({}) FROM STDIN (FORMAT binary)",
+            self.render_qualified_name(table),
+            names.join(", ")
+        );
+        Some(copy_chunks(batch, columns, usize::MAX).map(|chunks| (statement, chunks.concat())))
     }
 }

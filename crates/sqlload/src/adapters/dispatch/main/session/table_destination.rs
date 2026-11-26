@@ -3,9 +3,10 @@
 use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_own_connection::own_connection;
+use crate::adapters::session::main::_table_session::table_session;
 use crate::loader::errors::LoaderError;
 
-/// The destination for one table's load: DuckDB gets a connection of its own, so the table's transactions never mix with another table loading at the same time; BigQuery a Storage Write API connection of its own, so a table's open streams never wait on another table's for the connection's stream limit; Postgres a session of its own, which holds the table's temporary staging table and its transactions.
+/// The destination for one table's load: a caller's session gets a session of its own, for the same reasons as the warehouse's own destination; DuckDB gets a connection of its own, so the table's transactions never mix with another table loading at the same time; BigQuery a Storage Write API connection of its own, so a table's open streams never wait on another table's for the connection's stream limit; Postgres a session of its own, which holds the table's temporary staging table and its transactions.
 pub fn table_destination(destination: &Destination) -> Result<Destination, LoaderError> {
     match destination {
         #[cfg(feature = "duckdb")]
@@ -21,6 +22,7 @@ pub fn table_destination(destination: &Destination) -> Result<Destination, Loade
             own.reconnects = false;
             Ok(Destination::Postgres(Box::new(own)))
         }
+        Destination::Session(session) => Ok(Destination::Session(Box::new(table_session(session)))),
         other => Ok(other.clone()),
     }
 }

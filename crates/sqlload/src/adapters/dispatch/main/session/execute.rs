@@ -8,6 +8,7 @@ use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_execute_statements::execute_statements;
 use crate::adapters::postgres::main::session::_run_statements::run_statements as run_postgres;
+use crate::adapters::session::main::_run_statements::run_statements as run_session;
 use crate::adapters::snowflake::main::session::_run_statements::run_statements;
 use crate::loader::errors::LoaderError;
 
@@ -24,6 +25,7 @@ pub async fn execute(
         Destination::BigQuery(bigquery) => Ok(run_bigquery(bigquery, &statements).await?),
         Destination::Postgres(postgres) => run_postgres(postgres, &statements).await,
         Destination::ClickHouse(clickhouse) => Ok(run_clickhouse(clickhouse, &statements).await?),
+        Destination::Session(session) => run_session(session, statements).await,
         Destination::Files(_) => Err(no_sql()),
     }
 }

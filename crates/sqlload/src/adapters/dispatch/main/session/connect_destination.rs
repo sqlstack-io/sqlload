@@ -1,22 +1,12 @@
 //! Open the destination one target uses.
 
-use crate::adapters::bigquery::main::session::_connect_bigquery::connect_bigquery;
-use crate::adapters::clickhouse::main::session::_connect_clickhouse::connect_clickhouse;
-use crate::adapters::contract::models::TableName;
-use crate::adapters::databricks::main::session::_connect_databricks::connect_databricks;
+use crate::adapters::dispatch::main::session::_own_destination::own_destination;
 use crate::adapters::dispatch::models::Destination;
-#[cfg(feature = "duckdb")]
-use crate::adapters::duckdb::main::_open_target::open_target;
-use crate::adapters::files::models::FilesDestination;
-use crate::adapters::postgres::main::session::_open_postgres::open_postgres;
-use crate::adapters::snowflake::main::session::_connect_snowflake::connect_snowflake;
-use crate::adapters::snowflake::main::stage::_forced_stage::forced_stage;
-use crate::adapters::snowflake::models::SnowflakeAccount;
+use crate::adapters::session::main::_connect_session::connect_session;
 use crate::loader::errors::LoaderError;
 use crate::project::models::{ConnectionConfig, ProjectConfig};
-use crate::store_paths::main::connection_store::connection_store;
 
-/// The open destination of target `name`.
+/// The open destination of target `name`: its caller's session, or a connection of SQLLoad's own.
 pub async fn connect_destination(
     project: &ProjectConfig,
     name: &str,
@@ -25,112 +15,10 @@ pub async fn connect_destination(
         .targets
         .get(name)
         .ok_or_else(|| LoaderError::Invalid(format!("target {name:?} does not exist")))?;
-    let destination = match project.connections.get(&target.connection) {
-        #[cfg(feature = "duckdb")]
-        Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
-            Destination::DuckDb(open_target(project, target)?)
-        }
-        #[cfg(not(feature = "duckdb"))]
-        Some(ConnectionConfig::DuckDb { .. } | ConnectionConfig::MotherDuck { .. }) => {
-            return Err(LoaderError::Invalid(format!(
-                "target {name:?}: this sqlload was built without DuckDB (cargo feature \"duckdb\")"
-            )));
-        }
-        Some(connection @ ConnectionConfig::Snowflake { .. }) => {
-            Destination::Snowflake(Box::new(snowflake(connection, target, name)?))
-        }
-        Some(connection @ ConnectionConfig::Databricks { .. }) => Destination::Databricks(
-            Box::new(connect_databricks(connection, target.database.as_deref())?),
-        ),
-        Some(connection @ ConnectionConfig::BigQuery { .. }) => Destination::BigQuery(Box::new(
-            connect_bigquery(connection, target.database.as_deref())?,
-        )),
-        Some(ConnectionConfig::Postgres { .. }) => Destination::Postgres(Box::new(open_postgres(
-            project,
-            &target.connection,
-            target.database.as_deref(),
-        )?)),
-        Some(connection @ ConnectionConfig::ClickHouse { .. }) => {
-            Destination::ClickHouse(Box::new(connect_clickhouse(connection)?))
-        }
-        Some(
-            connection @ (ConnectionConfig::S3 { .. }
-            | ConnectionConfig::Gcs { .. }
-            | ConnectionConfig::Filesystem { .. }),
-        ) => files(connection, target).ok_or_else(|| {
-            LoaderError::Invalid(format!("target {name:?}: its connection holds no files"))
-        })?,
-        Some(other) => {
-            return Err(LoaderError::Invalid(format!(
-                "target {name:?}: {} destinations are not supported yet",
-                other.kind()
-            )));
-        }
-        None => {
-            return Err(LoaderError::Invalid(format!(
-                "target {name:?}: connection {:?} does not exist",
-                target.connection
-            )));
-        }
-    };
-    Ok(destination)
-}
-
-/// The files destination of `target`, from its `s3`, `gcs` or `filesystem` connection (the only kinds it is called for).
-fn files(
-    connection: &ConnectionConfig,
-    target: &crate::project::models::TargetConfig,
-) -> Option<Destination> {
-    let store = connection_store(connection)?;
-    Some(Destination::Files(Box::new(FilesDestination {
-        connection: target.connection.clone(),
-        store,
-        max_footer_reads: target.footer_read_limit(),
-        encoding: target.output_encoding(),
-    })))
-}
-
-/// The Snowflake destination of target `name`, from its `snowflake` connection.
-fn snowflake(
-    connection: &ConnectionConfig,
-    target: &crate::project::models::TargetConfig,
-    name: &str,
-) -> Result<crate::adapters::snowflake::models::SnowflakeDestination, LoaderError> {
-    let ConnectionConfig::Snowflake {
-        account,
-        user,
-        auth,
-        role,
-        warehouse,
-        database,
-        base_url,
-        load_method,
-    } = connection
-    else {
-        return Err(LoaderError::Invalid(format!(
-            "target {name:?}: its connection is not a Snowflake one"
-        )));
-    };
-    Ok(connect_snowflake(SnowflakeAccount {
-        account: account.clone(),
-        user: user.clone(),
-        auth: auth.clone(),
-        role: role.clone(),
-        warehouse: warehouse.clone(),
-        database: target.database.clone().unwrap_or_else(|| database.clone()),
-        base_url: base_url.clone(),
-        stage: forced_stage(
-            load_method.as_deref().ok_or_else(|| {
-                LoaderError::Invalid(format!(
-                    "target {name:?}: its connection has no load_method"
-                ))
-            })?,
-            TableName {
-                database: Some(target.database.clone().unwrap_or_else(|| database.clone())),
-                schema: target.loader_schema.clone().unwrap_or_default(),
-                table: String::new(),
-            },
-        )
-        .map_err(LoaderError::Invalid)?,
-    })?)
+    match project.connections.get(&target.connection) {
+        Some(ConnectionConfig::Session(session)) => Ok(Destination::Session(Box::new(
+            connect_session(session, target.database.as_deref()).await?,
+        ))),
+        connection => own_destination(project, (name, target), connection),
+    }
 }

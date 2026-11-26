@@ -1,17 +1,23 @@
 //! Snowflake's SQL, where it differs from the contract's shared rendering.
 
+use arrow_array::RecordBatch;
 use chrono::NaiveDateTime;
 
 use crate::adapters::contract::constants::{STAGING_SUFFIX, STALE_STAGING_HOURS};
-use crate::adapters::contract::models::{CursorValue, TableName, WriteStatementsRequest};
+use crate::adapters::contract::main::_session_parquet::default_session_parquet;
+use crate::adapters::contract::models::{
+    CursorValue, SessionRows, SessionStage, TableName, WriteStatementsRequest,
+};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::snowflake::_helpers::dialect::type_names::{
     logical_type, portable_type, widens_in_place,
 };
+use crate::adapters::snowflake::_helpers::write::table_writer::lists_as_json;
 use crate::adapters::snowflake::constants::{
-    MERGE_KEYWORD, RUN_LOG_FALLBACK_RETENTION_DAYS, RUN_LOG_RETENTION_DAYS,
+    MERGE_KEYWORD, RUN_LOG_FALLBACK_RETENTION_DAYS, RUN_LOG_RETENTION_DAYS, STAGE_FOLDER,
 };
-use crate::adapters::snowflake::models::SnowflakeSql;
+use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
+use crate::adapters::snowflake::models::{CopyStaged, SnowflakeSql};
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
@@ -254,5 +260,64 @@ impl SqlAdapter for SnowflakeSql {
                 "{create} DATA_RETENTION_TIME_IN_DAYS = {RUN_LOG_FALLBACK_RETENTION_DAYS}"
             )),
         )
+    }
+
+    /// A caller's session uploads each batch's Parquet files to the user's stage with `PUT`, then `COPY`s them in together.
+    fn session_rows(&self) -> SessionRows {
+        SessionRows::StagedParquet
+    }
+
+    /// From `database`'s `INFORMATION_SCHEMA` (the table's own database first), which need not be the session's.
+    fn render_describe_table(&self, table: &TableName, database: Option<&str>) -> Option<String> {
+        let database = table.database.as_deref().or(database)?;
+        let literal = |text: &str| self.render_loader_value_literal(text);
+        Some(format!(
+            "SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE, CHARACTER_MAXIMUM_LENGTH, DATETIME_PRECISION FROM \"{}\".INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {} AND TABLE_NAME = {} ORDER BY ORDINAL_POSITION",
+            self.stored_name(database).replace('"', "\"\""),
+            literal(&self.stored_name(&table.schema)),
+            literal(&self.stored_name(&table.table)),
+        ))
+    }
+
+    /// Lists and arrays as JSON text, which the `COPY` parses, as Snowflake's own writer stages them.
+    fn session_parquet(
+        &self,
+        batch: &RecordBatch,
+        columns: &[DesiredColumn],
+    ) -> Result<Vec<u8>, String> {
+        let batch = lists_as_json(batch.clone())?;
+        default_session_parquet(&batch, columns)
+    }
+
+    /// `PUT` into, `COPY` from and `REMOVE` of `@~/sqlload/<load id>/<batch>/`, the folder Snowflake's own writer stages a batch in.
+    fn render_session_stage(&self, stage: SessionStage<'_>) -> Vec<String> {
+        let folder = |load_id: &str, batch: u64| format!("{STAGE_FOLDER}/{load_id}/{batch:05}/");
+        match stage {
+            SessionStage::Put {
+                load_id,
+                batch,
+                file,
+            } => vec![format!(
+                "PUT {} @~/{} AUTO_COMPRESS = FALSE OVERWRITE = TRUE",
+                self.render_loader_value_literal(&format!("file://{file}")),
+                folder(load_id, batch)
+            )],
+            SessionStage::Copy {
+                load_id,
+                batch,
+                table,
+                names,
+                selected,
+            } => copy_staged(&CopyStaged {
+                table,
+                stage: "@~",
+                folder: &folder(load_id, batch),
+                names,
+                selected,
+            }),
+            SessionStage::Remove { load_id, batch } => {
+                vec![format!("REMOVE @~/{}", folder(load_id, batch))]
+            }
+        }
     }
 }

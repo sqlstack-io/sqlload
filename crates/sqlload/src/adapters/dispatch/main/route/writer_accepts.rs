@@ -11,7 +11,7 @@ use crate::number_text::main::thousands::thousands;
 use crate::routing::models::WriterAccepts;
 use crate::routing::models::{FileFormat, Store};
 
-/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself; MotherDuck takes zstd Parquet chunks it `COPY`s, and reads Parquet in S3 or GCS on its servers; and ClickHouse Parquet in S3, BigQuery Parquet in GCS), or what its stage route takes.
+/// What `destination` takes over the chosen `stage`: Arrow batches (DuckDB also reads Parquet in S3, GCS or on this machine itself; MotherDuck takes zstd Parquet chunks it `COPY`s, and reads Parquet in S3 or GCS on its servers; and ClickHouse Parquet in S3, BigQuery Parquet in GCS), or what its stage route takes. A caller's session takes Arrow batches only: no warehouse reads files itself through it, so SQLLoad reads a files source's files for it.
 pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> WriterAccepts {
     match destination {
         #[cfg(feature = "duckdb")]
@@ -57,10 +57,12 @@ pub fn writer_accepts(destination: &Destination, stage: Option<&StageRoute>) -> 
             pull_formats: vec![FileFormat::Parquet],
             ..WriterAccepts::default()
         },
-        Destination::Files(_) | Destination::Postgres(_) => WriterAccepts {
-            arrow: true,
-            ..WriterAccepts::default()
-        },
+        Destination::Files(_) | Destination::Postgres(_) | Destination::Session(_) => {
+            WriterAccepts {
+                arrow: true,
+                ..WriterAccepts::default()
+            }
+        }
         Destination::Snowflake(_) => snowflake_accepts(stage),
         Destination::Databricks(databricks) => databricks_accepts(databricks),
     }
