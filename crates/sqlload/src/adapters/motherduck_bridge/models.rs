@@ -25,7 +25,7 @@ impl Drop for BridgeCursor {
     }
 }
 
-/// A running bridge process: the lines going to its stdin, the requests waiting for its replies, and the tail of its stderr. The process ends when the last handle drops, which closes its stdin.
+/// A running bridge process: the lines going to its stdin, the requests waiting for its replies, and the tail of its stderr. The process ends when the last handle drops, which closes its stdin and waits for it to exit, so the database it holds is free before the command goes on.
 #[derive(Debug)]
 pub struct BridgeProcess {
     /// The Python it runs on, as messages name it.
@@ -37,6 +37,18 @@ pub struct BridgeProcess {
     pub next_request: AtomicU64,
     pub next_cursor: AtomicU64,
     pub stderr: Arc<Mutex<String>>,
+    /// The thread feeding its stdin, which reaps the process once stdin closes.
+    pub writer: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for BridgeProcess {
+    /// Close the bridge's stdin, by replacing `lines`, the writer's only sender, which ends the writer's loop; then wait for the writer, which reaps the bridge.
+    fn drop(&mut self) {
+        self.lines = std::sync::mpsc::channel().0;
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
+        }
+    }
 }
 
 /// The requests waiting for a reply, by id, each with where its reply goes; once the process has ended, why, which every later request fails with.

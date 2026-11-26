@@ -1,18 +1,20 @@
 //! The bridge process: starting it, sending it requests, and routing its replies.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Instant;
 
 use crate::adapters::motherduck_bridge::constants::{
-    BRIDGE_SCRIPT, PYTHON_VARIABLE, STDERR_TAIL_BYTES, SUPPORTED_DUCKDB,
+    BRIDGE_EXIT_POLL, BRIDGE_EXIT_WAIT, BRIDGE_SCRIPT, PYTHON_VARIABLE, STDERR_TAIL_BYTES,
+    SUPPORTED_DUCKDB,
 };
 use crate::adapters::motherduck_bridge::errors::BridgeError;
 use crate::adapters::motherduck_bridge::models::{BridgeCursor, BridgeProcess, Replies};
 
-/// Start the bridge on `python`: a writer thread feeding its stdin (closing it, and reaping the process, once every handle is gone), a reader thread routing its replies and, once stdout and stderr have both closed or a reply is unreadable, failing what still waits, and one keeping its stderr's tail with each of `hidden` taken out.
+/// Start the bridge on `python`: a writer thread feeding its stdin (closing it, and reaping the process, once the last handle drops, which waits for it), a reader thread routing its replies and, once stdout and stderr have both closed or a reply is unreadable, failing what still waits, and one keeping its stderr's tail with each of `hidden` taken out.
 pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProcess>, BridgeError> {
     let mut child = Command::new(python)
         .args(["-c", BRIDGE_SCRIPT])
@@ -36,7 +38,7 @@ pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProce
     let (lines, outgoing) = channel::<String>();
     let replies = Arc::new(Mutex::new(Replies::default()));
     let tail = Arc::new(Mutex::new(String::new()));
-    std::thread::spawn(move || {
+    let writer = std::thread::spawn(move || {
         for line in outgoing {
             if stdin
                 .write_all(format!("{line}\n").as_bytes())
@@ -47,7 +49,7 @@ pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProce
             }
         }
         drop(stdin);
-        let _ = child.wait();
+        reap(child);
     });
     let kept = tail.clone();
     let reading_stderr = std::thread::spawn(move || keep_tail(stderr, &kept, &hidden));
@@ -71,7 +73,24 @@ pub(crate) fn start(python: &str, hidden: Vec<String>) -> Result<Arc<BridgeProce
         next_request: AtomicU64::new(1),
         next_cursor: AtomicU64::new(1),
         stderr: tail,
+        writer: Some(writer),
     }))
+}
+
+/// Wait for `child`, whose stdin has closed, to exit; one still running after `BRIDGE_EXIT_WAIT` is ended.
+fn reap(mut child: Child) {
+    let deadline = Instant::now() + BRIDGE_EXIT_WAIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            Ok(None) => std::thread::sleep(BRIDGE_EXIT_POLL),
+        }
+    }
 }
 
 /// Send `request` with an id of its own; the receiver gets its reply, or why the bridge stopped first.
