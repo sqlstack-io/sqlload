@@ -1,5 +1,7 @@
 //! Parse project text.
 
+use std::collections::BTreeMap;
+
 use crate::project::errors::ProjectError;
 use crate::project::main::parse_python_project::parse_python_project;
 use crate::project::models::ProjectConfig;
@@ -9,5 +11,5 @@ pub fn parse_project(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ProjectConfig, ProjectError> {
-    parse_python_project(text, lookup, &[])
+    parse_python_project(text, lookup, (&[], BTreeMap::new()))
 }

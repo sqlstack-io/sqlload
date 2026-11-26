@@ -194,4 +194,15 @@ impl SqlAdapter for DatabricksSql {
             self.render_staging_filter(&format!("{STAGING_SUFFIX}_"))
         )
     }
+
+    /// From the catalog's `information_schema` (the table's own catalog first); types come from `full_data_type` (`decimal(18,2)`, `varchar(10)`).
+    fn render_describe_table(&self, table: &TableName, database: Option<&str>) -> Option<String> {
+        let catalog = table.database.as_deref().or(database)?;
+        Some(format!(
+            "SELECT column_name, full_data_type, numeric_precision, numeric_scale FROM {}.information_schema.columns WHERE table_schema = {} AND table_name = {} ORDER BY ordinal_position",
+            self.render_identifier(catalog),
+            self.render_loader_value_literal(&table.schema.to_ascii_lowercase()),
+            self.render_loader_value_literal(&table.table.to_ascii_lowercase()),
+        ))
+    }
 }

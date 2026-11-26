@@ -18,7 +18,12 @@ classifiers = [
   "Topic :: Database",
 ]
 # orjson writes gathered dict rows as JSON bytes, which Rust parses without the GIL.
-dependencies = ["orjson>=3.10", "tzdata; sys_platform == \"win32\""]
+dependencies = [
+  # The functions that describe data and requests, in pure Python; released with sqlload at the same version.
+  "sqlload-api==0.84.0", # x-release-please-version
+  "orjson>=3.10",
+  "tzdata; sys_platform == \"win32\"",
+]
 
 [project.optional-dependencies]
 # MotherDuck targets and sources: MotherDuck accepts DuckDB 1.4.1 to 1.5.6 (raise the bound as MotherDuck does), not the
@@ -51,6 +56,7 @@ include = [{ path = "unixODBC-*.tar.gz", format = "sdist" }]
 cache-keys = [
   { file = "pyproject.toml" },
   { file = "python/**/*.py" },
+  { file = "../sqlload-api/python/**/*.py" },
   { file = "../../Cargo.toml" },
   { file = "../../Cargo.lock" },
   { file = "../../crates/*/Cargo.toml" },

@@ -15,13 +15,16 @@ pub async fn drop_stale_staging(
     name: &TableName,
     warehouse: Warehouse,
 ) -> Result<usize, LoaderError> {
-    if let Destination::Postgres(_) = destination {
+    if warehouse == Warehouse::Postgres {
         return Ok(0);
     }
     let database = match destination {
         Destination::Snowflake(snowflake) => Some(snowflake.database.as_str()),
         Destination::Databricks(databricks) => Some(databricks.catalog.as_str()),
         Destination::BigQuery(bigquery) => Some(bigquery.project.as_str()),
+        Destination::Session(session) if warehouse != Warehouse::DuckDb => {
+            session.database.as_deref()
+        }
         _ => None,
     };
     let adapter = sql_adapter(warehouse);
@@ -45,6 +48,12 @@ fn listed_name(destination: &Destination, name: &TableName) -> TableName {
             database: None,
             ..name.clone()
         },
+        Destination::Session(session) if session.connection.warehouse == Warehouse::DuckDb => {
+            TableName {
+                database: None,
+                ..name.clone()
+            }
+        }
         _ => name.clone(),
     }
 }

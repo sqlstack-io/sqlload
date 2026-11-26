@@ -366,12 +366,16 @@ pub enum ConnectionConfig {
         #[serde(default)]
         retries: Option<u32>,
     },
+    /// A warehouse connection the caller owns, which a library caller attaches to the project by name (see [`SessionConnection`](crate::adapters::session::models::SessionConnection)); no project file can write one.
+    #[serde(skip_deserializing)]
+    Session(crate::adapters::session::models::SessionConnection),
 }
 
 impl ConnectionConfig {
-    /// The `kind` value as written.
+    /// The `kind` value as written; a caller's connection gives the kind it stands in for.
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::Session(session) => session.kind(),
             Self::Snowflake { .. } => "snowflake",
             Self::Databricks { .. } => "databricks",
             Self::BigQuery { .. } => "bigquery",

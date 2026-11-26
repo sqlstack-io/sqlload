@@ -8,6 +8,7 @@ use crate::adapters::dispatch::models::{Destination, Writer};
 use crate::adapters::duckdb::models::DuckDbWriter;
 use crate::adapters::files::models::ParquetFiles;
 use crate::adapters::postgres::models::PostgresWriter;
+use crate::adapters::session::main::_open_writer::open_writer;
 use crate::adapters::snowflake::models::{SnowflakeWriter, StageRoute};
 use crate::file_store::main::open_folder::open_folder;
 use crate::loader::errors::LoaderError;
@@ -63,5 +64,6 @@ pub fn open_table_writer(
             staged_build: None,
         }))),
         Destination::Files(_) => Ok(Writer::Files(ParquetFiles)),
+        Destination::Session(session) => Ok(Writer::Session(Box::new(open_writer(session)?))),
     }
 }

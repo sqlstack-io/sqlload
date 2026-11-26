@@ -542,7 +542,7 @@ transform = "kpi_sheet"
 
 
 def test_a_function_passed_as_transform_resolves_to_itself_when_two_files_register_its_name(tmp_path: Path) -> None:
-	from sqlload._registry import Registry
+	from sqlload_api._registry import Registry
 
 	registry = Registry("@sl.transform")
 	modules = []
@@ -563,7 +563,7 @@ def test_a_function_passed_as_transform_resolves_to_itself_when_two_files_regist
 
 def test_a_function_passed_as_transform_is_released_when_the_run_finishes() -> None:
 	from sqlload._runtime import finish_run
-	from sqlload._transform import TRANSFORMS
+	from sqlload_api._transform import TRANSFORMS
 
 	def page_transform() -> Any:
 		return lambda rows, ctx: rows
@@ -581,7 +581,7 @@ def test_a_function_passed_as_transform_is_released_when_the_run_finishes() -> N
 
 def test_a_transform_whose_file_cant_be_read_is_versioned_by_its_code() -> None:
 	from sqlload._runtime import transform_version
-	from sqlload._transform import TRANSFORMS
+	from sqlload_api._transform import TRANSFORMS
 
 	def version_of(body: str) -> str | None:
 		namespace: dict[str, Any] = {}

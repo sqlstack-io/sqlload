@@ -1,22 +1,24 @@
-//! Parse project text together with the sources declared in Python.
+//! Parse project text together with the sources declared in Python and the connections its caller attaches.
 
 use std::collections::BTreeMap;
 
+use crate::adapters::session::models::SessionConnection;
 use crate::config::main::interpolate_toml::interpolate_toml;
 use crate::project::_helpers::python_checks::{checked_python_sources, with_python_sources};
 use crate::project::_helpers::references::reference_problems;
 use crate::project::_helpers::serde_values::typed_constants;
+use crate::project::_helpers::sessions::attach_sessions;
 use crate::project::_helpers::tombstones::with_tombstone_tables;
 use crate::project::errors::ProjectError;
 use crate::project::models::ProjectConfig;
 use crate::python_sources::main::connection_settings::connection_settings;
 use crate::python_sources::models::PythonSource;
 
-/// Parse and validate a project's TOML text (resolving `${ENV:NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries, and each `deletes_from`'s tombstone table; Python settings are not interpolated.
+/// Parse and validate a project's TOML text (resolving `${ENV:NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries, each `deletes_from`'s tombstone table, and `sessions` attached by name before its targets are checked: warehouse connections its caller owns ([`SessionConnection`]), which targets load into as into any other connection of their kind; Python settings are not interpolated.
 pub fn parse_python_project(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
-    python: &[PythonSource],
+    (python, sessions): (&[PythonSource], BTreeMap<String, SessionConnection>),
 ) -> Result<ProjectConfig, ProjectError> {
     let value: toml::Value =
         toml::from_str(text).map_err(|error| ProjectError::Syntax(error.to_string()))?;
@@ -40,6 +42,7 @@ pub fn parse_python_project(
         .map(|source| (source.name.clone(), source.http_paths.clone()))
         .collect();
     project.connection_variables = variables;
+    let project = attach_sessions(project, sessions).map_err(ProjectError::Invalid)?;
     let problems = reference_problems(&project);
     match problems.is_empty() {
         true => Ok(with_tombstone_tables(project)),

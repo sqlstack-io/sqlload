@@ -20,11 +20,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlload._declare import Connection, Context, Source, Table
-from sqlload._http import Job
-from sqlload._data import checkpoint
-from sqlload._http_paths import literal_paths
 from sqlload._rename import RENAMES, Column, RenameContext, renamed
-from sqlload._transform import TRANSFORMS, TransformContext, returned_items
+from sqlload_api._data import checkpoint
+from sqlload_api._http import Job
+from sqlload_api._http_paths import literal_paths
+from sqlload_api._transform import TRANSFORMS, TransformContext, returned_items
 
 #: What `page_items` yields after each page's items.
 PAGE_END = checkpoint(None)

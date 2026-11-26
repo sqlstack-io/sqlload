@@ -5,79 +5,13 @@ use arrow_array::RecordBatch;
 use arrow_pyarrow::ToPyArrow;
 use arrow_schema::SchemaRef;
 use pyo3::exceptions::{PyConnectionError, PyRuntimeError, PyValueError};
-use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods, PyList, PyListMethods};
 use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use sqlload::row_batches::main::conform_batch::conform_batch;
-use sqlload::row_batches::main::projection::projection;
 use sqlload::row_batches::main::settled_schema::settled_schema;
-use sqlload::row_batches::models::{FieldSpec, JsonLayout, Projection};
 
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{Polled, TableBatches};
-
-/// JSON or NDJSON bytes yielded by a table function (`sl.json(...)`, `sl.ndjson(...)`), parsed in Rust without the GIL.
-#[derive(Debug)]
-#[pyclass(frozen, module = "sqlload._native", name = "JsonData")]
-pub struct JsonData {
-    pub(crate) bytes: PyBackedBytes,
-    pub(crate) layout: JsonLayout,
-    pub(crate) path: Option<String>,
-    /// The columns each row loads as, when only some of its values load.
-    pub(crate) projection: Option<Projection>,
-}
-
-#[pymethods]
-impl JsonData {
-    /// `data` as one JSON document (rows at dotted `path`, or the whole document), or as NDJSON when `lines`; `fields` (a JSON list of `sl.field` specs: name, path, required, parse, on_error) and `keep_record` project each row.
-    #[new]
-    #[pyo3(signature = (data, *, lines = false, path = None, fields = None, keep_record = None))]
-    fn new(
-        data: PyBackedBytes,
-        lines: bool,
-        path: Option<String>,
-        fields: Option<String>,
-        keep_record: Option<String>,
-    ) -> PyResult<Self> {
-        let fields = fields
-            .map(|text| serde_json::from_str::<Vec<FieldSpec>>(&text))
-            .transpose()
-            .map_err(|error| PyValueError::new_err(format!("fields: {error}")))?;
-        let projection =
-            projection(fields.as_deref(), keep_record.as_deref()).map_err(PyValueError::new_err)?;
-        let layout = match (lines, &path) {
-            (true, Some(_)) => {
-                return Err(PyValueError::new_err(
-                    "path picks rows out of a JSON document; NDJSON has none",
-                ));
-            }
-            (true, None) => JsonLayout::Lines,
-            (false, _) => JsonLayout::Document,
-        };
-        Ok(Self {
-            bytes: data,
-            layout,
-            path,
-            projection,
-        })
-    }
-
-    /// Whether the bytes are NDJSON.
-    #[getter]
-    fn lines(&self) -> bool {
-        self.layout == JsonLayout::Lines
-    }
-
-    /// The dotted path to the rows inside the document, if any.
-    #[getter]
-    fn path(&self) -> Option<String> {
-        self.path.clone()
-    }
-
-    fn __len__(&self) -> usize {
-        self.bytes.len()
-    }
-}
 
 /// The Arrow batches of one table generator, as `pyarrow.RecordBatch`es (the crossing's test hook).
 #[derive(Debug)]

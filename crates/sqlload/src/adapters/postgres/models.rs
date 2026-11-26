@@ -44,6 +44,19 @@ pub(crate) struct KeyIndexes {
     pub(crate) not_null: Vec<String>,
 }
 
+/// A foreign key referencing a table, as `REFERENCES_SQL` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReferenceRow {
+    /// The referencing table, `schema.table`.
+    pub(crate) referencing: String,
+    pub(crate) constraint: String,
+    /// Its `ON DELETE` action as `confdeltype` spells it (`c`, `n`, `d`, `r` or `a`).
+    pub(crate) action: String,
+    pub(crate) deferred: bool,
+    /// The table references itself.
+    pub(crate) own: bool,
+}
+
 /// One table's write session on Postgres: each batch is sent by binary `COPY` into the temporary staging table on the table's own session.
 #[derive(Debug)]
 pub struct PostgresWriter {

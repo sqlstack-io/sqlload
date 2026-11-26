@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, TypeVar, overload
 
-from sqlload._registry import Registry
+from sqlload_api._registry import Registry
 
 _Function = TypeVar("_Function", bound=Callable[..., Any])
 

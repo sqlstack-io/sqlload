@@ -124,7 +124,7 @@ pub(crate) fn parse_with_python(
     crate::project::main::parse_python_project::parse_python_project(
         &format!("{CONNECTIONS}{toml}"),
         &environment,
-        &python,
+        (&python, std::collections::BTreeMap::new()),
     )
     .map(|project| read(&project))
     .map_err(|error| error.to_string())

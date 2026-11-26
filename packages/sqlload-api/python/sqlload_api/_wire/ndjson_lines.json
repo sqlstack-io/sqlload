@@ -1,0 +1,17 @@
+{
+  "json": {
+    "data": "{\"id\": 1}\n{\"id\": 2}\n",
+    "read": {
+      "fields": [
+        {
+          "name": "id",
+          "path": "$.id",
+          "required": true
+        }
+      ],
+      "keep_record": null,
+      "layout": "lines",
+      "path": null
+    }
+  }
+}

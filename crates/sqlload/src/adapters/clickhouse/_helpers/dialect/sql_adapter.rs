@@ -334,4 +334,13 @@ impl SqlAdapter for ClickHouseSql {
             CursorValue::Date | CursorValue::Plain => format!("toString(MAX({column}))"),
         }
     }
+
+    /// From `system.columns`; the database is the table's schema.
+    fn render_describe_table(&self, table: &TableName, _database: Option<&str>) -> Option<String> {
+        Some(format!(
+            "SELECT name, type FROM system.columns WHERE database = {} AND table = {} ORDER BY position",
+            self.render_loader_value_literal(&table.schema),
+            self.render_loader_value_literal(&table.table)
+        ))
+    }
 }

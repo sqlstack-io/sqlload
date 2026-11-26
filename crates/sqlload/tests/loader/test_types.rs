@@ -1733,3 +1733,29 @@ pub(crate) struct ManyFilesTestCase {
     /// Rows of the table not in the newest-file-wins oracle, then the reverse, then its rows, its commits and the rows its commits recorded.
     pub(crate) expected_result: &'static str,
 }
+
+/// A caller's connection to a Postgres server, as a program embedding SQLLoad would hold one: each session is its own connection, run on a runtime of its own.
+#[derive(Debug)]
+pub(crate) struct PostgresCaller {
+    pub(crate) port: u16,
+}
+
+/// One session of a [`PostgresCaller`]: its connection, and the runtime that drives it.
+#[derive(Debug)]
+pub(crate) struct PostgresCallerSession {
+    /// Taken when the session drops, which may happen on an async worker, where a runtime only shuts down in the background.
+    pub(crate) runtime: Option<tokio::runtime::Runtime>,
+    pub(crate) client: tokio_postgres::Client,
+}
+
+pub(crate) struct PostgresSessionTestCase {
+    pub(crate) description: &'static str,
+    /// The table's settings in `[sources.app.tables."public.accounts"]`.
+    pub(crate) settings: &'static str,
+    /// SQL run on the server before the second load.
+    pub(crate) change: &'static str,
+    /// The second load's outcome for the table: `ok`, or a part of its problem.
+    pub(crate) expected_second: &'static str,
+    /// The loaded `raw.accounts` rows after it, as `id:name`, by id.
+    pub(crate) expected_rows: &'static [&'static str],
+}

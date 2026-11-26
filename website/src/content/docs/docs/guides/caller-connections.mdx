@@ -1,0 +1,78 @@
+---
+title: "Loading through your own connection"
+description: "Embed the sqlload Rust library and load into a warehouse through a connection your program already holds, with SQLLoad planning and rendering every statement."
+---
+
+A program that embeds the `sqlload` crate can load into a warehouse through a connection it
+already holds, instead of one SQLLoad opens from `[connections]`. SQLLoad still plans the load,
+renders every statement in the warehouse's SQL and decides every write. Your program runs those
+statements on its own connection, with its own credentials, and takes the rows in the files SQLLoad
+writes.
+
+No project file can name such a connection. Your program attaches it by name when it parses the
+project, and targets use that name as any other connection:
+
+```rust
+use std::collections::BTreeMap;
+use sqlload::adapters::session::models::SessionConnection;
+use sqlload::column_types::models::Warehouse;
+use sqlload::project::main::parse_python_project::parse_python_project;
+
+let sessions = BTreeMap::from([(
+    "warehouse".to_owned(),
+    SessionConnection {
+        warehouse: Warehouse::Snowflake,
+        motherduck: false,
+        database: Some("ANALYTICS".to_owned()),
+        caller: my_connection, // an Arc<dyn CallerConnection>
+    },
+)]);
+let project = parse_python_project(&text, &lookup, (&[], sessions))?;
+```
+
+```toml
+[targets.dev]
+connection = "warehouse"   # attached by the program
+loader_schema = "RAW"
+```
+
+`connect_targets`, `plan_project`, `apply_project` and `load_tables` then work as for any target.
+Run them on threads with 8 MiB of stack, the workers of a Tokio runtime built with
+`thread_stack_size(8 * 1024 * 1024)` and the thread that blocks on the load: a debug build's load
+goes deeper than Tokio's 2 MiB default.
+
+## What your connection does
+
+`CallerConnection::open` returns a session for SQLLoad alone. SQLLoad opens one per table it
+loads, holding that table's temporary tables and transactions, and drops it when the table is
+done. A session must:
+
+- run each statement in autocommit; SQLLoad sends `BEGIN`, `COMMIT` and `ROLLBACK` itself, and
+  rolls back when a statement inside a transaction fails, a failed `COMMIT` included. A Snowflake
+  session with autocommit off is refused when it opens;
+- have the database tables load into as its current database (DuckDB);
+- allow SQLLoad to set session parameters (a Snowflake session runs in UTC, as SQLLoad's own do),
+  so it must not be one your program uses for other work at the same time.
+
+How rows reach the warehouse depends on the warehouse:
+
+| Warehouse | Rows go in as |
+|-----------|---------------|
+| DuckDB, MotherDuck | Parquet files on this machine, read with `read_parquet` |
+| Snowflake | Parquet files `PUT` on the user stage (`@~/sqlload/...`), then `COPY INTO`, then `REMOVE` |
+| Postgres | A binary `COPY ... FROM STDIN`, through `CallerSession::copy_in` |
+| BigQuery, ClickHouse, Databricks | Parquet files your session loads with its own client, through `CallerSession::load_parquet` |
+
+A session reports a failure as a `SessionError`: `transient` when a rerun may pass, and
+`not_found` when what a query names doesn't exist, such as a BigQuery dataset before its first load.
+
+## What changes
+
+Every write strategy, staging table and swap, schema change, `on_schema_change`, check and
+cursor works as it does on SQLLoad's own connection. A few routes need SQLLoad's own connection
+and are not taken:
+
+- The warehouse never reads a files source's files itself through your connection: SQLLoad reads
+  them and sends the rows.
+- Rows are not streamed into Snowflake without files.
+- A DuckDB target has no memory budget from SQLLoad; your connection's settings apply.

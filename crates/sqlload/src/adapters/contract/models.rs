@@ -333,3 +333,37 @@ pub enum CheckQuery<'a> {
         held_by: Option<&'a TableName>,
     },
 }
+
+/// How a batch's rows reach the staging table through a caller's session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRows {
+    /// The warehouse reads the Parquet file SQLLoad wrote on this machine itself, with the statement [`SqlAdapter::render_insert_local_parquet`](crate::adapters::contract::types::SqlAdapter::render_insert_local_parquet) renders.
+    LocalParquet,
+    /// The batch's Parquet files go up to the user's stage with `PUT` as they fill, and load together when the batch loads.
+    StagedParquet,
+    /// A binary `COPY ... FROM STDIN` the session runs with the encoded rows.
+    CopyIn,
+    /// The session loads each Parquet file through its own client.
+    CallerLoadsParquet,
+}
+
+/// One step of a batch's files through the user's stage, for [`SessionRows::StagedParquet`]: each batch's files wait in a folder of their own, named by the load and the batch.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionStage<'a> {
+    /// Upload the Parquet file at `file`, a path on this machine, into the batch's folder unchanged.
+    Put {
+        load_id: &'a str,
+        batch: u64,
+        file: &'a str,
+    },
+    /// Load the named files of the batch's folder into `table`: by column name, or filling `selected` by a `SELECT` where given (a table holding JSON the files carry as text).
+    Copy {
+        load_id: &'a str,
+        batch: u64,
+        table: &'a TableName,
+        names: &'a [String],
+        selected: Option<&'a [crate::schema_plan::models::DesiredColumn]>,
+    },
+    /// Remove every file of the batch's folder.
+    Remove { load_id: &'a str, batch: u64 },
+}

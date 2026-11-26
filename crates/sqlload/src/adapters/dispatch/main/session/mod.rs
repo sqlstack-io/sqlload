@@ -1,3 +1,4 @@
+pub(in crate::adapters) mod _own_destination;
 pub mod check_destination;
 pub mod clean_stage;
 pub mod connect_destination;

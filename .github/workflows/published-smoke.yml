@@ -63,6 +63,18 @@ jobs:
             echo "PyPI's index still lacks files of ${package} ${VERSION} after 180 attempts"
             exit 1
           done
+          # sqlload-api is pure Python: one wheel for every platform, and its sdist.
+          for attempt in $(seq 1 180); do
+            listed=$(curl -fsS -H "Accept: application/vnd.pypi.simple.v1+json" "https://pypi.org/simple/sqlload-api/" | jq -r '.files[].filename' || true)
+            if grep -qx "sqlload_api-${VERSION}-py3-none-any.whl" <<< "$listed" && grep -qx "sqlload_api-${VERSION}.tar.gz" <<< "$listed"; then
+              echo "PyPI's index lists sqlload-api ${VERSION} (attempt ${attempt})"
+              exit 0
+            fi
+            echo "attempt ${attempt}: sqlload-api ${VERSION} is not listed yet"
+            sleep 60
+          done
+          echo "PyPI's index still lacks sqlload-api ${VERSION} after 180 attempts"
+          exit 1
 
   smoke:
     name: Smoke (${{ matrix.platform.name }})

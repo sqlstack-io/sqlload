@@ -1,0 +1,28 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "concurrency": 2,
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "fan_out",
+    "method": "GET",
+    "on_status": {},
+    "over": {
+      "kind": "values",
+      "values": [
+        "north",
+        "south"
+      ]
+    },
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/regions/{region}/stock",
+    "select": "$.items"
+  }
+}

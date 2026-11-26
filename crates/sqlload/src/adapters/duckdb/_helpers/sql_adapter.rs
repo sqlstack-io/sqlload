@@ -1,9 +1,10 @@
 //! DuckDB's SQL: the contract's shared rendering, with DuckDB's types.
 
 use crate::adapters::contract::main::_rebuilt_in_place::rebuilt_in_place;
-use crate::adapters::contract::models::TableName;
+use crate::adapters::contract::models::{SessionRows, TableName};
 use crate::adapters::contract::types::SqlAdapter;
 use crate::adapters::duckdb::_helpers::type_names::{logical_type, portable_type};
+use crate::adapters::duckdb::constants::DESCRIBE_TABLE_SQL;
 use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::constants::VARIANT_TYPE;
 use crate::column_types::main::is_variant::is_variant;
@@ -88,5 +89,39 @@ impl SqlAdapter for DuckDbSql {
             "table_catalog = current_database() AND table_name ILIKE {}",
             self.render_loader_value_literal(&format!("%{suffix}%"))
         )
+    }
+
+    /// A caller's session reads the Parquet files SQLLoad writes on this machine itself.
+    fn session_rows(&self) -> SessionRows {
+        SessionRows::LocalParquet
+    }
+
+    /// [`DESCRIBE_TABLE_SQL`] with the schema and table as literals: in the session's current database, which is the one tables load into.
+    fn render_describe_table(&self, table: &TableName, _database: Option<&str>) -> Option<String> {
+        let mut parts = DESCRIBE_TABLE_SQL.split('?');
+        let (head, middle, tail) = (parts.next()?, parts.next()?, parts.next()?);
+        Some(format!(
+            "{head}{}{middle}{}{tail}",
+            self.render_loader_value_literal(&table.schema),
+            self.render_loader_value_literal(&table.table)
+        ))
+    }
+
+    fn render_insert_local_parquet(
+        &self,
+        table: &TableName,
+        names: &[String],
+        file: &str,
+    ) -> Option<String> {
+        let list: Vec<String> = names
+            .iter()
+            .map(|name| self.render_identifier(name))
+            .collect();
+        Some(format!(
+            "INSERT INTO {} ({list}) SELECT {list} FROM read_parquet({})",
+            self.render_qualified_name(table),
+            self.render_loader_value_literal(file),
+            list = list.join(", ")
+        ))
     }
 }

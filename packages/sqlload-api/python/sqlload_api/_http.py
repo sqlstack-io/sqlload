@@ -8,11 +8,10 @@ response once into the table's rows.
 import json
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
-from sqlload._data import Field, Fields, field_list
-from sqlload._declare import Source
-from sqlload._transform import TRANSFORMS
+from sqlload_api._data import Field, Fields, field_list
+from sqlload_api._transform import TRANSFORMS
 
 #: What moved from `sl.http` onto the `http` connection in sqlload.toml.
 CONNECTION_SETTINGS = ("auth", "rate_limit", "max_in_flight", "retries")
@@ -21,6 +20,16 @@ ROW_LOOP_HINT = (
 	"rows of an sl.http job stay in Rust and are never handed to Python one at a time (rule python_row_loop); "
 	"return or yield the job itself, and filter the rows downstream, or reshape each page with transform="
 )
+
+
+class ConnectionOwner(Protocol):
+	"""What `sl.http` reads a connection from: a SQLLoad `sl.source(...)`, or anything with a name and settings."""
+
+	@property
+	def name(self) -> str: ...
+
+	@property
+	def settings(self) -> Mapping[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -199,17 +208,19 @@ class Job:
 
 
 class Http:
-	"""Requests to one source's HTTP connection: `paginate` and `fan_out` build jobs."""
+	"""Requests to one HTTP connection, a source's or one named: `paginate` and `fan_out` build jobs."""
 
 	def __init__(
 		self,
-		source: Source,
+		source: ConnectionOwner | None = None,
 		*,
 		headers: Mapping[str, str] | None = None,
 		connection: str | None = None,
 		**moved: Any,
 	) -> None:
-		name = connection or source.settings.get("connection")
+		name = connection or (None if source is None else source.settings.get("connection"))
+		if not name and source is None:
+			raise ValueError("sl.http needs a connection: pass connection=, or a source that sets one")
 		if not name:
 			raise ValueError(f"sl.http needs a connection: set connection= on source {source.name} or pass connection=")
 		for key in moved:
@@ -404,13 +415,14 @@ def _projection(fields: Fields | None, keep_record: str | None) -> dict[str, Any
 
 
 def http(
-	source: Source,
+	source: ConnectionOwner | None = None,
 	*,
 	headers: Mapping[str, str] | None = None,
 	connection: str | None = None,
 	**moved: Any,
 ) -> Http:
-	"""Requests to `source`'s HTTP connection (or `connection`), adding `headers` to the connection's. The connection in
-	sqlload.toml sets how requests authenticate (`auth`), the limits every request to it shares in the run (`rate_limit`,
-	`max_in_flight`) and its `retries`."""
+	"""Requests to `source`'s HTTP connection (or `connection`, which is all it needs without a source), adding `headers`
+	to the connection's. The connection sets how requests authenticate (`auth`), the limits every request to it shares
+	in the run (`rate_limit`, `max_in_flight`) and its `retries`. The job is the same whichever way the connection is
+	given."""
 	return Http(source, headers=headers, connection=connection, **moved)

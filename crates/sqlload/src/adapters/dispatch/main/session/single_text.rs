@@ -8,6 +8,7 @@ use crate::adapters::dispatch::models::Destination;
 #[cfg(feature = "duckdb")]
 use crate::adapters::duckdb::main::_query_text::query_text as query_duckdb;
 use crate::adapters::postgres::main::session::_query_rows::query_rows as query_postgres;
+use crate::adapters::session::main::_query_rows::query_rows as query_session;
 use crate::adapters::snowflake::main::session::_query_text::query_text as query_snowflake;
 use crate::loader::errors::LoaderError;
 
@@ -36,6 +37,12 @@ pub async fn single_text(
             .next()
             .flatten()),
         Destination::ClickHouse(clickhouse) => Ok(query_clickhouse(clickhouse, &query)
+            .await?
+            .into_iter()
+            .next()
+            .and_then(|row| row.into_iter().next())
+            .flatten()),
+        Destination::Session(session) => Ok(query_session(session, query)
             .await?
             .into_iter()
             .next()

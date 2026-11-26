@@ -14,6 +14,7 @@ pub async fn ddl_guard(destination: &Destination) -> Option<OwnedMutexGuard<()>>
         Destination::BigQuery(bigquery) => Some(bigquery.ddl.clone()),
         Destination::Postgres(postgres) => Some(postgres.ddl.clone()),
         Destination::ClickHouse(clickhouse) => Some(clickhouse.ddl.clone()),
+        Destination::Session(session) => Some(session.ddl.clone()),
         Destination::Files(_) => None,
     };
     match lock {

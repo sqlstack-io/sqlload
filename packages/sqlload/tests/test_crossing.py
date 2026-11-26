@@ -18,6 +18,7 @@ import pytest
 
 import sqlload as sl
 from sqlload import _native
+from sqlload_api import JsonData
 
 CROSSINGS = ["walk", "serialise"]
 TEXT = string.ascii_letters + " \"\\\n\t/é😀"
@@ -199,7 +200,7 @@ def test_given_json_data_when_constructed_then_ndjson_takes_no_path() -> None:
 	assert sl.json("[]", path="items").path == "items"
 	assert sl.ndjson(memoryview(b"{}")).lines
 	with pytest.raises(ValueError, match="NDJSON"):
-		_native.JsonData(b"", lines=True, path="items")
+		JsonData(b"", lines=True, path="items")
 
 
 def test_given_polars_and_pandas_frames_when_crossed_then_they_match_pyarrow() -> None:
@@ -422,18 +423,30 @@ def test_given_fields_when_json_and_ndjson_cross_then_only_those_values_load_ren
 @pytest.mark.parametrize(
 	("make", "expected_text"),
 	[
-		(lambda: sl.json(b"[]", fields={"id": "id"}), 'field path "id" is not a path'),
 		(lambda: sl.ndjson(b"", keep_record="raw"), "keep_record needs fields"),
 		(lambda: sl.json(b"[]", fields={"id": 1}), "takes a path such as"),
 		(lambda: sl.json(b"[]", fields={1: "$.id"}), "names columns with text"),
 		(lambda: sl.json(b"[]", fields={"id": sl.field("$.id", required="yes")}), "required takes True or False"),
 		(lambda: sl.json(b"[]", fields=[("id", "$.id")]), "fields takes a mapping"),
 	],
-	ids=["path-without-root", "keep-record-alone", "path-not-text", "name-not-text", "required-not-bool", "fields-not-a-mapping"],
+	ids=["keep-record-alone", "path-not-text", "name-not-text", "required-not-bool", "fields-not-a-mapping"],
 )
 def test_given_bad_fields_when_building_json_data_then_it_fails_at_once(make: Any, expected_text: str) -> None:
 	with pytest.raises((ValueError, TypeError), match=expected_text):
 		make()
+
+
+@pytest.mark.parametrize(
+	("item", "expected_text"),
+	[
+		(sl.json(b"[]", fields={"id": "id"}), 'field path "id" is not a path'),
+		(sl.ndjson(b"{}", fields={"items": "$.items[*]"}), "uses the wildcard"),
+	],
+	ids=["path-without-root", "wildcard"],
+)
+def test_given_a_field_path_the_engine_refuses_when_its_json_data_crosses_then_the_read_fails_naming_it(item: Any, expected_text: str) -> None:
+	with pytest.raises(ValueError, match=expected_text):
+		read(iter([item]))
 
 
 def test_given_a_required_field_when_a_row_lacks_it_then_the_read_fails_naming_the_row() -> None:

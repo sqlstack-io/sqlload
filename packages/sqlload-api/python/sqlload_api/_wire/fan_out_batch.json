@@ -1,0 +1,53 @@
+{
+  "job": {
+    "batch": 100,
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "concurrency": 4,
+    "fields": null,
+    "json_body": {
+      "ids": "{id}"
+    },
+    "keep_record": null,
+    "key_path": {
+      "from": {
+        "kind": "parent",
+        "levels": 1
+      },
+      "path": "$.issueId"
+    },
+    "kind": "fan_out",
+    "method": "POST",
+    "on_status": {},
+    "over": {
+      "client": {
+        "connection": "shop_api",
+        "headers": {}
+      },
+      "fields": null,
+      "json_body": null,
+      "keep_record": null,
+      "kind": "paginate",
+      "method": "GET",
+      "on_status": {},
+      "paginator": {
+        "kind": "offset",
+        "limit": 50,
+        "limit_param": "limit",
+        "location": "query",
+        "param": "offset"
+      },
+      "params": {},
+      "path": "/issues",
+      "select": "$.issues[*].id"
+    },
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/comments",
+    "select": "$.comments"
+  }
+}

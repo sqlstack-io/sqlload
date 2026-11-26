@@ -11,7 +11,12 @@ sha256="$(sed -n 's/^UNIXODBC_SHA256=//p' "$pins")"
 name="unixODBC-${version}.tar.gz"
 
 shopt -s nullglob
-sdists=("$1"/*.tar.gz)
+sdists=()
+for sdist in "$1"/*.tar.gz; do
+	# sqlload-api is pure Python, with no wheel bundling unixODBC, so its sdist carries none of its source.
+	case "$(basename "$sdist")" in sqlload_api-*) continue ;; esac
+	sdists+=("$sdist")
+done
 if [ "${#sdists[@]}" -eq 0 ]; then
 	echo "no sdists in $1" >&2
 	exit 1

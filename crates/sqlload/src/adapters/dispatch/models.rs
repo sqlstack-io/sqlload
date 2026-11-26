@@ -5,6 +5,7 @@ use crate::adapters::databricks::models::{DatabricksDestination, DatabricksWrite
 use crate::adapters::duckdb::models::{DuckDbDestination, DuckDbWriter};
 use crate::adapters::files::models::{FilesDestination, ParquetFiles};
 use crate::adapters::postgres::models::{PostgresDestination, PostgresWriter};
+use crate::adapters::session::models::{SessionDestination, SessionWriter};
 use crate::adapters::snowflake::models::{SnowflakeDestination, SnowflakeWriter};
 
 /// An open destination.
@@ -19,6 +20,8 @@ pub enum Destination {
     ClickHouse(Box<ClickHouseDestination>),
     /// Parquet files in an s3, gcs or filesystem connection.
     Files(Box<FilesDestination>),
+    /// A warehouse reached through a connection the caller owns.
+    Session(Box<SessionDestination>),
 }
 
 /// One table's write session, on the destination it loads into.
@@ -32,4 +35,5 @@ pub enum Writer {
     Postgres(Box<PostgresWriter>),
     ClickHouse(Box<ClickHouseWriter>),
     Files(ParquetFiles),
+    Session(Box<SessionWriter>),
 }

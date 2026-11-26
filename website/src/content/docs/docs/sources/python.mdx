@@ -342,7 +342,7 @@ thread-safe. Set `parallel_tables=True` on the source when its client is.
 
 | Function | Meaning |
 |----------|---------|
-| `sl.http(source, *, headers=None, connection=None)` | Requests to the source's `http` connection, or to `connection`, adding `headers` to the connection's. How requests authenticate, their `rate_limit` and `max_in_flight`, and their `retries` are set on the [connection](/docs/configuration/#http); passing `auth`, `rate_limit`, `max_in_flight` or `retries` to `sl.http` fails, naming the connection key to set. |
+| `sl.http(source=None, *, headers=None, connection=None)` | Requests to the source's `http` connection, or to `connection` (all it needs without a source), adding `headers` to the connection's. How requests authenticate, their `rate_limit` and `max_in_flight`, and their `retries` are set on the [connection](/docs/configuration/#http); passing `auth`, `rate_limit`, `max_in_flight` or `retries` to `sl.http` fails, naming the connection key to set. |
 | `api.paginate(path, *, paginator, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, select_missing="fail", error_path=None, transform=None)` | Every page of `path`. `select` is where the rows are: `$`, or a dotted path such as `$.data.items`. A response without the `select` path fails the load, naming what the response holds; `select_missing="empty"` reads it as no rows instead. See [A missing select path](#a-missing-select-path). `error_path` is where the API reports an error in a successful response; see [Errors in a successful response](#errors-in-a-successful-response). `fields` and `keep_record` pick and rename each row's values; see [Fields](#fields). For `method` and `json_body`, see [POST with a JSON body](#post-with-a-json-body). `cells=` turns each row's list of cells into columns; see [Rows of cells](#rows-of-cells). `transform` reshapes each page's rows in Python before they load; see [Transforming each page](#transforming-each-page). |
 | `api.fan_out(path, *, over, concurrency=8, paginator=None, params=None, select=None, on_status=None, fields=None, keep_record=None, method="GET", json_body=None, key=None, cells=None, batch=None, select_missing="fail", error_path=None, transform=None)` | `path` once per key of `over`, up to `concurrency` at a time, while keys still arrive. `select_missing` and `error_path` are as for `paginate`. `over` is a paginate whose `select` picks keys (`$.items[*].id` fills `{id}`), or a list: a value fills the path's one placeholder, and a dict fills placeholders by name. `over` can also be another `fan_out`; see [Multi-level fan-out](#multi-level-fan-out). `method` and `json_body` are as for `paginate`. Keys also fill `{placeholders}` in `json_body`, and `batch` sends several keys per request; see [Keys in a POST body](#keys-in-a-post-body). `transform` is as for `paginate`, called once per page of each key. |
 
@@ -816,3 +816,22 @@ To inspect or correct a logged position, see [`sqlload logged-state`](/docs/cli/
 | `@sl.transform`, `@sl.transform("name")` | Registers a function under its own name, or the one given, as a transform for a [files](/docs/sources/files/#transforming-each-file) or [Google Sheets](/docs/sources/google-sheets/#transforming-each-range) table's `transform = "name"`, or an `sl.http` job's [`transform=`](#transforming-each-page). Returns the function unchanged. |
 | `@sl.rename`, `@sl.rename("name")` | Registers a function under its own name, or the one given, for a table's `rename`. It gets the columns as `sl.Column`s (`position`, `source`, `default`) and an `sl.RenameContext` (`source`, `table`), and returns the names it changes by position. See [rename](/docs/concepts/nested-data/#rename). |
 | `sl.TransformContext` | The `ctx` a transform gets: `unit` (`"file"`, `"range"` or `"page"`), `table`, and the unit's details. |
+
+## Without the engine
+
+`sl.http` and its paginators, `sl.json`, `sl.ndjson`, `sl.field`, `sl.parent`, `sl.key`, `sl.checkpoint` and
+`@sl.transform` come from [`sqlload-api`](https://pypi.org/project/sqlload-api/), a pure-Python package `sqlload` depends
+on and re-exports: `sl.http` is `sqlload_api.http`. It holds no compiled code, so a tool that runs SQLLoad's engine in its
+own process can build the same items without loading a second one, naming the connection instead of a source:
+
+```python
+import sqlload_api
+
+api = sqlload_api.http(connection="shop_api")
+orders = api.paginate("/orders", paginator=sqlload_api.next_link("$.next"), select="$.items")
+```
+
+A job built this way is the same, byte for byte, as one built with `sl.http(source)` from a source whose connection is
+`shop_api`. `sqlload-api` is released with `sqlload`, at the same version, and `sqlload` pins it exactly: an engine reads
+the items of its own version. A field path in `sl.json(..., fields=...)` is checked by the engine when the item is
+yielded, and fails the table naming the field.

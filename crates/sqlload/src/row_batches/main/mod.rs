@@ -7,6 +7,7 @@ pub mod flatten_lines;
 pub mod flattened_columns;
 pub mod item_position;
 pub mod json_lists;
+pub mod json_read_spec;
 pub mod json_rows;
 pub mod loaded_batch;
 pub mod merge_schema;

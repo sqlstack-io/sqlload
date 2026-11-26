@@ -14,6 +14,9 @@ pub const VOLATILE: &[(&str, &str)] = &[
     (r"\s+", " "),
 ];
 
+/// How a load's tally line for one table starts, once normalized: the lines `load` prints as each table finishes.
+pub const TALLY_VERBS: &[&str] = &["loaded ", "failed ", "skipped "];
+
 /// The Postgres image a page's `docker run` starts.
 pub const PAGE_POSTGRES_IMAGE: (&str, &str) = ("postgres", "17");
 

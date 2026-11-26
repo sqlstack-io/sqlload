@@ -30,22 +30,6 @@ def cross(
 	file).
 	"""
 
-class JsonData:
-	def __new__(
-		cls,
-		data: bytes | bytearray,
-		*,
-		lines: bool = False,
-		path: str | None = None,
-		fields: str | None = None,
-		keep_record: str | None = None,
-	) -> JsonData: ...
-	@property
-	def lines(self) -> bool: ...
-	@property
-	def path(self) -> str | None: ...
-	def __len__(self) -> int: ...
-
 class BatchStream(Iterator[Any]):
 	def __iter__(self) -> BatchStream: ...
 	def __next__(self) -> Any: ...

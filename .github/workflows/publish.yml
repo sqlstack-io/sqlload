@@ -88,8 +88,12 @@ jobs:
           manifests = [
               ("Python package", project_version("packages/sqlload/pyproject.toml")),
               ("CLI package", project_version("packages/sqlload-cli/pyproject.toml")),
+              ("API package", project_version("packages/sqlload-api/pyproject.toml")),
               ("Cargo workspace", workspace_version),
           ]
+          with Path("packages/sqlload/pyproject.toml").open("rb") as file:
+              pins = [d for d in tomllib.load(file)["project"]["dependencies"] if d.startswith("sqlload-api")]
+          manifests.append(("Python package's sqlload-api pin", pins[0].partition("==")[2] if pins else "missing"))
           mismatches = [f"{label}={version}" for label, version in manifests if version != expected]
           if mismatches:
               raise SystemExit(
@@ -271,10 +275,35 @@ jobs:
           name: wheel-${{ matrix.platform.name }}-${{ matrix.package.id }}
           path: dist
 
+  # sqlload-api is pure Python: one wheel for every platform, and its sdist; every sqlload wheel pins it.
+  api:
+    name: Build sqlload-api
+    needs: [release-tag, release-metadata]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.release-tag.outputs.tag }}
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      - name: Build the wheel and sdist
+        run: uv build packages/sqlload-api --out-dir dist
+      - name: Assert the wheel is pure Python and imports without the engine
+        run: |
+          ls dist/sqlload_api-*-py3-none-any.whl
+          python3 -m venv api
+          api/bin/pip install --quiet dist/sqlload_api-*.whl
+          api/bin/python -c "import sys, sqlload_api; assert not any(m.split('.')[0] == 'sqlload' for m in sys.modules)"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: sqlload-api
+          path: dist
+
   # Each platform's two wheels, installed and run natively: the Intel Mac's on an Intel runner.
   wheel-smoke:
     name: Smoke-test wheels (${{ matrix.platform.name }})
-    needs: [release-tag, wheels]
+    needs: [release-tag, wheels, api]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       fail-fast: false
@@ -304,13 +333,18 @@ jobs:
           pattern: wheel-${{ matrix.platform.name }}-*
           path: dist
           merge-multiple: true
+      # The sqlload wheel pins sqlload-api at its own version, which installs from here.
+      - uses: actions/download-artifact@v5
+        with:
+          name: sqlload-api
+          path: dist
       - name: Smoke-test the wheels
         shell: bash
         run: |
           python -m venv smoke
           bin=smoke/bin
           if [[ "${RUNNER_OS}" == "Windows" ]]; then bin=smoke/Scripts; fi
-          "${bin}/python" -m pip install --quiet dist/sqlload-*.whl
+          "${bin}/python" -m pip install --quiet --find-links dist dist/sqlload-*.whl
           "${bin}/sqlload" --help
           "${bin}/sqll" --help > /dev/null
           "${bin}/python" -c "import sqlload, sqlload._native"
@@ -326,7 +360,7 @@ jobs:
           case "${RUNNER_OS}" in
             Linux)
               docker run --rm -v "$PWD:/w" -w /w python:3.12-slim bash -c '
-                python -m venv /v && /v/bin/pip install --quiet dist/sqlload-*.whl &&
+                python -m venv /v && /v/bin/pip install --quiet --find-links dist dist/sqlload-*.whl &&
                 python -m venv /c && /c/bin/pip install --quiet dist/sqlload_cli-*.whl &&
                 /v/bin/python .github/scripts/smoke_odbc_wheel.py /v/bin/sqlload /c/bin/sqlload --default-ini /etc/odbcinst.ini --driver-folder "/usr/lib/$(uname -m)-linux-gnu/odbc"'
               ;;
@@ -386,6 +420,7 @@ jobs:
       - wheels
       - wheel-smoke
       - sdist
+      - api
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -415,6 +450,17 @@ jobs:
       - name: Assert every sdist carries unixODBC's source, unchanged
         shell: bash
         run: bash .github/scripts/assert_sdist_sources.sh dist
+
+      # sqlload pins sqlload-api at its own version, so sqlload-api goes up first: `pip install sqlload==<version>`
+      # resolves as soon as sqlload is listed.
+      - name: Set sqlload-api's files apart
+        run: mkdir dist-api && mv dist/sqlload_api-* dist-api/
+
+      - name: Publish sqlload-api to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-api
+          skip-existing: true
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

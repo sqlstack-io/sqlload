@@ -1,0 +1,30 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "fields": null,
+    "json_body": {
+      "filter": {
+        "status": "open"
+      },
+      "page": {}
+    },
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "POST",
+    "on_status": {},
+    "paginator": {
+      "kind": "page_number",
+      "location": "body",
+      "page_size": 50,
+      "page_size_param": "$.page.size",
+      "param": "$.page.number",
+      "start": 1
+    },
+    "params": {},
+    "path": "/search",
+    "select": "$.results"
+  }
+}

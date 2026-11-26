@@ -1,0 +1,34 @@
+{
+  "job": {
+    "cells": {
+      "name": {
+        "from": "$.columns",
+        "id_key": "id",
+        "key": "columnId",
+        "kind": "listed",
+        "name_key": "title"
+      },
+      "pointer": "$.cells",
+      "value": [
+        "$.value",
+        "$.displayValue"
+      ]
+    },
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {},
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/sheets/1",
+    "select": "$.rows"
+  }
+}

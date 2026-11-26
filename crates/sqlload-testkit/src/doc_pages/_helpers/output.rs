@@ -2,7 +2,7 @@
 
 use regex::Regex;
 
-use crate::doc_pages::constants::{ELISION, VOLATILE};
+use crate::doc_pages::constants::{ELISION, TALLY_VERBS, VOLATILE};
 
 /// What the page should show of `actual`: all of it, or around a `…` line the page's line counts.
 pub(crate) fn shown_output(expected: &[String], actual: &[String]) -> Vec<String> {
@@ -19,7 +19,7 @@ pub(crate) fn shown_output(expected: &[String], actual: &[String]) -> Vec<String
     shown
 }
 
-/// `lines` without durations, memory, server versions and the spaces that align them.
+/// `lines` without durations, memory, server versions and the spaces that align them, each run of a load's tally lines in a fixed order (see [`tally_runs_sorted`]).
 pub(crate) fn normalized(lines: &[String]) -> Result<Vec<String>, String> {
     let mut patterns: Vec<(Regex, &str)> = Vec::new();
     for (pattern, replacement) in VOLATILE {
@@ -34,7 +34,26 @@ pub(crate) fn normalized(lines: &[String]) -> Result<Vec<String>, String> {
         }
         normalized.push(text.trim().to_owned());
     }
-    Ok(normalized)
+    Ok(tally_runs_sorted(normalized))
+}
+
+/// `lines` with each run of adjacent tally lines (`loaded`, `failed`, `skipped`) sorted: `load` prints a table's line as the table finishes, so tables loading at once print in no fixed order; which tables, and what each line says, still have to match.
+pub(crate) fn tally_runs_sorted(lines: Vec<String>) -> Vec<String> {
+    let tally = |line: &String| TALLY_VERBS.iter().any(|verb| line.starts_with(verb));
+    let mut sorted: Vec<String> = Vec::with_capacity(lines.len());
+    let mut run: Vec<String> = Vec::new();
+    for line in lines {
+        if tally(&line) {
+            run.push(line);
+            continue;
+        }
+        run.sort();
+        sorted.append(&mut run);
+        sorted.push(line);
+    }
+    run.sort();
+    sorted.append(&mut run);
+    sorted
 }
 
 /// A difference between the page's lines and a run's, for a failure message.

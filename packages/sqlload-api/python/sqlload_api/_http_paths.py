@@ -1,8 +1,9 @@
 """The `sl.http` field paths a table function writes as literals, read from its source without calling it.
 
 `plan` checks them with load's own path checker, so a bad literal path fails `plan` instead of the load. Only calls whose
-names resolve to sqlload count: `paginate` and `fan_out` on an `sl.http(...)` client, and `sl.field`, `sl.parent` and
-`sl.key` in their `fields=`. A `transform=` given as a name must be one `@sl.transform` registered. A path `plan` can't
+names resolve to sqlload or sqlload_api count: `paginate` and `fan_out` on an `sl.http(...)` client (or, with
+`context_clients`, one the function's context makes, such as `ctx.http()`), and `sl.field`, `sl.parent` and `sl.key` in
+their `fields=`. A `transform=` given as a name must be one `@sl.transform` registered. A path `plan` can't
 read as a literal (a variable, an f-string, a dict built elsewhere), or a function whose source can't be read, is left to
 load, which checks every job before its first request.
 """
@@ -13,17 +14,17 @@ import json
 import sys
 import textwrap
 import types
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from typing import Any
 
-from sqlload import _data, _http
-from sqlload._transform import TRANSFORMS
+from sqlload_api import _data, _http
+from sqlload_api._transform import TRANSFORMS
 
 #: The methods of an `sl.http` client that build a job.
 JOB_METHODS: frozenset[str] = frozenset({"paginate", "fan_out"})
 
-#: The module a name must resolve into for its call to count.
-PACKAGE = "sqlload"
+#: The packages a name must resolve into for its call to count: `sqlload` re-exports `sqlload_api`'s functions.
+PACKAGES: tuple[str, ...] = ("sqlload", "sqlload_api")
 
 #: A name or attribute that doesn't resolve to anything `plan` may look at.
 _UNRESOLVED: Any = object()
@@ -31,13 +32,22 @@ _UNRESOLVED: Any = object()
 #: A local name assigned an `sl.http(...)` client inside the table function.
 _LOCAL_CLIENT: Any = object()
 
+#: The table function's first parameter, its context, when `context_clients` names methods of it that make clients.
+_CONTEXT: Any = object()
 
-def literal_paths(function: Callable[..., Any]) -> dict[str, Any] | None:
+#: A context method named in `context_clients`: calling it makes a client.
+_CONTEXT_CLIENT: Any = object()
+
+
+def literal_paths(function: Callable[..., Any], *, context_clients: Collection[str] = ()) -> dict[str, Any] | None:
 	"""The literal paths of the jobs `function` builds that load rows: each `fields=` entry's `[name, path]` and each
 	`key_path`; why a `transform=` name can't be looked up; what `plan` can't read as a literal; and whether the source
 	can't be read at all. A job passed as another
 	job's `over=` is left out: load refuses its `fields` and `key_path` whatever their paths. `None` when the function builds
-	no job `plan` can see."""
+	no job `plan` can see.
+
+	`context_clients` names methods of the function's first parameter that return an `sl.http` client (`{"http"}` for
+	`api = ctx.http()` or `ctx.http().paginate(...)`); none by default."""
 	try:
 		tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
 	except (OSError, TypeError, SyntaxError):
@@ -45,7 +55,7 @@ def literal_paths(function: Callable[..., Any]) -> dict[str, Any] | None:
 	definition = next((node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
 	if definition is None:
 		return {"fields": [], "key_paths": [], "computed": [], "no_source": True}
-	names = _Names(function, definition)
+	names = _Names(function, definition, frozenset(context_clients))
 	jobs = [call for call in ast.walk(definition) if isinstance(call, ast.Call) and _job_method(call, names)]
 	if not jobs:
 		return None
@@ -61,7 +71,10 @@ class _Names:
 	"""What the names a table function uses resolve to: its own imports and `sl.http(...)` clients, else its closure and
 	module globals; a name it assigns otherwise shadows them and resolves to nothing."""
 
-	def __init__(self, function: Callable[..., Any], definition: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+	def __init__(
+		self, function: Callable[..., Any], definition: ast.FunctionDef | ast.AsyncFunctionDef, context_clients: frozenset[str]
+	) -> None:
+		self.context_clients = context_clients
 		self.outer: dict[str, Any] = dict(getattr(function, "__globals__", {}))
 		code = getattr(function, "__code__", None)
 		for name, cell in zip(code.co_freevars if code else (), getattr(function, "__closure__", None) or ()):
@@ -74,6 +87,9 @@ class _Names:
 		for argument in [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs, arguments.vararg, arguments.kwarg]:
 			if argument is not None:
 				self.local[argument.arg] = _UNRESOLVED
+		positional = [*arguments.posonlyargs, *arguments.args]
+		if context_clients and positional:
+			self.local[positional[0].arg] = _CONTEXT
 		for node in ast.walk(definition):
 			self._bind(node)
 
@@ -87,7 +103,7 @@ class _Names:
 			for alias in node.names:
 				self.local[alias.asname or alias.name] = getattr(module, alias.name, _UNRESOLVED) if _ours(module) else _UNRESOLVED
 		elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-			client = isinstance(node.value, ast.Call) and self.resolve(node.value.func) in (_http.http, _http.Http)
+			client = isinstance(node.value, ast.Call) and _makes_client(self.resolve(node.value.func))
 			self.local[node.targets[0].id] = _LOCAL_CLIENT if client and self.local.get(node.targets[0].id, _LOCAL_CLIENT) is _LOCAL_CLIENT else _UNRESOLVED
 		elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id not in self.local:
 			self.local[node.id] = _UNRESOLVED
@@ -96,9 +112,13 @@ class _Names:
 		"""What a name or a dotted attribute resolves to, looking only into sqlload's modules and clients."""
 		if isinstance(node, ast.Name):
 			return self.local[node.id] if node.id in self.local else self.outer.get(node.id, _UNRESOLVED)
+		if isinstance(node, ast.Call) and self.resolve(node.func) is _CONTEXT_CLIENT:
+			return _LOCAL_CLIENT
 		if not isinstance(node, ast.Attribute):
 			return _UNRESOLVED
 		owner = self.resolve(node.value)
+		if owner is _CONTEXT:
+			return _CONTEXT_CLIENT if node.attr in self.context_clients else _UNRESOLVED
 		if isinstance(owner, types.ModuleType) and _ours(owner):
 			return getattr(owner, node.attr, _UNRESOLVED)
 		if (owner is _LOCAL_CLIENT or isinstance(owner, _http.Http)) and node.attr in JOB_METHODS:
@@ -107,9 +127,15 @@ class _Names:
 
 
 def _ours(module: Any) -> bool:
-	"""Whether `module` is sqlload or one of its modules."""
+	"""Whether `module` is sqlload, sqlload_api or one of their modules."""
 	name = getattr(module, "__name__", "") if isinstance(module, types.ModuleType) else ""
-	return name == PACKAGE or name.startswith(f"{PACKAGE}.")
+	return any(name == package or name.startswith(f"{package}.") for package in PACKAGES)
+
+
+def _makes_client(resolved: Any) -> bool:
+	"""Whether calling what a name resolved to makes an `sl.http` client: `sl.http`, `sl.Http`, or a context method
+	`context_clients` names."""
+	return resolved is _CONTEXT_CLIENT or resolved in (_http.http, _http.Http)
 
 
 def _job_method(call: ast.Call, names: _Names) -> str | None:

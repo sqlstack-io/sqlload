@@ -4,6 +4,7 @@ use crate::adapters::databricks::main::stage::_check_volume::check_volume;
 use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::models::Destination;
 use crate::adapters::postgres::main::session::_check_session::check_session;
+use crate::adapters::session::main::_check_session::check_session as check_caller_session;
 use crate::adapters::snowflake::main::stage::_check_stage::check_stage;
 use crate::adapters::snowflake::models::ForcedStage;
 use crate::file_store::main::open_folder::open_folder;
@@ -63,6 +64,7 @@ pub async fn check_destination(destination: Destination) -> Result<String, Loade
             Ok(format!("{answer}; {checked}"))
         }
         Destination::Postgres(postgres) => check_session(&postgres).await,
+        Destination::Session(session) => check_caller_session(&session).await,
         #[cfg(feature = "duckdb")]
         destination @ Destination::DuckDb(_) => {
             let answer = single_text(&destination, version_query(&destination).to_owned()).await?;
