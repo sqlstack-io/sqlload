@@ -35,16 +35,17 @@ new_tables = "skip"
 exclude_columns = ["*email*"]
 write_strategy = "merge"
 unique_key = "id"
-cursor_column = "updated_at"
 lookback = "1h"
 
 [sources.app.tables."public.accounts"]
+write_strategy = "replace"
 columns = { balance = "decimal(18,2)" }
 type_change_rebuild = "allow"
 checks = { unique = ["id"], not_null = ["id"], max_row_drop = "20%", warn = ["max_row_drop"] }
 
 [sources.app.tables."public.events"]
-write_strategy = "append"
+write_strategy = "delete_insert"
+cursor_column = "updated_at"
 unique_key = ["event_id", "line_no"]
 "#;
 

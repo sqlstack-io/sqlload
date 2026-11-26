@@ -10,6 +10,10 @@ pub const DEFAULT_PYTHON: &str = "python3";
 pub const DEFAULT_PYTHON: &str = "python";
 /// The duckdb package versions MotherDuck accepts, as the bridge's install hints name them.
 pub const SUPPORTED_DUCKDB: &str = "duckdb 1.4.1 to 1.5.6";
+/// How long the last handle of a bridge waits for it to exit once its stdin closes, before ending it: it exits as soon as it reads the end of stdin, releasing the database it opened.
+pub const BRIDGE_EXIT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How often that wait checks whether the bridge has exited.
+pub const BRIDGE_EXIT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 /// How many bytes of the bridge's last stderr output a failure quotes.
 pub const STDERR_TAIL_BYTES: usize = 2048;
 /// The error types the bridge replies with when its Python has no duckdb package.

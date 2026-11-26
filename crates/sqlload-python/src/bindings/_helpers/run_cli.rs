@@ -2,7 +2,7 @@ use pyo3::{Python, pyfunction};
 use sqlload::command::main::run_args_with_host::run_args_with_host;
 use sqlload::memory_budget::main::run_stopped::run_stopped as stopped;
 
-use crate::host::main::extension_host::extension_host;
+use crate::bindings::_helpers::extension_host::extension_host;
 
 /// Run the `sqlload` command line `argv` (the program name first) with the GIL released, Python sources included, and return its exit code.
 #[pyfunction]

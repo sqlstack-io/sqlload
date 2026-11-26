@@ -6112,7 +6112,32 @@ dependencies = [
  "pyo3",
  "serde_json",
  "sqlload",
+ "sqlload-python-host",
  "tracing",
+]
+
+[[package]]
+name = "sqlload-python-host"
+version = "0.85.0"
+dependencies = [
+ "arrow-array",
+ "arrow-pyarrow",
+ "arrow-schema",
+ "base64 0.22.1",
+ "chrono-tz",
+ "pyo3",
+ "serde_json",
+ "sqlload",
+ "tracing",
+]
+
+[[package]]
+name = "sqlload-python-host-example"
+version = "0.0.0"
+dependencies = [
+ "pyo3",
+ "sqlload",
+ "sqlload-python-host",
 ]
 
 [[package]]

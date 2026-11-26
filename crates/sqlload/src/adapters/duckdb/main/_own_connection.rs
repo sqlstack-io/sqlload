@@ -7,7 +7,7 @@ use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
 use crate::adapters::motherduck_bridge::main::fork_connection::fork_connection;
 use crate::memory_budget::main::table_memory::table_memory;
 
-/// A new connection to the same database, so one table's transaction never mixes with another table's loading at the same time. Under the memory watchdog, the table it loads can have the connection's running statement interrupted.
+/// A new connection to the same database, so one table's transaction never mixes with another table's loading at the same time. Under the memory watchdog, the table it loads can have the connection's running statement interrupted; on a MotherDuck bridge, the thread that interrupts it holds the bridge weakly, so the connection keeps its last handle and the bridge exits on the command's own path.
 pub(in crate::adapters) fn own_connection(
     destination: &DuckDbDestination,
 ) -> Result<DuckDbDestination, DuckDbError> {
@@ -32,9 +32,12 @@ pub(in crate::adapters) fn own_connection(
         DuckDbConnection::Bridge(bridge) => {
             let forked = fork_connection(bridge);
             if watched.is_some() {
-                let (process, cursor) = (forked.cursor.process.clone(), forked.cursor.id);
+                let (process, cursor) = (Arc::downgrade(&forked.cursor.process), forked.cursor.id);
                 std::thread::spawn(move || {
                     for () in receiver {
+                        let Some(process) = process.upgrade() else {
+                            break;
+                        };
                         let interrupt = serde_json::json!({"op": "interrupt", "cursor": cursor});
                         let _ = process.lines.send(interrupt.to_string());
                     }

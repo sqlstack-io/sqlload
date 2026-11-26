@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "example-host"
+version = "0.0.0"
+description = "A host of SQLLoad's engine with a Python runtime of its own, for sqlload-python-host's tests; never published."
+requires-python = ">=3.10"
+
+[tool.maturin]
+manifest-path = "../../crates/sqlload-python-host-example/Cargo.toml"
+module-name = "example_host._native"
+python-source = "python"

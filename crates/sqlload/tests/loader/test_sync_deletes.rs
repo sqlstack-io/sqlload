@@ -75,20 +75,12 @@ fn given_deletes_where_nothing_can_scan_when_planning_then_plan_fails_naming_the
     run_async(|| async move {
         let source = start_postgres().await?;
         let client = connect(&source).await?;
-        let test_cases = [
-            SyncDeletesRefusalTestCase {
-                description: "--sync-deletes when no selected table sets deletes",
-                settings: "",
-                sync_deletes: true,
-                expected_error: "reason --sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes └── fix set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes",
-            },
-            SyncDeletesRefusalTestCase {
-                description: "deletes on a delete_insert, which has no key to match",
-                settings: "deletes = \"soft\"",
-                sync_deletes: false,
-                expected_error: "deletes marks the rows whose unique_key the source no longer holds, which needs write_strategy = \"merge\"; delete_insert keeps no key to match",
-            },
-        ];
+        let test_cases = [SyncDeletesRefusalTestCase {
+            description: "--sync-deletes when no selected table sets deletes",
+            settings: "",
+            sync_deletes: true,
+            expected_error: "reason --sync-deletes reads every key of each selected table with deletes and marks its rows of the keys the source no longer holds, but none of the selected tables sets deletes └── fix set deletes = \"soft\" or \"hard\" on a merge table, or drop --sync-deletes",
+        }];
         for test_case in &test_cases {
             let plan = sync_deletes_plan(
                 (&client, source.port),

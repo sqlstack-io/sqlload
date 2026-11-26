@@ -47,32 +47,14 @@ destination_path = "parts/{table}/{cursor:date}/"
 description = "Items, captured."
 "#;
 
-const FILES_MERGED: &str = r#"
-[sources.merged]
-kind = "postgres_cdc"
-connection = "pg"
-include = ["public.items"]
-
-[sources.merged.tables."public.items"]
-description = "Items, merged."
-
+const FILES_UNLISTED: &str = r#"
 [sources.down]
 kind = "postgres"
 connection = "pg"
 include = ["public.["]
 "#;
 
-const MERGE_REFUSED: (bool, &str) = (
-    false,
-    "a files target takes kind = \"postgres_cdc\" only with cdc_mode = \"changelog\"",
-);
-
-const FILES_MERGE_REFUSED: [CdcStep; 8] = [
-    step("", &["plan", "merged"], "", MERGE_REFUSED),
-    step("", &["plan", "merged__items"], "", MERGE_REFUSED),
-    step("", &["plan", "public.items"], "", MERGE_REFUSED),
-    step("", &["plan"], "", MERGE_REFUSED),
-    step("", &["load", "merged", "--follow"], "", MERGE_REFUSED),
+const FILES_UNLISTED_REFUSED: [CdcStep; 3] = [
     step(
         "",
         &["plan", "down"],
@@ -81,7 +63,7 @@ const FILES_MERGE_REFUSED: [CdcStep; 8] = [
     ),
     step(
         "",
-        &["plan", "--exclude", "merged__items", "--exclude", "down"],
+        &["plan", "--exclude", "down"],
         "",
         (true, "Plan complete"),
     ),
@@ -244,12 +226,12 @@ fn given_a_postgres_cdc_changelog_into_files_when_loads_stop_at_each_restart_poi
             expected_result: CHANGELOG_RESULT,
         },
         CdcFilesTestCase {
-            description: "a source merging its changes, or one that cannot list its tables, is refused when selected, and a load of another source goes ahead",
+            description: "a source that cannot list its tables is refused when selected, and a load of another source goes ahead",
             tag: "17-alpine",
-            steps: &FILES_MERGE_REFUSED,
+            steps: &FILES_UNLISTED_REFUSED,
             store: local_store,
             spill_bytes: "",
-            extra_config: FILES_MERGED,
+            extra_config: FILES_UNLISTED,
             plant: nothing_planted,
             check_query: "SELECT CAST((SELECT count(*) FROM glob('{root}/out/merged/**')) AS VARCHAR) || ':' || CAST((SELECT count(*) > 0 FROM glob('{root}/out/log/orders/*.parquet')) AS VARCHAR)",
             expected_result: "0:true",

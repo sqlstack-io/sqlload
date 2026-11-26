@@ -24,8 +24,7 @@ use crate::loader::_helpers::sources::scoped_tables;
 use crate::loader::_helpers::specs::ColumnSelection;
 use crate::loader::_helpers::specs::table_name;
 use crate::loader::_helpers::specs::{
-    ColumnChoices, SourceContext, build_spec, column_selection, layered, pinned_types,
-    table_compat, table_naming,
+    ColumnChoices, SourceContext, build_spec, column_selection, pinned_types,
 };
 #[cfg(feature = "odbc")]
 use crate::loader::_helpers::table_plan::block_refused_bounds;
@@ -52,6 +51,9 @@ use crate::python_sources::types::PythonHost;
 use crate::schema_plan::models::SchemaPlan;
 use crate::similar_names::main::nearest_name::nearest_name;
 use crate::ssh_tunnel::models::SshTunnel;
+use crate::table_options::main::layered::layered;
+use crate::table_options::main::table_compat::table_compat;
+use crate::table_options::main::table_naming::table_naming;
 use std::collections::BTreeMap;
 
 /// The specs for `discovered` tables of source `source_name`, with problems and skipped tables, including each table listed under `[sources.NAME.tables]` that discovery didn't find.

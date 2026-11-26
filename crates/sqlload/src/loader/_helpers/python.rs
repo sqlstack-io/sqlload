@@ -1277,6 +1277,7 @@ fn table_read(
         zone: spec.timezone.map(|(zone, _)| zone),
         source_part: (load.project.memory.budget.as_ref())
             .map(|budget| budget.table_share / TABLE_SHARE_PARTS),
+        host: load.project.python_hosts.get(&spec.source_name).cloned(),
     }
 }
 

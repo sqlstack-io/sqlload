@@ -1191,18 +1191,6 @@ pub(crate) struct DedupeTargetTestCase {
     pub(crate) expected_rows: [&'static str; 4],
 }
 
-/// A `delete_insert` by `replace_key` on a database source with `settings` added, and what plan says of it.
-pub(crate) struct ReplaceKeyRefusalTestCase {
-    pub(crate) description: &'static str,
-    pub(crate) settings: &'static str,
-    /// Text the load's error must contain; empty when it must load.
-    pub(crate) expected_error: &'static str,
-    /// Text the error's fix must contain.
-    pub(crate) expected_fix: &'static str,
-    /// How many tables named `app__estimates` the target holds afterwards.
-    pub(crate) expected_tables: &'static str,
-}
-
 /// A target that `delete_insert` with a cursor and a `replace_key` loads Postgres rows into twice.
 pub(crate) struct ReplaceKeyTargetTestCase {
     pub(crate) description: &'static str,

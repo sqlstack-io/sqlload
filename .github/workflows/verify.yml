@@ -95,8 +95,10 @@ jobs:
       # Checks what crates.io would receive (files, metadata, lockfile) without compiling it again:
       # the steps above already build it, and recompiling the packaged copy re-unpacks DuckDB's
       # bundled sources into a cached build folder, which fails when that folder is not empty.
-      - name: Package the crate as crates.io would
-        run: cargo publish --dry-run --no-verify --locked -p sqlload
+      # `cargo package` with both crates resolves sqlload-python-host's exact sqlload requirement against the sqlload
+      # packaged beside it, which `cargo publish --dry-run` can't before that version is on crates.io.
+      - name: Package the crates as crates.io would
+        run: cargo package --no-verify --locked -p sqlload -p sqlload-python-host
 
   containers:
     name: Container tests

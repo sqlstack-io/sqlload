@@ -67,9 +67,7 @@ use crate::loader::_helpers::run_log::{
     file_column_problem, loaded_file, logs_files, merge_ledger, reload_order,
 };
 use crate::loader::_helpers::specs::integer_cursor;
-use crate::loader::_helpers::specs::{
-    flattened_object_problems, referenced_columns, table_compat, table_name, table_naming,
-};
+use crate::loader::_helpers::specs::{flattened_object_problems, referenced_columns, table_name};
 use crate::loader::_helpers::specs::{path_values, pinned_unsampled};
 use crate::loader::_helpers::specs::{returned_columns, runnable_transform, transform_input};
 #[cfg(not(feature = "duckdb"))]
@@ -132,6 +130,8 @@ use crate::snowflake_source::models::{UnloadRequest, UnloadedFiles};
 use crate::store_paths::main::connection_store::connection_store;
 use crate::store_paths::main::resolve_location::resolve_location;
 use crate::store_paths::models::Location;
+use crate::table_options::main::table_compat::table_compat;
+use crate::table_options::main::table_naming::table_naming;
 
 /// The sources the plan running now has finished checking, which only the line `plan` shows on a terminal reads.
 pub(crate) static PLANNED_SOURCES: std::sync::atomic::AtomicUsize =

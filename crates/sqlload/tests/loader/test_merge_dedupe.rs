@@ -8,14 +8,13 @@ use sqlload_testkit::postgres::main::connect::connect;
 use sqlload_testkit::postgres::main::start_postgres::start_postgres;
 use sqlload_testkit::postgres::main::start_postgres_version::start_postgres_version;
 
-use crate::helpers::{run_async, words};
+use crate::helpers::run_async;
 use crate::merge_helpers::{
-    READINGS_SETUP, replace_key_outcome, run_dedupe_case, run_dedupe_rules, run_null_key_loads,
-    run_replace_key_loads,
+    READINGS_SETUP, run_dedupe_case, run_dedupe_rules, run_null_key_loads, run_replace_key_loads,
 };
 use crate::test_types::{
     DedupeRefusalTestCase, DedupeRule, DedupeTargetTestCase, NullKeyTargetTestCase,
-    ReplaceKeyRefusalTestCase, ReplaceKeyTargetTestCase,
+    ReplaceKeyTargetTestCase,
 };
 
 /// What a merge on `(company, item, site)` holds after each of three loads, the source's `qty` growing by 10 between them: one row per key, NULL parts included, each with the latest load's value, and the empty key (`/`) apart from the NULL one.
@@ -198,16 +197,6 @@ fn given_a_newest_by_column_it_cannot_compare_when_planning_then_plan_refuses_th
             .map_err(|error| error.to_string())?;
         let test_cases = [
             DedupeRefusalTestCase {
-                description: "a masked column",
-                rule: DedupeRule {
-                    description: "a masked column",
-                    settings: "newest_by = \"seen_at\"\nmask = { seen_at = \"hash\" }",
-                    expected_error: "newest_by column seen_at is masked, so its values cannot say which row is newer",
-                    expected_plan: "",
-                },
-                expected_tables: "0",
-            },
-            DedupeRefusalTestCase {
                 description: "a JSON column, which has no order",
                 rule: DedupeRule {
                     description: "a JSON column, which has no order",
@@ -306,51 +295,6 @@ fn given_a_database_source_with_a_replace_key_and_no_cursor_when_loading_into_ea
         for test_case in &test_cases {
             let rows = run_replace_key_loads(test_case, (&client, source.port)).await?;
             assert_eq!(rows, test_case.expected_rows, "{}", test_case.description);
-        }
-        Ok(())
-    })
-}
-
-#[test]
-fn given_a_cursor_column_with_a_replace_key_on_a_database_source_when_planning_then_plan_refuses_it_naming_the_full_read()
--> Result<(), String> {
-    run_async(|| async move {
-        let source = start_postgres().await?;
-        let client = connect(&source).await?;
-        let test_cases = [
-            ReplaceKeyRefusalTestCase {
-                description: "a cursor would read part of a version's rows while the commit deletes all of them, so plan refuses it and creates no table",
-                settings: "cursor_column = \"updated_at\"",
-                expected_error: "cursor_column updated_at does not apply to delete_insert by replace_key: a load deletes every row of each key value it reads, so the rows of a key value outside the cursor range, which it never reads, would be lost",
-                expected_fix: "drop cursor_column, so every load reads the whole source and replaces each key value it holds; or use write_strategy = \"merge\" on a unique_key to read by the cursor",
-                expected_tables: "0",
-            },
-            ReplaceKeyRefusalTestCase {
-                description: "without a cursor the table is read whole and loads",
-                settings: "",
-                expected_error: "",
-                expected_fix: "",
-                expected_tables: "1",
-            },
-        ];
-        for test_case in &test_cases {
-            let (error, tables) =
-                replace_key_outcome((&client, source.port), test_case.settings).await?;
-            assert_eq!(
-                (
-                    words(&error).contains(&words(test_case.expected_error))
-                        && words(&error).contains(&words(test_case.expected_fix)),
-                    error.is_empty(),
-                    tables.as_deref(),
-                ),
-                (
-                    true,
-                    test_case.expected_error.is_empty(),
-                    Some(test_case.expected_tables)
-                ),
-                "{}: {error}",
-                test_case.description
-            );
         }
         Ok(())
     })

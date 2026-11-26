@@ -1052,28 +1052,6 @@ pub(crate) fn listed_sources(
     ))
 }
 
-/// Why `on_overlapping_files` does not apply to a table loaded by `strategy`: it is for a `delete_insert` by `replace_key` (`keyed`) of a source of `files`, where two files of the folder can hold one key value.
-pub(crate) fn overlapping_files_problem(
-    files: bool,
-    strategy: WriteStrategy,
-    keyed: bool,
-) -> Option<String> {
-    const FOR: &str = "on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value";
-    match (files, strategy, keyed) {
-        (true, _, true) => None,
-        (false, _, _) => Some(format!("{FOR}; this source reads no files, so remove it")),
-        (true, WriteStrategy::Merge, _) => Some(format!(
-            "{FOR}; a merge already lets the last file win each unique_key; remove it"
-        )),
-        (true, WriteStrategy::DeleteInsert, false) => Some(format!(
-            "{FOR}; this delete_insert replaces a cursor range, not key values, so remove it, or set replace_key"
-        )),
-        (true, strategy, false) => Some(format!(
-            "{FOR}; {strategy} replaces no key values, so remove it"
-        )),
-    }
-}
-
 /// How `plan` describes the commits of a files table whose files, in `groups`, are each recorded in the run log: how many commits, their order, and what `on_overlapping_files = "last_wins"` adds.
 pub(crate) fn recorded_commits(groups: &[FileGroup], spec: &TableSpec) -> String {
     let files = match groups.iter().map(|group| group.files.len()).sum::<usize>() {

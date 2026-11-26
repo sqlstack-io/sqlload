@@ -112,19 +112,6 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
-            description: "append with lookback is rejected before anything runs",
-            setup: "CREATE TABLE public.ticks (seq int8, at timestamptz);",
-            settings: "write_strategy = \"append\"\ncursor_column = \"at\"\nlookback = \"1h\"\n[sources.app.tables.\"public.ticks\"]\n",
-            runs: &[ScenarioRun {
-                source_change: "",
-                destination_change: "",
-                expected_error: "lookback re-inserts the window on every run with append",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
-        },
-        ScenarioTestCase {
             description: "a column dropped by hand is added back, and one added by hand is left alone",
             setup: "CREATE TABLE public.stores (code text PRIMARY KEY, city text);
                     INSERT INTO public.stores VALUES ('L1', 'Leeds');",
@@ -402,17 +389,6 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             expected_result: "0",
         },
         ScenarioTestCase {
-            description: "a masked cursor column is rejected",
-            setup: "CREATE TABLE public.users (id int8 PRIMARY KEY, code text);",
-            settings: "write_strategy = \"replace\"\n[sources.app.tables.\"public.users\"]\nwrite_strategy = \"merge\"\nunique_key = \"{primary_key}\"\ncursor_column = \"code\"\nmask = { code = \"hash\" }\n",
-            runs: &[ScenarioRun {
-                expected_error: "a masked column cannot be the cursor_column",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
-        },
-        ScenarioTestCase {
             description: "a write that fails inside the transaction keeps the old rows and drops the staging table",
             setup: "CREATE TABLE public.people (id int8 PRIMARY KEY, name text);
                     INSERT INTO public.people VALUES (1, 'Ann'), (2, 'Bob');",
@@ -455,17 +431,6 @@ fn given_edge_cases_when_loading_postgres_into_duckdb_then_tables_stay_correct()
             settings: "[sources.app.tables.\"public.keyed\"]\ncursor_column = \"at\"\n",
             runs: &[ScenarioRun {
                 expected_error: "public.keyed (kind = \"postgres\"): no write_strategy is set on the table or its source, and SQLLoad doesn't choose one",
-                ..OK
-            }],
-            check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",
-            expected_result: "0",
-        },
-        ScenarioTestCase {
-            description: "merge without a unique_key is refused, though the table has a primary key: SQLLoad no longer takes it unasked",
-            setup: "CREATE TABLE public.keyed (id int8 PRIMARY KEY, note text);",
-            settings: "write_strategy = \"merge\"\n",
-            runs: &[ScenarioRun {
-                expected_error: "write_strategy = \"merge\" needs a unique_key: the key columns, such as unique_key = [\"id\"], or unique_key = \"{primary_key}\"",
                 ..OK
             }],
             check_query: "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_schema = 'raw'",

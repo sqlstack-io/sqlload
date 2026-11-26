@@ -835,3 +835,43 @@ A job built this way is the same, byte for byte, as one built with `sl.http(sour
 `shop_api`. `sqlload-api` is released with `sqlload`, at the same version, and `sqlload` pins it exactly: an engine reads
 the items of its own version. A field path in `sl.json(..., fields=...)` is checked by the engine when the item is
 yielded, and fails the table naming the field.
+
+### Embedding the Python host
+
+A tool with a pyo3 extension of its own can run its tables on SQLLoad's engine with the
+[`sqlload-python-host`](https://crates.io/crates/sqlload-python-host) crate. What its tables yield crosses as an
+`sl.source`'s does: dicts, Arrow data, `json`/`ndjson` items, `http` jobs with their page transforms, and checkpoints.
+The tool declares its tables its own way, in a Python runtime module it names:
+
+```rust
+let host = sqlload_python_host::host::main::module_host::module_host("my_tool._sqlload_runtime");
+```
+
+The runtime module defines these functions:
+
+| Function | What it does |
+| --- | --- |
+| `discover(root, python_paths)` | Returns the sources found, as JSON: each with `name`, `module`, `settings` (TOML keys, tables under `tables`) and an optional `host` value of the tool's own. |
+| `start_table(read)` | Calls the table `read` (JSON) names and returns what it yields. `read["host"]` is its source's `host` value. |
+| `current_state(table)`, `table_state(table)` | A logged table's `ctx.state` as JSON while its rows cross, and once it has finished. |
+| `rename(name, columns, context)` | Runs a table's `rename`; returns `(names, None)` or `(None, problem)`. |
+| `finish_run()` | Runs when the run is over, to close clients. |
+
+`sqlload_api.Context.from_read(read, **extras)` builds a table's `ctx` as SQLLoad builds it: connections, cursor
+window and types, logged state. A tool adds fields of its own with a subclass:
+
+```python
+import sqlload_api
+
+
+class ToolContext(sqlload_api.Context):
+    def __init__(self, *, model: str, **fields):
+        super().__init__(**fields)
+        self.model = model
+
+
+ctx = ToolContext.from_read(read, model=read["host"]["model"])
+```
+
+The extension uses the crate's pyo3, 0.29, with `abi3-py310`. The interpreter needs `sqlload-api` at the crate's
+version: a different one fails the first read with the version to install.

@@ -14,7 +14,7 @@ use crate::project::models::ProjectConfig;
 use crate::python_sources::main::connection_settings::connection_settings;
 use crate::python_sources::models::PythonSource;
 
-/// Parse and validate a project's TOML text (resolving `${ENV:NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries, each `deletes_from`'s tombstone table, and `sessions` attached by name before its targets are checked: warehouse connections its caller owns ([`SessionConnection`]), which targets load into as into any other connection of their kind; Python settings are not interpolated.
+/// Parse and validate a project's TOML text (resolving `${ENV:NAME}` through `lookup`) with `python` sources added, checked by the same rules as `[sources]` entries (how each table's options combine included, as `plan` checks them), each `deletes_from`'s tombstone table, and `sessions` attached by name before its targets are checked: warehouse connections its caller owns ([`SessionConnection`]), which targets load into as into any other connection of their kind; Python settings are not interpolated.
 pub fn parse_python_project(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
@@ -40,6 +40,10 @@ pub fn parse_python_project(
     project.python_http_paths = python
         .iter()
         .map(|source| (source.name.clone(), source.http_paths.clone()))
+        .collect();
+    project.python_hosts = python
+        .iter()
+        .filter_map(|source| Some((source.name.clone(), source.host.clone()?)))
         .collect();
     project.connection_variables = variables;
     let project = attach_sessions(project, sessions).map_err(ProjectError::Invalid)?;

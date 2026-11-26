@@ -26,6 +26,7 @@ use crate::row_batches::models::Flatten;
 /// A loader project: `sqlload.toml` with `[connections]`, `[targets]` and `[sources]`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ProjectConfig {
     /// Folders scanned for Python sources; none when omitted.
     #[serde(default)]
@@ -57,6 +58,9 @@ pub struct ProjectConfig {
     /// The `sl.http` paths each Python table writes as literals, by source name and table name.
     #[serde(skip)]
     pub python_http_paths: BTreeMap<String, BTreeMap<String, LiteralPaths>>,
+    /// Each Python source's host data ([`PythonSource::host`](crate::python_sources::models::PythonSource::host)), by source name, for its tables' reads; sources without any are left out.
+    #[serde(skip)]
+    pub python_hosts: BTreeMap<String, serde_json::Value>,
     /// The `${ENV:NAME}` variables each connection's settings read, by connection name, for hints.
     #[serde(skip)]
     pub connection_variables: BTreeMap<String, Vec<String>>,

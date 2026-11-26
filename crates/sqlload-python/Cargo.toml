@@ -1,7 +1,7 @@
 [package]
 name = "sqlload-python"
 version.workspace = true
-description = "The native module of the sqlload Python package: the command line in-process and the Python-to-Arrow crossing."
+description = "The native module of the sqlload Python package: the command line in-process, with the Python host of sqlload-python-host."
 edition.workspace = true
 license.workspace = true
 publish = false
@@ -17,9 +17,9 @@ doctest = false
 
 [features]
 # TLS with OpenSSL built in, as in the sqlload-cli wheels.
-ssl-vendored = ["sqlload/ssl-vendored"]
+ssl-vendored = ["sqlload/ssl-vendored", "sqlload-python-host/ssl-vendored"]
 # ODBC sources, as in the sqlload-cli wheels.
-odbc = ["sqlload/odbc"]
+odbc = ["sqlload/odbc", "sqlload-python-host/odbc"]
 
 [dependencies]
 arrow-array.workspace = true
@@ -30,6 +30,7 @@ chrono-tz.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true
 sqlload = { workspace = true, default-features = true }
+sqlload-python-host.workspace = true
 tracing.workspace = true
 
 [lints]

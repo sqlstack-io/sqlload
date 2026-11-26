@@ -55,7 +55,8 @@ curl -fsSL --retry 3 --retry-all-errors -o "/tmp/$package" "https://cdn.mysql.co
 	curl -fsSL --retry 3 --retry-all-errors -o "/tmp/$package" "https://downloads.mysql.com/archives/get/p/10/file/$package"
 echo "$MYSQL_ODBC_SHA256  /tmp/$package" | sha256sum -c --quiet -
 apt-get -o Acquire::Retries=3 install -y -qq "/tmp/$package" > /dev/null
-python -m venv /v && /v/bin/pip install --quiet --find-links /dist /dist/sqlload-*.whl
+# This build's sqlload-api wheel by name, so pip never takes a release of the same version from PyPI.
+python -m venv /v && /v/bin/pip install --quiet /dist/sqlload_api-*.whl /dist/sqlload-*.whl
 python -m venv /c && /c/bin/pip install --quiet /dist/sqlload_cli-*.whl
 
 # Load into a fresh project with SQLLOAD (and the environment before it); print what it said.

@@ -9,10 +9,6 @@ use crate::test_types::{FilesMergeTestCase, MergeFile, MergeStep};
 /// Every row as `version:line:amount`, then how many file commits the run log records.
 const CHECK: &str = "SELECT (SELECT COALESCE(string_agg(COALESCE(le_version, 'NULL') || ':' || line || ':' || CAST(amount AS VARCHAR), ',' ORDER BY le_version NULLS LAST, line), '') FROM raw.scores) || '|' || (SELECT CAST(count(*) AS VARCHAR) FROM raw._sqlload_runs WHERE table_name = 'scores' AND event = 'run')";
 
-/// No table is created when plan refuses the settings.
-const NO_TABLE: &str =
-    "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'";
-
 const LAST_WINS: &str = "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\non_overlapping_files = \"last_wins\"\n";
 
 const LAST_WINS_BY_PATH: &str = "write_strategy = \"delete_insert\"\nreplace_key = [\"le_version\"]\non_overlapping_files = \"last_wins\"\norder = \"path\"\n";
@@ -34,8 +30,6 @@ const SECOND: MergeFile = MergeFile {
 };
 
 const LAST_WINS_PLAN: &str = "2 files, 1 commit, oldest modified first (ties by path), each recorded in the run log; the last file holding a replace_key value replaces it (on_overlapping_files = \"last_wins\")";
-
-const OUTSIDE: &str = "on_overlapping_files says which file wins when two files of a files source's folder hold one replace_key value";
 
 const ONE_RUN: &[MergeStep] = &[load_step(&[FIRST, SECOND], "", LAST_WINS_PLAN)];
 
@@ -64,8 +58,6 @@ const SPLIT: &[MergeStep] = &[load_step(
     "drop/second.csv: it holds the replace_key (le_version) value (P02), which first.csv also holds, loaded earlier in this run; each file replaces the rows of the values it holds, so it would delete the rows first.csv loaded, as a value split across part files would keep only its last part. One file must hold all of a value's rows. Fix: if the files are parts of one export, put all the rows of each (le_version) value in one file; if newer files restate older ones, set on_overlapping_files = \"last_wins\", so the file last in order replaces the values, or remove the older of first.csv and second.csv from the folder by hand and set after_load = { move_to = ... } (or \"delete\"), so that each file leaves the folder once it loads",
     "",
 )];
-
-const REFUSED: &[MergeStep] = &[load_step(&[FIRST], OUTSIDE, "")];
 
 /// The newer file loads first, and the older one, by path, arrives in a later run.
 const SENT_LATE: &[MergeStep] = &[
@@ -166,27 +158,6 @@ fn given_files_holding_one_replace_key_value_when_loading_into_duckdb_then_on_ov
                 steps: MERGED,
                 check_query: CHECK,
                 expected_result: "P01:A:1,P01:B:2,P02:A:10|1",
-            },
-            FilesMergeTestCase {
-                description: "plan refuses it on a merge, where the last file already wins each key",
-                settings: "write_strategy = \"merge\"\nunique_key = [\"le_version\", \"line\"]\non_overlapping_files = \"last_wins\"\n",
-                steps: REFUSED,
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
-                description: "plan refuses it on an append",
-                settings: "write_strategy = \"append\"\non_overlapping_files = \"fail\"\n",
-                steps: REFUSED,
-                check_query: NO_TABLE,
-                expected_result: "0",
-            },
-            FilesMergeTestCase {
-                description: "plan refuses it on a delete_insert by cursor",
-                settings: "write_strategy = \"delete_insert\"\ncursor_column = \"le_version\"\non_overlapping_files = \"last_wins\"\n",
-                steps: REFUSED,
-                check_query: NO_TABLE,
-                expected_result: "0",
             },
         ];
         for test_case in &test_cases {

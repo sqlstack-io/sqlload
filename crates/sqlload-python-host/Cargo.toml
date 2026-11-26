@@ -1,0 +1,38 @@
+[package]
+name = "sqlload-python-host"
+version.workspace = true
+description = "The Python host of SQLLoad's engine: runs Python tables and crosses what they yield into the engine, for a pyo3 extension of your own."
+edition.workspace = true
+publish = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["sqlload", "python", "pyo3", "arrow", "etl"]
+categories = ["database", "api-bindings"]
+
+[lib]
+name = "sqlload_python_host"
+# Tested from Python (packages/sqlload/tests and tests/external_host); a Rust test binary would have to link libpython.
+test = false
+doctest = false
+
+[features]
+# TLS with OpenSSL built in, as in the sqlload-cli wheels.
+ssl-vendored = ["sqlload/ssl-vendored"]
+# ODBC sources, as in the sqlload-cli wheels.
+odbc = ["sqlload/odbc"]
+
+[dependencies]
+arrow-array.workspace = true
+arrow-pyarrow.workspace = true
+arrow-schema.workspace = true
+base64.workspace = true
+chrono-tz.workspace = true
+pyo3.workspace = true
+serde_json.workspace = true
+sqlload.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
