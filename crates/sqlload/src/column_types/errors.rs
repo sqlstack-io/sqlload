@@ -5,10 +5,13 @@ pub enum TypeError {
     Unknown { written: String, suggestion: String },
     #[error("column type {written:?} is malformed: {reason}")]
     Malformed { written: String, reason: String },
-    #[error(
-        "{written:?} means different things in different warehouses; use \"timestamp_tz\" (with a time zone) or \"timestamp_ntz\" (without)"
-    )]
-    AmbiguousTimestamp { written: String },
+    #[error("{written:?} {readings}; use {portable}")]
+    DependsOnDestination {
+        written: String,
+        /// How the table's destinations read it, such as `is timestamp_tz in BigQuery, but timestamp_ntz in DuckDB`.
+        readings: String,
+        portable: String,
+    },
     #[error(
         "{written:?} is a {warehouse} type, but this table also loads into {others}; use the portable name {portable:?}"
     )]

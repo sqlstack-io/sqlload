@@ -5,6 +5,9 @@ use crate::column_types::tests::test_types::{ParseTypeErrorTestCase, ParseTypeTe
 const SNOWFLAKE: &[Warehouse] = &[Warehouse::Snowflake];
 const DUCKDB: &[Warehouse] = &[Warehouse::DuckDb];
 const MIXED: &[Warehouse] = &[Warehouse::Snowflake, Warehouse::DuckDb];
+const POSTGRES: &[Warehouse] = &[Warehouse::Postgres];
+const BIGQUERY: &[Warehouse] = &[Warehouse::BigQuery];
+const DATABRICKS: &[Warehouse] = &[Warehouse::Databricks];
 
 #[test]
 fn given_a_valid_type_when_parsing_then_it_maps_onto_the_portable_vocabulary() {
@@ -142,6 +145,95 @@ fn given_a_valid_type_when_parsing_then_it_maps_onto_the_portable_vocabulary() {
             expected_warnings: 1,
         },
         ParseTypeTestCase {
+            description: "DuckDB reads TIMESTAMP without a time zone",
+            text: "TIMESTAMP",
+            destinations: DUCKDB,
+            expected_type: ColumnType::TimestampNtz,
+            expected_written_as: Some("TIMESTAMP"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "Postgres reads timestamp without a time zone",
+            text: "timestamp",
+            destinations: POSTGRES,
+            expected_type: ColumnType::TimestampNtz,
+            expected_written_as: Some("timestamp"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "Postgres reads TIMESTAMP with a precision without a time zone",
+            text: "TIMESTAMP(6)",
+            destinations: POSTGRES,
+            expected_type: ColumnType::TimestampNtz,
+            expected_written_as: Some("TIMESTAMP(6)"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "BigQuery reads TIMESTAMP as an instant",
+            text: "TIMESTAMP",
+            destinations: BIGQUERY,
+            expected_type: ColumnType::TimestampTz,
+            expected_written_as: Some("TIMESTAMP"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "Databricks reads TIMESTAMP as an instant",
+            text: "TIMESTAMP",
+            destinations: DATABRICKS,
+            expected_type: ColumnType::TimestampTz,
+            expected_written_as: Some("TIMESTAMP"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "DuckDB and Postgres read TIMESTAMP alike",
+            text: "TIMESTAMP",
+            destinations: &[Warehouse::DuckDb, Warehouse::Postgres],
+            expected_type: ColumnType::TimestampNtz,
+            expected_written_as: Some("TIMESTAMP"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "BigQuery and Databricks read TIMESTAMP alike",
+            text: "TIMESTAMP",
+            destinations: &[Warehouse::BigQuery, Warehouse::Databricks],
+            expected_type: ColumnType::TimestampTz,
+            expected_written_as: Some("TIMESTAMP"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "BigQuery's BIGNUMERIC with a precision and scale is a decimal",
+            text: "BIGNUMERIC(38,0)",
+            destinations: BIGQUERY,
+            expected_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 0,
+            },
+            expected_written_as: Some("BIGNUMERIC(38,0)"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "BigQuery's BIGNUMERIC with a precision alone has scale 0",
+            text: "bignumeric(38)",
+            destinations: BIGQUERY,
+            expected_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 0,
+            },
+            expected_written_as: Some("bignumeric(38)"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
+            description: "BigQuery's BIGNUMERIC with fraction digits is a decimal",
+            text: "BIGNUMERIC(38,20)",
+            destinations: BIGQUERY,
+            expected_type: ColumnType::Decimal {
+                precision: 38,
+                scale: 20,
+            },
+            expected_written_as: Some("BIGNUMERIC(38,20)"),
+            expected_warnings: 0,
+        },
+        ParseTypeTestCase {
             description: "one engine twice counts once for native types",
             text: "native(\"HUGEINT\")",
             destinations: &[Warehouse::DuckDb, Warehouse::DuckDb],
@@ -207,16 +299,58 @@ fn given_an_invalid_type_when_parsing_then_the_error_explains_the_fix() {
             expected_message: "its element type: unknown column type \"intt\"",
         },
         ParseTypeErrorTestCase {
-            description: "a bare timestamp is ambiguous",
+            description: "Snowflake reads TIMESTAMP by the account's mapping, so it means no one type",
             text: "TIMESTAMP",
             destinations: SNOWFLAKE,
-            expected_message: "use \"timestamp_tz\"",
+            expected_message: "\"TIMESTAMP\" follows the account's TIMESTAMP_TYPE_MAPPING in Snowflake; use \"timestamp_tz\" (with a time zone) or \"timestamp_ntz\" (without)",
         },
         ParseTypeErrorTestCase {
-            description: "a bare timestamp with a precision is ambiguous too",
+            description: "a precision does not fix Snowflake's TIMESTAMP",
             text: "timestamp(6)",
             destinations: SNOWFLAKE,
             expected_message: "\"timestamp_ntz\" (without)",
+        },
+        ParseTypeErrorTestCase {
+            description: "destinations reading TIMESTAMP differently are each named",
+            text: "TIMESTAMP",
+            destinations: &[Warehouse::DuckDb, Warehouse::BigQuery, Warehouse::Postgres],
+            expected_message: "\"TIMESTAMP\" is timestamp_tz in BigQuery, but timestamp_ntz in DuckDB and Postgres; use \"timestamp_tz\" (with a time zone) or \"timestamp_ntz\" (without)",
+        },
+        ParseTypeErrorTestCase {
+            description: "a destination with no fixed reading is named beside one that has one",
+            text: "TIMESTAMP",
+            destinations: MIXED,
+            expected_message: "\"TIMESTAMP\" is timestamp_ntz in DuckDB, but follows the account's TIMESTAMP_TYPE_MAPPING in Snowflake",
+        },
+        ParseTypeErrorTestCase {
+            description: "with no destinations, TIMESTAMP is refused, naming how each warehouse reads it",
+            text: "TIMESTAMP",
+            destinations: &[],
+            expected_message: "\"TIMESTAMP\" is timestamp_tz in BigQuery and Databricks, timestamp_ntz in DuckDB and Postgres, but follows the account's TIMESTAMP_TYPE_MAPPING in Snowflake",
+        },
+        ParseTypeErrorTestCase {
+            description: "a session-dependent timestamp is rejected on Databricks too",
+            text: "TIMESTAMP_LTZ",
+            destinations: DATABRICKS,
+            expected_message: "depends on each session's time zone",
+        },
+        ParseTypeErrorTestCase {
+            description: "BIGNUMERIC on a table also loading elsewhere names that destination",
+            text: "BIGNUMERIC(38,0)",
+            destinations: &[Warehouse::BigQuery, Warehouse::DuckDb],
+            expected_message: "\"BIGNUMERIC(38,0)\" is decimal(38,0) in BigQuery, but names no type in DuckDB; use \"decimal(38,0)\"",
+        },
+        ParseTypeErrorTestCase {
+            description: "a bare BIGNUMERIC holds more digits than any decimal",
+            text: "BIGNUMERIC",
+            destinations: BIGQUERY,
+            expected_message: "\"BIGNUMERIC\" is BIGNUMERIC(76.76,38), more digits than decimal's 38, in BigQuery; use \"decimal(p,s)\" with the precision and scale",
+        },
+        ParseTypeErrorTestCase {
+            description: "a BIGNUMERIC wider than a decimal is refused",
+            text: "BIGNUMERIC(50,0)",
+            destinations: BIGQUERY,
+            expected_message: "precision must be between 1 and 38",
         },
         ParseTypeErrorTestCase {
             description: "a decimal needs a precision and scale",

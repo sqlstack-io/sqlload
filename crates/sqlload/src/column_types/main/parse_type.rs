@@ -1,15 +1,14 @@
 //! Parse a declared column type.
 
 use crate::column_types::_helpers::array::array_type;
-use crate::column_types::_helpers::destinations::{check_destinations, native_warnings};
-use crate::column_types::_helpers::names::resolve_name;
+use crate::column_types::_helpers::destinations::{named_type, native_warnings};
 use crate::column_types::_helpers::native::native_inner;
-use crate::column_types::_helpers::suggest::nearest_portable_name;
+use crate::column_types::_helpers::readings::destination_type;
 use crate::column_types::_helpers::syntax::split_type;
 use crate::column_types::errors::TypeError;
 use crate::column_types::models::{ColumnType, ParsedType, Warehouse};
 
-/// Parse `text` as a column type for a table that loads into `destinations`.
+/// Parse `text` as a column type for a table that loads into `destinations`. A name a warehouse reads its own way (`TIMESTAMP`, BigQuery's `BIGNUMERIC(p,s)`) is taken when every destination reads it as the same type.
 pub fn parse_type(text: &str, destinations: &[Warehouse]) -> Result<ParsedType, TypeError> {
     let written = text.trim();
     let malformed = |reason: String| TypeError::Malformed {
@@ -29,13 +28,10 @@ pub fn parse_type(text: &str, destinations: &[Warehouse]) -> Result<ParsedType, 
         return parsed;
     }
     let syntax = split_type(written).map_err(malformed)?;
-    let Some((column_type, kind)) = resolve_name(&syntax, written)? else {
-        return Err(TypeError::Unknown {
-            written: written.to_owned(),
-            suggestion: nearest_portable_name(&syntax.name),
-        });
+    let column_type = match destination_type(&syntax, written, destinations)? {
+        Some(column_type) => column_type,
+        None => named_type(&syntax, written, destinations)?,
     };
-    check_destinations(kind, &column_type, written, destinations)?;
     let compact: String = written
         .chars()
         .filter(|character| !character.is_whitespace())

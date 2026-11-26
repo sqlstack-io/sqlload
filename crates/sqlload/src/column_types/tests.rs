@@ -6,5 +6,7 @@ mod exact_cast;
 mod helpers;
 #[path = "tests/test_parse_type.rs"]
 mod parse_type;
+#[path = "tests/test_round_trip.rs"]
+mod round_trip;
 #[path = "tests/test_types.rs"]
 mod test_types;

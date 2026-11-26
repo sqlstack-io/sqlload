@@ -26,8 +26,15 @@ pub const TIME_PRECISION_DIGITS: u8 = 6;
 /// The most fractional-seconds digits any warehouse accepts in a time type's precision.
 pub const MAX_FRACTIONAL_SECONDS_DIGITS: u8 = 9;
 
-/// The bare name whose meaning (with or without a time zone) differs between warehouses.
-pub const AMBIGUOUS_TIMESTAMP_NAME: &str = "timestamp";
+/// The bare name whose meaning (with or without a time zone) depends on the warehouse.
+pub const TIMESTAMP_NAME: &str = "timestamp";
+
+/// BigQuery's name for its wide decimal.
+pub const BIGNUMERIC_NAME: &str = "bignumeric";
+
+/// What to write instead of a timestamp name whose meaning depends on the warehouse.
+pub const TIMESTAMP_PORTABLE: &str =
+    "\"timestamp_tz\" (with a time zone) or \"timestamp_ntz\" (without)";
 
 /// Field metadata key marking a text column's portable type when Arrow has no matching type (`json`, `uuid`).
 pub const ARROW_TYPE_METADATA_KEY: &str = "sqlload.type";
