@@ -217,3 +217,10 @@ pub const CATALOG_CONFLICT: &str = "Catalog write-write conflict";
 
 /// How often a table's create refused for [`CATALOG_CONFLICT`] is tried, 20 ms apart: the other connection's create commits within moments.
 pub const CATALOG_CONFLICT_TRIES: u32 = 10;
+
+/// Where a files table's declared columns are looked for at plan, and what happens to one none of them holds, for [`missing_columns_warnings`](crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings).
+pub const FILES_MISSING_COLUMN: (&str, &str) =
+    ("the sampled files", "rows without it load as NULL");
+
+/// Where a Python table's declared columns are looked for once it has loaded, and what happened to one none of them held.
+pub const PYTHON_MISSING_COLUMN: (&str, &str) = ("the rows", "it loaded as NULL");

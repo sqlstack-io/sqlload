@@ -34,7 +34,8 @@ use crate::loader::_helpers::run_log::overlapping_files_problem;
 use crate::loader::_helpers::sources::sheet_rule;
 use crate::loader::_helpers::table_plan::source_cursor;
 use crate::loader::constants::{
-    ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, SNOWFLAKE_SOURCE, UNNEST_ALL,
+    ODBC_SOURCE, PRIMARY_KEY, PRIMARY_KEY_PLACEHOLDER, PYTHON_MISSING_COLUMN, SNOWFLAKE_SOURCE,
+    UNNEST_ALL,
 };
 use crate::loader::errors::LoaderError;
 use crate::loader::models::{
@@ -60,6 +61,7 @@ use crate::row_batches::main::merge_schema::merge_schema;
 use crate::row_batches::models::{Flatten, Unnest};
 use crate::row_deletes::main::deletes_problems::deletes_problems;
 use crate::row_deletes::main::deletes_spec::deletes_spec;
+use crate::schema_plan::main::missing_columns_warnings::missing_columns_warnings;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 use crate::sheets_source::models::SheetRead;
 use crate::similar_names::main::close_name::close_name;
@@ -569,6 +571,7 @@ pub(crate) fn build_spec(
         transform: None,
         parses,
         timezone,
+        missing_columns: Vec::new(),
     })
 }
 
@@ -1800,13 +1803,12 @@ pub(crate) fn path_values(
     Ok((values, types))
 }
 
-/// Columns a JSON or CSV source's table pins in `columns` that sampling did not see, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. A pin naming a sampled column by the name `rule`'s naming gives it is one sampling saw.
+/// Columns a files source's table pins in `columns` that no sampled file holds (its JSON or CSV records, or its Parquet footers), which load as NULL where the files lack them unless `on_schema_change = "fail"` refuses them, so a key found only in older files can be pinned; a name close to a sampled one (a typo, or another case) is an error, and a `mask` key alone never adds a column. A pin naming a sampled column by the name `rule`'s naming gives it is one sampling saw.
 pub(crate) fn pinned_unsampled(
     overrides: Option<&TableOverride>,
     (table, added, rule): (&FilesTable, &[&str], NameRule),
-    format: SourceFormat,
 ) -> Result<Vec<String>, LoaderError> {
-    let Some(overrides) = overrides.filter(|_| format != SourceFormat::Parquet) else {
+    let Some(overrides) = overrides else {
         return Ok(Vec::new());
     };
     let sampled: Vec<&str> = table
@@ -1834,6 +1836,40 @@ pub(crate) fn pinned_unsampled(
         unsampled.push(name.clone());
     }
     Ok(unsampled)
+}
+
+/// The declared columns none of a Python table's `rows` rows had (its yielded fields merged as `merged`), and a warning for each; or, under `on_schema_change = "fail"`, the failure. A table that yielded no rows lacks none.
+pub(crate) fn python_missing(
+    spec: &TableSpec,
+    merged: &Schema,
+    rows: u64,
+) -> Result<(Vec<String>, Vec<String>), LoaderError> {
+    let missing = match rows {
+        0 => Vec::new(),
+        _ => missing_declared(spec, merged),
+    };
+    let warnings = missing_columns_warnings(&missing, PYTHON_MISSING_COLUMN, spec.on_schema_change)
+        .map_err(LoaderError::Invalid)?;
+    Ok((missing, warnings))
+}
+
+/// The columns `spec` declares (pinned in `columns`, or parsed) that no field of `merged` is, ignoring case, by the name each loads as; a child table's and a masked column's are left out, as a masked column the rows lack fails the table already.
+fn missing_declared(spec: &TableSpec, merged: &Schema) -> Vec<String> {
+    let had = |name: &str| {
+        merged
+            .fields()
+            .iter()
+            .any(|field| field.name().eq_ignore_ascii_case(name))
+    };
+    let mut missing: Vec<String> = Vec::new();
+    for name in spec.pinned.keys().chain(spec.parses.keys()) {
+        let left_out =
+            spec.child_pinned.contains_key(name) || spec.masked.columns.contains_key(name);
+        if !left_out && !had(name) && !missing.contains(name) {
+            missing.push(name.clone());
+        }
+    }
+    missing
 }
 
 /// The read columns of a files source: the file's types, or the pinned ones (converted while reading); a parsed column reads as text, for `parse` to convert.

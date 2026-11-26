@@ -58,7 +58,7 @@ use crate::loader::_helpers::table_plan::{change_lines, schema_statements};
 use crate::loader::constants::{CATALOG_CONFLICT, CATALOG_CONFLICT_TRIES, COALESCED_BYTES};
 use crate::loader::errors::LoaderError;
 use crate::loader::models::SourceReader;
-use crate::loader::models::{CommitRange, Publisher};
+use crate::loader::models::{CommitRange, Publisher, PythonFeed, PythonLoad};
 use crate::loader::models::{Cuts, Pending, Pieces, RowGroupSeen};
 use crate::loader::models::{
     FilesSink, FilesSource, LiveFiles, LoadRun, ProjectPlan, TablePlan, TableSpec, UnreadSharing,
@@ -1768,4 +1768,33 @@ impl Publisher {
             ..Pieces::default()
         };
     }
+}
+
+/// `result`, after dropping the table `feed`'s load created in a SQL destination when `result` failed and nothing has committed to it, so a load that fails at its end (a declared column under `on_schema_change = "fail"`) leaves no empty table it made; a table that existed at plan, a files target and a table with commits are left as they are.
+pub(crate) async fn unpublished_on_error<T>(
+    (feed, load): (&PythonFeed, &PythonLoad<'_>),
+    result: Result<T, LoaderError>,
+) -> Result<T, LoaderError> {
+    let error = match result {
+        Ok(found) => return Ok(found),
+        Err(error) => error,
+    };
+    let committed = feed
+        .publisher
+        .as_ref()
+        .is_some_and(|publisher| publisher.commits > 0);
+    if load.table.exists || committed || feed.table.output.is_some() {
+        return Err(error);
+    }
+    let destination = feed
+        .publisher
+        .as_ref()
+        .map_or(load.destination, |publisher| &publisher.destination);
+    let name =
+        sql_adapter(feed.table.spec.warehouse).render_qualified_name(&feed.table.spec.destination);
+    let drop = format!("DROP TABLE IF EXISTS {name}");
+    if let Err(dropped) = execute_ddl(destination, vec![drop]).await {
+        tracing::warn!(error = %dropped, table = %name, "cannot drop the table the failed load created");
+    }
+    Err(error)
 }

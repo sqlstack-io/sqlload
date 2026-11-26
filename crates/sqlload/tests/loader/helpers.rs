@@ -321,6 +321,16 @@ pub(crate) fn parquet_bytes(file: &ParquetFile) -> Result<bytes::Bytes, String> 
     Ok(bytes::Bytes::from(buffer))
 }
 
+/// Two rows of `id` and `score` as a Parquet file, whatever `_text` says: a text files scenario's Parquet file.
+pub(crate) fn two_scores_parquet(_text: &str) -> Result<bytes::Bytes, String> {
+    parquet_bytes(&ParquetFile {
+        key: "part-0.parquet",
+        ids: &[1, 2],
+        score: 1.0,
+        extra: None,
+    })
+}
+
 /// A `delete_insert` files source into DuckDB with one partition of `test_case.files` files that alone have an `extra` column (outside the newest files the plan samples), then that partition's neighbour rewritten; the check query's result.
 pub(crate) async fn run_large_partition(
     directory: &std::path::Path,

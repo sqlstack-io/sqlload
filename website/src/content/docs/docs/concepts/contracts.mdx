@@ -51,6 +51,41 @@ Objects (1)                                         sqlload apply
 
 SQLLoad never drops columns from a destination table.
 
+### Declared columns the data lacks
+
+A column declared in `columns` that the data doesn't hold follows `on_schema_change` too:
+
+| `on_schema_change` | A declared column missing from the data |
+|--------------------|-----------------------------------------|
+| `append_new_columns` (default) | Loads as `NULL` at its declared type, with a warning. |
+| `ignore` | Loads as `NULL` at its declared type, with a warning. |
+| `fail` | Stops the table. |
+
+A files table looks for its declared columns in the files `plan` samples (their Parquet footers, or
+their JSON and CSV records), so a column only older files hold can still be declared, and loads
+where they hold it. With `fail`, such a column fails `plan` even when older files hold it, as no
+sampled file does.
+
+A Python table's columns are known once its function has yielded every row, so the warning comes
+with the load, and `fail` stops the table at its end. A `replace` swaps its new rows in only after
+the whole load, so the table keeps its old rows; a table the failed load created is dropped again,
+unless rows were committed to it. An `append` that committed several times on the way (about every
+1 GB, or once per `batch_size` window) keeps the rows those commits loaded; only the rows after the
+last commit are left out.
+
+A name close to one the data holds, such as `Email` for `email`, still fails as a likely typo.
+
+```console
+$ sqlload plan orders
+…
+Warnings (1)
+└── orders
+    └── declared column coupon is in none of the sampled files, so rows without it load as NULL
+```
+
+`plan --json` lists the columns under `missing_columns`, one entry per table, and `load --json` on
+each table it loaded. The column is never dropped from the table.
+
 ### Wider types
 
 A pinned type wider than the live column widens it:

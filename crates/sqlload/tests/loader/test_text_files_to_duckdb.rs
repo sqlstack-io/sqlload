@@ -3,7 +3,7 @@ use sqlload_testkit::seaweedfs::main::start_seaweedfs::start_seaweedfs;
 
 use crate::helpers::{
     after_sample, codes_after_sample, duckdb_text, gzip, local_store, plain, run_async,
-    run_sqlload, run_text_files_scenario, seaweedfs_store, words, zstd,
+    run_sqlload, run_text_files_scenario, seaweedfs_store, two_scores_parquet, words, zstd,
 };
 use crate::test_types::{
     FilesSettingsChangeTestCase, PipedOutputTestCase, TargetSettingsFilesTestCase, TextFile,
@@ -145,6 +145,55 @@ const NO_ROWS: &str = "SELECT CAST(count(*) AS VARCHAR) FROM raw.scores";
 /// `0` while the table was never created.
 const NO_TABLE: &str =
     "SELECT CAST(count(*) AS VARCHAR) FROM information_schema.tables WHERE table_name = 'scores'";
+
+/// Two NDJSON rows with no `coupon`.
+const TWO_ROWS_NDJSON: TextFile = TextFile {
+    key: "part-0.ndjson",
+    contents: "{\"id\":1}\n{\"id\":2}\n",
+    encode: plain,
+};
+
+/// The same two rows as Parquet.
+const TWO_ROWS_PARQUET: TextFile = TextFile {
+    key: "part-0.parquet",
+    contents: "",
+    encode: two_scores_parquet,
+};
+
+/// Rows, rows with a `coupon`, and the `coupon` column's type.
+const MISSING_COUPON_CHECK: &str = "SELECT count(*) || ',' || count(coupon) || ',' || (SELECT data_type FROM information_schema.columns WHERE table_name = 'scores' AND column_name = 'coupon') FROM raw.scores";
+
+const MISSING_COUPON_WARNING: &str =
+    "declared column coupon is in none of the sampled files, so rows without it load as NULL";
+
+const MISSING_COUPON_FAILURE: &str =
+    "declared column coupon is in none of the sampled files and on_schema_change = \"fail\"";
+
+/// One run of two rows without `coupon`, whose plan warns of it.
+const NDJSON_WARNED: &[TextFilesRun] = &[TextFilesRun {
+    files: &[TWO_ROWS_NDJSON],
+    expected_error: "",
+    expected_plan: MISSING_COUPON_WARNING,
+}];
+
+/// One run of two rows without `coupon`, whose plan and load fail of it.
+const NDJSON_FAILED: &[TextFilesRun] = &[TextFilesRun {
+    files: &[TWO_ROWS_NDJSON],
+    expected_error: MISSING_COUPON_FAILURE,
+    expected_plan: MISSING_COUPON_FAILURE,
+}];
+
+const PARQUET_WARNED: &[TextFilesRun] = &[TextFilesRun {
+    files: &[TWO_ROWS_PARQUET],
+    expected_error: "",
+    expected_plan: MISSING_COUPON_WARNING,
+}];
+
+const PARQUET_FAILED: &[TextFilesRun] = &[TextFilesRun {
+    files: &[TWO_ROWS_PARQUET],
+    expected_error: MISSING_COUPON_FAILURE,
+    expected_plan: MISSING_COUPON_FAILURE,
+}];
 
 #[test]
 fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_json_load()
@@ -301,7 +350,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
-                expected_plan: "note    pinned column coupon_code was not seen in the sampled files (check the name)",
+                expected_plan: "declared column coupon_code is in none of the sampled files, so rows without it load as NULL",
             }],
             check_query: "SELECT count(*) || ',' || count(coupon_code) || ',' || max(coupon_code) FROM raw.scores",
             expected_result: "10001,1,x",
@@ -325,7 +374,7 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             runs: &[TextFilesRun {
                 files: &[LATE_KEY],
                 expected_error: "",
-                expected_plan: "note    pinned column coupon_code was not seen in the sampled files",
+                expected_plan: "declared column coupon_code is in none of the sampled files",
             }],
             check_query: "SELECT count(coupon_code) || ',' || (max(coupon_code) = sha256('x')) FROM raw.scores",
             expected_result: "1,true",
@@ -505,6 +554,84 @@ fn given_json_and_csv_files_when_loading_into_duckdb_then_rows_partitions_and_js
             let directory =
                 std::env::temp_dir().join(format!("sqlload-text-files-{}", uuid::Uuid::new_v4()));
             let result = run_text_files_scenario(&server.endpoint, &directory, &test_case).await;
+            let _ = std::fs::remove_dir_all(&directory);
+            assert_eq!(
+                result?.as_deref(),
+                Some(test_case.expected_result),
+                "{}",
+                test_case.description
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn given_a_declared_column_missing_from_the_files_when_loading_then_on_schema_change_decides()
+-> Result<(), String> {
+    let test_cases = [
+        TextFilesScenarioTestCase {
+            description: "NDJSON, append_new_columns: the declared column loads as NULL at its declared type, with a warning",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: NDJSON_WARNED,
+            check_query: MISSING_COUPON_CHECK,
+            expected_result: "2,0,DATE",
+        },
+        TextFilesScenarioTestCase {
+            description: "NDJSON, ignore: the declared column still loads as NULL at its declared type",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\non_schema_change = \"ignore\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: NDJSON_WARNED,
+            check_query: MISSING_COUPON_CHECK,
+            expected_result: "2,0,DATE",
+        },
+        TextFilesScenarioTestCase {
+            description: "NDJSON, fail: the plan refuses the table and nothing loads",
+            store: local_store,
+            settings: "format = \"ndjson\"\nwrite_strategy = \"append\"\non_schema_change = \"fail\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: NDJSON_FAILED,
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+        TextFilesScenarioTestCase {
+            description: "Parquet read by DuckDB, append_new_columns: the declared column loads as NULL at its declared type, with a warning",
+            store: local_store,
+            settings: "format = \"parquet\"\nwrite_strategy = \"append\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: PARQUET_WARNED,
+            check_query: MISSING_COUPON_CHECK,
+            expected_result: "2,0,DATE",
+        },
+        TextFilesScenarioTestCase {
+            description: "Parquet read by SQLLoad, append_new_columns: the same",
+            store: local_store,
+            settings: "format = \"parquet\"\nwrite_strategy = \"append\"\ntest_loader_route = true\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: PARQUET_WARNED,
+            check_query: MISSING_COUPON_CHECK,
+            expected_result: "2,0,DATE",
+        },
+        TextFilesScenarioTestCase {
+            description: "Parquet, ignore: the declared column still loads as NULL at its declared type",
+            store: local_store,
+            settings: "format = \"parquet\"\nwrite_strategy = \"append\"\non_schema_change = \"ignore\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: PARQUET_WARNED,
+            check_query: MISSING_COUPON_CHECK,
+            expected_result: "2,0,DATE",
+        },
+        TextFilesScenarioTestCase {
+            description: "Parquet, fail: the plan refuses the table and nothing loads",
+            store: local_store,
+            settings: "format = \"parquet\"\nwrite_strategy = \"append\"\non_schema_change = \"fail\"\n[sources.scores.tables.scores]\ncolumns = { coupon = \"date\" }\n",
+            runs: PARQUET_FAILED,
+            check_query: NO_TABLE,
+            expected_result: "0",
+        },
+    ];
+    run_async(|| async move {
+        for test_case in test_cases {
+            let directory =
+                std::env::temp_dir().join(format!("sqlload-missing-{}", uuid::Uuid::new_v4()));
+            let result = run_text_files_scenario("", &directory, &test_case).await;
             let _ = std::fs::remove_dir_all(&directory);
             assert_eq!(
                 result?.as_deref(),

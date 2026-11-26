@@ -1089,7 +1089,7 @@ pub(crate) fn files_source_parts(
         .collect();
     let overrides = source.tables.get(source_name);
     let rule = (naming, sql_adapter(warehouse).max_identifier_length());
-    let pinned_only = pinned_unsampled(overrides, (&table, &added, rule), encoding.format)?;
+    let pinned_only = pinned_unsampled(overrides, (&table, &added, rule))?;
     if !table.objects.is_empty() {
         let problems =
             flattened_object_problems((source, overrides), (&table.columns, &table.objects))
@@ -1104,12 +1104,8 @@ pub(crate) fn files_source_parts(
             table.dropped.join(", ")
         )
     });
-    let notes: Vec<String> = dropped
-        .into_iter()
-        .chain(pinned_only.iter().map(|name| {
-            format!("pinned column {name} was not seen in the sampled files (check the name)")
-        }))
-        .collect();
+    let notes: Vec<String> = dropped.into_iter().collect();
+    let unsampled = pinned_only.clone();
     let typed = table
         .columns
         .iter()
@@ -1184,6 +1180,7 @@ pub(crate) fn files_source_parts(
             encoding,
             checks,
             notes,
+            unsampled,
             copy_to_internal_stage: source.copy_to_internal_stage,
             transform: None,
             archive: None,
