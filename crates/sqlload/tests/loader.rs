@@ -32,6 +32,8 @@ mod merge_helpers;
 mod odbc_helpers;
 #[path = "loader/postgres/helpers.rs"]
 mod postgres_helpers;
+#[path = "loader/session/helpers.rs"]
+mod session_helpers;
 #[path = "loader/sftp/helpers.rs"]
 mod sftp_helpers;
 #[path = "loader/sheets/helpers.rs"]

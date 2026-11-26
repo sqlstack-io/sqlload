@@ -1,7 +1,8 @@
 //! The checks before a Postgres write, apart from how their queries run: on SQLLoad's own session, or a caller's.
 
-use crate::adapters::contract::models::WriteMode;
+use crate::adapters::contract::models::{TableName, WriteMode};
 use crate::adapters::contract::types::SqlAdapter;
+use crate::adapters::postgres::constants::{KEY_INDEX_SQL, REFERENCES_SQL};
 use crate::adapters::postgres::models::{KeyIndexes, PostgresSql, ReferenceRow};
 
 /// The merge key's columns as stored, sorted as `KEY_INDEX_SQL` compares them.
@@ -76,10 +77,12 @@ pub(crate) fn bound(sql: &str, values: &[String]) -> Result<String, String> {
         while let Some(digit) = characters.next_if(char::is_ascii_digit) {
             digits.push(digit);
         }
-        let value = digits
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| values.get(number.checked_sub(1)?))
+        let number: usize = digits
+            .parse()
+            .map_err(|error| format!("${digits} is not a placeholder: {error}"))?;
+        let value = number
+            .checked_sub(1)
+            .and_then(|index| values.get(index))
             .ok_or_else(|| format!("${digits} has no value"))?;
         out.push_str(value);
     }
@@ -121,4 +124,78 @@ pub(crate) fn text_array(text: &str) -> Result<Vec<String>, String> {
         elements.push(current);
     }
     Ok(elements)
+}
+
+/// `KEY_INDEX_SQL` for `table` (as stored) and `unique_key`, its values as text, for a caller's session.
+pub(crate) fn key_index_text_query(
+    table: &TableName,
+    unique_key: &[String],
+) -> Result<String, String> {
+    let key: Vec<String> = sorted_key(unique_key)
+        .iter()
+        .map(|column| PostgresSql.render_loader_value_literal(column))
+        .collect();
+    let query = bound(
+        KEY_INDEX_SQL,
+        &[
+            PostgresSql.render_loader_value_literal(&table.schema),
+            PostgresSql.render_loader_value_literal(&table.table),
+            format!("ARRAY[{}]", key.join(", ")),
+        ],
+    )?;
+    Ok(as_text(&query, 5))
+}
+
+/// `REFERENCES_SQL` for `schema.name` (as stored), its values as text, for a caller's session.
+pub(crate) fn references_text_query((schema, name): (&str, &str)) -> Result<String, String> {
+    let query = bound(
+        REFERENCES_SQL,
+        &[
+            PostgresSql.render_loader_value_literal(schema),
+            PostgresSql.render_loader_value_literal(name),
+        ],
+    )?;
+    Ok(as_text(&query, 5))
+}
+
+/// The unique indexes [`key_index_text_query`]'s row describes.
+pub(crate) fn text_key_indexes(row: &[Option<String>]) -> Result<KeyIndexes, String> {
+    Ok(KeyIndexes {
+        count: parsed(row, 0)?,
+        nulls_equal: parsed(row, 1)?,
+        others: row_text(row, 2),
+        drops: row_text(row, 3),
+        not_null: text_array(&row_text(row, 4))?,
+    })
+}
+
+/// The foreign keys [`references_text_query`]'s rows describe.
+pub(crate) fn text_references(rows: &[Vec<Option<String>>]) -> Result<Vec<ReferenceRow>, String> {
+    rows.iter()
+        .map(|row| {
+            Ok(ReferenceRow {
+                referencing: row_text(row, 0),
+                constraint: row_text(row, 1),
+                action: row_text(row, 2),
+                deferred: parsed(row, 3)?,
+                own: parsed(row, 4)?,
+            })
+        })
+        .collect()
+}
+
+/// The text of `row`'s value at `index`, empty for NULL.
+pub(crate) fn row_text(row: &[Option<String>], index: usize) -> String {
+    row.get(index).cloned().flatten().unwrap_or_default()
+}
+
+/// `row`'s value at `index`, as Postgres writes a number or a boolean as text, parsed.
+pub(crate) fn parsed<T: std::str::FromStr>(
+    row: &[Option<String>],
+    index: usize,
+) -> Result<T, String> {
+    let text = row_text(row, index);
+    text.parse::<T>().map_err(|_| {
+        format!("a check before the write gave {text:?}, which does not read as its type")
+    })
 }

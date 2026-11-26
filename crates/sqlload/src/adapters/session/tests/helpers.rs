@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
 
-use crate::adapters::contract::models::{TableName, WriteTarget};
+use crate::adapters::contract::models::{TableName, WriteMode, WriteTarget};
 use crate::adapters::contract::types::TableWriter;
 use crate::adapters::session::errors::SessionError;
 use crate::adapters::session::main::_connect_session::connect_session;
@@ -115,10 +115,8 @@ impl CallerSession for RecordingSession {
             .autocommit
             .filter(|_| query.contains("AUTOCOMMIT"))
             .map(|value| vec![Some("AUTOCOMMIT".to_owned()), Some(value.to_owned())]);
-        let references = query
-            .contains("pg_constraint con")
-            .then(|| self.references.clone())
-            .unwrap_or_default();
+        let asks_references = query.contains("pg_constraint con");
+        let references = self.references.iter().filter(|_| asks_references).cloned();
         Ok(answer.into_iter().chain(references).collect())
     }
 
@@ -472,12 +470,11 @@ pub(crate) fn autocommit_refusal(
     })
 }
 
-/// What the checks before a write refuse and warn of, for a `replace` (else a `delete_insert`) into an existing Postgres table through a caller's session, when one foreign key references it with `reference`: its action, whether it is deferred, and whether it is the table's own.
+/// What the checks before a write in `mode` into an existing Postgres table through a caller's session refuse and warn of, when one foreign key references it with `reference`: its action, whether it is deferred, and whether it is the table's own.
 pub(crate) fn reference_checks(
     (action, deferred, own): (&str, bool, bool),
-    replace: bool,
+    mode: WriteMode,
 ) -> Result<(Vec<String>, Vec<String>), String> {
-    use crate::adapters::contract::models::WriteMode;
     use crate::adapters::dispatch::main::session::write_problems::write_problems;
     use crate::adapters::dispatch::models::Destination;
 
@@ -505,17 +502,6 @@ pub(crate) fn reference_checks(
         schema: "shop".to_owned(),
         table: "orders".to_owned(),
     };
-    let mode = match replace {
-        true => WriteMode::Replace,
-        false => WriteMode::DeleteInsert {
-            cursor_column: Some("updated_at".to_owned()),
-            from: None,
-            to: None,
-            values: Vec::new(),
-            replace_key: Vec::new(),
-            not_null_keys: Vec::new(),
-        },
-    };
     on_load_stack(move || {
         runtime()?.block_on(async {
             let destination = Destination::Session(Box::new(
@@ -528,4 +514,21 @@ pub(crate) fn reference_checks(
                 .map_err(|error| error.to_string())
         })
     })
+}
+
+/// A `replace`.
+pub(crate) fn replace_mode() -> WriteMode {
+    WriteMode::Replace
+}
+
+/// A `delete_insert` on `updated_at`.
+pub(crate) fn delete_insert_mode() -> WriteMode {
+    WriteMode::DeleteInsert {
+        cursor_column: Some("updated_at".to_owned()),
+        from: None,
+        to: None,
+        values: Vec::new(),
+        replace_key: Vec::new(),
+        not_null_keys: Vec::new(),
+    }
 }

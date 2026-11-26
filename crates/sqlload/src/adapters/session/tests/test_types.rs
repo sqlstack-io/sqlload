@@ -114,8 +114,8 @@ pub(crate) struct ReferenceCheckTestCase {
     pub(crate) description: &'static str,
     /// The foreign key referencing the table: its `ON DELETE` action (`confdeltype`), whether it is deferred, and whether the table references itself.
     pub(crate) reference: (&'static str, bool, bool),
-    /// Whether the write is a `replace` (else a `delete_insert`).
-    pub(crate) replace: bool,
+    /// The write: a `replace` or a `delete_insert`.
+    pub(crate) mode: fn() -> crate::adapters::contract::models::WriteMode,
     /// What the check refuses, and what it warns of, each as a part of its line.
     pub(crate) expected_problem: Option<&'static str>,
     pub(crate) expected_warning: Option<&'static str>,

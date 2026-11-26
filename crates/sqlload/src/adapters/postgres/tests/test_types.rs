@@ -59,7 +59,7 @@ pub(crate) struct BoundTestCase {
     pub(crate) sql: &'static str,
     pub(crate) values: &'static [&'static str],
     /// The SQL with its placeholders filled, or why it cannot be.
-    pub(crate) expected: Result<&'static str, &'static str>,
+    pub(crate) expected_sql: Result<&'static str, &'static str>,
 }
 
 pub(crate) struct TextArrayTestCase {

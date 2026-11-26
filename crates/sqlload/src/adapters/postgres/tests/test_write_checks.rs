@@ -9,25 +9,25 @@ fn given_a_query_with_placeholders_when_bound_for_a_callers_session_then_each_ta
             description: "each placeholder takes its value, wherever it repeats",
             sql: "WHERE n = $1 AND c = $2 OR n2 = $1",
             values: &["'raw'", "'orders'"],
-            expected: Ok("WHERE n = 'raw' AND c = 'orders' OR n2 = 'raw'"),
+            expected_sql: Ok("WHERE n = 'raw' AND c = 'orders' OR n2 = 'raw'"),
         },
         BoundTestCase {
             description: "a value holding a placeholder's text is not filled again",
             sql: "WHERE n = $1 AND c = $2",
             values: &["'$2'", "'orders'"],
-            expected: Ok("WHERE n = '$2' AND c = 'orders'"),
+            expected_sql: Ok("WHERE n = '$2' AND c = 'orders'"),
         },
         BoundTestCase {
             description: "a dollar sign not before a digit stays",
             sql: "SELECT $sqlload$x$sqlload$, $1",
             values: &["1"],
-            expected: Ok("SELECT $sqlload$x$sqlload$, 1"),
+            expected_sql: Ok("SELECT $sqlload$x$sqlload$, 1"),
         },
         BoundTestCase {
             description: "a placeholder without a value fails",
             sql: "WHERE n = $3",
             values: &["'raw'"],
-            expected: Err("$3 has no value"),
+            expected_sql: Err("$3 has no value"),
         },
     ];
     for test_case in test_cases {
@@ -38,7 +38,10 @@ fn given_a_query_with_placeholders_when_bound_for_a_callers_session_then_each_ta
             .collect();
         assert_eq!(
             bound(test_case.sql, &values),
-            test_case.expected.map(str::to_owned).map_err(str::to_owned),
+            test_case
+                .expected_sql
+                .map(str::to_owned)
+                .map_err(str::to_owned),
             "{}",
             test_case.description
         );

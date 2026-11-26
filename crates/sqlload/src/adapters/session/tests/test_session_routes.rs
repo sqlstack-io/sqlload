@@ -1,7 +1,8 @@
 use crate::adapters::contract::models::TableName;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::adapters::session::tests::helpers::{
-    autocommit_refusal, caller_parse_problem, reference_checks, written_batch,
+    autocommit_refusal, caller_parse_problem, delete_insert_mode, reference_checks, replace_mode,
+    written_batch,
 };
 use crate::adapters::session::tests::test_types::{
     AttachedNameTestCase, AutocommitTestCase, DescribeQueryTestCase, DescribedTypeTestCase,
@@ -248,14 +249,14 @@ fn given_a_foreign_key_referencing_a_postgres_table_when_a_write_through_a_calle
         ReferenceCheckTestCase {
             description: "ON DELETE CASCADE would change another table, so replace is refused",
             reference: ("c", false, false),
-            replace: true,
+            mode: replace_mode,
             expected_problem: Some("ON DELETE CASCADE deletes its rows when replace deletes"),
             expected_warning: None,
         },
         ReferenceCheckTestCase {
             description: "a restricting key is warned of, as delete_insert fails while it holds rows",
             reference: ("r", false, false),
-            replace: false,
+            mode: delete_insert_mode,
             expected_problem: None,
             expected_warning: Some(
                 "so delete_insert fails while any of its rows reference a row it deletes",
@@ -264,13 +265,13 @@ fn given_a_foreign_key_referencing_a_postgres_table_when_a_write_through_a_calle
         ReferenceCheckTestCase {
             description: "replace ignores the table's reference to itself",
             reference: ("c", false, true),
-            replace: true,
+            mode: replace_mode,
             expected_problem: None,
             expected_warning: None,
         },
     ];
     for test_case in test_cases {
-        let (problems, warnings) = reference_checks(test_case.reference, test_case.replace)
+        let (problems, warnings) = reference_checks(test_case.reference, (test_case.mode)())
             .unwrap_or_else(|error| panic!("{}: {error}", test_case.description));
         let found = |lines: &[String], part: Option<&str>| {
             part.map_or(lines.is_empty(), |part| {

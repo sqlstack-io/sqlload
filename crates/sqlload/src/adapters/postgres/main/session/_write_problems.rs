@@ -59,22 +59,7 @@ pub(in crate::adapters) async fn write_problems(
             ))
         }
         WriteMode::Replace | WriteMode::DeleteInsert { .. } if exists => {
-            let rows = client
-                .query(REFERENCES_SQL, &[&schema, &name])
-                .await
-                .map_err(query_error)?
-                .iter()
-                .map(|row| {
-                    Ok(ReferenceRow {
-                        referencing: row.try_get(0)?,
-                        constraint: row.try_get(1)?,
-                        action: row.try_get(2)?,
-                        deferred: row.try_get(3)?,
-                        own: row.try_get(4)?,
-                    })
-                })
-                .collect::<Result<Vec<ReferenceRow>, tokio_postgres::Error>>()
-                .map_err(query_error)?;
+            let rows = reference_rows(client, (&schema, &name)).await?;
             Ok(reference_outcome(&rows, (&schema, &name), mode))
         }
         _ => Ok((Vec::new(), Vec::new())),
@@ -99,4 +84,27 @@ async fn key_indexes(
         drops: row.try_get(3).map_err(query_error)?,
         not_null: row.try_get(4).map_err(query_error)?,
     })
+}
+
+/// The foreign keys referencing `schema.name`.
+async fn reference_rows(
+    client: &Client,
+    (schema, name): (&str, &str),
+) -> Result<Vec<ReferenceRow>, LoaderError> {
+    client
+        .query(REFERENCES_SQL, &[&schema, &name])
+        .await
+        .map_err(query_error)?
+        .iter()
+        .map(|row| {
+            Ok(ReferenceRow {
+                referencing: row.try_get(0)?,
+                constraint: row.try_get(1)?,
+                action: row.try_get(2)?,
+                deferred: row.try_get(3)?,
+                own: row.try_get(4)?,
+            })
+        })
+        .collect::<Result<Vec<ReferenceRow>, tokio_postgres::Error>>()
+        .map_err(query_error)
 }
