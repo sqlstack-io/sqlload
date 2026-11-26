@@ -1,0 +1,27 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {},
+    "paginator": {
+      "kind": "offset",
+      "limit": 100,
+      "limit_param": "count",
+      "location": "query",
+      "param": "start",
+      "read_ahead": 4
+    },
+    "params": {
+      "status": "open"
+    },
+    "path": "/orders",
+    "select": "$.data"
+  }
+}

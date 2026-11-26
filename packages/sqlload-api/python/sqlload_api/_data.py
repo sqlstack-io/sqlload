@@ -1,11 +1,13 @@
-"""What a table function can yield besides rows: JSON bytes, which Rust parses without the GIL, and checkpoints."""
+"""What a table function can yield besides rows: JSON bytes, which Rust parses without the GIL, and checkpoints.
+
+Each crosses into the engine through a method returning plain data (`__sqlload_json__`, `__sqlload_checkpoint__`), so
+this module needs no compiled code; the engine checks what it reads.
+"""
 
 import json as _json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
-
-from sqlload._native import JsonData
 
 BytesLike = bytes | bytearray | memoryview | str
 
@@ -63,17 +65,72 @@ def key(name: str, *, required: bool = False) -> Field:
 	return Field("$", required, None, "fail", {"kind": "key", "name": name})
 
 
+class JsonData:
+	"""JSON or NDJSON bytes yielded by a table function (`sl.json(...)`, `sl.ndjson(...)`), parsed by the engine.
+
+	It crosses as `__sqlload_json__()`: the bytes, and how to read them as JSON. The engine checks the read when the
+	item crosses (a field's path syntax among it), failing the table with the problem."""
+
+	__slots__ = ("_bytes", "_fields", "_keep_record", "_lines", "_path")
+
+	def __init__(
+		self,
+		data: bytes | bytearray,
+		*,
+		lines: bool = False,
+		path: str | None = None,
+		fields: list[dict[str, Any]] | None = None,
+		keep_record: str | None = None,
+	) -> None:
+		if lines and path is not None:
+			raise ValueError("path picks rows out of a JSON document; NDJSON has none")
+		if keep_record is not None and fields is None:
+			raise ValueError("keep_record needs fields: name the columns to load beside the whole record")
+		self._bytes = data
+		self._lines = lines
+		self._path = path
+		self._fields = fields
+		self._keep_record = keep_record
+
+	@property
+	def lines(self) -> bool:
+		"""Whether the bytes are NDJSON."""
+		return self._lines
+
+	@property
+	def path(self) -> str | None:
+		"""The dotted path to the rows inside the document, if any."""
+		return self._path
+
+	def __len__(self) -> int:
+		return len(self._bytes)
+
+	def __sqlload_json__(self) -> tuple[bytes | bytearray, str]:
+		"""The bytes, and the read as the engine takes it: layout, path, fields and keep_record."""
+		read = {
+			"layout": "lines" if self._lines else "document",
+			"path": self._path,
+			"fields": self._fields,
+			"keep_record": self._keep_record,
+		}
+		return self._bytes, _json.dumps(read)
+
+	def __repr__(self) -> str:
+		kind = "sl.ndjson" if self._lines else "sl.json"
+		return f"{kind}({len(self._bytes)} bytes)"
+
+
 def json(data: BytesLike, path: str | None = None, *, fields: Fields | None = None, keep_record: str | None = None) -> JsonData:
 	"""Rows in a JSON document: an array of objects (at dotted `path`, such as `"data.items"`), or objects.
 
 	`fields` loads only those values, renamed (`{"account_code": "$.code"}`); `keep_record` adds each row's whole
 	object as a JSON column."""
-	return JsonData(_as_bytes(data), path=path, fields=_fields_text(fields), keep_record=keep_record)
+	return JsonData(_as_bytes(data), path=path, fields=_json_fields(fields), keep_record=keep_record)
 
 
 def ndjson(data: BytesLike, *, fields: Fields | None = None, keep_record: str | None = None) -> JsonData:
 	"""Rows as newline-delimited JSON, one object per line; `fields` and `keep_record` as for `sl.json`."""
-	return JsonData(_as_bytes(data), lines=True, fields=_fields_text(fields), keep_record=keep_record)
+	return JsonData(_as_bytes(data), lines=True, fields=_json_fields(fields), keep_record=keep_record)
 
 
 def field_list(fields: Fields | None) -> list[dict[str, Any]] | None:
@@ -114,13 +171,13 @@ def _conversion(name: str, projected: Field) -> dict[str, Any]:
 	return {"parse": parse if isinstance(parse, str) else dict(parse), **({"on_error": "null"} if projected.on_error == "null" else {})}
 
 
-def _fields_text(fields: Fields | None) -> str | None:
-	"""`fields` as the JSON list of specs `JsonData` reads."""
+def _json_fields(fields: Fields | None) -> list[dict[str, Any]] | None:
+	"""`fields` as the list of specs `JsonData` crosses with."""
 	listed = field_list(fields)
 	for spec in listed or []:
 		if "from" in spec:
 			raise ValueError(f"fields[{spec['name']!r}]: sl.parent and sl.key read around the rows of an sl.http job; sl.json and sl.ndjson rows have no request")
-	return None if listed is None else _json.dumps(listed)
+	return listed
 
 
 def _as_bytes(data: BytesLike) -> bytes | bytearray:

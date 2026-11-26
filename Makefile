@@ -50,12 +50,14 @@ test-clickhouse-latest:
 test-clickhouse-older:
 	SQLLOAD_TEST_CLICKHOUSE_TAG=$(CLICKHOUSE_OLDER) AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test cargo test -p sqlload --features container-tests,odbc --test loader --quiet -- to_clickhouse --test-threads=2
 
-# Builds the sqlload extension (debug) into .venv and runs the package's tests.
+# Installs sqlload-api (pure Python, which sqlload pins) and builds the sqlload extension (debug) into .venv, and runs
+# both packages' tests.
 test-python:
 	uv venv --quiet --allow-existing --python 3.12 .venv
 	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson duckdb
+	uv pip install --quiet --python .venv/bin/python -e packages/sqlload-api
 	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet --features odbc
-	.venv/bin/python -m pytest packages/sqlload/tests -n auto --dist loadfile
+	.venv/bin/python -m pytest packages/sqlload-api/tests packages/sqlload/tests -n auto --dist loadfile
 
 test: test-unit test-containers
 

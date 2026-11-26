@@ -138,7 +138,8 @@ impl RowColumns {
 }
 
 /// How JSON bytes hold their rows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum JsonLayout {
     /// One JSON document: an array of objects, or objects one after another.
     Document,
@@ -155,6 +156,22 @@ pub struct JsonRead {
     pub batch_rows: usize,
     /// The columns each row object loads as, when only some of its values load, renamed.
     pub projection: Option<Projection>,
+}
+
+/// How a yielded `sl.json(...)` or `sl.ndjson(...)` asks its bytes to be read, as its `__sqlload_json__()` writes it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JsonReadSpec {
+    pub layout: JsonLayout,
+    /// A dotted path to the array of rows inside a document.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `fields=`: the columns each row loads as.
+    #[serde(default)]
+    pub fields: Option<Vec<FieldSpec>>,
+    /// `keep_record=`: the column the whole row object loads in, beside `fields`.
+    #[serde(default)]
+    pub keep_record: Option<String>,
 }
 
 /// Which values of each row object load, under which column names.

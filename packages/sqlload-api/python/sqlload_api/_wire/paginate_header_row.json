@@ -1,0 +1,29 @@
+{
+  "job": {
+    "cells": {
+      "name": {
+        "kind": "header_row"
+      },
+      "pointer": "$.values",
+      "value": [
+        "$"
+      ]
+    },
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {},
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/values/A1:Z",
+    "select": "$.rows"
+  }
+}

@@ -7,7 +7,12 @@ set -euo pipefail
 
 python="$(command -v python3 || command -v python)"
 shopt -s nullglob
-wheels=("$1"/*.whl)
+wheels=()
+for wheel in "$1"/*.whl; do
+	# sqlload-api is pure Python: it bundles nothing, so it carries no notice of unixODBC.
+	case "$(basename "$wheel")" in sqlload_api-*) continue ;; esac
+	wheels+=("$wheel")
+done
 if [ "${#wheels[@]}" -eq 0 ]; then
 	echo "no wheels in $1" >&2
 	exit 1

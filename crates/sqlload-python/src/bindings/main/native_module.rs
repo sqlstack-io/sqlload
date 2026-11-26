@@ -5,7 +5,7 @@ use pyo3::{Bound, PyResult, pymodule, wrap_pyfunction};
 
 use crate::bindings::_helpers::cross::cross;
 use crate::bindings::_helpers::run_cli::{run_cli, run_cli_captured, run_stopped};
-use crate::bindings::models::{BatchStream, JsonData};
+use crate::bindings::models::BatchStream;
 
 /// Register `sqlload._native`'s functions and classes.
 #[pymodule]
@@ -15,7 +15,6 @@ pub fn native_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(run_cli_captured, module)?)?;
     module.add_function(wrap_pyfunction!(run_stopped, module)?)?;
     module.add_function(wrap_pyfunction!(cross, module)?)?;
-    module.add_class::<JsonData>()?;
     module.add_class::<BatchStream>()?;
     Ok(())
 }

@@ -1,0 +1,17 @@
+{
+  "json": {
+    "data": "{\"data\": {\"items\": [{\"id\": 1}]}}",
+    "read": {
+      "fields": [
+        {
+          "name": "id",
+          "path": "$.id",
+          "required": false
+        }
+      ],
+      "keep_record": "raw",
+      "layout": "document",
+      "path": "data.items"
+    }
+  }
+}

@@ -1,3 +1,5 @@
+#[path = "tests/test_api_wire.rs"]
+mod api_wire;
 #[path = "tests/test_credential_source.rs"]
 mod credential_source;
 #[path = "tests/helpers.rs"]

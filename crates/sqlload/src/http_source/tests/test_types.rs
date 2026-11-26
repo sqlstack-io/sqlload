@@ -32,3 +32,17 @@ pub(crate) struct CredentialSourceTestCase {
     pub(crate) set: &'static [&'static str],
     pub(crate) expected_source: Result<&'static str, &'static str>,
 }
+
+pub(crate) struct ApiWireTestCase {
+    pub(crate) description: &'static str,
+    /// The wire file's name, without `.json`.
+    pub(crate) file: &'static str,
+    /// How the engine reads the file's item: as a job, JSON data or a checkpoint.
+    pub(crate) read: fn(&str) -> Result<Vec<String>, String>,
+    pub(crate) expected_problems: &'static [&'static str],
+}
+
+pub(crate) struct WireFilesTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) expected_files: &'static [&'static str],
+}

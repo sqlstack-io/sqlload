@@ -1,0 +1,53 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "error_path": "$.errors",
+    "fields": [
+      {
+        "name": "id",
+        "path": "$.id",
+        "required": false
+      },
+      {
+        "name": "city",
+        "path": "$.address.city",
+        "required": true
+      },
+      {
+        "name": "updated_at",
+        "on_error": "null",
+        "parse": "epoch_ms",
+        "path": "$.updated",
+        "required": false
+      },
+      {
+        "from": {
+          "kind": "parent",
+          "levels": 2
+        },
+        "name": "page_total",
+        "path": "$.total",
+        "required": false
+      }
+    ],
+    "json_body": null,
+    "keep_record": "raw",
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {},
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/accounts",
+    "select": "$.data.items",
+    "select_missing": "empty",
+    "transform": {
+      "function": "account_page",
+      "name": "account_page"
+    }
+  }
+}

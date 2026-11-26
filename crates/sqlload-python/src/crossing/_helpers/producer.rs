@@ -5,18 +5,19 @@ use std::time::Instant;
 use arrow_array::RecordBatch;
 use arrow_array::ffi_stream::RecordBatchStreamReader;
 use arrow_pyarrow::FromPyArrow;
-use pyo3::exceptions::{PyImportError, PyTypeError};
+use pyo3::exceptions::{PyImportError, PyTypeError, PyValueError};
 use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::{
     PyAnyMethods, PyBytes, PyDict, PyDictMethods, PyList, PyListMethods, PyTypeMethods,
 };
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
+use sqlload::python_sources::constants::{CHECKPOINT_METHOD, HTTP_JOB_METHOD, JSON_DATA_METHOD};
+use sqlload::row_batches::main::json_read_spec::json_read_spec;
 use sqlload::row_batches::models::{JsonLayout, JsonRead};
 
-use crate::bindings::models::JsonData;
 use crate::crossing::_helpers::parser::{panic_if, panicked};
 use crate::crossing::_helpers::walk::{holds_nonfinite, walk_rows};
-use crate::crossing::constants::{CHECKPOINT_METHOD, CROSSING_DEFAULT, HTTP_JOB_METHOD};
+use crate::crossing::constants::CROSSING_DEFAULT;
 use crate::crossing::errors::CrossError;
 use crate::crossing::models::{
     Crossed, CrossingOptions, CrossingStats, DictCrossing, Dispatch, PanicSite,
@@ -120,15 +121,11 @@ impl<'py> Producer<'py> {
         if let Ok(rows) = item.cast::<PyList>() {
             return self.take_list(rows);
         }
-        if let Ok(json) = item.cast::<JsonData>() {
-            let json = json.get();
-            let read = JsonRead {
-                layout: json.layout,
-                path: json.path.clone(),
-                batch_rows: self.options.batch_rows,
-                projection: json.projection.clone(),
-            };
-            let bytes = json.bytes.clone_ref(self.py);
+        if item.hasattr(JSON_DATA_METHOD)? {
+            let (bytes, spec): (PyBackedBytes, String) =
+                item.call_method0(JSON_DATA_METHOD)?.extract()?;
+            let read =
+                json_read_spec(&spec, self.options.batch_rows).map_err(PyValueError::new_err)?;
             return Ok(self.flush()? && self.send(Crossed::Json { bytes, read })?);
         }
         if item.hasattr(HTTP_JOB_METHOD)? {

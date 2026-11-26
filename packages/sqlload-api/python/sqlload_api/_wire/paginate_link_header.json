@@ -1,0 +1,24 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {
+        "Accept": "application/json"
+      }
+    },
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {
+      "404": "skip"
+    },
+    "paginator": {
+      "kind": "link_header"
+    },
+    "params": {},
+    "path": "/orders",
+    "select": "$"
+  }
+}

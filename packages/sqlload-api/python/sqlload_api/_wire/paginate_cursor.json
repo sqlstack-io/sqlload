@@ -1,0 +1,23 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "fields": null,
+    "json_body": null,
+    "keep_record": null,
+    "kind": "paginate",
+    "method": "GET",
+    "on_status": {},
+    "paginator": {
+      "kind": "cursor",
+      "location": "query",
+      "param": "token",
+      "pointer": "$.next_token"
+    },
+    "params": {},
+    "path": "/events",
+    "select": "$.events"
+  }
+}

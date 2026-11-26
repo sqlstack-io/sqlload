@@ -1,0 +1,85 @@
+{
+  "job": {
+    "client": {
+      "connection": "shop_api",
+      "headers": {}
+    },
+    "concurrency": 8,
+    "fields": [
+      {
+        "from": {
+          "kind": "key",
+          "name": "order_id"
+        },
+        "name": "order_id",
+        "path": "$",
+        "required": false
+      },
+      {
+        "from": {
+          "kind": "key",
+          "name": "item_id"
+        },
+        "name": "item_id",
+        "path": "$",
+        "required": false
+      },
+      {
+        "name": "sku",
+        "path": "$.sku",
+        "required": false
+      }
+    ],
+    "json_body": null,
+    "keep_record": null,
+    "kind": "fan_out",
+    "method": "GET",
+    "on_status": {},
+    "over": {
+      "client": {
+        "connection": "shop_api",
+        "headers": {}
+      },
+      "concurrency": 8,
+      "fields": null,
+      "json_body": null,
+      "keep_record": null,
+      "key": "item_id",
+      "kind": "fan_out",
+      "method": "GET",
+      "on_status": {},
+      "over": {
+        "client": {
+          "connection": "shop_api",
+          "headers": {}
+        },
+        "fields": null,
+        "json_body": null,
+        "keep_record": null,
+        "key": "order_id",
+        "kind": "paginate",
+        "method": "GET",
+        "on_status": {},
+        "paginator": {
+          "kind": "next_link",
+          "pointer": "$.next"
+        },
+        "params": {},
+        "path": "/orders",
+        "select": "$.items[*].id"
+      },
+      "paginator": {
+        "kind": "single"
+      },
+      "params": {},
+      "path": "/orders/{order_id}/items",
+      "select": "$.items[*].id"
+    },
+    "paginator": {
+      "kind": "single"
+    },
+    "params": {},
+    "path": "/orders/{order_id}/items/{item_id}/parts",
+    "select": "$.parts"
+  }
+}
