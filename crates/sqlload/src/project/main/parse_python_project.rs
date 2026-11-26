@@ -41,6 +41,10 @@ pub fn parse_python_project(
         .iter()
         .map(|source| (source.name.clone(), source.http_paths.clone()))
         .collect();
+    project.python_hosts = python
+        .iter()
+        .filter_map(|source| Some((source.name.clone(), source.host.clone()?)))
+        .collect();
     project.connection_variables = variables;
     let project = attach_sessions(project, sessions).map_err(ProjectError::Invalid)?;
     let problems = reference_problems(&project);

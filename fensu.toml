@@ -119,6 +119,26 @@ reason = "The keys INFORMATION_SCHEMA lists only explain plan's error for a tabl
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSL105"
+path = "crates/sqlload-python-host/src/host/main/error_text.rs"
+reason = "Part of sqlload-python-host's public interface, for a host that implements PythonHost itself; its importers are other projects' extensions."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-python-host/src/host/main/read_error.rs"
+reason = "Part of sqlload-python-host's public interface, for a host that implements PythonHost itself; its importers are other projects' extensions."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-python-host/src/host/main/table_stream.rs"
+reason = "Part of sqlload-python-host's public interface, for a host that implements PythonHost itself; its importers are other projects' extensions."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
+path = "crates/sqlload-python-host/src/host/main/transform_stream.rs"
+reason = "Part of sqlload-python-host's public interface, for a host that implements PythonHost itself; its importers are other projects' extensions."
+
+[[targets.rust.rule_exceptions]]
+rule = "FPRSL105"
 path = "crates/sqlload-testkit/src/parity/main/comparison_sql.rs"
 reason = "Testkit entry used by sqlload's integration tests, which live outside the analysed crate tree."
 
@@ -311,7 +331,7 @@ reason = "PyO3 maps each of the Python function's keyword-only arguments to one 
 
 [[targets.rust.rule_exceptions]]
 rule = "FPRSH003"
-path = "crates/sqlload-python/src/crossing/_helpers/parser.rs"
+path = "crates/sqlload-python-host/src/crossing/_helpers/parser.rs"
 symbols = ["panic_if"]
 reason = "The crossing's test hook panics on purpose, to prove a panicking crossing thread fails the read instead of ending it early."
 

@@ -26,6 +26,7 @@ on:
       - Cargo.lock
       - crates/sqlload/Cargo.toml
       - crates/sqlload-python/Cargo.toml
+      - crates/sqlload-python-host/Cargo.toml
 
 # A new push to a pull request cancels its older wheel builds; a release run is a group of its own,
 # so releases never cancel each other.
@@ -84,7 +85,8 @@ jobs:
               with Path(path).open("rb") as file:
                   return tomllib.load(file)["project"]["version"]
           with Path("Cargo.toml").open("rb") as file:
-              workspace_version = tomllib.load(file)["workspace"]["package"]["version"]
+              workspace = tomllib.load(file)["workspace"]
+          workspace_version = workspace["package"]["version"]
           manifests = [
               ("Python package", project_version("packages/sqlload/pyproject.toml")),
               ("CLI package", project_version("packages/sqlload-cli/pyproject.toml")),
@@ -94,6 +96,10 @@ jobs:
           with Path("packages/sqlload/pyproject.toml").open("rb") as file:
               pins = [d for d in tomllib.load(file)["project"]["dependencies"] if d.startswith("sqlload-api")]
           manifests.append(("Python package's sqlload-api pin", pins[0].partition("==")[2] if pins else "missing"))
+          # sqlload-python-host publishes with exact requirements on these, so they must name the release.
+          for crate in ("sqlload", "sqlload-python-host"):
+              pin = workspace["dependencies"][crate].get("version", "missing")
+              manifests.append((f"Cargo workspace's {crate} pin", pin.removeprefix("=")))
           mismatches = [f"{label}={version}" for label, version in manifests if version != expected]
           if mismatches:
               raise SystemExit(
@@ -491,7 +497,12 @@ jobs:
       - name: Exchange the OIDC token for a crates.io token
         id: crates-io-auth
         uses: rust-lang/crates-io-auth-action@v1
+      # sqlload first: sqlload-python-host requires it at exactly this version, so crates.io must have it already.
       - name: Publish sqlload
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
         run: cargo publish --locked -p sqlload
+      - name: Publish sqlload-python-host
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.crates-io-auth.outputs.token }}
+        run: cargo publish --locked -p sqlload-python-host

@@ -4,39 +4,27 @@ The native loader calls these functions through `sqlload._native` while running 
 `load` and the other commands; they are not a public API.
 """
 
-import hashlib
 import importlib
 import json
-import logging
 import sys
 import threading
 import traceback
-import types
-from collections.abc import Callable, Iterator
-from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from collections.abc import Iterator
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo
 
-from sqlload._declare import Connection, Context, Source, Table
+from sqlload._declare import Context, Source, Table
 from sqlload._rename import RENAMES, Column, RenameContext, renamed
-from sqlload_api._data import checkpoint
+from sqlload_api import _host
 from sqlload_api._http import Job
 from sqlload_api._http_paths import literal_paths
-from sqlload_api._transform import TRANSFORMS, TransformContext, returned_items
-
-#: What `page_items` yields after each page's items.
-PAGE_END = checkpoint(None)
 
 #: Folders under `python_paths` never imported: virtual environments, build output and caches.
 SKIPPED_FOLDERS: frozenset[str] = frozenset({"venv", "build", "dist", "site-packages", "node_modules"})
 
 #: The destination name of a table declared without a source: its own name.
 STANDALONE_TABLE_NAME = "{table}"
-
-#: How long a transform's version hash is, in hex digits.
-VERSION_DIGITS = 16
 
 _tables: dict[str, Table] = {}
 #: The project folder `discover` imported from, which errors name files relative to.
@@ -69,6 +57,7 @@ def discover(root: str, python_paths: list[str]) -> str:
 			elif isinstance(value, Table) and value.source is not None:
 				sources.setdefault(id(value.source), (value.source, relative))
 	_root[:] = [root_path]
+	_host.set_root(root_path)
 	_tables.clear()
 	declared: list[dict[str, Any]] = []
 	for source, relative in sources.values():
@@ -90,39 +79,13 @@ def discover(root: str, python_paths: list[str]) -> str:
 	return json.dumps(declared)
 
 
-def crossing_default(value: Any) -> Any:
-	"""orjson's `default` for yielded rows: `str()`, a `time` as ISO text; a `Decimal`, `date`, `datetime` or bytes refuses, so the batch is walked and keeps its type."""
-	if isinstance(value, (Decimal, bytes, bytearray, memoryview)) or type(value) in (date, datetime):
-		raise TypeError("typed value")
-	if type(value) is time:
-		return value.isoformat()
-	return str(value)
-
-
 def start_table(request: str) -> Iterator[Any]:
 	"""Call a table function with its context; returns what it yields."""
 	read = json.loads(request)
 	table = _tables[read["table"]]
-	connections: dict[str, Any] = read["connections"]
-	connection_name = read.get("connection")
-	withheld: list[str] = read["withheld"]
-	connection = Connection(connections.get(connection_name, {}) if connection_name else {}, connections, withheld)
-	cursor = read.get("cursor") or {}
 	source = table.source
-	ctx = Context(
-		table=table.name,
-		source=read["source"],
-		connection=connection,
-		logger=logging.getLogger(f"sqlload.{read['source']}.{table.name}"),
-		cursor_column=cursor.get("column"),
-		cursor_value=_cursor_value(cursor.get("start"), cursor.get("column_type"), cursor.get("timezone")),
-		cursor_end=_cursor_value(cursor.get("end"), cursor.get("column_type"), cursor.get("timezone")),
-		cursor_inclusive=cursor.get("inclusive", True),
-		is_reload=read["is_reload"],
-		client_factory=_shared_client(source) if source is not None and source.client_factory else None,
-		logged=read.get("logged", False),
-		state=json.loads(read["state"]) if read.get("state") is not None else None,
-	)
+	shared = _shared_client(source) if source is not None and source.client_factory else None
+	ctx = Context.from_read(read, client_factory=shared)
 	_contexts[table.name] = ctx
 	yielded = table.function(ctx)
 	if yielded is None:
@@ -131,75 +94,13 @@ def start_table(request: str) -> Iterator[Any]:
 
 
 def current_state(table: str) -> str | None:
-	"""The JSON `ctx.state` was assigned one assignment before its latest, while the table function runs: rows crossing now commit with it.
-
-	Rows a function yields may cross before or after it moves `ctx.state` past them, so only the
-	previous value is sure to cover every row crossed so far, whether the state is set before or
-	after the rows it covers; a resumed run then never skips rows, and may load up to about two
-	pages again. Each assignment is kept as JSON, so re-assigning a mutated object leaves the
-	previous value as it was."""
-	ctx = _contexts.get(table)
-	if ctx is None or not ctx._logged:
-		return None
-	return ctx._previous_assigned_state
+	"""The JSON `ctx.state` was assigned one assignment before its latest, while the table function runs (see `sqlload_api._host.current_state`)."""
+	return _host.current_state(_contexts.get(table))
 
 
 def table_state(table: str) -> str | None:
-	"""The position the table function left in `ctx.state`, as JSON, when it differs from the one it started with.
-
-	It is read once the function finished, so a position changed in place (`ctx.state["token"] = ...`)
-	counts like one assigned.
-	"""
-	ctx = _contexts.pop(table, None)
-	if ctx is None or not ctx._logged:
-		return None
-	try:
-		final = json.dumps(ctx.state)
-	except (TypeError, ValueError) as error:
-		raise TypeError(f"ctx.state of table {table} is not JSON: {error}") from error
-	return final if final != ctx.started_state else None
-
-
-def transform_version(name: str) -> tuple[str | None, str | None]:
-	"""Look up the transform registered as `name` and check it can run.
-
-	Returns its version, `name@` and a hash of the file it is defined in (an edit to the file, not only to the function,
-	changes it; when the file can't be read, as for a function defined in a notebook, a hash of the function's code), or
-	why it cannot run: no function or two are registered as `name`, or pyarrow is missing.
-	"""
-	function, problem = TRANSFORMS.lookup(name, _root[0] if _root else None)
-	if function is None:
-		return None, problem
-	try:
-		importlib.import_module("pyarrow")
-	except ImportError:
-		return None, "transform needs pyarrow: pip install pyarrow"
-	source = TRANSFORMS.source_file(name) or ""
-	contents = Path(source).read_bytes() if source and Path(source).is_file() else _code_bytes(function)
-	return f"{name}@{hashlib.sha256(contents).hexdigest()[:VERSION_DIGITS]}", None
-
-
-def call_transform(name: str, table: Any, context: str) -> tuple[Any, str | None]:
-	"""Call the transform `name` on one unit's rows, a pyarrow Table, with its `ctx` (JSON).
-
-	Returns what crosses, item by item as a generator yields them (its `dicts` says whether any were dicts), or why the
-	returned value cannot load.
-	"""
-	function, problem = TRANSFORMS.lookup(name)
-	if function is None:
-		raise LookupError(problem)
-	fields: dict[str, Any] = json.loads(context)
-	modified_at = fields.get("modified_at")
-	ctx = TransformContext(**{**fields, "modified_at": datetime.fromisoformat(_offset_text(modified_at)) if modified_at else None})
-	return returned_items(TRANSFORMS.shown(name), function(table, ctx))
-
-
-def page_items(next_page: Callable[[], Any]) -> Iterator[Any]:
-	"""Yield what an `sl.http` job's transform returns for each page `next_page` hands over, item by item, and
-	`sl.checkpoint(None)` after each page's items to mark where they end, until it hands over `None`."""
-	while (returned := next_page()) is not None:
-		yield from returned
-		yield PAGE_END
+	"""The position the table function left in `ctx.state`, as JSON, when it differs from the one it started with (see `sqlload_api._host.final_state`)."""
+	return _host.final_state(_contexts.pop(table, None))
 
 
 def rename(name: str, columns: str | None, context: str) -> tuple[str | None, str | None]:
@@ -224,7 +125,6 @@ def rename(name: str, columns: str | None, context: str) -> tuple[str | None, st
 
 def finish_run() -> None:
 	"""Close every client the run built (their `close()`, when they have one)."""
-	TRANSFORMS.release()
 	RENAMES.release()
 	clients = list(_clients.values())
 	_clients.clear()
@@ -325,85 +225,3 @@ def _shared_client(source: Source) -> Any:
 			return _clients[source.name]
 
 	return build
-
-
-def _cursor_value(text: str | None, column_type: str | None, zone: str | None = None) -> Any:
-	"""A cursor bound in its Python type: int, float, Decimal, date, or datetime: aware for `timestamp_tz`, in the
-	table's `timezone` (`zone`) or UTC; for `timestamp_ntz`, aware in `zone` when it is set, its wall-clock time kept.
-
-	Before the first load shows the cursor's type (`unknown`), ISO dates and timestamps and integers
-	are read as such, so the value's type matches later runs.
-	"""
-	if text is None:
-		return None
-	kind = column_type or "unknown"
-	if kind.startswith("decimal"):
-		kind = "decimal"
-	try:
-		if kind == "unknown":
-			return _zoned(_guessed_value(text), zone)
-		if kind in ("int", "smallint"):
-			return int(text)
-		if kind == "float":
-			return float(text)
-		if kind == "decimal":
-			return Decimal(text)
-		if kind == "date":
-			return date.fromisoformat(text[:10])
-		if kind in ("timestamp_tz", "timestamp_ntz"):
-			return _zoned(_timestamp(text, aware=kind == "timestamp_tz"), zone)
-	except (ValueError, ArithmeticError):
-		return text
-	return text
-
-
-def _guessed_value(text: str) -> Any:
-	if text.lstrip("-").isdigit():
-		return int(text)
-	if len(text) == 10:
-		return date.fromisoformat(text)
-	value = datetime.fromisoformat(_offset_text(text))
-	return value.astimezone(timezone.utc) if value.tzinfo is not None else value
-
-
-def _offset_text(text: str) -> str:
-	"""`text` with a `Z` or `+00` offset written as `+00:00`, which `fromisoformat` reads on Python 3.10."""
-	normal = text.replace("Z", "+00:00")
-	return normal + ":00" if normal.endswith("+00") else normal
-
-
-def _zoned(value: Any, zone: str | None) -> Any:
-	"""`value` in the IANA zone `zone` when it is a datetime and `zone` is set: an aware one converted, a naive one (a
-	wall-clock time declared to be in that zone) given it; anything else as it is."""
-	if zone is None or not isinstance(value, datetime):
-		return value
-	where = ZoneInfo(zone)
-	return value.astimezone(where) if value.tzinfo is not None else value.replace(tzinfo=where)
-
-
-def _timestamp(text: str, *, aware: bool) -> datetime:
-	value = datetime.fromisoformat(_offset_text(text))
-	if not aware:
-		return value.replace(tzinfo=None)
-	return value.astimezone(timezone.utc) if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-
-
-def _code_bytes(function: Any) -> bytes:
-	"""What a function does, for its version when its file can't be read: its bytecode, constants (nested functions' code
-	included) and the names it uses, without its file name or line numbers. A callable without code, by its type's name."""
-	code = getattr(function, "__code__", None)
-	return _code_parts(code) if isinstance(code, types.CodeType) else type(function).__qualname__.encode()
-
-
-def _code_parts(code: types.CodeType) -> bytes:
-	constants = [_code_parts(constant) if isinstance(constant, types.CodeType) else _constant_text(constant) for constant in code.co_consts]
-	return b"\0".join([code.co_code, repr(code.co_names).encode(), *constants])
-
-
-def _constant_text(constant: Any) -> bytes:
-	"""A code constant as text that is the same in every process: a frozenset's items sorted, as its order follows string hashing."""
-	if isinstance(constant, frozenset):
-		return repr(sorted(repr(item) for item in constant)).encode()
-	if isinstance(constant, tuple):
-		return b"(" + b",".join(_constant_text(item) for item in constant) + b")"
-	return repr(constant).encode()

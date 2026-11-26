@@ -1,0 +1,23 @@
+[package]
+name = "sqlload-python-host-example"
+version = "0.0.0"
+description = "A host of SQLLoad's engine with a Python runtime of its own, built on sqlload-python-host, for its tests."
+edition.workspace = true
+license.workspace = true
+publish = false
+rust-version.workspace = true
+
+[lib]
+name = "example_host"
+crate-type = ["cdylib"]
+# Tested from Python (tests/external_host).
+test = false
+doctest = false
+
+[dependencies]
+pyo3.workspace = true
+sqlload = { workspace = true, default-features = true }
+sqlload-python-host.workspace = true
+
+[lints]
+workspace = true

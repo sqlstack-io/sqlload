@@ -57,7 +57,9 @@ test-python:
 	uv pip install --quiet --python .venv/bin/python 'maturin>=1.9,<2' pytest pytest-xdist pyarrow polars pandas orjson duckdb
 	uv pip install --quiet --python .venv/bin/python -e packages/sqlload-api
 	cd packages/sqlload && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet --features odbc
-	.venv/bin/python -m pytest packages/sqlload-api/tests packages/sqlload/tests -n auto --dist loadfile
+	# A host of its own on sqlload-python-host, which loads through the same engine (never published).
+	cd tests/external_host && VIRTUAL_ENV=$(CURDIR)/.venv $(CURDIR)/.venv/bin/maturin develop --uv --quiet
+	.venv/bin/python -m pytest packages/sqlload-api/tests packages/sqlload/tests tests/external_host -n auto --dist loadfile
 
 test: test-unit test-containers
 

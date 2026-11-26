@@ -1,7 +1,5 @@
-//! The `sqlload._native` extension module: the `sqlload` command line in-process, and table generators crossing into Arrow.
+//! The `sqlload._native` extension module: the `sqlload` command line in-process, with the Python host from `sqlload-python-host`.
 
 #![forbid(unsafe_code)]
 
 pub mod bindings;
-pub mod crossing;
-pub mod host;

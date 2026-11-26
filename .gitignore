@@ -26,6 +26,7 @@ __pycache__/
 
 # Native extension built in place by maturin develop
 packages/sqlload/python/sqlload/*.so
+tests/external_host/python/example_host/*.so
 packages/sqlload/python/sqlload/*.pyd
 benchmarks/results/
 benchmarks/.wheels/

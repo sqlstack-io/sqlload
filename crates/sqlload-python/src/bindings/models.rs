@@ -10,8 +10,8 @@ use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use sqlload::row_batches::main::conform_batch::conform_batch;
 use sqlload::row_batches::main::settled_schema::settled_schema;
 
-use crate::crossing::errors::CrossError;
-use crate::crossing::models::{Polled, TableBatches};
+use sqlload_python_host::crossing::errors::CrossError;
+use sqlload_python_host::crossing::models::{Polled, TableBatches};
 
 /// The Arrow batches of one table generator, as `pyarrow.RecordBatch`es (the crossing's test hook).
 #[derive(Debug)]

@@ -1,6 +1,5 @@
 """Transforms end to end: `transform` on files tables (each file or ZIP member) and on `google_sheets` tables (each range), into DuckDB."""
 
-import gc
 import importlib.util
 import json
 import os
@@ -9,7 +8,6 @@ import sys
 import textwrap
 import threading
 import time
-import weakref
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -561,35 +559,3 @@ def test_a_function_passed_as_transform_resolves_to_itself_when_two_files_regist
 	assert shown == "clean"
 
 
-def test_a_function_passed_as_transform_is_released_when_the_run_finishes() -> None:
-	from sqlload._runtime import finish_run
-	from sqlload_api._transform import TRANSFORMS
-
-	def page_transform() -> Any:
-		return lambda rows, ctx: rows
-
-	function = page_transform()
-	released = weakref.ref(function)
-	key, _ = TRANSFORMS.key(function)
-	assert TRANSFORMS.lookup(key)[0] is function
-	del function
-	finish_run()
-	gc.collect()
-	assert released() is None
-	assert TRANSFORMS.lookup(key)[0] is None
-
-
-def test_a_transform_whose_file_cant_be_read_is_versioned_by_its_code() -> None:
-	from sqlload._runtime import transform_version
-	from sqlload_api._transform import TRANSFORMS
-
-	def version_of(body: str) -> str | None:
-		namespace: dict[str, Any] = {}
-		exec(compile(f"def unread_file_transform(rows, ctx):\n\t{body}\n", "<notebook cell>", "exec"), namespace)
-		TRANSFORMS.register("unread_file_transform", namespace["unread_file_transform"])
-		return transform_version("unread_file_transform")[0]
-
-	first = version_of("return rows")
-	assert first is not None and first.startswith("unread_file_transform@")
-	assert version_of("return rows.slice(1)") != first
-	assert version_of("return rows") == first

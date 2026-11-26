@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::row_batches::models::Flatten;
 
-/// One `sl.source(...)` (or a standalone `@sl.table`, as a source of its own) found under `python_paths`.
+/// One `sl.source(...)` (or a standalone `@sl.table`, as a source of its own) found under `python_paths`, or one a host declares itself ([`PythonSource::new`]).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct PythonSource {
     pub name: String,
     /// The file that declares it, relative to the project directory.
@@ -14,10 +15,31 @@ pub struct PythonSource {
     /// The `sl.http` paths each table function writes as literals, by table name; tables that build no job are left out.
     #[serde(default)]
     pub http_paths: std::collections::BTreeMap<String, crate::http_source::models::LiteralPaths>,
+    /// The host's own data about the source (its loader, run or model), which the engine never reads and copies into every [`TableRead`] of the source's tables; SQLLoad's sources set none.
+    #[serde(default)]
+    pub host: Option<serde_json::Value>,
+}
+
+impl PythonSource {
+    /// Source `name`, declared in `module` (as error messages name it), with its `settings` as TOML keys and its tables under `tables`; no literal `sl.http` paths and no host data.
+    pub fn new(
+        name: impl Into<String>,
+        module: impl Into<String>,
+        settings: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            module: module.into(),
+            settings,
+            http_paths: std::collections::BTreeMap::new(),
+            host: None,
+        }
+    }
 }
 
 /// What one table function is called with: its connection, the cursor window and the run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
+#[non_exhaustive]
 pub struct TableRead {
     pub source: String,
     pub table: String,
@@ -49,6 +71,32 @@ pub struct TableRead {
     /// The most the table's `sl.http` jobs hold in pages requested ahead: a quarter of its share of the run's memory budget; `None` without a budget. Not sent to the table function.
     #[serde(skip)]
     pub source_part: Option<u64>,
+    /// The source's [`PythonSource::host`] data, as the host declared it.
+    pub host: Option<serde_json::Value>,
+}
+
+impl TableRead {
+    /// A read of `table` from `source` with nothing else set: no connection, cursor or state, nothing masked or flattened; for a host's tests and its own reads.
+    pub fn new(source: impl Into<String>, table: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            table: table.into(),
+            connection: None,
+            connections: serde_json::Map::new(),
+            withheld: Vec::new(),
+            cursor: None,
+            logged: false,
+            state: None,
+            is_reload: false,
+            flatten: Flatten::default(),
+            masked: Vec::new(),
+            arrays: Vec::new(),
+            naming: (crate::load_naming::models::Naming::default(), None),
+            zone: None,
+            source_part: None,
+            host: None,
+        }
+    }
 }
 
 /// The cursor window a table function may use to read only new data.

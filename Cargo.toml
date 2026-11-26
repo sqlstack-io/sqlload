@@ -3,6 +3,8 @@ members = [
     "crates/sqlload",
     "crates/sqlload-benches",
     "crates/sqlload-python",
+    "crates/sqlload-python-host",
+    "crates/sqlload-python-host-example",
     "crates/sqlload-testkit",
 ]
 resolver = "2"
@@ -73,7 +75,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 sha2 = "0.10"
 shake = "0.1"
-sqlload = { path = "crates/sqlload", default-features = false }
+# Exact: sqlload-python-host publishes with this requirement, and its public types are sqlload's.
+sqlload = { path = "crates/sqlload", version = "=0.85.0", default-features = false } # x-release-please-version
+sqlload-python-host = { path = "crates/sqlload-python-host", version = "=0.85.0" } # x-release-please-version
 sqlload-testkit = { path = "crates/sqlload-testkit" }
 tempfile = "3"
 testcontainers = "0.28"
