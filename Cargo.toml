@@ -10,7 +10,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.89.0" # x-release-please-version
+version = "0.89.1" # x-release-please-version
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -76,8 +76,8 @@ serde_json = { version = "1", features = ["raw_value", "arbitrary_precision"] }
 sha2 = "0.10"
 shake = "0.1"
 # Exact: sqlload-python-host publishes with this requirement, and its public types are sqlload's.
-sqlload = { path = "crates/sqlload", version = "=0.89.0", default-features = false } # x-release-please-version
-sqlload-python-host = { path = "crates/sqlload-python-host", version = "=0.89.0" } # x-release-please-version
+sqlload = { path = "crates/sqlload", version = "=0.89.1", default-features = false } # x-release-please-version
+sqlload-python-host = { path = "crates/sqlload-python-host", version = "=0.89.1" } # x-release-please-version
 sqlload-testkit = { path = "crates/sqlload-testkit" }
 tempfile = "3"
 testcontainers = "0.28"
