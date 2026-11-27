@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.89.0](https://github.com/sqlstack-io/sqlload/compare/v0.88.0...v0.89.0) (2026-11-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **bigquery:** a BigQuery table whose config sets `partition_by`, `cluster_by` or `require_partition_filter`, and whose live layout differs, fails at `plan` until it is loaded with `--reload` or the config matches. The layout-refusal message on other targets names ClickHouse and BigQuery.
+
+### Features
+
+* **bigquery:** partition and cluster tables ([d2056a3](https://github.com/sqlstack-io/sqlload/commit/d2056a3ef4338b6a3f825320f96f181e047806d5))
+
 ## [0.88.0](https://github.com/sqlstack-io/sqlload/compare/v0.87.0...v0.88.0) (2026-11-27)
 
 
