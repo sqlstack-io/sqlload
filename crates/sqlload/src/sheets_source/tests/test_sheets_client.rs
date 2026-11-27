@@ -51,7 +51,7 @@ fn given_a_connection_key_when_making_a_client_then_it_reads_as_the_keys_service
                 json!({"type": "authorized_user", "client_id": "x"}).to_string(),
             )),
             expected_result: Err(
-                "the key is a \"authorized_user\" credential; Google Sheets sources read with a service-account key",
+                "the key is a \"authorized_user\" credential; a google_sheets connection's key is a service-account key",
             ),
         },
         KeyTestCase {
@@ -65,7 +65,7 @@ fn given_a_connection_key_when_making_a_client_then_it_reads_as_the_keys_service
     for test_case in test_cases {
         let width = test_case.expected_result.err().map_or(0, str::len);
         let seen = sheets_client(http.clone(), &test_case.source, None)
-            .map(|client| client.account().to_owned())
+            .map(|client| client.account())
             .map_err(|error| error.to_string().chars().take(width).collect::<String>());
         assert_eq!(
             seen,

@@ -21,6 +21,8 @@ mod duckdb_helpers;
 mod files_helpers;
 #[path = "loader/files_target/helpers.rs"]
 mod files_target_helpers;
+#[path = "loader/google/helpers.rs"]
+mod google_helpers;
 #[path = "loader/helpers.rs"]
 mod helpers;
 #[path = "loader/memory/helpers.rs"]
@@ -69,6 +71,8 @@ mod test_files_to_clickhouse;
 mod test_files_to_duckdb;
 #[path = "loader/test_gcs_files.rs"]
 mod test_gcs_files;
+#[path = "loader/test_google_sign_in.rs"]
+mod test_google_sign_in;
 #[path = "loader/test_loader_edge_cases.rs"]
 mod test_loader_edge_cases;
 #[path = "loader/test_memory_budget.rs"]

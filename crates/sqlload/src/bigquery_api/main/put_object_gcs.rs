@@ -1,11 +1,12 @@
 //! Upload an object to Cloud Storage.
 
-use crate::bigquery_api::_helpers::requests::{google_response, token_for};
+use crate::bigquery_api::_helpers::requests::google_response;
 use crate::bigquery_api::constants::{STORAGE_SCOPE, STORAGE_UPLOAD_URL, UNAUTHORIZED};
 use crate::bigquery_api::models::BigQueryClient;
+use crate::google_identity::main::google_access_token::google_access_token;
 use crate::http::errors::ApiError;
 
-/// Write `body` as the object `name` in `bucket`, replacing one of that name, as the client's service account with a Cloud Storage token; a refused token is replaced once.
+/// Write `body` as the object `name` in `bucket`, replacing one of that name, as the client's identity with a Cloud Storage token; a refused token is replaced once.
 pub async fn put_object_gcs(
     client: &BigQueryClient,
     (bucket, name): (&str, &str),
@@ -14,9 +15,9 @@ pub async fn put_object_gcs(
     let url = format!("{STORAGE_UPLOAD_URL}/b/{bucket}/o");
     let mut refused = None;
     loop {
-        let token = token_for(
+        let token = google_access_token(
             &client.http,
-            &client.key,
+            &client.credentials,
             &client.storage_token,
             (STORAGE_SCOPE, refused.as_ref()),
         )

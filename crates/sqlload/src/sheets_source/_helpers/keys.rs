@@ -23,12 +23,9 @@ pub(crate) fn key_text(source: &KeySource) -> Result<String, ApiError> {
         }
         KeySource::File(path) => read_key_file(path)?,
         KeySource::Environment => {
-            let path = std::env::var_os(CREDENTIALS_VARIABLE).ok_or_else(|| {
-                ApiError::Auth(format!(
-                    "no service-account key: set service_account_file, service_account_json or service_account_json_base64 on the connection, or {CREDENTIALS_VARIABLE}"
-                ))
-            })?;
-            read_key_file(std::path::Path::new(&path))?
+            return Err(ApiError::Protocol(format!(
+                "the file {CREDENTIALS_VARIABLE} names is read as Google credentials, not as a key's text"
+            )));
         }
     })
 }

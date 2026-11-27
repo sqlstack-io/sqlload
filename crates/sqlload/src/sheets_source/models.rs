@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::auth::models::{GoogleUser, Secret};
-use crate::bigquery_api::models::ServiceAccountKey;
 use crate::column_types::models::ColumnType;
+use crate::google_identity::models::{GoogleCredentials, Signer};
 use crate::sheets_source::constants::GOOGLE_USER;
 
 /// What the Sheets API needs: the shared HTTP pool, the API root, who reads (a service account or a signed-in Google user) and the token it last gave.
@@ -17,11 +17,17 @@ pub struct SheetsClient {
 }
 
 impl SheetsClient {
-    /// Who the client reads as: the service account's address, or the Google user who signed in.
-    pub fn account(&self) -> &str {
+    /// Who the client reads as: the service account's address (the one it impersonates, else its key's), how it signs in where it names no account, or the Google user who signed in.
+    pub fn account(&self) -> String {
         match &self.credential {
-            SheetsCredential::ServiceAccount(key) => &key.client_email,
-            SheetsCredential::User(_) => GOOGLE_USER,
+            SheetsCredential::Google(credentials) => {
+                match (&credentials.impersonate, &credentials.signer) {
+                    (Some(target), _) => target.account.clone(),
+                    (None, Signer::ServiceAccount(key)) => key.client_email.clone(),
+                    (None, _) => credentials.describe(),
+                }
+            }
+            SheetsCredential::User(_) => GOOGLE_USER.to_owned(),
         }
     }
 }
@@ -29,7 +35,8 @@ impl SheetsClient {
 /// Who a client reads spreadsheets as.
 #[derive(Debug, Clone)]
 pub enum SheetsCredential {
-    ServiceAccount(ServiceAccountKey),
+    /// A service-account key, or the credentials file `GOOGLE_APPLICATION_CREDENTIALS` names, as BigQuery reads it.
+    Google(Box<GoogleCredentials>),
     User(Box<GoogleUser>),
 }
 
@@ -42,7 +49,7 @@ pub enum KeySource {
     Base64(Secret),
     /// A key file.
     File(std::path::PathBuf),
-    /// The key file `GOOGLE_APPLICATION_CREDENTIALS` names.
+    /// The credentials file `GOOGLE_APPLICATION_CREDENTIALS` names: a key, a gcloud login, an impersonated service account or workload identity federation.
     Environment,
 }
 

@@ -1,5 +1,7 @@
 /// The project the fake's key belongs to, and so the one tables load into.
 pub const FAKE_PROJECT: &str = "fake-project";
+/// The subject token the fake's STS refuses.
+pub const REFUSED_SUBJECT: &str = "refused";
 /// Where the fake hands out OAuth tokens.
 pub const TOKEN_PATH: &str = "/token";
 /// How every request the fake accepts is authorized; the token's own text follows.

@@ -1,65 +1,57 @@
-//! The GCS client SQLLoad reads a bucket with, and where it gets its credentials: the connection's key, else Google's application default credentials.
+//! The GCS client SQLLoad reads a bucket with, and how it signs in: the connection's key, else Google's application default credentials, through the same sign-in as BigQuery.
+
+use std::sync::Arc;
 
 use object_store::ClientOptions;
-use object_store::gcp::GoogleCloudStorageBuilder;
+use object_store::CredentialProvider;
+use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
 
-/// Where a GCS client's credentials come from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum GcsCredentials {
-    /// The connection's `service_account_key`.
-    Connection,
-    /// The file `GOOGLE_APPLICATION_CREDENTIALS` names.
-    Named { path: String },
-    /// The gcloud CLI's application default credentials file.
-    Gcloud { path: String },
-    /// Neither: the service account of the machine SQLLoad runs on, from its metadata server.
-    Machine,
+use crate::auth::models::Secret;
+use crate::file_store::constants::GCS_SCOPE;
+use crate::google_identity::main::google_access_token::google_access_token;
+use crate::google_identity::main::google_credentials::google_credentials;
+use crate::google_identity::models::GoogleCredentials;
+use crate::http::main::http_client::build_http_client;
+use crate::http::models::ConnectionCounter;
+
+/// Cloud Storage tokens for Google's application default credentials, renewed before they expire.
+#[derive(Debug)]
+struct GcsTokens {
+    http: reqwest::Client,
+    credentials: GoogleCredentials,
+    kept: tokio::sync::Mutex<Option<(Secret, i64)>>,
 }
 
-impl GcsCredentials {
-    /// Where the credentials come from, for `sqlload debug`; never the credentials themselves.
-    pub(crate) fn describe(&self) -> String {
-        match self {
-            Self::Connection => "the connection's service_account_key".to_owned(),
-            Self::Named { path } => format!("GOOGLE_APPLICATION_CREDENTIALS ({path})"),
-            Self::Gcloud { path } => format!("gcloud's application default credentials ({path})"),
-            Self::Machine => "the machine's service account, from its metadata server".to_owned(),
-        }
+#[async_trait::async_trait]
+impl CredentialProvider for GcsTokens {
+    type Credential = GcpCredential;
+
+    async fn get_credential(&self) -> object_store::Result<Arc<GcpCredential>> {
+        let token =
+            google_access_token(&self.http, &self.credentials, &self.kept, (GCS_SCOPE, None))
+                .await
+                .map_err(|error| object_store::Error::Generic {
+                    store: "GCS",
+                    source: Box::new(error),
+                })?;
+        Ok(Arc::new(GcpCredential {
+            bearer: token.expose().to_owned(),
+        }))
     }
 }
 
-/// Where a GCS client's credentials come from, with `variable` reading the environment: the connection's key when it `has_key`; else the file `GOOGLE_APPLICATION_CREDENTIALS` names, which must exist; else gcloud's application default credentials file (`~/.config/gcloud/application_default_credentials.json`, or `%APPDATA%\gcloud\…` on Windows) when it exists; else the machine's service account.
+/// How a GCS client signs in, for `sqlload debug` (never the credentials themselves), with `variable` reading the environment: the connection's key when it `has_key`, else Google's application default credentials as BigQuery finds them; the error when they cannot be used.
 pub(crate) fn gcs_credentials(
     has_key: bool,
     variable: &dyn Fn(&str) -> Option<String>,
-) -> Result<GcsCredentials, String> {
-    if has_key {
-        return Ok(GcsCredentials::Connection);
+) -> Result<String, String> {
+    match has_key {
+        true => Ok("the connection's service_account_key".to_owned()),
+        false => google_credentials(None, None, variable).map(|found| found.describe()),
     }
-    if let Some(path) = variable("GOOGLE_APPLICATION_CREDENTIALS") {
-        return match std::path::Path::new(&path).is_file() {
-            true => Ok(GcsCredentials::Named { path }),
-            false => Err(format!(
-                "GOOGLE_APPLICATION_CREDENTIALS names {path}, which is not a file"
-            )),
-        };
-    }
-    let (home, below) = match cfg!(windows) {
-        true => ("APPDATA", "gcloud/application_default_credentials.json"),
-        false => (
-            "HOME",
-            ".config/gcloud/application_default_credentials.json",
-        ),
-    };
-    Ok(variable(home)
-        .map(|home| std::path::Path::new(&home).join(below))
-        .filter(|path| path.is_file())
-        .map_or(GcsCredentials::Machine, |path| GcsCredentials::Gcloud {
-            path: path.display().to_string(),
-        }))
 }
 
-/// The GCS client builder for `bucket`, signed in with the service-account key's JSON text `key`, else Google's application default credentials as [`gcs_credentials`] finds them with `variable` (the file `GOOGLE_APPLICATION_CREDENTIALS` names, gcloud's, else the machine's service account); the error when that variable names no file, rather than signing in as someone else. `endpoint` replaces Google's, as for an emulator.
+/// The GCS client builder for `bucket`, signed in with the service-account key's JSON text `key`, else Google's application default credentials as [`google_credentials`] finds them with `variable` (the file `GOOGLE_APPLICATION_CREDENTIALS` names, of any type BigQuery takes; gcloud's; else the machine's service account); the error when that variable names no file or one SQLLoad cannot sign in with, rather than signing in as someone else. `endpoint` replaces Google's, as for an emulator.
 pub(crate) fn gcs_builder(
     bucket: &str,
     key: Option<&str>,
@@ -67,13 +59,15 @@ pub(crate) fn gcs_builder(
     variable: &dyn Fn(&str) -> Option<String>,
 ) -> Result<GoogleCloudStorageBuilder, String> {
     let mut builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket);
-    match (key, gcs_credentials(key.is_some(), variable)?) {
-        (Some(key), _) => builder = builder.with_service_account_key(key),
-        (None, GcsCredentials::Named { path }) => {
-            builder = builder.with_application_credentials(path);
-        }
-        (None, _) => {}
-    }
+    builder = match key {
+        Some(key) => builder.with_service_account_key(key),
+        None => builder.with_credentials(Arc::new(GcsTokens {
+            http: build_http_client(&ConnectionCounter::default())
+                .map_err(|error| error.to_string())?,
+            credentials: google_credentials(None, None, variable)?,
+            kept: tokio::sync::Mutex::default(),
+        })),
+    };
     if let Some(endpoint) = endpoint {
         builder = builder.with_base_url(endpoint).with_client_options(
             ClientOptions::new().with_allow_http(endpoint.starts_with("http://")),

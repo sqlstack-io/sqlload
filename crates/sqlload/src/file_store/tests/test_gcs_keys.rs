@@ -8,10 +8,17 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
     let home = directory.path().join("home");
     for gcloud in [home.join(".config/gcloud"), home.join("gcloud")] {
         std::fs::create_dir_all(&gcloud).map_err(|error| error.to_string())?;
-        std::fs::write(gcloud.join("application_default_credentials.json"), "{}")
-            .map_err(|error| error.to_string())?;
+        std::fs::write(
+            gcloud.join("application_default_credentials.json"),
+            r#"{"type": "authorized_user", "client_id": "c", "client_secret": "s", "refresh_token": "r"}"#,
+        )
+        .map_err(|error| error.to_string())?;
     }
-    std::fs::write(directory.path().join("sa.json"), "{}").map_err(|error| error.to_string())?;
+    std::fs::write(
+        directory.path().join("sa.json"),
+        r#"{"type": "service_account", "client_email": "loader@demo.iam.gserviceaccount.com", "private_key": "-----BEGIN PRIVATE KEY-----", "token_uri": "https://oauth2.googleapis.com/token", "project_id": "demo"}"#,
+    )
+    .map_err(|error| error.to_string())?;
     let test_cases = [
         GcsCredentialsTestCase {
             description: "the connection's key wins over the environment",
@@ -26,7 +33,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             has_key: false,
             named: Some("sa.json"),
             home: Some("home"),
-            expected_text: "GOOGLE_APPLICATION_CREDENTIALS (",
+            expected_text: "the service-account key of loader@demo.iam.gserviceaccount.com (GOOGLE_APPLICATION_CREDENTIALS, ",
             expected_builds: true,
         },
         GcsCredentialsTestCase {
@@ -34,7 +41,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             has_key: false,
             named: Some("gone.json"),
             home: Some("home"),
-            expected_text: "gone.json, which is not a file",
+            expected_text: "gone.json, which cannot be read",
             expected_builds: false,
         },
         GcsCredentialsTestCase {
@@ -42,7 +49,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
             has_key: false,
             named: None,
             home: Some("home"),
-            expected_text: "gcloud's application default credentials (",
+            expected_text: "a gcloud user login (authorized_user) (gcloud's application default credentials, ",
             expected_builds: true,
         },
         GcsCredentialsTestCase {
@@ -67,9 +74,7 @@ fn given_a_gcs_connection_with_or_without_a_key_when_choosing_its_credentials_th
                 .and_then(|(_, relative)| *relative)
                 .map(|relative| directory.path().join(relative).display().to_string())
         };
-        let found = gcs_credentials(test_case.has_key, &variable)
-            .map(|source| source.describe())
-            .unwrap_or_else(|error| error);
+        let found = gcs_credentials(test_case.has_key, &variable).unwrap_or_else(|error| error);
         assert!(
             found.contains(test_case.expected_text),
             "{}: {found}",

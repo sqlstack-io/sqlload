@@ -1747,3 +1747,20 @@ pub(crate) struct PostgresSessionTestCase {
     /// The loaded `raw.accounts` rows after it, as `id:name`, by id.
     pub(crate) expected_rows: &'static [&'static str],
 }
+
+/// One sign-in to the fake BigQuery project, then `queries` queries.
+pub(crate) struct SignInTestCase {
+    pub(crate) description: &'static str,
+    /// The credentials file, given the fake's root and a directory to write in.
+    pub(crate) file: fn(&str, &std::path::Path) -> Result<serde_json::Value, String>,
+    /// Where the file goes, given that directory, and what `GOOGLE_APPLICATION_CREDENTIALS` then names.
+    pub(crate) place: fn(&std::path::Path, &serde_json::Value) -> Result<Option<String>, String>,
+    /// Where the metadata server is; the fake when `None`.
+    pub(crate) metadata_host: Option<&'static str>,
+    pub(crate) prepare: fn(&sqlload_testkit::fake_bigquery::models::FakeBigQuery),
+    pub(crate) queries: usize,
+    /// The start of each sign-in request the fake saw, in order.
+    pub(crate) expected_sign_ins: &'static [&'static str],
+    /// Text the error must contain; empty when every query must run.
+    pub(crate) expected_error: &'static str,
+}

@@ -70,6 +70,14 @@ pub struct FakeState {
     pub read_calls: Vec<(String, i64)>,
     /// How many of the next read streams break after their first row, with `UNAVAILABLE`.
     pub broken_reads: usize,
+    /// How long the tokens the fake hands out last, in seconds; an hour when `None`.
+    pub token_lifetime_secs: Option<u64>,
+    /// Refresh tokens the token endpoint refuses with `invalid_grant`.
+    pub refused_refresh_tokens: Vec<String>,
+    /// Service accounts IAM Credentials refuses to impersonate, with `PERMISSION_DENIED`.
+    pub denied_accounts: Vec<String>,
+    /// Every sign-in request, in order: `key`, `refresh ...`, `metadata ...`, `sts ...`, `impersonate ...` or `azure ...`.
+    pub sign_ins: Vec<String>,
 }
 
 /// Shared fake state.

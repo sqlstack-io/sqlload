@@ -96,7 +96,7 @@ sha2.workspace = true
 shake.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["io-util"] }
+tokio = { workspace = true, features = ["io-util", "process"] }
 pgwire-replication.workspace = true
 prost.workspace = true
 tokio-postgres.workspace = true
