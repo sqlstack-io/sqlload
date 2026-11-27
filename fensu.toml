@@ -318,6 +318,11 @@ path = "crates/sqlload/src/files_source/_helpers/parquet/object_reader.rs"
 reason = "get_bytes, get_byte_ranges and get_metadata are parquet's AsyncFileReader trait methods."
 
 [[targets.rust.rule_exceptions]]
+rule = "FPRSN003"
+path = "crates/sqlload/src/file_store/_helpers/gcs_keys.rs"
+reason = "get_credential is object_store's CredentialProvider trait method."
+
+[[targets.rust.rule_exceptions]]
 rule = "FPRSS120"
 path = "crates/sqlload/src/postgres_source/_helpers/tls.rs"
 symbols = ["Unchecked::verify_server_cert", "AnyHost::verify_server_cert"]

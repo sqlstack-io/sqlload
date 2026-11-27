@@ -1,4 +1,4 @@
-//! The fake's REST API: tokens, query jobs and table metadata.
+//! The fake's REST API: sign-in, query jobs and table metadata.
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -7,29 +7,22 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+use crate::fake_bigquery::_helpers::sign_in::sign_in;
 use crate::fake_bigquery::_helpers::statements::{
     google_error, list_datasets, list_tables, run_query, table_metadata,
 };
 use crate::fake_bigquery::constants::{FAKE_PROJECT, TOKEN_PATH, TOKEN_PREFIX};
 use crate::fake_bigquery::models::SharedState;
 
-/// Route one request by method and path; every request but the token's needs a bearer token the fake handed out and has not refused.
+/// Route one request by method and path; every request but a sign-in needs a bearer token the fake handed out and has not refused.
 pub(crate) async fn handle(
     State(state): State<SharedState>,
     parts: Parts,
     body: Bytes,
 ) -> Response {
     let path = parts.uri.path().to_owned();
-    if parts.method == axum::http::Method::POST && path == TOKEN_PATH {
-        let mut locked = state.lock();
-        locked.tokens += 1;
-        let token = format!("{}{}", &TOKEN_PREFIX["Bearer ".len()..], locked.tokens);
-        return (
-            StatusCode::OK,
-            json!({ "access_token": token, "token_type": "Bearer", "expires_in": 3600 })
-                .to_string(),
-        )
-            .into_response();
+    if let Some(answer) = sign_in(&state, &parts, &body) {
+        return answer;
     }
     let sent = match parts.headers.get(axum::http::header::AUTHORIZATION) {
         Some(value) => String::from_utf8_lossy(value.as_bytes()).into_owned(),

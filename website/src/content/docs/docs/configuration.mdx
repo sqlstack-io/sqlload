@@ -85,8 +85,9 @@ In beta.
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `location` | required | Where query jobs run and datasets are created, such as `EU`. |
-| `service_account_key` | required | The service account key file's JSON text. Use `${ENV:NAME}`. |
-| `project` | the key's project | The project tables load into and jobs run in. |
+| `service_account_key` | none | A service-account key file's JSON text. Use `${ENV:NAME}`. Without it, Google's application default credentials. |
+| `impersonate_service_account` | none | A service account to act as, whichever identity signs in. |
+| `project` | see [BigQuery](/docs/targets/bigquery/#connection) | The project tables load into and jobs run in. |
 
 See [BigQuery](/docs/targets/bigquery/).
 
@@ -161,13 +162,15 @@ A Google Cloud Storage bucket, for [files sources](/docs/sources/files/) and fil
 SQLLoad reads and writes the bucket with the first credentials it finds, in this order:
 
 1. The connection's `service_account_key`.
-2. The key file `GOOGLE_APPLICATION_CREDENTIALS` names, which must exist.
-3. gcloud's application default credentials (`gcloud auth application-default login`) (Beta).
-4. The service account of the machine SQLLoad runs on, from its metadata server (Beta).
+2. The credentials file `GOOGLE_APPLICATION_CREDENTIALS` names, which must exist: a service-account
+   key, a gcloud login, an impersonated service account or workload identity federation, as for
+   [BigQuery](/docs/targets/bigquery/#authentication).
+3. gcloud's application default credentials (`gcloud auth application-default login`).
+4. The service account of the machine SQLLoad runs on, from its metadata server.
 
 They need `roles/storage.objectViewer` on the bucket to read it, and `roles/storage.objectUser`
-to write files or remove them after a load. `sqlload debug` shows where each GCS connection's
-credentials come from, never the credentials.
+to write files or remove them after a load. `sqlload debug` shows how each GCS connection signs
+in, never the credentials.
 
 DuckDB and MotherDuck read GCS only with an HMAC key, not a service-account key. To have them read
 a bucket's Parquet files themselves, create an HMAC key for a service account that can read it

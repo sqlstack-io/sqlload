@@ -43,6 +43,23 @@ fn given_a_loader_project_when_debugging_then_every_connection_is_checked_and_re
             expected_ok: false,
         },
         DebugProjectTestCase {
+            description: "a BigQuery connection says who it signs in as and through what, never the key, and a key of the wrong type fails",
+            extra: |_, _| {
+                "[connections.warehouse]\nkind = \"bigquery\"\nlocation = \"EU\"\nimpersonate_service_account = \"reader@other.iam.gserviceaccount.com\"\nservice_account_key = '{\"type\": \"service_account\", \"client_email\": \"loader@demo.iam.gserviceaccount.com\", \"private_key\": \"-----BEGIN PRIVATE KEY-----\", \"token_uri\": \"https://oauth2.googleapis.com/token\", \"project_id\": \"demo\"}'\n\n[connections.wrong]\nkind = \"bigquery\"\nlocation = \"EU\"\nservice_account_key = '{\"type\": \"authorized_user\"}'\n".to_owned()
+            },
+            connect: true,
+            expected_lines: &[
+                "ok    config  4 connections, 1 targets, 1 sources",
+                "warn  connection warehouse  not used by any target or source",
+                "warn  connection wrong  not used by any target or source",
+                "ok    connection warehouse  BigQuery signs in with the service-account key of loader@demo.iam.gserviceaccount.com (the connection's service_account_key), impersonating reader@other.iam.gserviceaccount.com",
+                "fail  connection wrong  the connection's service_account_key is a \"authorized_user\" credentials file; it takes a service-account key",
+                "ok    target dev  DuckDB v",
+                "ok    source app  ",
+            ],
+            expected_ok: false,
+        },
+        DebugProjectTestCase {
             description: "--no-connection only checks the configuration and flags unused connections",
             extra: |_, _| {
                 "[connections.spare]\nkind = \"duckdb\"\ndatabase = \":memory:\"\n".to_owned()

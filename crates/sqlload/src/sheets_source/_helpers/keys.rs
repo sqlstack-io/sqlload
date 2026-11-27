@@ -3,9 +3,37 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
+use crate::google_identity::main::environment_credentials::environment_credentials;
+use crate::google_identity::models::{GoogleCredentials, Signer};
 use crate::http::errors::ApiError;
 use crate::sheets_source::constants::CREDENTIALS_VARIABLE;
 use crate::sheets_source::models::KeySource;
+
+/// Whoever the file `GOOGLE_APPLICATION_CREDENTIALS` names signs in as, when it can read Sheets; an error saying how to sign in when the variable is unset.
+pub(crate) fn environment_sheets_credentials() -> Result<GoogleCredentials, ApiError> {
+    if std::env::var(CREDENTIALS_VARIABLE)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err(ApiError::Auth(format!(
+            "no service-account key: set service_account_file, service_account_json or service_account_json_base64 on the connection, or {CREDENTIALS_VARIABLE}"
+        )));
+    }
+    sheets_readable(environment_credentials(None, None).map_err(ApiError::Auth)?)
+}
+
+/// `credentials`, when they can ask for a token with the Sheets scope: workload identity federation can only by impersonating a service account, since Google STS's own tokens don't reach the Sheets API.
+pub(crate) fn sheets_readable(
+    credentials: GoogleCredentials,
+) -> Result<GoogleCredentials, ApiError> {
+    match (&credentials.signer, &credentials.impersonate) {
+        (Signer::External(_), None) => Err(ApiError::Auth(format!(
+            "{} reads Google Sheets only by impersonating a service account: give the file a service_account_impersonation_url (gcloud iam workload-identity-pools create-cred-config --service-account=…)",
+            credentials.describe()
+        ))),
+        _ => Ok(credentials),
+    }
+}
 
 /// The key file's JSON text that `source` gives.
 pub(crate) fn key_text(source: &KeySource) -> Result<String, ApiError> {
@@ -23,12 +51,9 @@ pub(crate) fn key_text(source: &KeySource) -> Result<String, ApiError> {
         }
         KeySource::File(path) => read_key_file(path)?,
         KeySource::Environment => {
-            let path = std::env::var_os(CREDENTIALS_VARIABLE).ok_or_else(|| {
-                ApiError::Auth(format!(
-                    "no service-account key: set service_account_file, service_account_json or service_account_json_base64 on the connection, or {CREDENTIALS_VARIABLE}"
-                ))
-            })?;
-            read_key_file(std::path::Path::new(&path))?
+            return Err(ApiError::Protocol(format!(
+                "the file {CREDENTIALS_VARIABLE} names is read as Google credentials, not as a key's text"
+            )));
         }
     })
 }

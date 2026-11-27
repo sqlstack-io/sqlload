@@ -187,8 +187,12 @@ pub enum ConnectionConfig {
         project: Option<String>,
         /// Where jobs run and datasets are created, such as `EU` or `europe-west2`.
         location: String,
-        /// The service-account key file's JSON text, such as `${ENV:BIGQUERY_KEY}`.
-        service_account_key: crate::auth::models::Secret,
+        /// A service-account key file's JSON text, such as `${ENV:BIGQUERY_KEY}`; without it, Google's application default credentials: the file `GOOGLE_APPLICATION_CREDENTIALS` names, gcloud's login, else the machine's service account.
+        #[serde(default)]
+        service_account_key: Option<crate::auth::models::Secret>,
+        /// A service account to act as, with tokens from IAM Credentials, whichever identity signs in.
+        #[serde(default)]
+        impersonate_service_account: Option<String>,
         /// Overrides the REST API's root, for tests.
         #[serde(default)]
         base_url: Option<String>,
