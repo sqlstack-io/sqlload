@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.87.0](https://github.com/sqlstack-io/sqlload/compare/v0.86.0...v0.87.0) (2026-11-27)
+
+
+### Features
+
+* accept a warehouse's own type name when every destination reads it alike ([#370](https://github.com/sqlstack-io/sqlload/issues/370)) ([9171cb3](https://github.com/sqlstack-io/sqlload/commit/9171cb3155658fe741fe12047e6460b8cd332528))
+
 ## [0.86.0](https://github.com/sqlstack-io/sqlload/compare/v0.85.0...v0.86.0) (2026-11-26)
 
 
