@@ -331,28 +331,8 @@ pub(crate) fn orders_without_score(fake: &FakeBigQuery) {
     );
 }
 
-/// `raw.orders` with every column the files load, unpartitioned and unclustered.
+/// `raw.orders` as a files load leaves it, naming each row's file and version, unpartitioned and unclustered.
 pub(crate) fn orders_unpartitioned(fake: &FakeBigQuery) {
-    fake.place_table(
-        "raw.orders",
-        &[
-            ("id", "INT64"),
-            ("score", "FLOAT64"),
-            ("day", "DATE"),
-            ("_sqlload_load_id", "STRING"),
-            ("_sqlload_loaded_at", "TIMESTAMP"),
-        ],
-    );
-}
-
-/// `raw.orders` as [`orders_unpartitioned`], partitioned by `day` as someone created it by hand.
-pub(crate) fn orders_partitioned(fake: &FakeBigQuery) {
-    orders_unpartitioned(fake);
-    fake.lay_out("raw.orders", "PARTITION BY `day`");
-}
-
-/// `raw.orders` as a files load leaves it, naming each row's file and version, partitioned by `day` with `require_partition_filter`, so every query on it must filter on `day`.
-pub(crate) fn orders_filtered(fake: &FakeBigQuery) {
     fake.place_table(
         "raw.orders",
         &[
@@ -365,6 +345,17 @@ pub(crate) fn orders_filtered(fake: &FakeBigQuery) {
             ("_sqlload_source_version", "STRING"),
         ],
     );
+}
+
+/// `raw.orders` as [`orders_unpartitioned`], partitioned by `day` as someone created it by hand.
+pub(crate) fn orders_partitioned(fake: &FakeBigQuery) {
+    orders_unpartitioned(fake);
+    fake.lay_out("raw.orders", "PARTITION BY `day`");
+}
+
+/// `raw.orders` as [`orders_unpartitioned`], partitioned by `day` with `require_partition_filter`, so every query on it must filter on `day`.
+pub(crate) fn orders_filtered(fake: &FakeBigQuery) {
+    orders_unpartitioned(fake);
     fake.lay_out(
         "raw.orders",
         "PARTITION BY `day` OPTIONS (require_partition_filter = TRUE)",

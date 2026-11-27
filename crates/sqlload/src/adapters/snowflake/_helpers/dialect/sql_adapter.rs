@@ -136,7 +136,6 @@ impl SqlAdapter for SnowflakeSql {
         build: &TableName,
         table: &TableName,
         (columns, differing, _): (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-        _layout: &TableLayout,
     ) -> Vec<String> {
         let name = self.render_qualified_name(build);
         let sql_type = |column_type: &ColumnType| self.render_loader_logical_type(column_type).sql;

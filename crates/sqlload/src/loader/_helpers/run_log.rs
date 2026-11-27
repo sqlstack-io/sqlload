@@ -1208,7 +1208,6 @@ pub(crate) async fn merge_rebuild(
         &build,
         &spec.destination,
         (&table.schema.write_columns, table.live.as_deref(), None),
-        &spec.layout,
     );
     execute_ddl(destination, create).await?;
     Ok(Some(MergeRebuild {

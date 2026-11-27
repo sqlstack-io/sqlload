@@ -601,6 +601,13 @@ pub(crate) fn two_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
     Ok(files)
 }
 
+/// [`two_days`], the first day decades back: the Storage Write API refuses rows of a date partition over 10 years past.
+pub(crate) fn past_and_recent_days() -> Result<Vec<(String, bytes::Bytes)>, String> {
+    let mut files = day_files("1990-01-01", (2, 0), None)?;
+    files.extend(day_files("2026-11-02", (1, 0), None)?);
+    Ok(files)
+}
+
 /// Enough files for two batches.
 pub(crate) fn two_batches() -> Result<Vec<(String, bytes::Bytes)>, String> {
     let mut files = day_files("2026-11-01", (1000, 0), None)?;

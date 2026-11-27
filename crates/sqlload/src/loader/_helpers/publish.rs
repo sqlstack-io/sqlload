@@ -599,7 +599,6 @@ impl Publisher {
                     &build,
                     &table.spec.destination,
                     (&table.schema.write_columns, differing, definition),
-                    &table.spec.layout,
                 );
                 execute_ddl(&destination, create).await?;
                 Some(build)
@@ -1463,6 +1462,7 @@ impl Publisher {
             ..files_source
         });
         widened.approved = spec.approved;
+        widened.layout.relayout = spec.layout.relayout;
         let replanned_columns = replan_columns(
             &widened,
             (&self.destination, self.table.live.as_deref()),

@@ -199,7 +199,6 @@ impl SqlAdapter for ClickHouseSql {
         build: &TableName,
         table: &TableName,
         (columns, differing, _): (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-        _layout: &TableLayout,
     ) -> Vec<String> {
         let name = self.render_qualified_name(build);
         let mut statements = vec![format!(

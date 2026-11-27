@@ -637,7 +637,7 @@ fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static st
     }
 }
 
-/// `schema` blocked when the table's checks name columns it does not load, or its layout can't be carried by its columns (such as a partition column of the wrong type); a Python table's checks are checked once its rows show them.
+/// `schema` blocked when the table's checks name columns it does not load, or its layout can't be carried by its columns (such as a partition column of the wrong type); a Python table's are checked once its rows show its columns.
 fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
     let loaded: Vec<String> = schema
         .write_columns
@@ -648,7 +648,7 @@ fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
         (Some(checks), None, None) => check_column_problems(checks, &loaded),
         _ => Vec::new(),
     };
-    if schema.blocked.is_none() {
+    if schema.blocked.is_none() && spec.python.is_none() {
         problems
             .extend(sql_adapter(spec.warehouse).layout_table_problems(spec, &schema.write_columns));
     }

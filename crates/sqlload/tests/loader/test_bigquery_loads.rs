@@ -6,7 +6,7 @@ use crate::bigquery_helpers::{
     reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table,
     token_expired,
 };
-use crate::helpers::{found, not_found, run_async, two_batches, two_days};
+use crate::helpers::{found, not_found, past_and_recent_days, run_async, two_batches, two_days};
 use crate::test_types::{BigQueryLoadTestCase, LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
 
 const LIVE_APPEND: LiveBigQueryLoadTestCase = LiveBigQueryLoadTestCase {
@@ -130,6 +130,13 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BASE
         },
         BigQueryLoadTestCase {
+            description: "replace into a table partitioned by day loads rows dated decades back: they stream into an unpartitioned build table, which the swap lays out",
+            settings: "write_strategy = \"replace\"\npartition_by = \"day\"",
+            file_set: past_and_recent_days,
+            expected_layout: Some("PARTITION BY `day`"),
+            ..BASE
+        },
+        BigQueryLoadTestCase {
             description: "a live table laid out otherwise than its config fails at plan, naming both layouts and the fix, even under replace, which rebuilds it every load",
             settings: "write_strategy = \"replace\"\npartition_by = \"day\"",
             prepare: orders_unpartitioned,
@@ -138,21 +145,20 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BLOCKED
         },
         BigQueryLoadTestCase {
-            description: "a table partitioned by hand with no layout configured is reported, never replaced unpartitioned",
-            settings: "write_strategy = \"replace\"",
+            description: "a table partitioned by hand with no layout configured loads as before, its layout left as it is",
             prepare: orders_partitioned,
-            expected_error: "the table is partitioned by DAY of day, unclustered, but its config lays it out unpartitioned, unclustered",
             expected_layout: Some("PARTITION BY `day`"),
-            ..BLOCKED
+            ..BASE
         },
         BigQueryLoadTestCase {
-            description: "--reload of a table laid out otherwise drops it and creates it laid out as configured",
+            description: "--reload of a table laid out otherwise renames it out of the way, creates it laid out as configured, then drops the renamed one",
             settings: "write_strategy = \"append\"\npartition_by = \"day\"\ncluster_by = [\"id\"]",
             prepare: orders_unpartitioned,
             reload: true,
             expected_sent: &[
-                "DROP TABLE IF EXISTS `raw`.`orders`",
+                "ALTER TABLE `raw`.`orders` RENAME TO `orders__sqlload_relayout`",
                 "CREATE TABLE `raw`.`orders` LIKE `raw`.`orders__sqlload_staging_",
+                "DROP TABLE `raw`.`orders__sqlload_relayout`",
             ],
             expected_unsent: &["CREATE OR REPLACE TABLE `raw`.`orders` LIKE"],
             expected_layout: Some("PARTITION BY `day` CLUSTER BY `id`"),

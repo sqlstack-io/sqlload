@@ -61,3 +61,9 @@ pub const STAGED_PARTITIONS: &str = "__sqlload_partitions";
 
 /// The partition column's staged value, as the script that declares the staged partitions names it.
 pub const PARTITION_VALUE: &str = "__sqlload_partition_value";
+
+/// What a table `--reload` lays out anew is renamed to while its successor is created: its name and this. Unlike a staging table's, no later load drops it, so its rows stay should the load fail before the new table is in place.
+pub const RELAYOUT_SUFFIX: &str = "__sqlload_relayout";
+
+/// The most partitions BigQuery gives a table, which bounds a `RANGE_BUCKET`'s ranges.
+pub const MAX_PARTITIONS: i64 = 10_000;

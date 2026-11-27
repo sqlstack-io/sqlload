@@ -75,7 +75,7 @@ fn filter_after(statement: &str, start: usize) -> &str {
 }
 
 /// `tables.get`'s `timePartitioning`, `rangePartitioning`, `clustering` and `requirePartitionFilter` for a table laid out as `layout`.
-fn layout_fields(layout: &str) -> serde_json::Map<String, Value> {
+pub(crate) fn layout_fields(layout: &str) -> serde_json::Map<String, Value> {
     let mut fields = serde_json::Map::new();
     let clause = |name: &str| layout_clause(layout, name);
     let unquoted = |text: &str| text.trim().trim_matches('`').to_owned();
@@ -345,6 +345,22 @@ impl FakeState {
         }
         if let Some(name) = name_after(statement, "DROP TABLE IF EXISTS ") {
             self.tables.remove(&table_key(name));
+            return done();
+        }
+        if let Some(name) = name_after(statement, "DROP TABLE ") {
+            return (self.tables.remove(&table_key(name)))
+                .map(|_| (Vec::new(), Vec::new()))
+                .ok_or_else(|| format!("Not found: Table {name}"));
+        }
+        if let Some(name) = name_after(statement, "ALTER TABLE ")
+            && let Some((_, renamed)) = statement.split_once(" RENAME TO ")
+        {
+            let key = table_key(name);
+            let table =
+                (self.tables.remove(&key)).ok_or_else(|| format!("Not found: Table {name}"))?;
+            let dataset = key.split_once('.').map_or("", |(dataset, _)| dataset);
+            self.tables
+                .insert(format!("{dataset}.{}", table_key(renamed)), table);
             return done();
         }
         if let Some(name) = name_after(statement, "ALTER TABLE ") {

@@ -80,22 +80,16 @@ pub(crate) fn staging_table<A: SqlAdapter + ?Sized>(
     (staging, create)
 }
 
-/// `build` from the table's `definition` when there is one, else from `columns`, laid out by `clauses` (empty for none).
+/// `build` from the table's `definition` when there is one, else from `columns`.
 pub(crate) fn build_table<A: SqlAdapter + ?Sized>(
     adapter: &A,
-    (build, _table): (&TableName, &TableName),
+    build: &TableName,
+    _table: &TableName,
     (columns, _differing, definition): (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-    clauses: &str,
 ) -> Vec<String> {
     let name = adapter.render_qualified_name(build);
-    let laid_out = match clauses.is_empty() {
-        true => String::new(),
-        false => format!(" {clauses}"),
-    };
     if let Some(definition) = definition {
-        return vec![format!(
-            "CREATE OR REPLACE TABLE {name}{definition}{laid_out}"
-        )];
+        return vec![format!("CREATE OR REPLACE TABLE {name}{definition}")];
     }
     let definitions: Vec<String> = columns
         .iter()
@@ -108,7 +102,7 @@ pub(crate) fn build_table<A: SqlAdapter + ?Sized>(
         })
         .collect();
     vec![format!(
-        "CREATE OR REPLACE TABLE {name} ({}){laid_out}",
+        "CREATE OR REPLACE TABLE {name} ({})",
         definitions.join(", ")
     )]
 }

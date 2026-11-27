@@ -1151,6 +1151,7 @@ async fn replan(
     };
     inferred.python = spec.python.clone();
     inferred.approved = true;
+    inferred.layout.relayout = spec.layout.relayout;
     inferred.name_rules = spec.name_rules.clone();
     inferred.names = LoadedNames {
         columns: names.columns.clone(),
@@ -1205,6 +1206,7 @@ async fn replan(
         .checks
         .iter()
         .flat_map(|checks| check_column_problems(checks, &loaded))
+        .chain(adapter.layout_table_problems(&columns.spec, &columns.schema.write_columns))
         .collect();
     if !problems.is_empty() {
         return Err(LoaderError::Invalid(problems.join("; ")));

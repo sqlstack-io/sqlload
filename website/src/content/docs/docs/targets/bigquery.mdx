@@ -191,8 +191,10 @@ Each statement is its own query job and commits on its own. The run record commi
 ```
 
 The new table takes its description from the config, so a description set outside SQLLoad is
-lost, as are labels, column descriptions and policy tags. The build table is partitioned and
-clustered as the config says, so the swapped-in table keeps its [layout](#partitioning-and-clustering).
+lost, as are labels, column descriptions and policy tags. The build table is unpartitioned, as
+the Storage Write API refuses rows of a date partition more than 10 years back or a year ahead;
+the swap lays the table out as the config says, so it keeps its [layout](#partitioning-and-clustering)
+and takes rows of any date.
 A type change that rewrites the table, such as `int` to `float`, keeps the layout too, and each
 column's type, except that a `BIGNUMERIC` whose digits fit a `NUMERIC`, such as `BIGNUMERIC(20,2)`,
 becomes `NUMERIC(20,2)`. In a table with a column whose type SQLLoad can't name again, a `STRUCT`,
@@ -216,13 +218,18 @@ cluster_by = ["id"]
 
 | Key | Meaning |
 |-----|---------|
-| `partition_by` | A `DATE` column; `DATE(col)` of a `TIMESTAMP` or `DATETIME`; `DATE_TRUNC(col, MONTH\|YEAR)` of a `DATE`; `TIMESTAMP_TRUNC(col, HOUR\|DAY\|MONTH\|YEAR)` of a `TIMESTAMP`; `DATETIME_TRUNC(col, ...)` of a `DATETIME`; or `RANGE_BUCKET(col, GENERATE_ARRAY(start, end, interval))` of an integer. |
-| `cluster_by` | Up to 4 columns, not `FLOAT64`, `JSON`, `BYTES` or an array. |
+| `partition_by` | A `DATE` column; `DATE(col)` of a `TIMESTAMP` or `DATETIME`; `DATE_TRUNC(col, MONTH\|YEAR)` of a `DATE`; `TIMESTAMP_TRUNC(col, HOUR\|DAY\|MONTH\|YEAR)` of a `TIMESTAMP`; `DATETIME_TRUNC(col, ...)` of a `DATETIME`; or `RANGE_BUCKET(col, GENERATE_ARRAY(start, end, interval))` of an integer, of at most 10,000 ranges. |
+| `cluster_by` | Up to 4 columns, not `FLOAT64`, `TIME`, `JSON`, `BYTES` or an array. |
 | `table_settings` | Only `{ require_partition_filter = true }`, which needs `partition_by`. |
 
 `plan` refuses what BigQuery would, naming the fix, such as a partition column the table doesn't
 load or of another type, or `engine`, `order_by` and `primary_key`, which lay out ClickHouse
 tables. `replace` and `--reload` build the new table with the same layout.
+
+A table whose config sets no layout keeps the layout it has, so removing `partition_by` and
+`cluster_by` from a config stops SQLLoad managing it. A `replace` of such a table that was
+partitioned or clustered by hand fails, as BigQuery won't replace it with one laid out otherwise;
+set its layout in the config.
 
 ### Which writes prune
 
@@ -250,8 +257,8 @@ A batch that touches every partition, such as a first load, scans the whole tabl
 
 A table with `require_partition_filter` loads by `append`, `replace`, `delete_insert` by cursor,
 and `merge` or `delete_insert` by key when the key holds the partition column; every query SQLLoad
-runs on it filters on that column. `plan` refuses a key without it, and `deletes`, `newest_by` and
-`unnest`, whose queries can't filter:
+runs on it filters on that column. `plan` refuses a key without it, and `deletes`,
+`checks.max_row_drop`, `newest_by` and `unnest`, whose queries can't filter:
 
 ```console
 └── reason  require_partition_filter: a merge filters on the partition column only when unique_key holds it, and unique_key lacks day; set table_settings.require_partition_filter = false, or add day to unique_key
@@ -260,8 +267,7 @@ runs on it filters on that column. `plan` refuses a key without it, and `deletes
 ### A table laid out otherwise
 
 BigQuery can't change a table's partitioning or clustering in place. When the live table is laid
-out otherwise than its config, including a table partitioned by hand with no layout configured,
-`plan` fails the table:
+out otherwise than the layout its config sets, `plan` fails the table:
 
 ```console
 Errors (1)
@@ -269,8 +275,10 @@ Errors (1)
     └── reason  the table is unpartitioned, unclustered, but its config lays it out partitioned by DAY of day, unclustered; load with --reload to rebuild it as configured, or change the config to match
 ```
 
-`sqlload load --reload` rebuilds it laid out as configured. It drops the table before the rebuilt
-one takes its place, so the table is missing for a moment, and `plan --reload` warns so.
+`sqlload load --reload` rebuilds it laid out as configured, and `plan --reload` warns that it
+will. It renames the table to `<table>__sqlload_relayout`, creates the new one from the rebuilt
+rows, then drops the renamed table, so the table is missing for a moment. If the load fails in
+between, the old rows stay in `<table>__sqlload_relayout`.
 
 ## Staging cleanup
 

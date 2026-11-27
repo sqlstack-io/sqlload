@@ -1,7 +1,8 @@
 //! A created BigQuery table's layout: its partitioning, its clustering and `require_partition_filter`.
 
 use crate::adapters::bigquery::constants::{
-    MAX_CLUSTER_COLUMNS, PARTITION_VALUE, REQUIRE_PARTITION_FILTER, STAGED_PARTITIONS,
+    MAX_CLUSTER_COLUMNS, MAX_PARTITIONS, PARTITION_VALUE, REQUIRE_PARTITION_FILTER,
+    STAGED_PARTITIONS,
 };
 use crate::adapters::bigquery::models::{BigQuerySql, Partitioning};
 use crate::adapters::contract::types::SqlAdapter;
@@ -133,8 +134,21 @@ pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
     if layout.engine.is_some() || layout.order_by.is_some() || layout.primary_key.is_some() {
         problems.push("engine, order_by and primary_key lay out ClickHouse tables; a BigQuery table takes partition_by, cluster_by and table_settings.require_partition_filter".to_owned());
     }
-    if let Some(Err(problem)) = layout.partition_by.as_deref().map(partitioning) {
-        problems.push(problem);
+    match layout.partition_by.as_deref().map(partitioning) {
+        Some(Err(problem)) => problems.push(problem),
+        Some(Ok(Partitioning::Range {
+            start,
+            end,
+            interval,
+            ..
+        })) if (end - start + interval - 1) / interval > MAX_PARTITIONS => {
+            problems.push(format!(
+                "partition_by {:?} makes {} ranges; BigQuery takes at most {MAX_PARTITIONS}, so widen the interval",
+                layout.partition_by.as_deref().unwrap_or_default(),
+                (end - start + interval - 1) / interval
+            ));
+        }
+        Some(Ok(_)) | None => {}
     }
     let clustered = layout.cluster_by.as_deref().unwrap_or_default();
     if layout.cluster_by.is_some() && clustered.is_empty() {
@@ -176,7 +190,7 @@ pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
     problems
 }
 
-/// Why `spec`'s table can't load with `require_partition_filter`: a statement SQLLoad runs on the table that can't filter on the partition column. Reads of every row (the cursor's maximum, the loaded files) and a `MERGE`'s deletes carry [`whole_table_filter`], which BigQuery takes there but not in a `MERGE`'s `ON`, so a `merge` loads only by a `unique_key` holding the partition column, and a keyed `delete_insert` only by a `replace_key` holding it; `deletes`, `newest_by` and `unnest` read the table in queries that carry no filter.
+/// Why `spec`'s table can't load with `require_partition_filter`: a statement SQLLoad runs on the table that can't filter on the partition column. Reads of every row (the cursor's maximum, the loaded files) and a `MERGE`'s deletes carry [`whole_table_filter`], which BigQuery takes there but not in a `MERGE`'s `ON`, so a `merge` loads only by a `unique_key` holding the partition column, and a keyed `delete_insert` only by a `replace_key` holding it; `deletes`, `checks.max_row_drop`, `newest_by` and `unnest` read the table in queries that carry no filter.
 fn partition_filter_problems(spec: &TableSpec) -> Vec<String> {
     let Some(column) =
         partition_column(&spec.layout).filter(|_| requires_partition_filter(&spec.layout))
@@ -186,6 +200,12 @@ fn partition_filter_problems(spec: &TableSpec) -> Vec<String> {
     let fix = format!("set table_settings.{REQUIRE_PARTITION_FILTER} = false, or");
     let unfiltered = [
         (spec.deletes.is_some(), "deletes"),
+        (
+            spec.checks
+                .as_ref()
+                .is_some_and(|checks| checks.max_row_drop.is_some()),
+            "checks.max_row_drop",
+        ),
         (!spec.newest_by.is_empty(), "newest_by"),
         (spec.unnest != Unnest::None, "unnest"),
     ];
@@ -268,13 +288,14 @@ pub(crate) fn layout_table_problems(spec: &TableSpec, columns: &[DesiredColumn])
             )),
             Some(
                 found @ (ColumnType::Float
+                | ColumnType::Time
                 | ColumnType::Json
                 | ColumnType::Binary
                 | ColumnType::Array(_)
                 | ColumnType::Native(_)),
             ) => {
                 problems.push(format!(
-                    "cluster_by column {column} is {found}, which BigQuery can't cluster by; cluster by a text, number, date, time or bool column"
+                    "cluster_by column {column} is {found}, which BigQuery can't cluster by; cluster by a text, number, date, timestamp or bool column"
                 ));
             }
             Some(_) => {}
@@ -291,8 +312,8 @@ pub(crate) fn whole_table_filter(layout: &TableLayout, qualifier: &str) -> Optio
     Some(format!("({column} IS NOT NULL OR {column} IS NULL)"))
 }
 
-/// The `PARTITION BY`, `CLUSTER BY` and `OPTIONS` clauses of a table laid out as `layout`, without `require_partition_filter` unless `with_filter_option`; empty for no layout.
-pub(crate) fn layout_clauses(layout: &TableLayout, with_filter_option: bool) -> String {
+/// The `PARTITION BY`, `CLUSTER BY` and `OPTIONS` clauses of a table laid out as `layout`, each after a space; empty for no layout.
+pub(crate) fn layout_clauses(layout: &TableLayout) -> String {
     let adapter = BigQuerySql;
     let mut clauses: Vec<String> = Vec::new();
     if let Some(Ok(partitioning)) = layout.partition_by.as_deref().map(partitioning) {
@@ -311,10 +332,10 @@ pub(crate) fn layout_clauses(layout: &TableLayout, with_filter_option: bool) -> 
     if !clustered.is_empty() {
         clauses.push(format!("CLUSTER BY {}", clustered.join(", ")));
     }
-    if with_filter_option && requires_partition_filter(layout) {
+    if requires_partition_filter(layout) {
         clauses.push(format!("OPTIONS ({REQUIRE_PARTITION_FILTER} = TRUE)"));
     }
-    clauses.join(" ")
+    clauses.iter().map(|clause| format!(" {clause}")).collect()
 }
 
 /// The partition a row of `qualifier` (such as `__target.`, or `""` in DDL) falls in, as BigQuery's `PARTITION BY` writes it; a range partition's raw column, which is what prunes.

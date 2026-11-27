@@ -131,13 +131,13 @@ fn given_a_layout_when_rebuilding_the_table_then_the_layout_and_its_partition_fi
         ..layout_of("day", &["id"], true)
     };
     let live = [LiveColumn {
-        name: "note".to_owned(),
-        column_type: ColumnType::Text,
+        name: "qty".to_owned(),
+        column_type: ColumnType::Int,
         fraction_digits: None,
     }];
     let test_cases = [
         RenderedTestCase {
-            description: "a swap of the same layout: replaced LIKE the build table, the filter option added as the build table leaves it out",
+            description: "a swap of the same layout: replaced LIKE the unpartitioned build table, laid out here with its filter option",
             rendered: BigQuerySql.render_swap(
                 &orders(),
                 &orders_build(),
@@ -145,46 +145,46 @@ fn given_a_layout_when_rebuilding_the_table_then_the_layout_and_its_partition_fi
                 &layout_of("day", &["id"], true),
             ),
             expected_statements: &[
-                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` OPTIONS (require_partition_filter = TRUE) AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` PARTITION BY `day` CLUSTER BY `id` OPTIONS (require_partition_filter = TRUE) AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
                 "DROP TABLE IF EXISTS `p`.`raw`.`orders__sqlload_staging_load1`",
             ],
         },
         RenderedTestCase {
-            description: "a --reload laying the table out anew: dropped first, as CREATE OR REPLACE refuses another partitioning",
+            description: "a --reload laying the table out anew: renamed out of the way, as CREATE OR REPLACE refuses another partitioning, and dropped only once its successor holds the rows",
             rendered: BigQuerySql.render_swap(&orders(), &orders_build(), &[], &relayout),
             expected_statements: &[
-                "DROP TABLE IF EXISTS `p`.`raw`.`orders`",
-                "CREATE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` OPTIONS (require_partition_filter = TRUE) AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
+                "ALTER TABLE `p`.`raw`.`orders` RENAME TO `orders__sqlload_relayout`",
+                "CREATE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` PARTITION BY `day` CLUSTER BY `id` OPTIONS (require_partition_filter = TRUE) AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
+                "DROP TABLE `p`.`raw`.`orders__sqlload_relayout`",
                 "DROP TABLE IF EXISTS `p`.`raw`.`orders__sqlload_staging_load1`",
             ],
         },
         RenderedTestCase {
-            description: "a build table is partitioned and clustered, without the filter option, which the swap's SELECT would need a filter for",
+            description: "a build table is left unpartitioned, as the Storage Write API refuses rows of a date partition over 10 years back or a year ahead; the swap lays the table out",
             rendered: BigQuerySql.render_create_build_table(
                 &orders_build(),
                 &orders(),
                 (&[desired("day", ColumnType::Date)], None, None),
-                &layout_of("day", &["id"], true),
             ),
             expected_statements: &[
-                "CREATE OR REPLACE TABLE `p`.`raw`.`orders__sqlload_staging_load1` (`day` DATE) PARTITION BY `day` CLUSTER BY `id`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders__sqlload_staging_load1` (`day` DATE)",
             ],
         },
         RenderedTestCase {
-            description: "a type change's rewrite is laid out as the table is, its partition filter dropped first in the same script and set again",
+            description: "a type change's rewrite is laid out as the table is, reading every row with a filter its require_partition_filter takes",
             rendered: BigQuerySql.render_change_columns(
                 &orders(),
                 &[ColumnChange::Rebuild {
-                    column: "note".to_owned(),
-                    from: ColumnType::Text,
-                    to: ColumnType::Varchar(10),
-                    sql_type: "STRING(10)".to_owned(),
+                    column: "qty".to_owned(),
+                    from: ColumnType::Int,
+                    to: ColumnType::Float,
+                    sql_type: "FLOAT64".to_owned(),
                 }],
                 &live,
                 &layout_of("day", &["id"], true),
             ),
             expected_statements: &[
-                "ALTER TABLE `p`.`raw`.`orders` SET OPTIONS (require_partition_filter = FALSE); CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`note` STRING(10)) PARTITION BY `day` CLUSTER BY `id` OPTIONS (require_partition_filter = TRUE) AS SELECT CAST(`note` AS STRING(10)) AS `note` FROM `p`.`raw`.`orders`",
+                "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`qty` FLOAT64) PARTITION BY `day` CLUSTER BY `id` OPTIONS (require_partition_filter = TRUE) AS SELECT CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders` WHERE (`day` IS NOT NULL OR `day` IS NULL)",
             ],
         },
     ];
@@ -297,6 +297,18 @@ fn given_a_bigquery_layout_when_checking_it_then_what_bigquery_refuses_is_named(
             ],
         },
         LayoutProblemsTestCase {
+            description: "more ranges than BigQuery's 10,000 partitions",
+            layout: layout_of("RANGE_BUCKET(n, GENERATE_ARRAY(0, 1000000, 1))", &[], false),
+            expected_problems: &[
+                "partition_by \"RANGE_BUCKET(n, GENERATE_ARRAY(0, 1000000, 1))\" makes 1000000 ranges; BigQuery takes at most 10000, so widen the interval",
+            ],
+        },
+        LayoutProblemsTestCase {
+            description: "exactly 10,000 ranges",
+            layout: layout_of("RANGE_BUCKET(n, GENERATE_ARRAY(0, 100000, 10))", &[], false),
+            expected_problems: &[],
+        },
+        LayoutProblemsTestCase {
             description: "five cluster columns",
             layout: layout_of("", &["a", "b", "c", "d", "e"], false),
             expected_problems: &["cluster_by names 5 columns; BigQuery clusters by at most 4"],
@@ -345,6 +357,7 @@ fn given_require_partition_filter_when_planning_a_table_then_writes_that_cannot_
             strategy: WriteStrategy::Append,
             unique_key: &[],
             newest_by: &[],
+            settings: "",
             expected_problems: &[],
         },
         PartitionFilterTestCase {
@@ -352,6 +365,7 @@ fn given_require_partition_filter_when_planning_a_table_then_writes_that_cannot_
             strategy: WriteStrategy::Merge,
             unique_key: &["id", "day"],
             newest_by: &[],
+            settings: "",
             expected_problems: &[],
         },
         PartitionFilterTestCase {
@@ -359,6 +373,7 @@ fn given_require_partition_filter_when_planning_a_table_then_writes_that_cannot_
             strategy: WriteStrategy::Merge,
             unique_key: &["id"],
             newest_by: &[],
+            settings: "",
             expected_problems: &[
                 "require_partition_filter: a merge filters on the partition column only when unique_key holds it, and unique_key lacks day; set table_settings.require_partition_filter = false, or add day to unique_key",
             ],
@@ -368,8 +383,19 @@ fn given_require_partition_filter_when_planning_a_table_then_writes_that_cannot_
             strategy: WriteStrategy::Merge,
             unique_key: &["id", "day"],
             newest_by: &["id"],
+            settings: "",
             expected_problems: &[
                 "require_partition_filter: newest_by reads the table's rows in queries SQLLoad can't filter on the partition column day; set table_settings.require_partition_filter = false, or leave newest_by out",
+            ],
+        },
+        PartitionFilterTestCase {
+            description: "checks.max_row_drop, whose count of the table's rows carries no filter",
+            strategy: WriteStrategy::Replace,
+            unique_key: &[],
+            newest_by: &[],
+            settings: "checks = { max_row_drop = \"20%\" }",
+            expected_problems: &[
+                "require_partition_filter: checks.max_row_drop reads the table's rows in queries SQLLoad can't filter on the partition column day; set table_settings.require_partition_filter = false, or leave checks.max_row_drop out",
             ],
         },
     ];
@@ -379,8 +405,11 @@ fn given_require_partition_filter_when_planning_a_table_then_writes_that_cannot_
             strategy: test_case.strategy,
             unique_key: names(test_case.unique_key),
             newest_by: names(test_case.newest_by),
-            ..crate::contract::tests::helpers::postgres_spec("", Warehouse::BigQuery)
-                .unwrap_or_else(|error| panic!("{}: {error}", test_case.description))
+            ..crate::contract::tests::helpers::postgres_spec(
+                test_case.settings,
+                Warehouse::BigQuery,
+            )
+            .unwrap_or_else(|error| panic!("{}: {error}", test_case.description))
         };
         assert_eq!(
             layout_table_problems(&spec, &columns),

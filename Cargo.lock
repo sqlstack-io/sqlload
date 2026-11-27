@@ -6150,6 +6150,7 @@ dependencies = [
  "arrow-schema",
  "axum",
  "bytes",
+ "chrono",
  "flate2",
  "parquet",
  "rcgen",

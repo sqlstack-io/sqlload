@@ -84,7 +84,6 @@ fn given_a_replace_when_building_the_table_then_it_has_the_tables_own_types_and_
             &build,
             &accounts(),
             (&columns(), test_case.live.as_deref(), test_case.definition),
-            &TableLayout::default(),
         );
         assert_eq!(
             statements, test_case.expected_statements,

@@ -1,14 +1,13 @@
 //! BigQuery GoogleSQL, where it differs from the contract's shared rendering.
 
 use crate::adapters::bigquery::_helpers::dialect::layout::{
-    layout_clauses, layout_problems, layout_table_problems, requires_partition_filter,
-    whole_table_filter,
+    layout_clauses, layout_problems, layout_table_problems, whole_table_filter,
 };
 use crate::adapters::bigquery::_helpers::dialect::type_names::{
     decimal_digits, logical_type, portable_type, widens_in_place,
 };
 use crate::adapters::bigquery::_helpers::dialect::write::write_statements;
-use crate::adapters::bigquery::constants::REQUIRE_PARTITION_FILTER;
+use crate::adapters::bigquery::constants::RELAYOUT_SUFFIX;
 use crate::adapters::bigquery::models::BigQuerySql;
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::{
@@ -132,10 +131,7 @@ impl SqlAdapter for BigQuerySql {
     /// Partitioned and clustered as the table's layout says, with its `require_partition_filter`.
     fn render_create_loaded_table(&self, spec: &TableSpec, columns: &[DesiredColumn]) -> String {
         let create = self.render_create_table(&spec.destination, columns);
-        match layout_clauses(&spec.layout, true) {
-            clauses if clauses.is_empty() => create,
-            clauses => format!("{create} {clauses}"),
-        }
+        format!("{create}{}", layout_clauses(&spec.layout))
     }
 
     fn render_alter_column_type(&self, target: &str, column: &str, sql_type: &str) -> String {
@@ -156,29 +152,23 @@ impl SqlAdapter for BigQuerySql {
         }
     }
 
-    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized. A table with a column whose type can't be named again, such as a `STRUCT`, gets no list. The rewrite is laid out as the table is, since BigQuery refuses to replace a partitioned or clustered table with one laid out otherwise; a table with `require_partition_filter` drops it first in the same script, as the rewrite's `SELECT` reads every row, and the rewritten table sets it again.
+    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized. A table with a column whose type can't be named again, such as a `STRUCT`, gets no list. The rewrite is laid out as the table is, since BigQuery refuses to replace a partitioned or clustered table with one laid out otherwise; a table with `require_partition_filter` is read with the [filter](whole_table_filter) matching every row.
     fn render_rebuild_table(
         &self,
         target: &str,
         (select, columns): (&str, &str),
         layout: &TableLayout,
     ) -> String {
-        let script = match requires_partition_filter(layout) {
-            true => {
-                format!("ALTER TABLE {target} SET OPTIONS ({REQUIRE_PARTITION_FILTER} = FALSE); ")
-            }
-            false => String::new(),
-        };
+        let filter = whole_table_filter(layout, "")
+            .map(|filter| format!(" WHERE {filter}"))
+            .unwrap_or_default();
         let declared = match columns.is_empty() {
             true => String::new(),
             false => format!(" ({columns})"),
         };
-        let clauses = match layout_clauses(layout, true) {
-            clauses if clauses.is_empty() => clauses,
-            clauses => format!(" {clauses}"),
-        };
+        let clauses = layout_clauses(layout);
         format!(
-            "{script}CREATE OR REPLACE TABLE {target}{declared}{clauses} AS SELECT {select} FROM {target}"
+            "CREATE OR REPLACE TABLE {target}{declared}{clauses} AS SELECT {select} FROM {target}{filter}"
         )
     }
 
@@ -190,7 +180,7 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
-    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's partitioning, clustering and options, so a build table must never carry an expiration, or the table it replaces would expire with it; a `require_partition_filter` the config sets is added here, as the build table leaves it out. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name. A table `--reload` lays out anew (`relayout`) is dropped first, as `CREATE OR REPLACE` refuses another partitioning, so it is missing until the copy lands.
+    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's options, so a build table must never carry an expiration, or the table it replaces would expire with it. The build table is unpartitioned, as the Storage Write API refuses rows of a date partition over 10 years back or a year ahead, which a query takes; the table is partitioned, clustered and given its `require_partition_filter` here, as its config says. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name. A table `--reload` lays out anew (`relayout`) is renamed out of the way first, as `CREATE OR REPLACE` refuses another partitioning, and dropped once the new table holds the rows; it is missing for a moment, and a failure in between leaves its rows under the [kept name](RELAYOUT_SUFFIX).
     fn render_swap(
         &self,
         target: &TableName,
@@ -202,27 +192,29 @@ impl SqlAdapter for BigQuerySql {
             self.render_qualified_name(target),
             self.render_qualified_name(build),
         );
-        let options = match requires_partition_filter(layout) {
-            true => format!(" OPTIONS ({REQUIRE_PARTITION_FILTER} = TRUE)"),
-            false => String::new(),
-        };
-        let swap = format!("TABLE {old} LIKE {new}{options} AS SELECT * FROM {new}");
+        let clauses = layout_clauses(layout);
+        let swap = format!("TABLE {old} LIKE {new}{clauses} AS SELECT * FROM {new}");
         match layout.relayout {
-            true => vec![
-                format!("DROP TABLE IF EXISTS {old}"),
-                format!("CREATE {swap}"),
-                format!("DROP TABLE IF EXISTS {new}"),
-            ],
+            true => {
+                let kept = TableName {
+                    table: format!("{}{RELAYOUT_SUFFIX}", target.table),
+                    ..target.clone()
+                };
+                vec![
+                    format!(
+                        "ALTER TABLE {old} RENAME TO {}",
+                        self.render_identifier(&kept.table)
+                    ),
+                    format!("CREATE {swap}"),
+                    format!("DROP TABLE {}", self.render_qualified_name(&kept)),
+                    format!("DROP TABLE IF EXISTS {new}"),
+                ]
+            }
             false => vec![
                 format!("CREATE OR REPLACE {swap}"),
                 format!("DROP TABLE IF EXISTS {new}"),
             ],
         }
-    }
-
-    /// Partitioned and clustered as the config says, so the swap keeps the layout, but without `require_partition_filter`, which the swap's `SELECT` from the build table would need a filter for; the swap sets it on the table.
-    fn render_build_layout(&self, layout: &TableLayout) -> String {
-        layout_clauses(layout, false)
     }
 
     fn render_write(

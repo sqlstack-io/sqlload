@@ -376,25 +376,14 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging_table(self, table, columns, staging_id)
     }
 
-    /// The statements creating `build` in `table`'s own shape, so batches land in their final form, what the destination added stays, and the swap copies nothing: from the table's `definition` by default. A `--reload` passes the `differing` live columns, as it rebuilds with the current columns; `layout` is the table's as its config says, for a warehouse whose build table must be laid out as it.
+    /// The statements creating `build` in `table`'s own shape, so batches land in their final form, what the destination added stays, and the swap copies nothing: from the table's `definition` by default. A `--reload` passes the `differing` live columns, as it rebuilds with the current columns.
     fn render_create_build_table(
         &self,
         build: &TableName,
         table: &TableName,
         shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-        layout: &TableLayout,
     ) -> Vec<String> {
-        build_table(
-            self,
-            (build, table),
-            shape,
-            &self.render_build_layout(layout),
-        )
-    }
-
-    /// The clauses after a build table's columns laying it out as `layout` says, so swapping it in keeps the layout; empty where the warehouse lays tables out otherwise or not at all.
-    fn render_build_layout(&self, _layout: &TableLayout) -> String {
-        String::new()
+        build_table(self, build, table, shape)
     }
 
     /// The statement changing `column` of `target` to `sql_type` in place.

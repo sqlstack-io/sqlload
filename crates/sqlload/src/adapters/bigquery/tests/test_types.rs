@@ -84,5 +84,7 @@ pub(crate) struct PartitionFilterTestCase {
     pub(crate) strategy: crate::project::models::WriteStrategy,
     pub(crate) unique_key: &'static [&'static str],
     pub(crate) newest_by: &'static [&'static str],
+    /// TOML under the table's entry.
+    pub(crate) settings: &'static str,
     pub(crate) expected_problems: &'static [&'static str],
 }
