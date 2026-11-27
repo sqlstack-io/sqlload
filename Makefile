@@ -10,6 +10,9 @@ CLICKHOUSE_OLDER := 25.3
 # Lints the default build (DuckDB included) and the build without DuckDB, so both keep compiling.
 check:
 	cargo fmt --all
+	@# Nothing links librdkafka without the kafka feature: a host of the library (sqlload-python-host) gets none.
+	@! cargo tree -p sqlload --no-default-features -e normal,build --prefix none 2>/dev/null | grep -q '^rdkafka ' || (echo "rdkafka reaches sqlload without the kafka feature" && false)
+	@! cargo tree -p sqlload-python-host -e normal,build --prefix none 2>/dev/null | grep -q '^rdkafka ' || (echo "rdkafka reaches sqlload-python-host" && false)
 	cargo clippy --workspace --all-targets --features sqlload/container-tests,sqlload/odbc --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings
@@ -17,6 +20,9 @@ check:
 
 check-ci:
 	cargo fmt --all --check
+	@# Nothing links librdkafka without the kafka feature: a host of the library (sqlload-python-host) gets none.
+	@! cargo tree -p sqlload --no-default-features -e normal,build --prefix none 2>/dev/null | grep -q '^rdkafka ' || (echo "rdkafka reaches sqlload without the kafka feature" && false)
+	@! cargo tree -p sqlload-python-host -e normal,build --prefix none 2>/dev/null | grep -q '^rdkafka ' || (echo "rdkafka reaches sqlload-python-host" && false)
 	cargo clippy --workspace --all-targets --features sqlload/container-tests,sqlload/odbc --quiet -- -D warnings
 	cargo clippy -p sqlload --all-targets --no-default-features --features cli,container-tests --quiet -- -D warnings
 	cargo clippy -p sqlload --lib --no-default-features --features cli --quiet -- -D warnings

@@ -1,3 +1,4 @@
+#[cfg(feature = "kafka")]
 pub(crate) mod commands;
 pub(crate) mod copy_command;
 pub(crate) mod exporter_commands;

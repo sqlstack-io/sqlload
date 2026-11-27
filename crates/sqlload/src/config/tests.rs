@@ -4,6 +4,8 @@ mod bigquery_destination;
 mod destinations;
 #[path = "tests/helpers.rs"]
 mod helpers;
+#[path = "tests/test_kafka_support.rs"]
+mod kafka_support;
 #[path = "tests/test_parse_config.rs"]
 mod parse_config;
 #[path = "tests/test_stream_settings.rs"]

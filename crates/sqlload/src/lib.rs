@@ -23,6 +23,7 @@ pub mod databricks_source;
 pub mod delivery;
 pub mod duckdb_source;
 pub mod envelope;
+#[cfg(feature = "kafka")]
 pub mod exporter;
 pub mod file_format;
 pub mod file_store;
@@ -30,6 +31,7 @@ pub mod files_source;
 pub mod google_identity;
 pub mod http;
 pub mod http_source;
+#[cfg(feature = "kafka")]
 pub mod kafka;
 pub mod load_events;
 pub mod load_naming;
@@ -63,6 +65,7 @@ pub mod snowflake_source;
 pub mod sql_api;
 pub mod ssh_tunnel;
 pub mod stage_api;
+#[cfg(feature = "kafka")]
 pub mod status;
 pub mod store_paths;
 pub mod streaming_api;

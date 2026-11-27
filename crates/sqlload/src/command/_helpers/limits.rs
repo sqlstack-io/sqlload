@@ -3,6 +3,7 @@ use crate::loader::constants::{DEFAULT_THREADS, SPARE_BLOCKING_THREADS};
 use crate::project::main::is_project::is_project;
 
 /// Raise the open-file soft limit to the hard limit; each stream holds several Kafka sockets.
+#[cfg(feature = "kafka")]
 pub(crate) fn raise_open_file_limit() {
     match rlimit::increase_nofile_limit(u64::MAX) {
         Ok(limit) => tracing::debug!(limit, "open-file limit"),
