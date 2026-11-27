@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.89.1](https://github.com/sqlstack-io/sqlload/compare/v0.89.0...v0.89.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **clickhouse:** carry out publish steps on a caller's ClickHouse session ([#378](https://github.com/sqlstack-io/sqlload/issues/378)) ([fff0a61](https://github.com/sqlstack-io/sqlload/commit/fff0a6147615439458816d311198e7889dd9b59c))
+* put Kafka support behind an optional kafka feature ([#376](https://github.com/sqlstack-io/sqlload/issues/376)) ([304ff9c](https://github.com/sqlstack-io/sqlload/commit/304ff9c18a5bbe69301ee56d2b075073984c83bd))
+
 ## [0.89.0](https://github.com/sqlstack-io/sqlload/compare/v0.88.0...v0.89.0) (2026-11-27)
 
 
