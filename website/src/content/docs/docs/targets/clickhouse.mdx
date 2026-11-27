@@ -72,8 +72,9 @@ order_by = ["customer_id", "order_id"]
 | `table_settings` | none | Table settings by name. A table's settings are added to its source's, the table's value winning. |
 
 Every loaded column is `Nullable`, so a table with a sorting, partitioning or primary key gets
-`allow_nullable_key = 1` unless `table_settings` sets it. Other targets refuse these settings at
-`plan`.
+`allow_nullable_key = 1` unless `table_settings` sets it. `plan` refuses `cluster_by`, which
+clusters BigQuery tables. Targets other than ClickHouse and
+[BigQuery](/docs/targets/bigquery/#partitioning-and-clustering) refuse these settings at `plan`.
 
 The layout applies when SQLLoad creates a table. `--reload` keeps the table's layout: to lay an
 existing table out again, drop it and load. ClickHouse can't change the type of a column in the
