@@ -2,6 +2,7 @@
 
 use crate::adapters::bigquery::_helpers::dialect::layout::{
     layout_clauses, layout_problems, layout_table_problems, requires_partition_filter,
+    whole_table_filter,
 };
 use crate::adapters::bigquery::_helpers::dialect::type_names::{
     decimal_digits, logical_type, portable_type, widens_in_place,
@@ -9,7 +10,6 @@ use crate::adapters::bigquery::_helpers::dialect::type_names::{
 use crate::adapters::bigquery::_helpers::dialect::write::write_statements;
 use crate::adapters::bigquery::constants::REQUIRE_PARTITION_FILTER;
 use crate::adapters::bigquery::models::BigQuerySql;
-use crate::adapters::contract::_helpers::schema::{alter_statements, build_table};
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
@@ -17,7 +17,7 @@ use crate::adapters::contract::models::{
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
 use crate::loader::models::{TableLayout, TableSpec};
-use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
+use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
 impl SqlAdapter for BigQuerySql {
     fn warehouse(&self) -> Warehouse {
@@ -125,9 +125,8 @@ impl SqlAdapter for BigQuerySql {
         layout_table_problems(spec, columns)
     }
 
-    /// A filter on the partition column, which a table with `require_partition_filter` needs on every query, when the cursor is that column.
-    fn render_cursor_filter(&self, column: &str) -> Option<String> {
-        Some(format!("{column} IS NOT NULL"))
+    fn render_whole_table_filter(&self, layout: &TableLayout) -> Option<String> {
+        whole_table_filter(layout, "")
     }
 
     /// Partitioned and clustered as the table's layout says, with its `require_partition_filter`.
@@ -157,36 +156,30 @@ impl SqlAdapter for BigQuerySql {
         }
     }
 
-    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized. A table with a column whose type can't be named again, such as a `STRUCT`, gets no list.
-    fn render_rebuild_table(&self, target: &str, (select, columns): (&str, &str)) -> String {
-        match columns.is_empty() {
-            true => format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}"),
-            false => format!(
-                "CREATE OR REPLACE TABLE {target} ({columns}) AS SELECT {select} FROM {target}"
-            ),
-        }
-    }
-
-    /// The contract's statements, with the rebuild (`CREATE OR REPLACE TABLE … AS SELECT`) laid out as the table is, since BigQuery refuses to replace a partitioned or clustered table with one laid out otherwise.
-    fn render_change_columns(
+    /// The columns are listed with their types: a query's result types carry no precision, scale or length, so without the list every `NUMERIC(20, 2)` and `STRING(10)` of the table would come back unparameterized. A table with a column whose type can't be named again, such as a `STRUCT`, gets no list. The rewrite is laid out as the table is, since BigQuery refuses to replace a partitioned or clustered table with one laid out otherwise; a table with `require_partition_filter` drops it first in the same script, as the rewrite's `SELECT` reads every row, and the rewritten table sets it again.
+    fn render_rebuild_table(
         &self,
-        table: &TableName,
-        changes: &[ColumnChange],
-        live: &[LiveColumn],
+        target: &str,
+        (select, columns): (&str, &str),
         layout: &TableLayout,
-    ) -> Vec<String> {
-        let clauses = layout_clauses(layout, true);
-        alter_statements(self, table, changes, live)
-            .into_iter()
-            .map(|statement| match statement.split_once(" AS SELECT ") {
-                Some((head, select))
-                    if !clauses.is_empty() && head.starts_with("CREATE OR REPLACE TABLE ") =>
-                {
-                    format!("{head} {clauses} AS SELECT {select}")
-                }
-                _ => statement,
-            })
-            .collect()
+    ) -> String {
+        let script = match requires_partition_filter(layout) {
+            true => {
+                format!("ALTER TABLE {target} SET OPTIONS ({REQUIRE_PARTITION_FILTER} = FALSE); ")
+            }
+            false => String::new(),
+        };
+        let declared = match columns.is_empty() {
+            true => String::new(),
+            false => format!(" ({columns})"),
+        };
+        let clauses = match layout_clauses(layout, true) {
+            clauses if clauses.is_empty() => clauses,
+            clauses => format!(" {clauses}"),
+        };
+        format!(
+            "{script}CREATE OR REPLACE TABLE {target}{declared}{clauses} AS SELECT {select} FROM {target}"
+        )
     }
 
     /// BigQuery's `DELETE` needs a `WHERE`.
@@ -227,21 +220,9 @@ impl SqlAdapter for BigQuerySql {
         }
     }
 
-    /// The table's columns, partitioned and clustered as its config says so the swap keeps the layout, but without `require_partition_filter`, which the swap's `SELECT` from the build table would need a filter for; the swap sets it on the table.
-    fn render_create_build_table(
-        &self,
-        build: &TableName,
-        table: &TableName,
-        shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-        layout: &TableLayout,
-    ) -> Vec<String> {
-        let mut statements = build_table(self, build, table, shape);
-        let clauses = layout_clauses(layout, false);
-        if let Some(create) = statements.first_mut().filter(|_| !clauses.is_empty()) {
-            create.push(' ');
-            create.push_str(&clauses);
-        }
-        statements
+    /// Partitioned and clustered as the config says, so the swap keeps the layout, but without `require_partition_filter`, which the swap's `SELECT` from the build table would need a filter for; the swap sets it on the table.
+    fn render_build_layout(&self, layout: &TableLayout) -> String {
+        layout_clauses(layout, false)
     }
 
     fn render_write(

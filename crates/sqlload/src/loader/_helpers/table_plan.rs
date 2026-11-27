@@ -84,7 +84,7 @@ use crate::loader::models::SourceEnd;
 use crate::loader::models::TablePlan;
 use crate::loader::models::TableSpec;
 use crate::loader::models::WholeReason;
-use crate::loader::models::{ProjectPlan, SkippedTable};
+use crate::loader::models::{ProjectPlan, SkippedTable, TableLayout};
 use crate::loader::models::{WarehouseRoute, WarehouseSource};
 use crate::postgres_source::main::plan_read::plan_read;
 use crate::postgres_source::models::SourceTable;
@@ -658,13 +658,16 @@ fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
     }
 }
 
-/// `schema` with what stops or endangers writing `mode` into the table (`exists` when it does): blocked by its problems, with its warnings added; and whether the table is laid out otherwise than its config, which only a `reload` may change (it rebuilds the table).
+/// `schema` (unless already blocked) with what stops or endangers writing `mode` into the table (`exists` when it does): blocked by its problems, with its warnings added; and the table's layout, marked `relayout` where the live table is laid out otherwise, which only a `reload` may change (it rebuilds the table).
 async fn checked_writes(
     destination: &Destination,
     spec: &TableSpec,
     (mode, exists, reload): (&WriteMode, bool, bool),
     mut schema: SchemaPlan,
-) -> Result<(SchemaPlan, bool), LoaderError> {
+) -> Result<(SchemaPlan, TableLayout), LoaderError> {
+    if schema.blocked.is_some() {
+        return Ok((schema, spec.layout.clone()));
+    }
     let variants = !spec.variants.is_empty()
         || (spec.variant_json && spec.python.is_some())
         || schema
@@ -674,23 +677,16 @@ async fn checked_writes(
     let (mut problems, warnings) =
         write_problems(destination, &spec.destination, (mode, exists, variants)).await?;
     schema.warnings.extend(warnings);
-    let drift = match exists {
-        true => layout_drift(destination, &spec.destination, &spec.layout).await?,
-        false => None,
+    let (drift, relaid) = layout_drift(destination, spec, (exists, reload)).await?;
+    problems.extend(drift);
+    let layout = TableLayout {
+        relayout: relaid.is_some(),
+        ..spec.layout.clone()
     };
-    let relayout = drift.is_some() && reload;
-    match drift {
-        Some(drift) if reload => schema.warnings.push(format!(
-            "{drift}; --reload drops the table and creates it laid out as configured, so it is missing for a moment"
-        )),
-        Some(drift) => problems.push(format!(
-            "{drift}; load with --reload to rebuild it as configured, or change the config to match"
-        )),
-        None => {}
-    }
+    schema.warnings.extend(relaid);
     Ok(match problems.is_empty() {
-        true => (schema, relayout),
-        false => (blocked_plan(problems), false),
+        true => (schema, layout),
+        false => (blocked_plan(problems), spec.layout.clone()),
     })
 }
 
@@ -857,12 +853,9 @@ async fn plan_table_once(
     schema.warnings.extend(resnapshot_warning(spec, options));
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
-    schema = checked_columns(spec, schema);
-    let mut relayout = false;
-    if schema.blocked.is_none() {
-        (schema, relayout) =
-            checked_writes(destination, spec, (&mode, exists, options.reload), schema).await?;
-    }
+    let schema = checked_columns(spec, schema);
+    let (mut schema, layout) =
+        checked_writes(destination, spec, (&mode, exists, options.reload), schema).await?;
     let chosen = match &schema.blocked {
         None => {
             let direct_append = mode == WriteMode::Append && !spec.logged;
@@ -917,10 +910,11 @@ async fn plan_table_once(
             CommitRule::Whole(WholeReason::Blocked)
         }
     };
-    let mut spec = spec.clone();
-    spec.layout.relayout = relayout;
     Ok(TablePlan {
-        spec,
+        spec: TableSpec {
+            layout,
+            ..spec.clone()
+        },
         read_columns,
         live,
         schema,
@@ -1517,6 +1511,7 @@ async fn lower_bound(
             true => &spec.constants,
             false => &[],
         },
+        layout: &spec.layout,
     });
     let Some(query) = query else {
         return Ok(Err(format!(

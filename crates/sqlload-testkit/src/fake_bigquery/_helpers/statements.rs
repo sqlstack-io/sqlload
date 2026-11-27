@@ -41,19 +41,43 @@ fn layout_after_columns(statement: &str) -> String {
     head.get(end..).unwrap_or_default().trim().to_owned()
 }
 
+/// The text of `layout`'s clause opened by `name` (such as `PARTITION BY `), up to the next clause.
+fn layout_clause<'a>(layout: &'a str, name: &str) -> Option<&'a str> {
+    let (_, rest) = layout.split_once(name)?;
+    let end = ["PARTITION BY ", "CLUSTER BY ", "OPTIONS ("]
+        .iter()
+        .filter_map(|next| rest.find(next))
+        .min()
+        .unwrap_or(rest.len());
+    Some(rest[..end].trim())
+}
+
+/// Where `statement` (lower-cased) reads `quoted`, the table's name: after `FROM` or `MERGE INTO`.
+fn read_at(statement: &str, quoted: &str) -> Option<usize> {
+    let reads = |at: &usize| {
+        let before = statement[..*at].trim_end_matches(|character: char| character != ' ');
+        before.ends_with(" from ") || before.ends_with("merge into ")
+    };
+    statement
+        .match_indices(quoted)
+        .map(|(at, _)| at)
+        .find(reads)
+}
+
+/// What `statement` says from its first `WHERE` or `ON` after `start` on, its filter; empty for none.
+fn filter_after(statement: &str, start: usize) -> &str {
+    let after = &statement[start..];
+    let found: Vec<usize> = [" where ", " on "]
+        .iter()
+        .filter_map(|keyword| after.find(keyword))
+        .collect();
+    found.iter().min().map_or("", |start| &after[*start..])
+}
+
 /// `tables.get`'s `timePartitioning`, `rangePartitioning`, `clustering` and `requirePartitionFilter` for a table laid out as `layout`.
 fn layout_fields(layout: &str) -> serde_json::Map<String, Value> {
     let mut fields = serde_json::Map::new();
-    let clause = |name: &str| {
-        layout.split_once(name).map(|(_, rest)| {
-            ["PARTITION BY ", "CLUSTER BY ", "OPTIONS ("]
-                .iter()
-                .filter_map(|next| rest.find(next))
-                .min()
-                .map_or(rest, |end| &rest[..end])
-                .trim()
-        })
-    };
+    let clause = |name: &str| layout_clause(layout, name);
     let unquoted = |text: &str| text.trim().trim_matches('`').to_owned();
     if let Some(partition) = clause("PARTITION BY ") {
         let inner = parenthesised(partition);
@@ -276,7 +300,29 @@ fn done() -> Answer {
 }
 
 impl FakeState {
+    /// BigQuery's refusal of `statement` where it reads a table with `require_partition_filter` (its name after `FROM` or `MERGE INTO`) without naming the partition column after a `WHERE` or `ON`.
+    fn unfiltered(&self, statement: &str) -> Option<String> {
+        self.tables.iter().find_map(|(key, table)| {
+            let fields = layout_fields(&table.layout);
+            fields.get("requirePartitionFilter")?;
+            let partitioning = fields
+                .get("timePartitioning")
+                .or_else(|| fields.get("rangePartitioning"))?;
+            let column = partitioning["field"].as_str()?.to_ascii_lowercase();
+            let (dataset, name) = key.split_once('.')?;
+            let quoted = format!("`{dataset}`.`{name}`");
+            let lowered = statement.to_ascii_lowercase();
+            let filter = filter_after(&lowered, read_at(&lowered, &quoted)?);
+            (!filter.contains(&format!("`{column}`"))).then(|| format!(
+                "Cannot query over table '{key}' without a filter over column(s) '{column}' that can be used for partition elimination"
+            ))
+        })
+    }
+
     fn answer(&mut self, statement: &str) -> Answer {
+        if let Some(refusal) = self.unfiltered(statement) {
+            return Err(refusal);
+        }
         if let Some(name) = name_after(statement, "CREATE TABLE IF NOT EXISTS ") {
             let columns = parenthesised(statement)
                 .map(column_list)

@@ -594,14 +594,11 @@ impl Publisher {
                     .filter(|_| table.mode == WriteMode::Recreate);
                 let adapter = sql_adapter(table.spec.warehouse);
                 let build = adapter.staging_relation_name(&table.spec.destination, &id);
+                let definition = shape.as_ref().map(|shape| shape.definition.as_str());
                 let create = adapter.render_create_build_table(
                     &build,
                     &table.spec.destination,
-                    (
-                        &table.schema.write_columns,
-                        differing,
-                        shape.as_ref().map(|shape| shape.definition.as_str()),
-                    ),
+                    (&table.schema.write_columns, differing, definition),
                     &table.spec.layout,
                 );
                 execute_ddl(&destination, create).await?;

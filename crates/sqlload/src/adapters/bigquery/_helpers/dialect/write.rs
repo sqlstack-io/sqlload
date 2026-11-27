@@ -1,7 +1,7 @@
 //! BigQuery's writes: each one statement, which commits on its own.
 
 use crate::adapters::bigquery::_helpers::dialect::layout::{
-    partition_column, partition_filter, pruned,
+    partition_column, partition_filter, pruned, whole_table_filter,
 };
 use crate::adapters::contract::main::_keyed_merge::keyed_merge;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
@@ -57,7 +57,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         WriteMode::Replace => vec![insert_and_delete(
             (&target, &source),
             (&names, &values),
-            None,
+            whole_table_filter(request.layout, "__target."),
         )],
         WriteMode::DeleteInsert {
             cursor_column,
@@ -72,7 +72,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
                     replace_key,
                     cursor_column
                         .as_ref()
-                        .map(|_| range_condition(adapter, request)),
+                        .map(|_| filtered_range(adapter, request)),
                 ),
             );
             vec![prune(request, replace_key, (&source, &values), merge)]
@@ -80,7 +80,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
         WriteMode::DeleteInsert { .. } => vec![insert_and_delete(
             (&target, &source),
             (&names, &values),
-            range_condition(adapter, request),
+            filtered_range(adapter, request),
         )],
     }
 }
@@ -131,6 +131,18 @@ fn insert_and_delete(
         names.join(", "),
         inserted.join(", ")
     )
+}
+
+/// [`range_condition`] with the [filter](whole_table_filter) a `require_partition_filter` table needs on the rows it deletes; `None` for every row of a table that needs none.
+fn filtered_range<A: SqlAdapter + ?Sized>(
+    adapter: &A,
+    request: &WriteStatementsRequest<'_>,
+) -> Option<String> {
+    let conditions: Vec<String> = range_condition(adapter, request)
+        .into_iter()
+        .chain(whole_table_filter(request.layout, "__target."))
+        .collect();
+    (!conditions.is_empty()).then(|| conditions.join(" AND "))
 }
 
 /// The table rows a `delete_insert` replaces by its cursor, on `__target`; `None` for every row, and without a cursor.

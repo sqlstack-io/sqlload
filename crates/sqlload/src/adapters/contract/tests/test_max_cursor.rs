@@ -25,11 +25,11 @@ fn given_a_cursor_when_rendering_its_maximum_query_then_only_constant_columns_sc
             expected_query: "SELECT CAST(epoch_us(MAX(\"updated_at\")) AS VARCHAR) FROM \"raw\".\"app__accounts\" WHERE \"tenant_id\" = CAST('it''s' AS VARCHAR) AND \"shard\" = CAST('7' AS BIGINT)",
         },
         MaxCursorTestCase {
-            description: "the scope takes each warehouse's quoting and types; BigQuery also filters on the cursor, a partition filter where the table is partitioned by it",
+            description: "the scope takes each warehouse's quoting and types",
             warehouse: Warehouse::BigQuery,
             scope: vec![("tenant_id".to_owned(), ColumnType::Text, "a".to_owned())],
             coalesce: vec![],
-            expected_query: "SELECT CAST(UNIX_MICROS(MAX(`updated_at`)) AS STRING) FROM `raw`.`app__accounts` WHERE `tenant_id` = CAST('a' AS STRING) AND `updated_at` IS NOT NULL",
+            expected_query: "SELECT CAST(UNIX_MICROS(MAX(`updated_at`)) AS STRING) FROM `raw`.`app__accounts` WHERE `tenant_id` = CAST('a' AS STRING)",
         },
         MaxCursorTestCase {
             description: "a coalesced cursor's maximum is of the first set column of each row, as the source filter reads it",
@@ -61,6 +61,7 @@ fn given_a_cursor_when_rendering_its_maximum_query_then_only_constant_columns_sc
             column_type: &ColumnType::TimestampTz,
             lookback: None,
             scope: &test_case.scope,
+            layout: &crate::loader::models::TableLayout::default(),
         });
         assert_eq!(
             query.map(|read| read.sql).as_deref(),

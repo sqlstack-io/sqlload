@@ -2,8 +2,9 @@ use sqlload::bigquery_api::main::run_query::run_query;
 
 use crate::bigquery_helpers::{
     append_refused, commit_refused, live_bigquery, live_bigquery_client, nothing_in_bigquery,
-    orders_partitioned, orders_unpartitioned, orders_without_score, reset_live_bigquery,
-    run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table, token_expired,
+    orders_filtered, orders_partitioned, orders_unpartitioned, orders_without_score,
+    reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table,
+    token_expired,
 };
 use crate::helpers::{found, not_found, run_async, two_batches, two_days};
 use crate::test_types::{BigQueryLoadTestCase, LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
@@ -15,6 +16,8 @@ const LIVE_APPEND: LiveBigQueryLoadTestCase = LiveBigQueryLoadTestCase {
     file_set: two_days,
     expected_rows: "6",
 };
+
+const FILTERED_APPEND: &str = "write_strategy = \"append\"\npartition_by = \"day\"\ntable_settings = { require_partition_filter = true }";
 
 const STAGED: &str = "raw.orders__sqlload_staging_";
 
@@ -156,10 +159,28 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BASE
         },
         BigQueryLoadTestCase {
-            description: "require_partition_filter with a cursor other than the partition column fails at plan, as the cursor read could not filter",
-            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_by = \"RANGE_BUCKET(id, GENERATE_ARRAY(0, 100, 10))\"\ntable_settings = { require_partition_filter = true }",
-            expected_error: "require_partition_filter: the cursor read on the table filters only on its cursor, day, not the partition column id",
-            ..BLOCKED
+            description: "require_partition_filter: an append into the table loads, its every query filtering on the partition column",
+            settings: FILTERED_APPEND,
+            prepare: orders_filtered,
+            expected_layout: Some("PARTITION BY `day` OPTIONS (require_partition_filter = TRUE)"),
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "require_partition_filter: a delete_insert on the partition cursor loads",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_by = \"day\"\ntable_settings = { require_partition_filter = true }",
+            prepare: orders_filtered,
+            expected_rows: None,
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "require_partition_filter: a replace swaps the build table in with the option set again",
+            settings: "write_strategy = \"replace\"\npartition_by = \"day\"\ntable_settings = { require_partition_filter = true }",
+            prepare: orders_filtered,
+            expected_sent: &[
+                "OPTIONS (require_partition_filter = TRUE) AS SELECT * FROM `raw`.`orders__sqlload_staging_",
+            ],
+            expected_layout: Some("PARTITION BY `day` OPTIONS (require_partition_filter = TRUE)"),
+            ..BASE
         },
         BigQueryLoadTestCase {
             description: "clustering by a float column fails at plan",

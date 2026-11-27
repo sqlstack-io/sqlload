@@ -30,5 +30,10 @@ pub(in crate::adapters) fn rebuilt_in_place<A: SqlAdapter + ?Sized>(
             other => other,
         })
         .collect();
-    alter_statements(adapter, table, &altered, live)
+    alter_statements(
+        adapter,
+        table,
+        (&altered, live),
+        &crate::loader::models::TableLayout::default(),
+    )
 }

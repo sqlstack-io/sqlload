@@ -56,9 +56,7 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
             )
         })
         .collect();
-    if request.coalesce.is_empty() {
-        scope.extend(adapter.render_cursor_filter(&adapter.render_identifier(request.column)));
-    }
+    scope.extend(adapter.render_whole_table_filter(request.layout));
     let filter = match scope.is_empty() {
         true => String::new(),
         false => format!(" WHERE {}", scope.join(" AND ")),
@@ -72,10 +70,10 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
     })
 }
 
-/// `SELECT DISTINCT file || '|' || version`; without a version column, just the file names.
+/// `SELECT DISTINCT file || '|' || version`; without a version column, just the file names; over every row, with the filter `layout` needs for that.
 pub(crate) fn loaded_files_query<A: SqlAdapter + ?Sized>(
     adapter: &A,
-    table: &TableName,
+    (table, layout): (&TableName, &crate::loader::models::TableLayout),
     file_column: &str,
     version_column: Option<&str>,
 ) -> String {
@@ -87,8 +85,12 @@ pub(crate) fn loaded_files_query<A: SqlAdapter + ?Sized>(
         ),
         None => file,
     };
+    let filter = adapter
+        .render_whole_table_filter(layout)
+        .map(|filter| format!(" WHERE {filter}"))
+        .unwrap_or_default();
     format!(
-        "SELECT DISTINCT {expression} FROM {}",
+        "SELECT DISTINCT {expression} FROM {}{filter}",
         adapter.render_qualified_name(table)
     )
 }

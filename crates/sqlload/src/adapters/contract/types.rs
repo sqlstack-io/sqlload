@@ -330,8 +330,8 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         Vec::new()
     }
 
-    /// The condition on the cursor column `column` (rendered) its `MAX` query adds where the warehouse gains by it (a BigQuery table's partition filter), which changes nothing as `MAX` skips NULLs; none by default.
-    fn render_cursor_filter(&self, _column: &str) -> Option<String> {
+    /// The condition a query reading every row of a table laid out as `layout` must carry, matching every row: a BigQuery table's partition filter under `require_partition_filter`; none by default.
+    fn render_whole_table_filter(&self, _layout: &TableLayout) -> Option<String> {
         None
     }
 
@@ -382,9 +382,19 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         build: &TableName,
         table: &TableName,
         shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
-        _layout: &TableLayout,
+        layout: &TableLayout,
     ) -> Vec<String> {
-        build_table(self, build, table, shape)
+        build_table(
+            self,
+            (build, table),
+            shape,
+            &self.render_build_layout(layout),
+        )
+    }
+
+    /// The clauses after a build table's columns laying it out as `layout` says, so swapping it in keeps the layout; empty where the warehouse lays tables out otherwise or not at all.
+    fn render_build_layout(&self, _layout: &TableLayout) -> String {
+        String::new()
     }
 
     /// The statement changing `column` of `target` to `sql_type` in place.
@@ -398,9 +408,9 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         table: &TableName,
         changes: &[ColumnChange],
         live: &[LiveColumn],
-        _layout: &TableLayout,
+        layout: &TableLayout,
     ) -> Vec<String> {
-        alter_statements(self, table, changes, live)
+        alter_statements(self, table, (changes, live), layout)
     }
 
     /// The select-list entry keeping column `name` of `column_type` in a rebuild that declares each column's type, where its value must coerce to that type.
@@ -408,8 +418,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         name.to_owned()
     }
 
-    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters.
-    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
+    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters, and `layout` is the table's, for a warehouse whose rewrite must lay it out again.
+    fn render_rebuild_table(
+        &self,
+        target: &str,
+        (select, _columns): (&str, &str),
+        _layout: &TableLayout,
+    ) -> String {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
     }
 
@@ -641,11 +656,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// `SELECT DISTINCT file || '|' || version`; without a version column, just the file names.
     fn render_loaded_files_query(
         &self,
-        table: &TableName,
+        (table, layout): (&TableName, &TableLayout),
         file_column: &str,
         version_column: Option<&str>,
     ) -> String {
-        loaded_files_query(self, table, file_column, version_column)
+        loaded_files_query(self, (table, layout), file_column, version_column)
     }
 
     /// The condition choosing staging tables a crashed load may have left, by name (`_` matches any character).

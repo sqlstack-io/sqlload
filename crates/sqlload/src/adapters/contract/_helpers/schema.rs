@@ -6,6 +6,7 @@ use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 /// `CREATE SCHEMA IF NOT EXISTS` for `table`'s schema.
@@ -79,16 +80,22 @@ pub(crate) fn staging_table<A: SqlAdapter + ?Sized>(
     (staging, create)
 }
 
-/// `build` from the table's `definition` when there is one, else from `columns`.
+/// `build` from the table's `definition` when there is one, else from `columns`, laid out by `clauses` (empty for none).
 pub(crate) fn build_table<A: SqlAdapter + ?Sized>(
     adapter: &A,
-    build: &TableName,
-    _table: &TableName,
+    (build, _table): (&TableName, &TableName),
     (columns, _differing, definition): (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
+    clauses: &str,
 ) -> Vec<String> {
     let name = adapter.render_qualified_name(build);
+    let laid_out = match clauses.is_empty() {
+        true => String::new(),
+        false => format!(" {clauses}"),
+    };
     if let Some(definition) = definition {
-        return vec![format!("CREATE OR REPLACE TABLE {name}{definition}")];
+        return vec![format!(
+            "CREATE OR REPLACE TABLE {name}{definition}{laid_out}"
+        )];
     }
     let definitions: Vec<String> = columns
         .iter()
@@ -101,17 +108,17 @@ pub(crate) fn build_table<A: SqlAdapter + ?Sized>(
         })
         .collect();
     vec![format!(
-        "CREATE OR REPLACE TABLE {name} ({})",
+        "CREATE OR REPLACE TABLE {name} ({}){laid_out}",
         definitions.join(", ")
     )]
 }
 
-/// The statements applying `changes` to `table`, whose current columns are `live`: added columns, in-place widening, and one rewrite for the columns that need it.
+/// The statements applying `changes` to `table`, whose current columns are `live`: added columns, in-place widening, and one rewrite for the columns that need it, laid out as `layout`.
 pub(crate) fn alter_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     table: &TableName,
-    changes: &[ColumnChange],
-    live: &[LiveColumn],
+    (changes, live): (&[ColumnChange], &[LiveColumn]),
+    layout: &TableLayout,
 ) -> Vec<String> {
     let target = adapter.render_qualified_name(table);
     let mut statements: Vec<String> = Vec::new();
@@ -135,7 +142,10 @@ pub(crate) fn alter_statements<A: SqlAdapter + ?Sized>(
         }
     }
     if !rebuilt.is_empty() {
-        statements.insert(0, rebuild_statement(adapter, &target, (live, &rebuilt)));
+        statements.insert(
+            0,
+            rebuild_statement(adapter, &target, (live, &rebuilt), layout),
+        );
     }
     statements
 }
@@ -199,7 +209,10 @@ pub(crate) fn staging_changes<A: SqlAdapter + ?Sized>(
                 .iter()
                 .map(|(name, sql_type)| (name.as_str(), sql_type.as_str()))
                 .collect();
-            statements.insert(0, rebuild_statement(adapter, &target, (&live, &casts)));
+            statements.insert(
+                0,
+                rebuild_statement(adapter, &target, (&live, &casts), &TableLayout::default()),
+            );
         }
         (false, false) => statements.extend(rebuilt.iter().map(|(name, sql_type)| {
             adapter.render_alter_column_type(

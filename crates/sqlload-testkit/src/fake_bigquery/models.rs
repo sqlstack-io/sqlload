@@ -147,4 +147,16 @@ impl FakeBigQuery {
             },
         );
     }
+
+    /// Lay out `table` (`dataset.table`) as `layout`, the clauses after a `CREATE TABLE`'s columns, as though it was created so; nothing for a missing table.
+    pub fn lay_out(&self, table: &str, layout: &str) {
+        if let Some(found) = self
+            .state
+            .lock()
+            .tables
+            .get_mut(&table.to_ascii_lowercase())
+        {
+            layout.clone_into(&mut found.layout);
+        }
+    }
 }

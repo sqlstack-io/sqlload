@@ -191,6 +191,8 @@ pub struct CursorQuery<'a> {
     pub lookback: Option<Duration>,
     /// The table's `constant_columns` (name, type and value as text): only the rows holding these values count, so tables sharing a destination each read from their own maximum.
     pub scope: &'a [(String, ColumnType, String)],
+    /// The table's layout, for the [filter](crate::adapters::contract::types::SqlAdapter::render_whole_table_filter) a query over every row needs.
+    pub layout: &'a crate::loader::models::TableLayout,
 }
 
 /// Which way a cursor bound counted from now moves.

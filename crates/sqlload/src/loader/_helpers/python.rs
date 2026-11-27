@@ -1690,7 +1690,7 @@ impl ChildTables {
             columns: &parent.schema.write_columns,
             mode,
             hashed: &[],
-            layout: &spec.layout,
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         };
@@ -1747,14 +1747,11 @@ impl ChildTables {
                 table,
                 ..spec.destination.clone()
             };
-            let has_root = live_columns(destination, &name)
-                .await?
-                .is_some_and(|columns| {
-                    columns
-                        .iter()
-                        .any(|column| column.name.eq_ignore_ascii_case(root_name))
-                });
-            if has_root {
+            let live = live_columns(destination, &name).await?.unwrap_or_default();
+            if live
+                .iter()
+                .any(|column| column.name.eq_ignore_ascii_case(root_name))
+            {
                 rooted.push((index, name));
             }
         }

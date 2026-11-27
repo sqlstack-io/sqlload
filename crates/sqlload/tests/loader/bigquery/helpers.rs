@@ -348,9 +348,27 @@ pub(crate) fn orders_unpartitioned(fake: &FakeBigQuery) {
 /// `raw.orders` as [`orders_unpartitioned`], partitioned by `day` as someone created it by hand.
 pub(crate) fn orders_partitioned(fake: &FakeBigQuery) {
     orders_unpartitioned(fake);
-    if let Some(table) = fake.state.lock().tables.get_mut("raw.orders") {
-        table.layout = "PARTITION BY `day`".to_owned();
-    }
+    fake.lay_out("raw.orders", "PARTITION BY `day`");
+}
+
+/// `raw.orders` as a files load leaves it, naming each row's file and version, partitioned by `day` with `require_partition_filter`, so every query on it must filter on `day`.
+pub(crate) fn orders_filtered(fake: &FakeBigQuery) {
+    fake.place_table(
+        "raw.orders",
+        &[
+            ("id", "INT64"),
+            ("score", "FLOAT64"),
+            ("day", "DATE"),
+            ("_sqlload_load_id", "STRING"),
+            ("_sqlload_loaded_at", "TIMESTAMP"),
+            ("_sqlload_source_file", "STRING"),
+            ("_sqlload_source_version", "STRING"),
+        ],
+    );
+    fake.lay_out(
+        "raw.orders",
+        "PARTITION BY `day` OPTIONS (require_partition_filter = TRUE)",
+    );
 }
 
 /// A staging table a failed run left in January, which the next load drops.

@@ -91,7 +91,12 @@ impl SqlAdapter for DatabricksSql {
         }
     }
 
-    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
+    fn render_rebuild_table(
+        &self,
+        target: &str,
+        (select, _columns): (&str, &str),
+        _layout: &TableLayout,
+    ) -> String {
         format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}")
     }
 

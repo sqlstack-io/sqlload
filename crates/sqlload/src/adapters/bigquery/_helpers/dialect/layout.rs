@@ -9,6 +9,7 @@ use crate::column_types::models::ColumnType;
 use crate::loader::models::{TableLayout, TableSpec};
 use crate::project::models::LayoutSetting;
 use crate::project::models::WriteStrategy;
+use crate::row_batches::models::Unnest;
 use crate::schema_plan::models::DesiredColumn;
 
 /// The forms `partition_by` takes on BigQuery, for messages.
@@ -75,22 +76,28 @@ fn range_bucket(column: &str, argument: &str) -> Option<Partitioning> {
     if !function.trim().eq_ignore_ascii_case("GENERATE_ARRAY") {
         return None;
     }
-    let numbers: Vec<i64> = rest
+    let numbers: Vec<&str> = rest
         .trim()
         .strip_suffix(')')?
         .split(',')
-        .map(|number| number.trim().parse::<i64>())
-        .collect::<Result<Vec<i64>, _>>()
-        .ok()?;
-    match numbers.as_slice() {
-        [start, end, interval] if start < end && *interval > 0 => Some(Partitioning::Range {
-            column: column.to_owned(),
-            start: *start,
-            end: *end,
-            interval: *interval,
-        }),
-        _ => None,
-    }
+        .map(str::trim)
+        .collect();
+    let [start, end, interval] = numbers.as_slice() else {
+        return None;
+    };
+    let (Ok(start), Ok(end), Ok(interval)) = (
+        start.parse::<i64>(),
+        end.parse::<i64>(),
+        interval.parse::<i64>(),
+    ) else {
+        return None;
+    };
+    (start < end && interval > 0).then(|| Partitioning::Range {
+        column: column.to_owned(),
+        start,
+        end,
+        interval,
+    })
 }
 
 /// Whether `text` is a column's bare name.
@@ -104,8 +111,11 @@ fn is_column(text: &str) -> bool {
 
 /// The column the table is partitioned by, when `partition_by` names one BigQuery takes.
 pub(crate) fn partition_column(layout: &TableLayout) -> Option<String> {
-    match partitioning(layout.partition_by.as_deref()?).ok()? {
-        Partitioning::Time { column, .. } | Partitioning::Range { column, .. } => Some(column),
+    match layout.partition_by.as_deref().map(partitioning) {
+        Some(Ok(Partitioning::Time { column, .. } | Partitioning::Range { column, .. })) => {
+            Some(column)
+        }
+        Some(Err(_)) | None => None,
     }
 }
 
@@ -119,7 +129,7 @@ pub(crate) fn requires_partition_filter(layout: &TableLayout) -> bool {
 
 /// Why BigQuery can't lay out a table as `layout` says, each naming the fix; nothing for a layout it takes.
 pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
-    let mut problems = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
     if layout.engine.is_some() || layout.order_by.is_some() || layout.primary_key.is_some() {
         problems.push("engine, order_by and primary_key lay out ClickHouse tables; a BigQuery table takes partition_by, cluster_by and table_settings.require_partition_filter".to_owned());
     }
@@ -166,7 +176,7 @@ pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
     problems
 }
 
-/// Why `spec`'s table can't load with `require_partition_filter`: a statement SQLLoad runs on the table that can't filter on the partition column. Its cursor read filters on the cursor, so the cursor must be the partition column; a `merge` keeps to the staged rows' partitions only by a `unique_key` holding it, and a keyed `delete_insert` only by a `replace_key` holding it.
+/// Why `spec`'s table can't load with `require_partition_filter`: a statement SQLLoad runs on the table that can't filter on the partition column. Reads of every row (the cursor's maximum, the loaded files) and a `MERGE`'s deletes carry [`whole_table_filter`], which BigQuery takes there but not in a `MERGE`'s `ON`, so a `merge` loads only by a `unique_key` holding the partition column, and a keyed `delete_insert` only by a `replace_key` holding it; `deletes`, `newest_by` and `unnest` read the table in queries that carry no filter.
 fn partition_filter_problems(spec: &TableSpec) -> Vec<String> {
     let Some(column) =
         partition_column(&spec.layout).filter(|_| requires_partition_filter(&spec.layout))
@@ -174,15 +184,18 @@ fn partition_filter_problems(spec: &TableSpec) -> Vec<String> {
         return Vec::new();
     };
     let fix = format!("set table_settings.{REQUIRE_PARTITION_FILTER} = false, or");
-    let mut problems = Vec::new();
-    if let Some(cursor) = &spec.cursor
-        && (cursor.column != column || !cursor.coalesce.is_empty())
-    {
-        problems.push(format!(
-            "{REQUIRE_PARTITION_FILTER}: the cursor read on the table filters only on its cursor, {}, not the partition column {column}; {fix} use {column} as the cursor",
-            cursor.label()
-        ));
-    }
+    let unfiltered = [
+        (spec.deletes.is_some(), "deletes"),
+        (!spec.newest_by.is_empty(), "newest_by"),
+        (spec.unnest != Unnest::None, "unnest"),
+    ];
+    let mut problems: Vec<String> = unfiltered
+        .iter()
+        .filter(|(set, _)| *set)
+        .map(|(_, setting)| format!(
+            "{REQUIRE_PARTITION_FILTER}: {setting} reads the table's rows in queries SQLLoad can't filter on the partition column {column}; {fix} leave {setting} out"
+        ))
+        .collect();
     let keys = match spec.strategy {
         WriteStrategy::Merge => Some(("merge", "unique_key", &spec.unique_key)),
         WriteStrategy::DeleteInsert if !spec.replace_key.is_empty() => {
@@ -209,7 +222,7 @@ pub(crate) fn layout_table_problems(spec: &TableSpec, columns: &[DesiredColumn])
             .find(|column| column.name == name)
             .map(|column| &column.column_type)
     };
-    let mut problems = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
     if let Some(Ok(partitioning)) = layout.partition_by.as_deref().map(partitioning) {
         let (column, wanted): (&str, &[ColumnType]) = match &partitioning {
             Partitioning::Time {
@@ -271,10 +284,17 @@ pub(crate) fn layout_table_problems(spec: &TableSpec, columns: &[DesiredColumn])
     problems
 }
 
+/// The condition matching every row of `qualifier`'s table (such as `__target.`, or `""`) that satisfies `require_partition_filter`, which refuses `WHERE TRUE` and any condition not on the partition column; `None` where the layout doesn't require one.
+pub(crate) fn whole_table_filter(layout: &TableLayout, qualifier: &str) -> Option<String> {
+    let column = partition_column(layout).filter(|_| requires_partition_filter(layout))?;
+    let column = format!("{qualifier}{}", BigQuerySql.render_identifier(&column));
+    Some(format!("({column} IS NOT NULL OR {column} IS NULL)"))
+}
+
 /// The `PARTITION BY`, `CLUSTER BY` and `OPTIONS` clauses of a table laid out as `layout`, without `require_partition_filter` unless `with_filter_option`; empty for no layout.
 pub(crate) fn layout_clauses(layout: &TableLayout, with_filter_option: bool) -> String {
     let adapter = BigQuerySql;
-    let mut clauses = Vec::new();
+    let mut clauses: Vec<String> = Vec::new();
     if let Some(Ok(partitioning)) = layout.partition_by.as_deref().map(partitioning) {
         clauses.push(format!(
             "PARTITION BY {}",
@@ -349,7 +369,9 @@ pub(crate) fn partition_filter(
     keys: &[String],
     (staged, source): (&str, &str),
 ) -> Option<(String, String)> {
-    let partitioning = partitioning(layout.partition_by.as_deref()?).ok()?;
+    let Some(Ok(partitioning)) = layout.partition_by.as_deref().map(partitioning) else {
+        return None;
+    };
     let column = match &partitioning {
         Partitioning::Time { column, .. } | Partitioning::Range { column, .. } => column,
     };
