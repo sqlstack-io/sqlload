@@ -34,9 +34,13 @@ access to spreadsheets and nothing else.
 | `refresh_token` | The Google user's refresh token, for unattended runs. |
 
 Set at most one of the three key settings and `client_id`; `plan` refuses more. With none, SQLLoad
-reads the key file `GOOGLE_APPLICATION_CREDENTIALS` names. `sqlload debug` shows which service
-account reads each source and how many tabs it sees; the key itself never appears. Workload identity
-is not supported yet.
+signs in with the credentials file `GOOGLE_APPLICATION_CREDENTIALS` names: a service-account key,
+an impersonated service account, workload identity federation that impersonates a service account
+(federation alone can't read Sheets, and `plan` refuses it), or a gcloud user login made with the
+Sheets scope (`gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets.readonly`).
+See [BigQuery's authentication](/docs/targets/bigquery/#authentication) for each type.
+`sqlload debug` shows who reads each source and how many tabs it sees; the credentials themselves
+never appear.
 
 ## Sign in as a Google user
 

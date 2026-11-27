@@ -15,7 +15,7 @@ the rows into the table with one query job.
 
 ## Connection
 
-SQLLoad signs in with a service account's key file:
+With a service account's key file:
 
 ```toml
 [connections.bq]
@@ -32,8 +32,9 @@ loader_schema = "raw"
 | Key | Meaning |
 |-----|---------|
 | `location` | Where query jobs run and datasets are created, such as `EU` or `europe-west2`. Required. |
-| `service_account_key` | The key file's JSON text, not its path. Required. |
-| `project` | The project tables load into and jobs run in. Default: the key's own project. |
+| `service_account_key` | A service-account key file's JSON text, not its path. Without it, SQLLoad signs in as [Authentication](#authentication) describes. |
+| `impersonate_service_account` | A service account's email to act as, such as `loader@my-project.iam.gserviceaccount.com`, whichever identity signs in. |
+| `project` | The project tables load into and jobs run in. Default: the project of `service_account_key`; without one, `GOOGLE_CLOUD_PROJECT`, else the credentials' own project (a key's `project_id`, the impersonated account's project, or the file's `quota_project_id`). On a VM or Cloud Run, set `project` or `GOOGLE_CLOUD_PROJECT`. |
 
 The target's `loader_schema` is the dataset tables load into; a source's `destination_schema` overrides it.
 `sqlload apply` creates the dataset when it doesn't exist.
@@ -46,13 +47,61 @@ export BIGQUERY_KEY_JSON="$(cat loader-key.json)"
 
 ## Authentication
 
-SQLLoad signs a token request with the key's private key and exchanges it for an OAuth token
-scoped to BigQuery, which it renews shortly before it expires. The service account needs to create
-datasets and tables and run query jobs in the project: the `BigQuery Data Editor` and
-`BigQuery Job User` roles.
+SQLLoad signs in with the first of these it finds, in the order Google's own libraries use:
 
-`sqlload debug` checks the connection by running a query job, and prints the service account, the
-project and the location jobs run in.
+1. The connection's `service_account_key`.
+2. The credentials file `GOOGLE_APPLICATION_CREDENTIALS` names. It must exist: a missing file fails
+   rather than signing in as someone else.
+3. gcloud's login, from `gcloud auth application-default login`
+   (`~/.config/gcloud/application_default_credentials.json`).
+4. The service account of the machine SQLLoad runs on, from its metadata server: a Compute Engine
+   VM, a Cloud Run job or service, GKE with Workload Identity.
+
+A credentials file can be any of these types:
+
+| Type | What signs in | Roles it needs besides BigQuery's |
+|------|---------------|------------------------------------|
+| `service_account` | A service-account key. | |
+| `authorized_user` | A gcloud user login, renewed with its refresh token. | |
+| `impersonated_service_account` | Its source credentials, acting as the service account it names (`gcloud auth application-default login --impersonate-service-account=…`). | Service Account Token Creator (`roles/iam.serviceAccountTokenCreator`) on that service account. |
+| `external_account` | Workload identity federation: another cloud's token, exchanged at Google STS. | A workload identity pool and provider that trust it, and Workload Identity User (`roles/iam.workloadIdentityUser`) for the pool's principals on the service account the file impersonates. |
+
+An `external_account` file (from `gcloud iam workload-identity-pools create-cred-config`) gets the
+other cloud's token from:
+
+- a file, such as a Kubernetes projected token or one a CI job writes;
+- a URL, such as Azure's instance metadata service;
+- a command, which runs only with `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1`, as in Google's
+  libraries;
+- AWS: the keys in `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` and the
+  region in `AWS_REGION` (or `AWS_DEFAULT_REGION`), else the EC2 instance role and region from the instance metadata service
+  (IMDSv2 when the file names its session URL), signing a GetCallerIdentity request.
+
+Workforce identity pools, and other file types, are refused by name. `service_account_key` takes
+only a service-account key; put other credentials in the file `GOOGLE_APPLICATION_CREDENTIALS`
+names.
+
+With `impersonate_service_account`, whichever identity signs in gets one-hour tokens for that
+account from IAM Credentials, and needs Token Creator on it. A credentials file that already
+impersonates an account can't be combined with it.
+
+Whichever identity loads needs to create datasets and tables and run query jobs in the project: the
+`BigQuery Data Editor` and `BigQuery Job User` roles. SQLLoad renews each token two minutes before it
+expires, so a load can outlast any one token. When a step fails, the error names it (the metadata
+server, Google STS, IAM Credentials, or the gcloud login's renewal) and Google's reason.
+
+`sqlload debug` says how each BigQuery connection signs in: the identity, where it came from, and
+the account it impersonates, never a key or token. A file it can't use fails there and in
+`sqlload plan`. It then checks the connection by running a query job, and prints the project and
+the location jobs run in.
+
+Tested live against Google: a service-account key; a Compute Engine VM's and a Cloud Run job's
+service account, from the metadata server; impersonation from a VM; and workload identity
+federation from AWS (keys in the environment, and an EC2 instance role through IMDSv2), and from
+a GitHub Actions OIDC token, read from a URL and from a file. One federated, impersonating load
+outlasted its ten-minute token. A gcloud user login (`authorized_user`, alone or impersonating) and
+federation from Azure are not live-tested: they are tested against a simulated Google, including
+renewal, refused refresh tokens and Azure's metadata request.
 
 ## A first load
 

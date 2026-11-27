@@ -2,7 +2,7 @@
 
 use crate::auth::main::google_user_token::google_user_token;
 use crate::bigquery_api::main::google_answer::google_answer;
-use crate::bigquery_api::main::google_token::google_token;
+use crate::google_identity::main::google_access_token::google_access_token;
 use crate::http::errors::ApiError;
 use crate::http::models::RetryPolicy;
 use crate::sheets_source::constants::{
@@ -82,8 +82,14 @@ async fn send(
     let mut refused = None;
     loop {
         let token = match &client.credential {
-            SheetsCredential::ServiceAccount(key) => {
-                google_token(&client.http, key, &client.token, (SCOPE, refused.as_ref())).await?
+            SheetsCredential::Google(credentials) => {
+                google_access_token(
+                    &client.http,
+                    credentials,
+                    &client.token,
+                    (SCOPE, refused.as_ref()),
+                )
+                .await?
             }
             SheetsCredential::User(user) => {
                 google_user_token(&client.http, user, &client.token, refused.as_ref()).await?

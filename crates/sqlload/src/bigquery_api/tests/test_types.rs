@@ -14,11 +14,3 @@ pub(crate) struct GoogleErrorTestCase {
     pub(crate) expected_reason: &'static str,
     pub(crate) expected_message: &'static str,
 }
-
-pub(crate) struct KeyFileTestCase {
-    pub(crate) description: &'static str,
-    /// The key file's fields besides `private_key`, which every case gets from a key made for the test.
-    pub(crate) fields: serde_json::Value,
-    /// The assertion's claims, signed at `iat` 1000, or why the key does not read.
-    pub(crate) expected_claims: Result<serde_json::Value, &'static str>,
-}

@@ -1,20 +1,9 @@
 use std::sync::Arc;
 
 use crate::auth::models::Secret;
+use crate::google_identity::models::GoogleCredentials;
 
-/// The fields of a service-account key file that sqlload uses.
-#[derive(Debug, Clone)]
-pub struct ServiceAccountKey {
-    pub client_email: String,
-    /// The PEM private key.
-    pub private_key: Secret,
-    /// Where tokens are exchanged for signed assertions.
-    pub token_uri: String,
-    /// The project the key belongs to, used when the connection names none.
-    pub project_id: String,
-}
-
-/// What the BigQuery REST API needs: the shared HTTP pool, the project jobs run in and their location, the key, and the token it last gave.
+/// What the BigQuery REST API needs: the shared HTTP pool, the project jobs run in and their location, how it signs in, and the token it last gave.
 #[derive(Debug, Clone)]
 pub struct BigQueryClient {
     pub(crate) http: reqwest::Client,
@@ -22,7 +11,7 @@ pub struct BigQueryClient {
     pub(crate) base_url: String,
     pub(crate) project: String,
     pub(crate) location: String,
-    pub(crate) key: ServiceAccountKey,
+    pub(crate) credentials: GoogleCredentials,
     /// The current access token and when it expires, in milliseconds since the epoch.
     pub(crate) token: Arc<tokio::sync::Mutex<Option<(Secret, i64)>>>,
     /// The Storage Write API's root, with its scheme.
@@ -39,11 +28,11 @@ impl BigQueryClient {
         &self.location
     }
 
-    /// A client running jobs in `project` at `location`, against the REST root `base_url` and the Storage Write API at `storage_url` (the public ones when `None`); nothing is sent until the first request.
+    /// A client signed in with `credentials`, running jobs in `project` at `location`, against the REST root `base_url` and the Storage Write API at `storage_url` (the public ones when `None`); nothing is sent until the first request.
     pub fn new(
         http: reqwest::Client,
         (project, location): (&str, &str),
-        key: ServiceAccountKey,
+        credentials: GoogleCredentials,
         (base_url, storage_url): (Option<&str>, Option<&str>),
     ) -> Self {
         Self {
@@ -54,7 +43,7 @@ impl BigQueryClient {
                 .to_owned(),
             project: project.to_owned(),
             location: location.to_owned(),
-            key,
+            credentials,
             token: Arc::default(),
             storage_url: storage_url
                 .unwrap_or(crate::bigquery_api::constants::STORAGE_URL)

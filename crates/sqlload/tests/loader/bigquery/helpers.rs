@@ -6,15 +6,16 @@ use arrow_array::{
     Decimal128Array, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use sqlload::auth::models::Secret;
 use sqlload::bigquery_api::main::append_rows::append_rows;
 use sqlload::bigquery_api::main::arrow_request::arrow_request;
 use sqlload::bigquery_api::main::batch_commit_write_streams::batch_commit_write_streams;
 use sqlload::bigquery_api::main::create_write_stream::create_write_stream;
 use sqlload::bigquery_api::main::finalize_write_stream::finalize_write_stream;
-use sqlload::bigquery_api::main::parse_key::parse_key;
 use sqlload::bigquery_api::main::run_query::run_query;
 use sqlload::bigquery_api::main::table_path::table_path;
 use sqlload::bigquery_api::models::{AppendRowsRequest, AppendStream, BigQueryClient};
+use sqlload::google_identity::main::google_credentials::google_credentials;
 
 use sqlload::file_store::main::open_folder::open_folder;
 use sqlload::file_store::main::write_file::write_file;
@@ -41,9 +42,9 @@ pub(crate) fn live_bigquery() -> Result<Option<LiveBigQuery>, String> {
     ))?;
     let key = std::env::var("GCP_BQ_SANDBOX_SA_KEY")
         .map_err(|_| "GCP_BQ_SANDBOX_SA_KEY is not set".to_owned())?;
-    let project = parse_key(&key)
-        .map_err(|error| error.to_string())?
-        .project_id;
+    let project = google_credentials(Some(&Secret(key.clone())), None, &|_| None)?
+        .project()
+        .ok_or_else(|| "GCP_BQ_SANDBOX_SA_KEY names no project_id".to_owned())?;
     Ok(Some(LiveBigQuery {
         key,
         project,
@@ -61,7 +62,7 @@ pub(crate) fn live_bigquery_client(live: &LiveBigQuery) -> Result<BigQueryClient
         )
         .map_err(|error| error.to_string())?,
         (&live.project, &live.location),
-        parse_key(&live.key).map_err(|error| error.to_string())?,
+        google_credentials(Some(&Secret(live.key.clone())), None, &|_| None)?,
         (None, None),
     ))
 }
