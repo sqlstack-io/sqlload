@@ -19,6 +19,10 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
         "aws.json",
         json!({"type": "external_account", "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/aws", "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request", "token_url": "https://sts.googleapis.com/v1/token", "credential_source": {"environment_id": "aws1", "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone", "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials", "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"}, "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/loader@demo.iam.gserviceaccount.com:generateAccessToken"}),
     )?;
+    let url = write(
+        "url.json",
+        json!({"type": "external_account", "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/oidc", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "https://sts.googleapis.com/v1/token", "credential_source": {"url": "https://tokens.example.com/oidc?audience=x&sig=secret", "headers": {"Authorization": "Bearer secret"}}}),
+    )?;
     let user = write(
         "user.json",
         json!({"type": "authorized_user", "client_id": "c", "client_secret": "s", "refresh_token": "r", "quota_project_id": "billed"}),
@@ -48,8 +52,17 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             key: None,
             impersonate: None,
             named: Some(&aws),
-            expected_description: "workload identity federation with AWS keys, by a signed GetCallerIdentity, through provider //iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/aws (GOOGLE_APPLICATION_CREDENTIALS, ",
+            expected_description: "workload identity federation with the EC2 instance role's AWS keys, by a signed GetCallerIdentity, through provider //iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/aws (GOOGLE_APPLICATION_CREDENTIALS, ",
             expected_project: Some("demo"),
+            expected_error: "",
+        },
+        CredentialsTestCase {
+            description: "a URL-sourced token is described without the URL's query or headers, which can hold secrets",
+            key: None,
+            impersonate: None,
+            named: Some(&url),
+            expected_description: "workload identity federation with a token from https://tokens.example.com/oidc, through provider //iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/oidc (GOOGLE_APPLICATION_CREDENTIALS, ",
+            expected_project: None,
             expected_error: "",
         },
         CredentialsTestCase {
@@ -130,13 +143,30 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             test_case.description
         );
     }
-    let impersonated =
+    let short_lived = write(
+        "short.json",
+        json!({"type": "external_account", "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/oidc", "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": "https://sts.googleapis.com/v1/token", "credential_source": {"file": "/run/token"}, "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/loader@demo.iam.gserviceaccount.com:generateAccessToken", "service_account_impersonation": {"token_lifetime_seconds": 600}}),
+    )?;
+    let impersonations = [
         google_credentials(None, Some("reader@other.iam.gserviceaccount.com"), &|_| {
             None
-        })?;
+        })?,
+        google_credentials(None, None, &|name: &str| {
+            Some(short_lived.clone()).filter(|_| name == "GOOGLE_APPLICATION_CREDENTIALS")
+        })?,
+    ]
+    .map(|credentials| {
+        credentials
+            .impersonate
+            .map(|target| (target.url, target.lifetime_secs))
+    });
     assert_eq!(
-        impersonated.impersonate.map(|target| target.url),
-        Some("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/reader@other.iam.gserviceaccount.com:generateAccessToken".to_owned())
+        impersonations,
+        [
+            Some(("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/reader@other.iam.gserviceaccount.com:generateAccessToken".to_owned(), 3600)),
+            Some(("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/loader@demo.iam.gserviceaccount.com:generateAccessToken".to_owned(), 600)),
+        ],
+        "the connection's impersonation lasts an hour; a file's service_account_impersonation.token_lifetime_seconds sets its own"
     );
     Ok(())
 }

@@ -7,7 +7,9 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
 use crate::fake_bigquery::_helpers::statements::google_error;
-use crate::fake_bigquery::constants::{REFUSED_SUBJECT, TOKEN_PATH, TOKEN_PREFIX};
+use crate::fake_bigquery::constants::{
+    AWS_ROLE, AWS_SESSION, REFUSED_SUBJECT, TOKEN_PATH, TOKEN_PREFIX,
+};
 use crate::fake_bigquery::models::SharedState;
 
 /// The answer to a sign-in request, or `None` when `parts` is not one; every sign-in is recorded in `sign_ins`.
@@ -22,6 +24,9 @@ pub(crate) fn sign_in(state: &SharedState, parts: &Parts, body: &Bytes) -> Optio
             .get(name)
             .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
     };
+    if let Some(text) = aws_metadata(state, (method, path), &header) {
+        return Some(text);
+    }
     let answer = match (method, path) {
         ("POST", TOKEN_PATH) => {
             let form = form();
@@ -59,6 +64,9 @@ pub(crate) fn sign_in(state: &SharedState, parts: &Parts, body: &Bytes) -> Optio
                     field(&form, "scope")
                 ),
             );
+            if field(&form, "subject_token_type").ends_with(":aws4_request") {
+                record(state, aws_subject(&subject));
+            }
             match subject.is_empty() || subject == REFUSED_SUBJECT {
                 true => Err((
                     StatusCode::BAD_REQUEST,
@@ -160,6 +168,79 @@ pub(crate) fn sign_in(state: &SharedState, parts: &Parts, body: &Bytes) -> Optio
         Ok(value) => (StatusCode::OK, value.to_string()).into_response(),
         Err((status, value)) => (status, value.to_string()).into_response(),
     })
+}
+
+/// AWS's instance metadata service, IMDSv2 only: a session token for a `PUT` naming its lifetime, then the zone, the instance role and its keys for `GET`s carrying that session; `None` for other paths.
+fn aws_metadata(
+    state: &SharedState,
+    (method, path): (&str, &str),
+    header: &dyn Fn(&str) -> Option<String>,
+) -> Option<Response> {
+    let session = header("x-aws-ec2-metadata-token");
+    let answer = match (method, path) {
+        ("PUT", "/latest/api/token") => {
+            let ttl = header("x-aws-ec2-metadata-token-ttl-seconds").unwrap_or_default();
+            record(state, format!("aws session ttl={ttl}"));
+            return Some(match ttl.is_empty() {
+                true => (StatusCode::BAD_REQUEST, String::new()).into_response(),
+                false => (StatusCode::OK, AWS_SESSION.to_owned()).into_response(),
+            });
+        }
+        ("GET", "/latest/meta-data/placement/availability-zone") => {
+            record(state, "aws region".to_owned());
+            Some("eu-north-1a".to_owned())
+        }
+        ("GET", "/latest/meta-data/iam/security-credentials") => {
+            record(state, "aws role".to_owned());
+            Some(format!("{AWS_ROLE}\n"))
+        }
+        ("GET", path)
+            if path == format!("/latest/meta-data/iam/security-credentials/{AWS_ROLE}") =>
+        {
+            record(state, "aws keys".to_owned());
+            Some(
+                json!({ "Code": "Success", "AccessKeyId": "ASIAFAKEROLE", "SecretAccessKey": "fake-secret", "Token": "fake-role-session" })
+                    .to_string(),
+            )
+        }
+        _ => return None,
+    };
+    Some(match (answer, session.as_deref() == Some(AWS_SESSION)) {
+        (Some(text), true) => (StatusCode::OK, text).into_response(),
+        _ => (StatusCode::UNAUTHORIZED, String::new()).into_response(),
+    })
+}
+
+/// What a subject token of AWS's kind (a signed `GetCallerIdentity` request, as URL-encoded JSON) asks: its URL, the session token it carries and the start of its credential scope.
+fn aws_subject(subject: &str) -> String {
+    let request: Value = serde_json::from_str(&decode(subject)).unwrap_or(Value::Null);
+    let header = |name: &str| {
+        request["headers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|pair| {
+                pair["key"]
+                    .as_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(name))
+            })
+            .and_then(|pair| pair["value"].as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let authorization = header("Authorization");
+    let credential = authorization
+        .split_once("Credential=")
+        .and_then(|(_, rest)| rest.split_once('/'))
+        .map_or("", |(key, _)| key);
+    format!(
+        "aws-subject method={} url={} target={} token={} key={credential} signed={}",
+        request["method"].as_str().unwrap_or_default(),
+        request["url"].as_str().unwrap_or_default(),
+        header("x-goog-cloud-target-resource"),
+        header("x-amz-security-token"),
+        authorization.contains("SignedHeaders=host;x-amz-date;x-amz-security-token;x-goog-cloud-target-resource, Signature=")
+    )
 }
 
 /// A new fake token under `field`, lasting the fake's token lifetime.

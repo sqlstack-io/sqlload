@@ -76,7 +76,7 @@ fn connection_lines(project: &ProjectConfig) -> (Vec<String>, bool) {
                 service_account_key,
                 ..
             } => gcs_key_source(service_account_key.is_some())
-                .map(|source| format!("GCS credentials from {source}")),
+                .map(|source| format!("GCS signs in with {source}")),
             ConnectionConfig::BigQuery {
                 service_account_key,
                 impersonate_service_account,

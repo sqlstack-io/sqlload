@@ -1,6 +1,6 @@
 use crate::google_helpers::{
-    IMPERSONATED, azure, denied, executable, gcloud, impersonated_user, missing, named, no_file,
-    nothing, nowhere, refused_refresh, refused_subject, short_tokens, sign_in, token_file,
+    IMPERSONATED, aws, azure, denied, executable, gcloud, impersonated_user, missing, named,
+    no_file, nothing, nowhere, refused_refresh, refused_subject, short_tokens, sign_in, token_file,
     user_file, workforce,
 };
 use crate::test_types::SignInTestCase;
@@ -10,6 +10,7 @@ const BASE: SignInTestCase = SignInTestCase {
     file: no_file,
     place: nowhere,
     metadata_host: None,
+    environment: &[],
     prepare: nothing,
     queries: 2,
     expected_sign_ins: &[],
@@ -78,7 +79,7 @@ fn given_google_application_default_credentials_when_bigquery_signs_in_then_each
             place: named,
             prepare: denied,
             expected_sign_ins: &["refresh client_id=gcloud-client", IMPERSONATED],
-            expected_error: "IAM Credentials' generateAccessToken, impersonating loader@fake-project.iam.gserviceaccount.com (the identity signing in needs roles/iam.serviceAccountTokenCreator on it) refused (HTTP 403): PERMISSION_DENIED: Permission 'iam.serviceAccounts.getAccessToken' denied",
+            expected_error: "IAM Credentials' generateAccessToken, impersonating loader@fake-project.iam.gserviceaccount.com (the identity signing in needs roles/iam.serviceAccountTokenCreator on it, or roles/iam.workloadIdentityUser when it signs in through a workload identity pool) refused (HTTP 403): PERMISSION_DENIED: Permission 'iam.serviceAccounts.getAccessToken' denied",
             ..BASE
         },
         SignInTestCase {
@@ -99,6 +100,38 @@ fn given_google_application_default_credentials_when_bigquery_signs_in_then_each
             expected_sign_ins: &[
                 "azure api-version=2018-02-01 resource=api://sqlload-provider metadata=True",
                 "sts audience=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider type=urn:ietf:params:oauth:token-type:jwt scope=https://www.googleapis.com/auth/cloud-platform subject=azure-subject-",
+                IMPERSONATED,
+            ],
+            ..BASE
+        },
+        SignInTestCase {
+            description: "AWS on EC2: an IMDSv2 session, then the region, the instance role and its keys, signing a GetCallerIdentity request for STS",
+            file: aws,
+            place: named,
+            expected_sign_ins: &[
+                "aws session ttl=300",
+                "aws region",
+                "aws role",
+                "aws keys",
+                "sts audience=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider type=urn:ietf:params:aws:token-type:aws4_request scope=https://www.googleapis.com/auth/cloud-platform subject=",
+                "aws-subject method=POST url=https://sts.eu-north-1.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15 target=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider token=fake-role-session key=ASIAFAKEROLE signed=true",
+                IMPERSONATED,
+            ],
+            ..BASE
+        },
+        SignInTestCase {
+            description: "AWS keys and region from the environment are signed with, without asking the instance metadata service",
+            file: aws,
+            place: named,
+            environment: &[
+                ("AWS_REGION", "us-east-2"),
+                ("AWS_ACCESS_KEY_ID", "AKIAENVIRONMENT"),
+                ("AWS_SECRET_ACCESS_KEY", "environment-secret"),
+                ("AWS_SESSION_TOKEN", "environment-session"),
+            ],
+            expected_sign_ins: &[
+                "sts audience=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider type=urn:ietf:params:aws:token-type:aws4_request scope=https://www.googleapis.com/auth/cloud-platform subject=",
+                "aws-subject method=POST url=https://sts.us-east-2.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15 target=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider token=environment-session key=AKIAENVIRONMENT signed=true",
                 IMPERSONATED,
             ],
             ..BASE

@@ -60,6 +60,13 @@ pub(crate) fn azure(base_url: &str, _: &std::path::Path) -> Result<Value, String
     )
 }
 
+/// A federated file for AWS, impersonating the test account: the region, instance role and keys from the fake's IMDSv2, unless the environment sets them.
+pub(crate) fn aws(base_url: &str, _: &std::path::Path) -> Result<Value, String> {
+    Ok(
+        json!({"type": "external_account", "audience": PROVIDER, "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request", "token_url": format!("{base_url}/v1/token"), "credential_source": {"environment_id": "aws1", "region_url": format!("{base_url}/latest/meta-data/placement/availability-zone"), "url": format!("{base_url}/latest/meta-data/iam/security-credentials"), "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15", "imdsv2_session_token_url": format!("{base_url}/latest/api/token")}, "service_account_impersonation_url": impersonation_url(base_url)}),
+    )
+}
+
 /// A federated file whose subject token STS refuses.
 pub(crate) fn refused_subject(
     base_url: &str,
@@ -163,6 +170,12 @@ pub(crate) fn sign_in(
                 test_case.metadata_host.map_or(host, str::to_owned),
             ),
         ];
+        variables.extend(
+            test_case
+                .environment
+                .iter()
+                .map(|(name, value)| (*name, (*value).to_owned())),
+        );
         variables.extend(
             place(&root, &file(&fake.base_url, &root)?)?
                 .map(|path| ("GOOGLE_APPLICATION_CREDENTIALS", path)),

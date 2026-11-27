@@ -115,6 +115,18 @@ pub struct AwsSource {
     pub verification_url: String,
     /// The IMDSv2 session token URL, when the instance requires one.
     pub session_url: Option<String>,
+    /// `AWS_REGION`, else `AWS_DEFAULT_REGION`, when the environment sets one; else the instance's.
+    pub region: Option<String>,
+    /// The keys in `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, when the environment sets both of the first two; else the instance role's.
+    pub keys: Option<AwsKeys>,
+}
+
+/// AWS keys, as the environment or an instance role gives them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwsKeys {
+    pub access_key_id: String,
+    pub secret_access_key: Secret,
+    pub session_token: Option<Secret>,
 }
 
 impl GoogleCredentials {
@@ -131,12 +143,21 @@ impl GoogleCredentials {
             Signer::External(account) => {
                 let source = match &account.source {
                     SubjectSource::File { path, .. } => format!("the token file {path}"),
-                    SubjectSource::Url { url, .. } => format!("a token from {url}"),
+                    SubjectSource::Url { url, .. } => {
+                        let shown = url.split(['?', '#']).next().unwrap_or_default();
+                        format!("a token from {shown}")
+                    }
                     SubjectSource::Executable { command, .. } => {
                         let program = command.split_whitespace().next().unwrap_or_default();
                         format!("a token {program} prints")
                     }
-                    SubjectSource::Aws(_) => "AWS keys, by a signed GetCallerIdentity".to_owned(),
+                    SubjectSource::Aws(source) => match source.keys {
+                        Some(_) => {
+                            "the AWS keys in AWS_ACCESS_KEY_ID, by a signed GetCallerIdentity"
+                        }
+                        None => "the EC2 instance role's AWS keys, by a signed GetCallerIdentity",
+                    }
+                    .to_owned(),
                 };
                 format!(
                     "workload identity federation with {source}, through provider {}",

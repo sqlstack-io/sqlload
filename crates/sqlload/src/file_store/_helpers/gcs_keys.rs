@@ -46,7 +46,7 @@ pub(crate) fn gcs_credentials(
     variable: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, String> {
     match has_key {
-        true => Ok("the connection's service_account_key".to_owned()),
+        true => Ok("the service-account key in the connection's service_account_key".to_owned()),
         false => google_credentials(None, None, variable).map(|found| found.describe()),
     }
 }

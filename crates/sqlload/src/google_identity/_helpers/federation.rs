@@ -9,16 +9,8 @@ use crate::google_identity::_helpers::exchange::{access_token, answer, excerpt};
 use crate::google_identity::constants::{
     ACCESS_TOKEN_TYPE, ALLOW_EXECUTABLES_VARIABLE, CLOUD_PLATFORM_SCOPE, TOKEN_EXCHANGE_GRANT,
 };
-use crate::google_identity::models::{AwsSource, ExternalAccount, SubjectSource};
+use crate::google_identity::models::{AwsKeys, AwsSource, ExternalAccount, SubjectSource};
 use crate::http::errors::ApiError;
-
-/// AWS keys, as the environment or an instance role gives them.
-#[derive(Debug, Clone)]
-pub(crate) struct AwsKeys {
-    pub(crate) access_key_id: String,
-    pub(crate) secret_access_key: Secret,
-    pub(crate) session_token: Option<Secret>,
-}
 
 /// A Google access token for `account`: its subject token, exchanged at STS.
 pub(crate) async fn federated_token(
@@ -218,19 +210,12 @@ fn executable_answer(text: &str, now_ms: i64, what: &str) -> Result<Secret, ApiE
     Ok(Secret(token.to_owned()))
 }
 
-/// The AWS region and keys to sign with: `AWS_REGION` (or `AWS_DEFAULT_REGION`) and the `AWS_*` keys from the environment, else the instance metadata service the credentials file names, with an IMDSv2 session when it names one.
+/// The AWS region and keys to sign with: those the environment set when the credentials were found, else the instance metadata service the credentials file names, with an IMDSv2 session when it names one.
 async fn aws_identity(
     http: &reqwest::Client,
     source: &AwsSource,
 ) -> Result<(String, AwsKeys), ApiError> {
-    let variable = |name: &str| match std::env::var(name) {
-        Ok(value) if !value.is_empty() => Some(value),
-        Ok(_) | Err(std::env::VarError::NotPresent | std::env::VarError::NotUnicode(_)) => None,
-    };
-    let needs_metadata = variable("AWS_REGION")
-        .or_else(|| variable("AWS_DEFAULT_REGION"))
-        .is_none()
-        || variable("AWS_ACCESS_KEY_ID").is_none();
+    let needs_metadata = source.region.is_none() || source.keys.is_none();
     let session = match (&source.session_url, needs_metadata) {
         (Some(url), true) => {
             let step = "AWS's instance metadata service, for an IMDSv2 session";
@@ -251,8 +236,8 @@ async fn aws_identity(
         }
         request
     };
-    let region = match variable("AWS_REGION").or_else(|| variable("AWS_DEFAULT_REGION")) {
-        Some(region) => region,
+    let region = match &source.region {
+        Some(region) => region.clone(),
         None => {
             let url = source.region_url.as_deref().ok_or_else(|| {
                 ApiError::Auth("no AWS region: set AWS_REGION, or run on an EC2 instance whose credentials file names a region_url".to_owned())
@@ -264,18 +249,8 @@ async fn aws_identity(
             region
         }
     };
-    if let (Some(access_key_id), Some(secret)) = (
-        variable("AWS_ACCESS_KEY_ID"),
-        variable("AWS_SECRET_ACCESS_KEY"),
-    ) {
-        return Ok((
-            region,
-            AwsKeys {
-                access_key_id,
-                secret_access_key: Secret(secret),
-                session_token: variable("AWS_SESSION_TOKEN").map(Secret),
-            },
-        ));
+    if let Some(keys) = &source.keys {
+        return Ok((region, keys.clone()));
     }
     let url = source.url.as_deref().ok_or_else(|| {
         ApiError::Auth("no AWS keys: set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, or run on an EC2 instance whose credentials file names its metadata url".to_owned())

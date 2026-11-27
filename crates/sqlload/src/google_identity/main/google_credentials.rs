@@ -37,7 +37,7 @@ pub fn google_credentials(
                     format!("{CREDENTIALS_VARIABLE} names {path}, which cannot be read: {error}")
                 })?;
                 let (signer, file_impersonates) =
-                    credentials_file(&text, &format!("{CREDENTIALS_VARIABLE} ({path})"))?;
+                    credentials_file(&text, &format!("{CREDENTIALS_VARIABLE} ({path})"), variable)?;
                 (CredentialOrigin::Named { path }, signer, file_impersonates)
             }
             None => match gcloud_file(variable) {
@@ -48,6 +48,7 @@ pub fn google_credentials(
                     let (signer, file_impersonates) = credentials_file(
                         &text,
                         &format!("gcloud's application default credentials ({path})"),
+                        variable,
                     )?;
                     (CredentialOrigin::Gcloud { path }, signer, file_impersonates)
                 }

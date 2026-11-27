@@ -1757,6 +1757,8 @@ pub(crate) struct SignInTestCase {
     pub(crate) place: fn(&std::path::Path, &serde_json::Value) -> Result<Option<String>, String>,
     /// Where the metadata server is; the fake when `None`.
     pub(crate) metadata_host: Option<&'static str>,
+    /// Other variables the environment sets.
+    pub(crate) environment: &'static [(&'static str, &'static str)],
     pub(crate) prepare: fn(&sqlload_testkit::fake_bigquery::models::FakeBigQuery),
     pub(crate) queries: usize,
     /// The start of each sign-in request the fake saw, in order.

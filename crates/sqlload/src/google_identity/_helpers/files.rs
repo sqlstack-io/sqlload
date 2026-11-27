@@ -7,7 +7,7 @@ use crate::google_identity::constants::{
     AWS_ENVIRONMENT, EXECUTABLE_TIMEOUT_MS, IMPERSONATED_LIFETIME_SECS, TOKEN_URL,
 };
 use crate::google_identity::models::{
-    AuthorizedUser, AwsSource, ExternalAccount, Impersonation, ServiceAccountKey, Signer,
+    AuthorizedUser, AwsKeys, AwsSource, ExternalAccount, Impersonation, ServiceAccountKey, Signer,
     SubjectSource,
 };
 
@@ -15,6 +15,7 @@ use crate::google_identity::models::{
 pub(crate) fn credentials_file(
     text: &str,
     what: &str,
+    variable: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(Signer, Option<Impersonation>), String> {
     let file: Value = serde_json::from_str(text)
         .map_err(|error| format!("{what} is not a Google credentials file's JSON: {error}"))?;
@@ -22,14 +23,14 @@ pub(crate) fn credentials_file(
     match kind {
         "service_account" => Ok((Signer::ServiceAccount(key_fields(&file, what)?), None)),
         "authorized_user" => Ok((Signer::User(user_fields(&file, what)?), None)),
-        "external_account" => external_account(&file, what),
+        "external_account" => external_account(&file, what, variable),
         "impersonated_service_account" => {
             let url = text_field(&file, "service_account_impersonation_url", what)?;
             let source = &file["source_credentials"];
             let signer = match source["type"].as_str().unwrap_or_default() {
                 "service_account" => Signer::ServiceAccount(key_fields(source, what)?),
                 "authorized_user" => Signer::User(user_fields(source, what)?),
-                "external_account" => external_account(source, what)?.0,
+                "external_account" => external_account(source, what, variable)?.0,
                 other => {
                     return Err(format!(
                         "{what} impersonates a service account from source_credentials of type {other:?}; SQLLoad signs in with service_account, authorized_user or external_account source credentials"
@@ -74,13 +75,17 @@ fn user_fields(file: &Value, what: &str) -> Result<AuthorizedUser, String> {
 }
 
 /// An `external_account` file's signer, and the service account it impersonates when it names one.
-fn external_account(file: &Value, what: &str) -> Result<(Signer, Option<Impersonation>), String> {
+fn external_account(
+    file: &Value,
+    what: &str,
+    variable: &dyn Fn(&str) -> Option<String>,
+) -> Result<(Signer, Option<Impersonation>), String> {
     if file["workforce_pool_user_project"].is_string() {
         return Err(format!(
             "{what} signs in through a workforce identity pool, which SQLLoad does not support; use a workload identity pool"
         ));
     }
-    let source = subject_source(&file["credential_source"], what)?;
+    let source = subject_source(&file["credential_source"], what, variable)?;
     let account = ExternalAccount {
         audience: text_field(file, "audience", what)?,
         subject_token_type: text_field(file, "subject_token_type", what)?,
@@ -99,7 +104,11 @@ fn external_account(file: &Value, what: &str) -> Result<(Signer, Option<Imperson
 }
 
 /// A `credential_source`: a file, a URL, an executable, or AWS (`environment_id` `aws1`).
-fn subject_source(source: &Value, what: &str) -> Result<SubjectSource, String> {
+fn subject_source(
+    source: &Value,
+    what: &str,
+    variable: &dyn Fn(&str) -> Option<String>,
+) -> Result<SubjectSource, String> {
     let field = match source["format"]["type"].as_str() {
         Some("json") => Some(
             source["format"]["subject_token_field_name"]
@@ -132,6 +141,14 @@ fn subject_source(source: &Value, what: &str) -> Result<SubjectSource, String> {
             url: optional_text(source, "url"),
             verification_url: text_field(source, "regional_cred_verification_url", what)?,
             session_url: optional_text(source, "imdsv2_session_token_url"),
+            region: variable("AWS_REGION").or_else(|| variable("AWS_DEFAULT_REGION")),
+            keys: variable("AWS_ACCESS_KEY_ID")
+                .zip(variable("AWS_SECRET_ACCESS_KEY"))
+                .map(|(access_key_id, secret)| AwsKeys {
+                    access_key_id,
+                    secret_access_key: Secret(secret),
+                    session_token: variable("AWS_SESSION_TOKEN").map(Secret),
+                }),
         }));
     }
     if let Some(path) = optional_text(source, "file") {
