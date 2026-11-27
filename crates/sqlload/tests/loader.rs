@@ -48,6 +48,8 @@ mod test_batched_loads;
 mod test_bigquery_loads;
 #[path = "loader/test_bigquery_source.rs"]
 mod test_bigquery_source;
+#[path = "loader/test_clickhouse_session.rs"]
+mod test_clickhouse_session;
 #[path = "loader/test_column_names.rs"]
 mod test_column_names;
 #[path = "loader/test_databricks_loads.rs"]

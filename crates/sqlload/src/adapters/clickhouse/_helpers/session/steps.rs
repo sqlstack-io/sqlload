@@ -4,14 +4,13 @@ use crate::adapters::clickhouse::_helpers::dialect::publish::{
     engine_query, partition_key_columns_query, partition_key_query, partition_rows_query,
     replace_partition, sorted_insert, stageable_query,
 };
-use crate::adapters::clickhouse::_helpers::session::http::send;
-use crate::adapters::clickhouse::_helpers::session::rows::text_rows;
 use crate::adapters::clickhouse::constants::{
     ASIDE_SUFFIX, EMPTY_SORTING_KEY, EXCHANGE_UNSUPPORTED_CODES, LIGHTWEIGHT_DELETE_MODE,
     LIGHTWEIGHT_DELETE_REFUSED_CODE, MEMORY_LIMIT_EXCEEDED_CODE, NULLABLE_KEY_SETTING,
     PUBLISH_PREFIX,
 };
-use crate::adapters::clickhouse::models::{ClickHouseDestination, ClickHouseSql, PublishStep};
+use crate::adapters::clickhouse::models::{ClickHouseSql, PublishStep};
+use crate::adapters::clickhouse::types::StepRunner;
 use crate::adapters::contract::constants::SWAP_SUFFIX;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::http::errors::ApiError;
@@ -27,14 +26,12 @@ pub(crate) fn publish_step(statement: &str) -> Result<Option<PublishStep>, ApiEr
 }
 
 /// Run one statement, or the exchange, partition replace, row delete or sorted insert it stands for; a partition publish here is a mistake, as it only follows from a write.
-pub(crate) async fn run_step(
-    destination: &ClickHouseDestination,
+pub(crate) async fn run_step<R: StepRunner>(
+    destination: &R,
     statement: &str,
-) -> Result<(), ApiError> {
+) -> Result<(), R::Error> {
     match publish_step(statement)? {
-        None => send(destination, None, statement.as_bytes().to_vec())
-            .await
-            .map(|_| ()),
+        None => destination.run(statement).await,
         Some(PublishStep::Exchange {
             target,
             build,
@@ -61,7 +58,8 @@ pub(crate) async fn run_step(
         }) => fill_build(destination, (&target, &build), &swap).await,
         Some(PublishStep::Partitions { .. }) => Err(ApiError::Protocol(
             "a partition publish cannot run inside another".to_owned(),
-        )),
+        )
+        .into()),
     }
 }
 
@@ -75,27 +73,23 @@ fn qualified(database: &str, table: &str) -> String {
 }
 
 /// The first value of each row `query` answers.
-async fn first_values(
-    destination: &ClickHouseDestination,
+async fn first_values<R: StepRunner>(
+    destination: &R,
     query: String,
-) -> Result<Vec<String>, ApiError> {
-    let text = send(
-        destination,
-        None,
-        format!("{query} FORMAT JSONCompactStrings").into_bytes(),
-    )
-    .await?;
-    Ok(text_rows(&text)?
+) -> Result<Vec<String>, R::Error> {
+    Ok(destination
+        .rows(&query)
+        .await?
         .into_iter()
         .filter_map(|row| row.into_iter().next().flatten())
         .collect())
 }
 
 /// `database`.`table`'s partition key (empty when it has none) and the columns it reads.
-async fn partition_key(
-    destination: &ClickHouseDestination,
+async fn partition_key<R: StepRunner>(
+    destination: &R,
     (database, table): (&str, &str),
-) -> Result<(String, Vec<String>), ApiError> {
+) -> Result<(String, Vec<String>), R::Error> {
     let key = first_values(destination, partition_key_query(database, table)).await?;
     let key_columns =
         first_values(destination, partition_key_columns_query(database, table)).await?;
@@ -103,38 +97,36 @@ async fn partition_key(
 }
 
 /// Run `insert` into `database`.`table`, ordered by the partition key the server reports for the table when every column it reads is among `columns` (every column when `None`; see [`sorted_insert`]); a sort that runs out of memory is replaced by the unsorted insert into the emptied table.
-async fn insert_sorted(
-    destination: &ClickHouseDestination,
+async fn insert_sorted<R: StepRunner>(
+    destination: &R,
     (database, table): (&str, &str),
     columns: Option<&[String]>,
     insert: &str,
-) -> Result<(), ApiError> {
+) -> Result<(), R::Error> {
     let (key, key_columns) = partition_key(destination, (database, table)).await?;
     let sorted = sorted_insert(insert, &key, &key_columns, columns.unwrap_or(&key_columns));
-    match send(destination, None, sorted.clone().into_bytes()).await {
-        Ok(_) => Ok(()),
-        Err(error) if sorted != insert && error.code() == Some(MEMORY_LIMIT_EXCEEDED_CODE) => {
+    match destination.run(&sorted).await {
+        Ok(()) => Ok(()),
+        Err(error)
+            if sorted != insert
+                && R::code(&error).as_deref() == Some(MEMORY_LIMIT_EXCEEDED_CODE) =>
+        {
             tracing::debug!(%error, "the sorted insert ran out of memory; inserting unsorted");
-            send(
-                destination,
-                None,
-                format!("TRUNCATE TABLE {}", qualified(database, table)).into_bytes(),
-            )
-            .await?;
-            send(destination, None, insert.as_bytes().to_vec())
-                .await
-                .map(|_| ())
+            destination
+                .run(&format!("TRUNCATE TABLE {}", qualified(database, table)))
+                .await?;
+            destination.run(insert).await
         }
         Err(error) => Err(error),
     }
 }
 
 /// Before `build`'s first rows (a database and a table): when it is partitioned by columns all among `inserted`, put in its place an unpartitioned table with its columns (`PARTITION BY tuple()`, as `CREATE TABLE ... AS` keeps a partition key the new engine clause does not set), sorted by that partition key (inside `tuple()`, as ClickHouse refuses some single keys bare, such as `substring(code, 1, 1)`, and a key of several expressions needs it), so each insert writes one part rather than one for every partition it fills (unless its storage cannot be stood in for, see [`stageable_query`]), which a large first load into fine partitions would make hundreds of thousands of; [`fill_build`] partitions the rows at the commit.
-pub(crate) async fn stage_build(
-    destination: &ClickHouseDestination,
+pub(crate) async fn stage_build<R: StepRunner>(
+    destination: &R,
     (database, build): (&str, &str),
     inserted: &[String],
-) -> Result<(), ApiError> {
+) -> Result<(), R::Error> {
     let (key, key_columns) = partition_key(destination, (database, build)).await?;
     if key_columns.is_empty()
         || !key_columns.iter().all(|column| inserted.contains(column))
@@ -144,7 +136,7 @@ pub(crate) async fn stage_build(
     {
         return Ok(());
     }
-    let _held = destination.ddl.lock().await;
+    let _held = destination.ddl().lock().await;
     let name = qualified(database, build);
     let swap = qualified(database, &format!("{build}{SWAP_SUFFIX}"));
     let aside = qualified(database, &format!("{build}{ASIDE_SUFFIX}"));
@@ -155,20 +147,18 @@ pub(crate) async fn stage_build(
             key.trim()
         ),
     ] {
-        send(destination, None, statement.into_bytes()).await?;
+        destination.run(&statement).await?;
     }
     exchange(destination, (&name, &swap, &aside)).await?;
-    send(destination, None, format!("DROP TABLE {swap}").into_bytes())
-        .await
-        .map(|_| ())
+    destination.run(&format!("DROP TABLE {swap}")).await
 }
 
 /// Run outside the destination's schema-change lock (see [`SqlAdapter::unguarded_statements`](crate::adapters::contract::types::SqlAdapter::unguarded_statements)), which it takes only for its `CREATE` and `EXCHANGE`, so the copy holds up no other table. When `build`'s rows wait unpartitioned (see [`stage_build`]: `build`'s partition key reads no column and `target`'s does), move them into `swap`, created with `build`'s columns and `target`'s engine, keys and settings, by one insert ordered by the partition key, and exchange the two, so `build` holds them laid out as `target`; nothing otherwise.
-async fn fill_build(
-    destination: &ClickHouseDestination,
+async fn fill_build<R: StepRunner>(
+    destination: &R,
     ((target_database, target), (database, build)): (&(String, String), &(String, String)),
     swap: &str,
-) -> Result<(), ApiError> {
+) -> Result<(), R::Error> {
     let (_, staged) = partition_key(destination, (database, build)).await?;
     let (_, key) = partition_key(destination, (target_database, target)).await?;
     if !staged.is_empty() || key.is_empty() {
@@ -181,12 +171,12 @@ async fn fill_build(
         ))
     })?;
     let (name, swapped) = (qualified(database, build), qualified(database, swap));
-    let held = destination.ddl.lock().await;
+    let held = destination.ddl().lock().await;
     for statement in [
         format!("DROP TABLE IF EXISTS {swapped}"),
         format!("CREATE TABLE {swapped} AS {name} ENGINE = {engine}"),
     ] {
-        send(destination, None, statement.into_bytes()).await?;
+        destination.run(&statement).await?;
     }
     drop(held);
     insert_sorted(
@@ -197,93 +187,69 @@ async fn fill_build(
     )
     .await?;
     let aside = qualified(database, &format!("{build}{ASIDE_SUFFIX}"));
-    let _held = destination.ddl.lock().await;
+    let _held = destination.ddl().lock().await;
     exchange(destination, (&name, &swapped, &aside)).await
 }
 
 /// Swap `build` in for `target` with `EXCHANGE TABLES`, atomic in an `Atomic` database; where the database cannot exchange tables, by one `RENAME TABLE` moving `target` to `aside`, `build` to `target` and `aside` to `build`, so `build` holds the old table either way.
-pub(crate) async fn exchange(
-    destination: &ClickHouseDestination,
+pub(crate) async fn exchange<R: StepRunner>(
+    destination: &R,
     (target, build, aside): (&str, &str, &str),
-) -> Result<(), ApiError> {
-    let exchanged = send(
-        destination,
-        None,
-        format!("EXCHANGE TABLES {target} AND {build}").into_bytes(),
-    )
-    .await;
+) -> Result<(), R::Error> {
+    let exchanged = destination
+        .run(&format!("EXCHANGE TABLES {target} AND {build}"))
+        .await;
     match exchanged {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(error)
-            if error
-                .code()
-                .is_some_and(|code| EXCHANGE_UNSUPPORTED_CODES.contains(&code)) =>
+            if R::code(&error)
+                .is_some_and(|code| EXCHANGE_UNSUPPORTED_CODES.contains(&code.as_str())) =>
         {
             tracing::debug!(%error, "EXCHANGE TABLES is unsupported here; swapping by renames");
-            send(
-                destination,
-                None,
-                format!(
+            destination
+                .run(&format!(
                     "RENAME TABLE {target} TO {aside}, {build} TO {target}, {aside} TO {build}"
-                )
-                .into_bytes(),
-            )
-            .await
-            .map(|_| ())
+                ))
+                .await
         }
         Err(error) => Err(error),
     }
 }
 
 /// Replace `target`'s `partition` with `copy`'s, or drop it when `copy` holds none of its rows, as ClickHouse 26.6 and later refuse to replace a partition from a table with no parts in it; either way one statement, so readers see the old partition or the new.
-async fn replace_or_drop(
-    destination: &ClickHouseDestination,
+async fn replace_or_drop<R: StepRunner>(
+    destination: &R,
     (target, copy, partition): (&str, &str, &str),
-) -> Result<(), ApiError> {
-    let counted = send(
-        destination,
-        None,
-        partition_rows_query(copy, partition).into_bytes(),
-    )
-    .await?;
-    let statement = match counted.trim() {
-        "0" => format!(
+) -> Result<(), R::Error> {
+    let counted = first_values(destination, partition_rows_query(copy, partition)).await?;
+    let statement = match counted.first().map(String::as_str) {
+        Some("0") => format!(
             "ALTER TABLE {target} DROP PARTITION ID {}",
             ClickHouseSql.render_loader_value_literal(partition)
         ),
         _ => replace_partition(target, copy, partition),
     };
-    send(destination, None, statement.into_bytes())
-        .await
-        .map(|_| ())
+    destination.run(&statement).await
 }
 
 /// Delete `table`'s rows matching `condition` with a lightweight `DELETE`, which only marks them (with [`LIGHTWEIGHT_DELETE_MODE`], and finished before it returns), or by rewriting their parts with `ALTER TABLE ... DELETE` where the table refuses one.
-async fn delete_rows(
-    destination: &ClickHouseDestination,
+async fn delete_rows<R: StepRunner>(
+    destination: &R,
     (table, condition): (&str, &str),
-) -> Result<(), ApiError> {
-    let deleted = send(
-        destination,
-        None,
-        format!(
+) -> Result<(), R::Error> {
+    let deleted = destination
+        .run(&format!(
             "DELETE FROM {table} WHERE {condition} SETTINGS {} = '{}', lightweight_deletes_sync = 2",
             LIGHTWEIGHT_DELETE_MODE.0, LIGHTWEIGHT_DELETE_MODE.1
-        )
-        .into_bytes(),
-    )
-    .await;
+        ))
+        .await;
     match deleted {
-        Ok(_) => Ok(()),
-        Err(error) if error.code() == Some(LIGHTWEIGHT_DELETE_REFUSED_CODE) => {
+        Ok(()) => Ok(()),
+        Err(error) if R::code(&error).as_deref() == Some(LIGHTWEIGHT_DELETE_REFUSED_CODE) => {
             tracing::debug!(%error, "a lightweight DELETE is refused here; rewriting the parts");
-            send(
-                destination,
-                None,
-                format!("ALTER TABLE {table} DELETE WHERE {condition}").into_bytes(),
-            )
-            .await
-            .map(|_| ())
+            destination
+                .run(&format!("ALTER TABLE {table} DELETE WHERE {condition}"))
+                .await
         }
         Err(error) => Err(error),
     }

@@ -5,23 +5,24 @@ use crate::adapters::clickhouse::_helpers::dialect::publish::{
     partition_statements,
 };
 use crate::adapters::clickhouse::_helpers::session::steps::{publish_step, run_step};
-use crate::adapters::clickhouse::main::session::_query_rows::query_rows;
-use crate::adapters::clickhouse::models::{ClickHouseDestination, PublishStep};
+use crate::adapters::clickhouse::models::PublishStep;
+use crate::adapters::clickhouse::types::StepRunner;
 use crate::adapters::contract::constants::{BEGIN_STATEMENT, COMMIT_STATEMENT};
 use crate::http::errors::ApiError;
 
-/// Run `statements` one after another, each committing on its own (ClickHouse has no transactions, so `BEGIN` and `COMMIT` are refused); a publish step is carried out by asking the server which partitions it touches and whether it can pin a lightweight `DELETE`, then running the statements that swap them in (the copy they are rebuilt in is dropped if one fails).
-pub(in crate::adapters) async fn run_statements(
-    destination: &ClickHouseDestination,
+/// Run `statements` through `destination` (SQLLoad's own connection or a caller's session) one after another, each committing on its own (ClickHouse has no transactions, so `BEGIN` and `COMMIT` are refused); a publish step is carried out by asking the server which partitions it touches and whether it can pin a lightweight `DELETE`, then running the statements that swap them in (the copy they are rebuilt in is dropped if one fails).
+pub(in crate::adapters) async fn run_statements<R: StepRunner>(
+    destination: &R,
     statements: &[String],
-) -> Result<(), ApiError> {
+) -> Result<(), R::Error> {
     if let Some(statement) = statements.iter().find(|statement| {
         [BEGIN_STATEMENT, COMMIT_STATEMENT, "ROLLBACK"]
             .contains(&statement.trim().to_ascii_uppercase().as_str())
     }) {
         return Err(ApiError::Protocol(format!(
             "{statement} was sent to ClickHouse, which has no transactions"
-        )));
+        ))
+        .into());
     }
     for statement in statements {
         let Some(PublishStep::Partitions {
@@ -36,8 +37,8 @@ pub(in crate::adapters) async fn run_statements(
             continue;
         };
         let first_values = |query: String| async move {
-            let rows = query_rows(destination, &query).await?;
-            Ok::<Vec<String>, ApiError>(
+            let rows = destination.rows(&query).await?;
+            Ok::<Vec<String>, R::Error>(
                 rows.into_iter()
                     .filter_map(|row| row.into_iter().next().flatten())
                     .collect(),

@@ -1772,3 +1772,28 @@ pub(crate) struct SignInTestCase {
     /// Text the error must contain; empty when every query must run.
     pub(crate) expected_error: &'static str,
 }
+
+/// A caller's connection to the test ClickHouse on `port`, over its HTTP interface, as a host's ClickHouse client reaches it.
+#[derive(Debug)]
+pub(crate) struct ClickHouseCaller {
+    pub(crate) port: u16,
+}
+
+/// One session of a [`ClickHouseCaller`]: its HTTP client, and the runtime that drives it.
+#[derive(Debug)]
+pub(crate) struct ClickHouseCallerSession {
+    /// Taken when the session drops, which may happen on an async worker, where a runtime only shuts down in the background.
+    pub(crate) runtime: Option<tokio::runtime::Runtime>,
+    pub(crate) http: reqwest::Client,
+    pub(crate) port: u16,
+}
+
+pub(crate) struct ClickHouseSessionTestCase {
+    pub(crate) description: &'static str,
+    /// The table's settings in `[sources.app.tables."public.accounts"]`.
+    pub(crate) settings: &'static str,
+    /// SQL run on the source before the second load.
+    pub(crate) change: &'static str,
+    /// The loaded table's rows after the second load, as `id:name` by id.
+    pub(crate) expected_rows: &'static str,
+}

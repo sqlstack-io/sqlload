@@ -86,3 +86,10 @@ pub(crate) struct UnloadedInsertTestCase {
     pub(crate) signed: bool,
     pub(crate) expected_insert: &'static str,
 }
+
+pub(crate) struct ExceptionCodeTestCase {
+    pub(crate) description: &'static str,
+    /// A failure's text, as a ClickHouse client reports it.
+    pub(crate) message: &'static str,
+    pub(crate) expected_code: Option<&'static str>,
+}

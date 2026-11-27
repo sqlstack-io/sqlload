@@ -24,7 +24,9 @@ pub async fn execute(
         Destination::Databricks(databricks) => Ok(run_databricks(databricks, &statements).await?),
         Destination::BigQuery(bigquery) => Ok(run_bigquery(bigquery, &statements).await?),
         Destination::Postgres(postgres) => run_postgres(postgres, &statements).await,
-        Destination::ClickHouse(clickhouse) => Ok(run_clickhouse(clickhouse, &statements).await?),
+        Destination::ClickHouse(clickhouse) => {
+            Ok(run_clickhouse(clickhouse.as_ref(), &statements).await?)
+        }
         Destination::Session(session) => run_session(session, statements).await,
         Destination::Files(_) => Err(no_sql()),
     }

@@ -1,5 +1,7 @@
 #[path = "tests/test_arrow_batch.rs"]
 mod arrow_batch;
+#[path = "tests/test_exception_code.rs"]
+mod exception_code;
 #[path = "tests/helpers.rs"]
 mod helpers;
 #[path = "tests/test_layout.rs"]
