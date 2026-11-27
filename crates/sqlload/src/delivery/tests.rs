@@ -8,6 +8,7 @@ mod helpers;
 mod pending_loads;
 #[path = "tests/test_stage_paths.rs"]
 mod stage_paths;
+#[cfg(feature = "kafka")]
 #[path = "tests/test_staged_names.rs"]
 mod staged_names;
 #[path = "tests/test_types.rs"]

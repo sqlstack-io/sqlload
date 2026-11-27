@@ -29,14 +29,17 @@ required-features = ["cli"]
 doc = false
 
 [features]
-default = ["cli", "duckdb"]
+default = ["cli", "duckdb", "kafka"]
 # The `sqlload` executable and its command-line parsing.
 cli = ["dep:clap", "dep:console", "dep:indicatif", "dep:rlimit", "dep:tracing-subscriber"]
-# TLS and SASL support in the bundled librdkafka.
-ssl = ["rdkafka/ssl"]
-# TLS with OpenSSL built in, so the binary needs no system OpenSSL (PyPI wheels).
-ssl-vendored = ["rdkafka/ssl-vendored"]
-sasl = ["rdkafka/sasl"]
+# Kafka sources: exporter configurations, which read Kafka topics into a warehouse, through the
+# bundled librdkafka. Without it, nothing links librdkafka, and an exporter configuration fails to parse.
+kafka = ["dep:rdkafka"]
+# TLS and SASL support in the bundled librdkafka, when `kafka` is on.
+ssl = ["rdkafka?/ssl"]
+# TLS with OpenSSL built in, so the binary needs no system OpenSSL (PyPI wheels), when `kafka` is on.
+ssl-vendored = ["rdkafka?/ssl-vendored"]
+sasl = ["rdkafka?/sasl"]
 # Select the Docker-backed integration tests (`make test-containers`).
 container-tests = []
 # DuckDB as a loader destination, compiled from the bundled source (cached in CI after the first build).
@@ -83,7 +86,7 @@ parquet.workspace = true
 prometheus-client.workspace = true
 quick-xml.workspace = true
 regex.workspace = true
-rdkafka.workspace = true
+rdkafka = { workspace = true, optional = true }
 reqwest.workspace = true
 rlimit = { workspace = true, optional = true }
 rsa.workspace = true
@@ -126,7 +129,7 @@ libc.workspace = true
 # librdkafka's default build runs its mklove `configure` script and `make`, which MSVC has
 # neither of; on Windows it is built with CMake instead.
 [target.'cfg(windows)'.dependencies]
-rdkafka = { workspace = true, features = ["cmake-build"] }
+rdkafka = { workspace = true, optional = true, features = ["cmake-build"] }
 windows-sys.workspace = true
 
 [dev-dependencies]
@@ -145,7 +148,7 @@ workspace = true
 [[test]]
 name = "exporter"
 path = "tests/exporter.rs"
-required-features = ["container-tests"]
+required-features = ["container-tests", "kafka"]
 
 [[test]]
 name = "adapters"

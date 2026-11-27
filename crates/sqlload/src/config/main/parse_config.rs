@@ -2,17 +2,19 @@
 
 use crate::config::_helpers::defaults::destination_defaults;
 use crate::config::_helpers::interpolate::interpolate_value;
+use crate::config::_helpers::kafka_support::kafka_support;
 use crate::config::_helpers::validate::validate;
 use crate::config::errors::ConfigError;
 use crate::config::models::{Config, Destination};
 
-/// Parse and validate TOML text, resolving `${ENV:NAME}` through `lookup`.
+/// Parse and validate TOML text, resolving `${ENV:NAME}` through `lookup`; without the `kafka` feature, which every exporter configuration needs, it fails saying so.
 pub fn parse_config(
     text: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Config, ConfigError> {
     let mut value: toml::Value =
         toml::from_str(text).map_err(|error| ConfigError::Syntax(error.to_string()))?;
+    kafka_support(cfg!(feature = "kafka"))?;
     interpolate_value(&mut value, lookup).map_err(ConfigError::Interpolation)?;
     destination_defaults(&mut value);
     let mut config: Config = value

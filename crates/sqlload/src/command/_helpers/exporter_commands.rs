@@ -1,10 +1,26 @@
 use std::path::Path;
 
+#[cfg(feature = "kafka")]
 use crate::command::_helpers::commands::{apply, check, plan, run_export, status, tables};
-use crate::command::models::{Command, LoaderArgs};
+use crate::command::models::Command;
+#[cfg(feature = "kafka")]
+use crate::command::models::LoaderArgs;
+#[cfg(not(feature = "kafka"))]
+use crate::config::errors::ConfigError;
 use crate::config::main::load_config::load_config;
 
+/// Run an exporter command against the configuration at `path`: without the `kafka` feature, parsing it fails, saying so.
+#[cfg(not(feature = "kafka"))]
+pub(crate) async fn run_exporter_command(
+    path: &Path,
+    _command: Command,
+) -> Result<Vec<String>, String> {
+    load_config(path).map_err(|error| error.to_string())?;
+    Err(ConfigError::KafkaUnavailable.to_string())
+}
+
 /// Run an exporter command against the configuration at `path`.
+#[cfg(feature = "kafka")]
 pub(crate) async fn run_exporter_command(
     path: &Path,
     command: Command,

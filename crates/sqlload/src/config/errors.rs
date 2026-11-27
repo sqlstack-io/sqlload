@@ -12,4 +12,8 @@ pub enum ConfigError {
     Interpolation(String),
     #[error("invalid configuration:\n  - {}", .0.join("\n  - "))]
     Invalid(Vec<String>),
+    #[error(
+        "this is an exporter configuration, which reads Kafka topics, and this build of SQLLoad has no Kafka support (it was built without the `kafka` feature); run it with the `sqlload` command or Python package, which include it"
+    )]
+    KafkaUnavailable,
 }

@@ -73,3 +73,11 @@ pub(crate) struct BigQueryConfigTestCase {
     pub(crate) expected_path: crate::planning::models::LoadPath,
     pub(crate) expected_format: crate::config::models::FileFormat,
 }
+
+pub(crate) struct KafkaSupportTestCase {
+    pub(crate) description: &'static str,
+    /// Whether the build has the `kafka` feature.
+    pub(crate) available: bool,
+    /// The error an exporter configuration fails with; empty when it parses.
+    pub(crate) expected_error: &'static str,
+}
