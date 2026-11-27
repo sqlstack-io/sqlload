@@ -602,6 +602,7 @@ impl Publisher {
                         differing,
                         shape.as_ref().map(|shape| shape.definition.as_str()),
                     ),
+                    &table.spec.layout,
                 );
                 execute_ddl(&destination, create).await?;
                 Some(build)
@@ -1226,6 +1227,7 @@ impl Publisher {
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
                 hashed: &[],
+                layout: &spec.layout,
                 built: self.builds.then_some(self.indexes.as_slice()),
                 spared_load: (self.pieces.committed > 0).then_some((
                     metadata_name(spec.compat, MetadataRole::LoadId),

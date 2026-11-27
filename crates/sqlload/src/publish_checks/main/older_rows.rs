@@ -3,6 +3,7 @@
 use crate::adapters::contract::models::{WriteMode, WriteStatementsRequest};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::loader::errors::LoaderError;
+use crate::loader::models::TableLayout;
 use crate::publish_checks::_helpers::failures::single_count;
 use crate::publish_checks::models::CheckedCommit;
 
@@ -13,6 +14,7 @@ pub async fn older_rows(commit: &CheckedCommit<'_>, mode: &WriteMode) -> Result<
         columns: commit.columns,
         mode,
         hashed: &[],
+        layout: &TableLayout::default(),
         built: None,
         spared_load: None,
     };

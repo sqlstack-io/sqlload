@@ -23,6 +23,7 @@ pub const TABLE_SETTING_KEYS: &[&str] = &[
     "engine",
     "order_by",
     "partition_by",
+    "cluster_by",
     "primary_key",
     "table_settings",
     "header",

@@ -1690,6 +1690,7 @@ impl ChildTables {
             columns: &parent.schema.write_columns,
             mode,
             hashed: &[],
+            layout: &spec.layout,
             built: None,
             spared_load: None,
         };

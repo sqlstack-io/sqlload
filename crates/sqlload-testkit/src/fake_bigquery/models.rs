@@ -3,11 +3,12 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde_json::Value;
 
-/// One fake table: its declared columns (name, DDL type) and its rows, each value as text or null.
+/// One fake table: its declared columns (name, DDL type), its rows (each value as text or null), and its layout as its `CREATE TABLE` wrote it after the columns (`PARTITION BY …`, `CLUSTER BY …`, `OPTIONS (…)`).
 #[derive(Debug, Clone, Default)]
 pub struct FakeTable {
     pub columns: Vec<(String, String)>,
     pub rows: Vec<Value>,
+    pub layout: String,
 }
 
 /// One pending write stream: the table it writes (`dataset.table`), its writer schema, the rows appended, and whether it is finalized.
@@ -142,6 +143,7 @@ impl FakeBigQuery {
                     .map(|(name, sql_type)| ((*name).to_owned(), (*sql_type).to_owned()))
                     .collect(),
                 rows: Vec::new(),
+                layout: String::new(),
             },
         );
     }

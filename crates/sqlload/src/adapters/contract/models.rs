@@ -167,6 +167,8 @@ pub struct WriteStatementsRequest<'a> {
     pub built: Option<&'a [String]>,
     /// The load id column and this load's id, whose rows a `delete_insert`'s deletes keep: the load committed some in pieces before. With a file column (a files source under `on_overlapping_files = "last_wins"`), a `replace_key` delete keeps only those of the same file as the staged rows of their value, so a later file replaces an earlier one's rows its earlier pieces committed.
     pub spared_load: Option<(&'a str, &'a str, Option<&'a str>)>,
+    /// The table's layout as its config says: a BigQuery write prunes by its partitioning and swaps a build table in with its `require_partition_filter`.
+    pub layout: &'a crate::loader::models::TableLayout,
 }
 
 /// What a table rebuilt beside itself must keep, where the warehouse cannot copy it (DuckDB).

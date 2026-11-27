@@ -2,8 +2,8 @@ use sqlload::bigquery_api::main::run_query::run_query;
 
 use crate::bigquery_helpers::{
     append_refused, commit_refused, live_bigquery, live_bigquery_client, nothing_in_bigquery,
-    orders_without_score, reset_live_bigquery, run_bigquery, run_live_bigquery, stale_staging,
-    stream_into_live_table, token_expired,
+    orders_partitioned, orders_unpartitioned, orders_without_score, reset_live_bigquery,
+    run_bigquery, run_live_bigquery, stale_staging, stream_into_live_table, token_expired,
 };
 use crate::helpers::{found, not_found, run_async, two_batches, two_days};
 use crate::test_types::{BigQueryLoadTestCase, LiveBigQueryLoadTestCase, LiveWriteApiTestCase};
@@ -28,6 +28,14 @@ const BASE: BigQueryLoadTestCase = BigQueryLoadTestCase {
     expected_unsent: &[],
     expected_rows: Some(6),
     expected_commits: &[STAGED],
+    reload: false,
+    expected_layout: None,
+};
+
+const BLOCKED: BigQueryLoadTestCase = BigQueryLoadTestCase {
+    expected_rows: Some(0),
+    expected_commits: &[],
+    ..BASE
 };
 
 #[test]
@@ -102,6 +110,69 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ],
             ..BASE
         },
+        BigQueryLoadTestCase {
+            description: "a partitioned, clustered table is created laid out so, with require_partition_filter",
+            settings: "write_strategy = \"append\"\npartition_by = \"day\"\ncluster_by = [\"id\"]",
+            expected_layout: Some("PARTITION BY `day` CLUSTER BY `id`"),
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "replace builds the table laid out as configured and swaps it in LIKE the build table, so the layout stays",
+            settings: "write_strategy = \"replace\"\npartition_by = \"day\"",
+            prepare: orders_partitioned,
+            expected_sent: &[
+                "CREATE OR REPLACE TABLE `raw`.`orders` LIKE `raw`.`orders__sqlload_staging_",
+            ],
+            expected_layout: Some("PARTITION BY `day`"),
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "a live table laid out otherwise than its config fails at plan, naming both layouts and the fix, even under replace, which rebuilds it every load",
+            settings: "write_strategy = \"replace\"\npartition_by = \"day\"",
+            prepare: orders_unpartitioned,
+            expected_error: "the table is unpartitioned, unclustered, but its config lays it out partitioned by DAY of day, unclustered; load with --reload",
+            expected_layout: Some(""),
+            ..BLOCKED
+        },
+        BigQueryLoadTestCase {
+            description: "a table partitioned by hand with no layout configured is reported, never replaced unpartitioned",
+            settings: "write_strategy = \"replace\"",
+            prepare: orders_partitioned,
+            expected_error: "the table is partitioned by DAY of day, unclustered, but its config lays it out unpartitioned, unclustered",
+            expected_layout: Some("PARTITION BY `day`"),
+            ..BLOCKED
+        },
+        BigQueryLoadTestCase {
+            description: "--reload of a table laid out otherwise drops it and creates it laid out as configured",
+            settings: "write_strategy = \"append\"\npartition_by = \"day\"\ncluster_by = [\"id\"]",
+            prepare: orders_unpartitioned,
+            reload: true,
+            expected_sent: &[
+                "DROP TABLE IF EXISTS `raw`.`orders`",
+                "CREATE TABLE `raw`.`orders` LIKE `raw`.`orders__sqlload_staging_",
+            ],
+            expected_unsent: &["CREATE OR REPLACE TABLE `raw`.`orders` LIKE"],
+            expected_layout: Some("PARTITION BY `day` CLUSTER BY `id`"),
+            ..BASE
+        },
+        BigQueryLoadTestCase {
+            description: "require_partition_filter with a cursor other than the partition column fails at plan, as the cursor read could not filter",
+            settings: "write_strategy = \"delete_insert\"\ncursor_column = \"day\"\npartition_by = \"RANGE_BUCKET(id, GENERATE_ARRAY(0, 100, 10))\"\ntable_settings = { require_partition_filter = true }",
+            expected_error: "require_partition_filter: the cursor read on the table filters only on its cursor, day, not the partition column id",
+            ..BLOCKED
+        },
+        BigQueryLoadTestCase {
+            description: "clustering by a float column fails at plan",
+            settings: "write_strategy = \"append\"\ncluster_by = [\"score\"]",
+            expected_error: "which BigQuery can't cluster by",
+            ..BLOCKED
+        },
+        BigQueryLoadTestCase {
+            description: "a partition column the table doesn't load fails at plan",
+            settings: "write_strategy = \"append\"\npartition_by = \"DATE(loaded)\"",
+            expected_error: "partition_by column \"loaded\" is not a column the table loads",
+            ..BLOCKED
+        },
     ];
     run_async(|| async move {
         for test_case in &test_cases {
@@ -124,6 +195,7 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
                     outcome.commits.clone(),
                     outcome.staged.clone(),
                     outcome.unrouted_calls,
+                    test_case.expected_layout.map(|_| outcome.layout.as_str()),
                 ),
                 (
                     Vec::<&str>::new(),
@@ -136,8 +208,9 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
                         .collect::<Vec<String>>(),
                     Vec::<String>::new(),
                     0,
+                    test_case.expected_layout,
                 ),
-                "{}: not sent, sent anyway, rows, commits, staging left, unrouted calls\n{:#?}",
+                "{}: not sent, sent anyway, rows, commits, staging left, unrouted calls, layout\n{:#?}",
                 test_case.description,
                 outcome.sent
             );

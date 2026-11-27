@@ -1208,6 +1208,7 @@ pub(crate) async fn merge_rebuild(
         &build,
         &spec.destination,
         (&table.schema.write_columns, table.live.as_deref(), None),
+        &spec.layout,
     );
     execute_ddl(destination, create).await?;
     Ok(Some(MergeRebuild {
@@ -1225,7 +1226,7 @@ pub(crate) async fn swap_rebuild(
     let spec = &table.spec;
     let adapter = sql_adapter(spec.warehouse);
     let runs = runs_table(&spec.destination);
-    let mut statements = adapter.render_swap(&spec.destination, &rebuild.build, &[]);
+    let mut statements = adapter.render_swap(&spec.destination, &rebuild.build, &[], &spec.layout);
     for record in &rebuild.records {
         let insert = insert_run(&runs, record, spec.warehouse).map_err(LoaderError::Invalid)?;
         statements = adapter.render_logged(statements, insert);

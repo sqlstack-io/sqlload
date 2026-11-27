@@ -44,7 +44,7 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
         _ if request.lookback.is_some() => return None,
         _ => CursorValue::Plain,
     };
-    let scope: Vec<String> = request
+    let mut scope: Vec<String> = request
         .scope
         .iter()
         .map(|(name, column_type, text)| {
@@ -56,6 +56,9 @@ pub(crate) fn cursor_query<A: SqlAdapter + ?Sized>(
             )
         })
         .collect();
+    if request.coalesce.is_empty() {
+        scope.extend(adapter.render_cursor_filter(&adapter.render_identifier(request.column)));
+    }
     let filter = match scope.is_empty() {
         true => String::new(),
         false => format!(" WHERE {}", scope.join(" AND ")),

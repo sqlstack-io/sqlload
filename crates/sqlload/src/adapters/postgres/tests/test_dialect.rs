@@ -6,6 +6,7 @@ use crate::adapters::postgres::models::PostgresSql;
 use crate::adapters::postgres::tests::helpers::{desired, orders};
 use crate::adapters::postgres::tests::test_types::RenderedTestCase;
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 
 #[test]
 fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_is_one_transaction()
@@ -26,11 +27,13 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
         desired("note", ColumnType::Text),
     ];
     let table = orders();
+    let layout = TableLayout::default();
     let request = |mode| WriteStatementsRequest {
         table: &table,
         columns: &columns,
         mode,
         hashed: &[],
+        layout: &layout,
         built: None,
         spared_load: None,
     };
@@ -93,6 +96,7 @@ fn given_postgres_sql_when_rendering_writes_then_tables_are_kept_and_each_write_
                     columns: &key_only,
                     mode: &merge,
                     hashed: &[],
+                    layout: &TableLayout::default(),
                     built: None,
                     spared_load: None,
                 },

@@ -18,6 +18,7 @@ use crate::file_store::models::StoredFile;
 use crate::files_source::models::DataFile;
 use crate::files_source::models::StoredRead;
 use crate::http::errors::ApiError;
+use crate::loader::models::TableLayout;
 use crate::loader::models::WarehouseRoute;
 use crate::routing::models::Store;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
@@ -325,6 +326,7 @@ pub(crate) fn snowflake_hash_sql() -> String {
             columns: &columns,
             mode: &WriteMode::Append,
             hashed: &["name".to_owned()],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         },

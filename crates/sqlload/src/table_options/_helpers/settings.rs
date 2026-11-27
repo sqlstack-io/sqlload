@@ -118,7 +118,9 @@ pub(crate) fn table_layout(table: &TableSettings, source: &TableSettings) -> Tab
         engine: layered(&table.engine, &source.engine).map(|(value, _)| value),
         order_by: layered(&table.order_by, &source.order_by).map(|(value, _)| value),
         partition_by: layered(&table.partition_by, &source.partition_by).map(|(value, _)| value),
+        cluster_by: layered(&table.cluster_by, &source.cluster_by).map(|(value, _)| value),
         primary_key: layered(&table.primary_key, &source.primary_key).map(|(value, _)| value),
         table_settings,
+        relayout: false,
     }
 }

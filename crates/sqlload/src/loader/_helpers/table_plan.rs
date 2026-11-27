@@ -25,6 +25,7 @@ use crate::adapters::dispatch::main::route::stage_misses::stage_misses;
 use crate::adapters::dispatch::main::route::unload_blocked::unload_blocked;
 use crate::adapters::dispatch::main::route::unload_refused::unload_refused;
 use crate::adapters::dispatch::main::route::writer_accepts::writer_accepts;
+use crate::adapters::dispatch::main::session::layout_drift::layout_drift;
 use crate::adapters::dispatch::main::session::live_columns::live_columns;
 use crate::adapters::dispatch::main::session::single_text::single_text;
 use crate::adapters::dispatch::main::session::write_problems::write_problems;
@@ -636,42 +637,60 @@ fn reload_refusal(spec: &TableSpec, options: &PlanOptions) -> Option<&'static st
     }
 }
 
-/// `schema` blocked when the table's checks name columns it does not load; a Python table's columns are checked once its rows show them.
+/// `schema` blocked when the table's checks name columns it does not load, or its layout can't be carried by its columns (such as a partition column of the wrong type); a Python table's checks are checked once its rows show them.
 fn checked_columns(spec: &TableSpec, schema: SchemaPlan) -> SchemaPlan {
     let loaded: Vec<String> = schema
         .write_columns
         .iter()
         .map(|column| column.name.clone())
         .collect();
-    let problems = match (&spec.checks, &spec.python, &schema.blocked) {
+    let mut problems = match (&spec.checks, &spec.python, &schema.blocked) {
         (Some(checks), None, None) => check_column_problems(checks, &loaded),
         _ => Vec::new(),
     };
+    if schema.blocked.is_none() {
+        problems
+            .extend(sql_adapter(spec.warehouse).layout_table_problems(spec, &schema.write_columns));
+    }
     match problems.is_empty() {
         true => schema,
         false => blocked_plan(problems),
     }
 }
 
-/// `schema` with what stops or endangers writing `mode` into the table (`exists` when it does): blocked by its problems, with its warnings added.
+/// `schema` with what stops or endangers writing `mode` into the table (`exists` when it does): blocked by its problems, with its warnings added; and whether the table is laid out otherwise than its config, which only a `reload` may change (it rebuilds the table).
 async fn checked_writes(
     destination: &Destination,
     spec: &TableSpec,
-    (mode, exists): (&WriteMode, bool),
+    (mode, exists, reload): (&WriteMode, bool, bool),
     mut schema: SchemaPlan,
-) -> Result<SchemaPlan, LoaderError> {
+) -> Result<(SchemaPlan, bool), LoaderError> {
     let variants = !spec.variants.is_empty()
         || (spec.variant_json && spec.python.is_some())
         || schema
             .write_columns
             .iter()
             .any(|column| is_variant(&column.column_type));
-    let (problems, warnings) =
+    let (mut problems, warnings) =
         write_problems(destination, &spec.destination, (mode, exists, variants)).await?;
     schema.warnings.extend(warnings);
+    let drift = match exists {
+        true => layout_drift(destination, &spec.destination, &spec.layout).await?,
+        false => None,
+    };
+    let relayout = drift.is_some() && reload;
+    match drift {
+        Some(drift) if reload => schema.warnings.push(format!(
+            "{drift}; --reload drops the table and creates it laid out as configured, so it is missing for a moment"
+        )),
+        Some(drift) => problems.push(format!(
+            "{drift}; load with --reload to rebuild it as configured, or change the config to match"
+        )),
+        None => {}
+    }
     Ok(match problems.is_empty() {
-        true => schema,
-        false => blocked_plan(problems),
+        true => (schema, relayout),
+        false => (blocked_plan(problems), false),
     })
 }
 
@@ -839,8 +858,10 @@ async fn plan_table_once(
     let mode = captured_mode(spec, mode);
     let exists = live.is_some();
     schema = checked_columns(spec, schema);
+    let mut relayout = false;
     if schema.blocked.is_none() {
-        schema = checked_writes(destination, spec, (&mode, exists), schema).await?;
+        (schema, relayout) =
+            checked_writes(destination, spec, (&mode, exists, options.reload), schema).await?;
     }
     let chosen = match &schema.blocked {
         None => {
@@ -896,8 +917,10 @@ async fn plan_table_once(
             CommitRule::Whole(WholeReason::Blocked)
         }
     };
+    let mut spec = spec.clone();
+    spec.layout.relayout = relayout;
     Ok(TablePlan {
-        spec: spec.clone(),
+        spec,
         read_columns,
         live,
         schema,
@@ -958,7 +981,8 @@ pub(crate) fn schema_statements(table: &TablePlan) -> Option<Vec<String>> {
         TableAction::Alter(changes) => {
             let live = table.live.as_deref().unwrap_or_default();
             let adapter = sql_adapter(warehouse);
-            let mut statements = adapter.render_change_columns(&spec.destination, changes, live);
+            let mut statements =
+                adapter.render_change_columns(&spec.destination, changes, live, &spec.layout);
             if changes
                 .iter()
                 .any(|change| matches!(change, ColumnChange::Rebuild { .. }))

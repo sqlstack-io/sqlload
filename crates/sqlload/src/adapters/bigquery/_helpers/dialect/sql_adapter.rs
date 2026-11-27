@@ -1,17 +1,23 @@
 //! BigQuery GoogleSQL, where it differs from the contract's shared rendering.
 
+use crate::adapters::bigquery::_helpers::dialect::layout::{
+    layout_clauses, layout_problems, layout_table_problems, requires_partition_filter,
+};
 use crate::adapters::bigquery::_helpers::dialect::type_names::{
     decimal_digits, logical_type, portable_type, widens_in_place,
 };
 use crate::adapters::bigquery::_helpers::dialect::write::write_statements;
+use crate::adapters::bigquery::constants::REQUIRE_PARTITION_FILTER;
 use crate::adapters::bigquery::models::BigQuerySql;
+use crate::adapters::contract::_helpers::schema::{alter_statements, build_table};
 use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::{
     ChangeApply, CursorValue, TableName, WriteStatementsRequest,
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
-use crate::schema_plan::models::LiveColumn;
+use crate::loader::models::{TableLayout, TableSpec};
+use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 impl SqlAdapter for BigQuerySql {
     fn warehouse(&self) -> Warehouse {
@@ -111,6 +117,28 @@ impl SqlAdapter for BigQuerySql {
         })
     }
 
+    fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
+        layout_problems(layout)
+    }
+
+    fn layout_table_problems(&self, spec: &TableSpec, columns: &[DesiredColumn]) -> Vec<String> {
+        layout_table_problems(spec, columns)
+    }
+
+    /// A filter on the partition column, which a table with `require_partition_filter` needs on every query, when the cursor is that column.
+    fn render_cursor_filter(&self, column: &str) -> Option<String> {
+        Some(format!("{column} IS NOT NULL"))
+    }
+
+    /// Partitioned and clustered as the table's layout says, with its `require_partition_filter`.
+    fn render_create_loaded_table(&self, spec: &TableSpec, columns: &[DesiredColumn]) -> String {
+        let create = self.render_create_table(&spec.destination, columns);
+        match layout_clauses(&spec.layout, true) {
+            clauses if clauses.is_empty() => create,
+            clauses => format!("{create} {clauses}"),
+        }
+    }
+
     fn render_alter_column_type(&self, target: &str, column: &str, sql_type: &str) -> String {
         format!("ALTER TABLE {target} ALTER COLUMN {column} SET DATA TYPE {sql_type}")
     }
@@ -139,6 +167,28 @@ impl SqlAdapter for BigQuerySql {
         }
     }
 
+    /// The contract's statements, with the rebuild (`CREATE OR REPLACE TABLE … AS SELECT`) laid out as the table is, since BigQuery refuses to replace a partitioned or clustered table with one laid out otherwise.
+    fn render_change_columns(
+        &self,
+        table: &TableName,
+        changes: &[ColumnChange],
+        live: &[LiveColumn],
+        layout: &TableLayout,
+    ) -> Vec<String> {
+        let clauses = layout_clauses(layout, true);
+        alter_statements(self, table, changes, live)
+            .into_iter()
+            .map(|statement| match statement.split_once(" AS SELECT ") {
+                Some((head, select))
+                    if !clauses.is_empty() && head.starts_with("CREATE OR REPLACE TABLE ") =>
+                {
+                    format!("{head} {clauses} AS SELECT {select}")
+                }
+                _ => statement,
+            })
+            .collect()
+    }
+
     /// BigQuery's `DELETE` needs a `WHERE`.
     fn render_empty_staging(&self, staging: &TableName) -> String {
         format!(
@@ -147,21 +197,51 @@ impl SqlAdapter for BigQuerySql {
         )
     }
 
-    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's options, so a build table must never carry an expiration, or the table it replaces would expire with it. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name.
+    /// BigQuery has no rename into place: the table is replaced by the build table's rows in one statement, so the rows are copied once. `LIKE` the build table, as a query's result types carry no precision, scale or length (`NUMERIC(20, 2)` would come back as `NUMERIC`); a query rather than a table copy, which leaves out rows the Write API committed moments ago. `LIKE` also takes the build table's partitioning, clustering and options, so a build table must never carry an expiration, or the table it replaces would expire with it; a `require_partition_filter` the config sets is added here, as the build table leaves it out. The build table carries a load's own name, so no write stream ever meets a table recreated under the same name. A table `--reload` lays out anew (`relayout`) is dropped first, as `CREATE OR REPLACE` refuses another partitioning, so it is missing until the copy lands.
     fn render_swap(
         &self,
         target: &TableName,
         build: &TableName,
         _indexes: &[String],
+        layout: &TableLayout,
     ) -> Vec<String> {
         let (old, new) = (
             self.render_qualified_name(target),
             self.render_qualified_name(build),
         );
-        vec![
-            format!("CREATE OR REPLACE TABLE {old} LIKE {new} AS SELECT * FROM {new}"),
-            format!("DROP TABLE IF EXISTS {new}"),
-        ]
+        let options = match requires_partition_filter(layout) {
+            true => format!(" OPTIONS ({REQUIRE_PARTITION_FILTER} = TRUE)"),
+            false => String::new(),
+        };
+        let swap = format!("TABLE {old} LIKE {new}{options} AS SELECT * FROM {new}");
+        match layout.relayout {
+            true => vec![
+                format!("DROP TABLE IF EXISTS {old}"),
+                format!("CREATE {swap}"),
+                format!("DROP TABLE IF EXISTS {new}"),
+            ],
+            false => vec![
+                format!("CREATE OR REPLACE {swap}"),
+                format!("DROP TABLE IF EXISTS {new}"),
+            ],
+        }
+    }
+
+    /// The table's columns, partitioned and clustered as its config says so the swap keeps the layout, but without `require_partition_filter`, which the swap's `SELECT` from the build table would need a filter for; the swap sets it on the table.
+    fn render_create_build_table(
+        &self,
+        build: &TableName,
+        table: &TableName,
+        shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
+        layout: &TableLayout,
+    ) -> Vec<String> {
+        let mut statements = build_table(self, build, table, shape);
+        let clauses = layout_clauses(layout, false);
+        if let Some(create) = statements.first_mut().filter(|_| !clauses.is_empty()) {
+            create.push(' ');
+            create.push_str(&clauses);
+        }
+        statements
     }
 
     fn render_write(

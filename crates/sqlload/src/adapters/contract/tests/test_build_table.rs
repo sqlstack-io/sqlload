@@ -4,6 +4,7 @@ use crate::adapters::contract::tests::test_types::{
 };
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::{ColumnType, Warehouse};
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn, LiveColumn};
 
 const SF_BUILD: &str = "\"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
@@ -83,6 +84,7 @@ fn given_a_replace_when_building_the_table_then_it_has_the_tables_own_types_and_
             &build,
             &accounts(),
             (&columns(), test_case.live.as_deref(), test_case.definition),
+            &TableLayout::default(),
         );
         assert_eq!(
             statements, test_case.expected_statements,
@@ -123,6 +125,7 @@ fn given_a_finished_build_table_when_promoting_then_no_row_is_copied() {
                 &accounts(),
                 &build,
                 &["CREATE INDEX ix ON raw.app__accounts(id)".to_owned()],
+                &TableLayout::default(),
             ),
             test_case.expected_statements,
             "{}",

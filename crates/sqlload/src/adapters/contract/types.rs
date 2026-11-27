@@ -314,15 +314,25 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         create_table(self, table, columns)
     }
 
-    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `primary_key`, `table_settings`), which only ClickHouse takes.
+    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `cluster_by`, `primary_key`, `table_settings`), which only ClickHouse and BigQuery take.
     fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
         match layout.is_empty() {
             true => Vec::new(),
             false => vec![format!(
-                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; {} tables take none",
+                "engine, order_by, partition_by, cluster_by, primary_key and table_settings lay out ClickHouse and BigQuery tables; {} tables take none",
                 self.warehouse()
             )],
         }
+    }
+
+    /// Why `spec`'s table can't load with its layout and the loaded `columns`, such as a partition column of a type the warehouse can't partition by; nothing where the layout names nothing it checks.
+    fn layout_table_problems(&self, _spec: &TableSpec, _columns: &[DesiredColumn]) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The condition on the cursor column `column` (rendered) its `MAX` query adds where the warehouse gains by it (a BigQuery table's partition filter), which changes nothing as `MAX` skips NULLs; none by default.
+    fn render_cursor_filter(&self, _column: &str) -> Option<String> {
+        None
     }
 
     /// `CREATE TABLE IF NOT EXISTS` for a loaded table: the table `spec` names with `columns`, laid out as it says where the warehouse takes a layout.
@@ -366,12 +376,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging_table(self, table, columns, staging_id)
     }
 
-    /// The statements creating `build` in `table`'s own shape, so batches land in their final form, what the destination added stays, and the swap copies nothing: from the table's `definition` by default. A `--reload` passes the `differing` live columns, as it rebuilds with the current columns.
+    /// The statements creating `build` in `table`'s own shape, so batches land in their final form, what the destination added stays, and the swap copies nothing: from the table's `definition` by default. A `--reload` passes the `differing` live columns, as it rebuilds with the current columns; `layout` is the table's as its config says, for a warehouse whose build table must be laid out as it.
     fn render_create_build_table(
         &self,
         build: &TableName,
         table: &TableName,
         shape: (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
+        _layout: &TableLayout,
     ) -> Vec<String> {
         build_table(self, build, table, shape)
     }
@@ -381,12 +392,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         format!("ALTER TABLE {target} ALTER COLUMN {column} TYPE {sql_type}")
     }
 
-    /// The statements applying `changes` to `table`, whose current columns are `live`.
+    /// The statements applying `changes` to `table`, whose current columns are `live` and whose layout is `layout`, for a warehouse whose rebuild must lay the table out again.
     fn render_change_columns(
         &self,
         table: &TableName,
         changes: &[ColumnChange],
         live: &[LiveColumn],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         alter_statements(self, table, changes, live)
     }
@@ -421,12 +433,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging_changes(self, staging, columns, built)
     }
 
-    /// Promote the finished build table in place of `target` with no row copied (sqlbuild's staged promotion): by default the old table is dropped and the new one renamed in one transaction, then `indexes` are re-created.
+    /// Promote the finished build table in place of `target` with no row copied (sqlbuild's staged promotion): by default the old table is dropped and the new one renamed in one transaction, then `indexes` are re-created. `layout` is the table's as its config says.
     fn render_swap(
         &self,
         target: &TableName,
         build: &TableName,
         indexes: &[String],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         drop_and_rename(self, target, build, indexes)
     }

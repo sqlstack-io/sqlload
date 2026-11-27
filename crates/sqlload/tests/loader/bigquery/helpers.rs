@@ -331,6 +331,28 @@ pub(crate) fn orders_without_score(fake: &FakeBigQuery) {
     );
 }
 
+/// `raw.orders` with every column the files load, unpartitioned and unclustered.
+pub(crate) fn orders_unpartitioned(fake: &FakeBigQuery) {
+    fake.place_table(
+        "raw.orders",
+        &[
+            ("id", "INT64"),
+            ("score", "FLOAT64"),
+            ("day", "DATE"),
+            ("_sqlload_load_id", "STRING"),
+            ("_sqlload_loaded_at", "TIMESTAMP"),
+        ],
+    );
+}
+
+/// `raw.orders` as [`orders_unpartitioned`], partitioned by `day` as someone created it by hand.
+pub(crate) fn orders_partitioned(fake: &FakeBigQuery) {
+    orders_unpartitioned(fake);
+    if let Some(table) = fake.state.lock().tables.get_mut("raw.orders") {
+        table.layout = "PARTITION BY `day`".to_owned();
+    }
+}
+
 /// A staging table a failed run left in January, which the next load drops.
 pub(crate) fn stale_staging(fake: &FakeBigQuery) {
     fake.place_table(
@@ -366,7 +388,11 @@ pub(crate) async fn run_bigquery(
     let destinations = connect_targets(&project)
         .await
         .map_err(|error| error.to_string())?;
-    let (plan, outcome) = plan_apply_load(&project, &destinations, &PlanOptions::default()).await;
+    let options = PlanOptions {
+        reload: test_case.reload,
+        ..PlanOptions::default()
+    };
+    let (plan, outcome) = plan_apply_load(&project, &destinations, &options).await;
     let rows = fake.rows("raw.orders").len();
     let staged: Vec<String> = fake
         .tables_in("raw")
@@ -391,6 +417,11 @@ pub(crate) async fn run_bigquery(
             .collect(),
         staged,
         unrouted_calls: state.unrouted_calls,
+        layout: state
+            .tables
+            .get("raw.orders")
+            .map(|table| table.layout.clone())
+            .unwrap_or_default(),
     })
 }
 

@@ -49,3 +49,15 @@ pub const MAX_FILES_PER_QUERY: usize = 1000;
 
 /// What a query over files in GCS fails with on a row of a file not in its batch, before the file's name.
 pub const UNEXPECTED_FILE: &str = "sqlload: unexpected file ";
+
+/// The most columns BigQuery clusters a table by.
+pub const MAX_CLUSTER_COLUMNS: usize = 4;
+
+/// The table setting that makes BigQuery refuse queries of a table without a filter on its partition column.
+pub const REQUIRE_PARTITION_FILTER: &str = "require_partition_filter";
+
+/// The script variable a pruned write declares: the staged rows' partitions, or a range partition's lowest and highest staged value.
+pub const STAGED_PARTITIONS: &str = "__sqlload_partitions";
+
+/// The partition column's staged value, as the script that declares the staged partitions names it.
+pub const PARTITION_VALUE: &str = "__sqlload_partition_value";

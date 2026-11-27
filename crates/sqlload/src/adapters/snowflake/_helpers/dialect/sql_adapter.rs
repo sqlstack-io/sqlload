@@ -19,6 +19,7 @@ use crate::adapters::snowflake::constants::{
 use crate::adapters::snowflake::main::copy::_copy_staged::copy_staged;
 use crate::adapters::snowflake::models::{CopyStaged, SnowflakeSql};
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{DesiredColumn, LiveColumn};
 
 /// Whether `name` is lower snake_case, which Snowflake stores upper-cased like an unquoted name.
@@ -135,6 +136,7 @@ impl SqlAdapter for SnowflakeSql {
         build: &TableName,
         table: &TableName,
         (columns, differing, _): (&[DesiredColumn], Option<&[LiveColumn]>, Option<&str>),
+        _layout: &TableLayout,
     ) -> Vec<String> {
         let name = self.render_qualified_name(build);
         let sql_type = |column_type: &ColumnType| self.render_loader_logical_type(column_type).sql;
@@ -182,6 +184,7 @@ impl SqlAdapter for SnowflakeSql {
         target: &TableName,
         build: &TableName,
         _indexes: &[String],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         let (old, new) = (
             self.render_qualified_name(target),

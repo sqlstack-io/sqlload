@@ -34,3 +34,21 @@ pub struct BigQueryWriter {
     /// Requests sent in the batch, spread over its streams in turn.
     pub requests_sent: usize,
 }
+
+/// How a BigQuery table is partitioned, as its `partition_by` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Partitioning {
+    /// By time: a DATE column's own value (`function` `None`), a TIMESTAMP's or DATETIME's day (`DATE`), or a truncation to `unit` (`DATE_TRUNC`, `TIMESTAMP_TRUNC`, `DATETIME_TRUNC`).
+    Time {
+        function: Option<&'static str>,
+        column: String,
+        unit: Option<&'static str>,
+    },
+    /// By an integer column's ranges, `RANGE_BUCKET(column, GENERATE_ARRAY(start, end, interval))`.
+    Range {
+        column: String,
+        start: i64,
+        end: i64,
+        interval: i64,
+    },
+}

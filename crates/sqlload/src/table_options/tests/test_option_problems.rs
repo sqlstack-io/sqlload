@@ -237,7 +237,7 @@ fn given_table_options_that_do_not_combine_when_parsing_a_toml_project_then_pars
             target: DUCKDB,
             source: POSTGRES_TABLE,
             settings: "write_strategy = \"replace\"\norder_by = [\"id\"]\n",
-            expected_problem: "[sources.s.tables.\"public.t\"]: engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables",
+            expected_problem: "[sources.s.tables.\"public.t\"]: engine, order_by, partition_by, cluster_by, primary_key and table_settings lay out ClickHouse and BigQuery tables",
         },
         TomlOptionsTestCase {
             description: "{primary_key} listed with other columns",

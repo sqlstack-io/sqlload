@@ -781,6 +781,10 @@ pub(crate) struct BigQueryLoadTestCase {
     pub(crate) expected_rows: Option<usize>,
     /// The tables each Storage Write API commit went into, in order.
     pub(crate) expected_commits: &'static [&'static str],
+    /// Load with `--reload`.
+    pub(crate) reload: bool,
+    /// `raw.orders`'s layout clauses in the fake afterwards; `None` when the case doesn't check it.
+    pub(crate) expected_layout: Option<&'static str>,
 }
 
 /// What a load into the fake BigQuery did.
@@ -796,6 +800,8 @@ pub(crate) struct BigQueryOutcome {
     pub(crate) staged: Vec<String>,
     /// Storage Write API calls sent without a routing header.
     pub(crate) unrouted_calls: usize,
+    /// `raw.orders`'s layout clauses, empty when it has none or doesn't exist.
+    pub(crate) layout: String,
 }
 
 /// Which test server a TLS case connects to; its index in the case's list of ports.

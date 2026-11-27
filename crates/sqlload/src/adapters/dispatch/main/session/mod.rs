@@ -7,6 +7,7 @@ pub mod drop_stale_staging;
 pub mod execute;
 pub mod execute_ddl;
 pub mod helper_process;
+pub mod layout_drift;
 pub mod live_columns;
 #[cfg(feature = "duckdb")]
 pub mod open_source_bridge;

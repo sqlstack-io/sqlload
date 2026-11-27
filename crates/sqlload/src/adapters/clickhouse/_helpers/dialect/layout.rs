@@ -73,8 +73,14 @@ pub(crate) fn layout_clauses(layout: &TableLayout, unique_key: &[String]) -> Str
     clauses.join(" ")
 }
 
-/// Why `layout` cannot lay out a table SQLLoad loads: an engine outside the non-replicated `MergeTree` family, whose partitions it could not swap.
+/// Why `layout` cannot lay out a table SQLLoad loads: BigQuery's `cluster_by`, or an engine outside the non-replicated `MergeTree` family, whose partitions it could not swap.
 pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
+    if layout.cluster_by.is_some() {
+        return vec![
+            "cluster_by clusters BigQuery tables; a ClickHouse table is sorted by order_by"
+                .to_owned(),
+        ];
+    }
     let Some(engine) = layout.engine.as_deref() else {
         return Vec::new();
     };

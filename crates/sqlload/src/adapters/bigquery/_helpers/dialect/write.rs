@@ -1,5 +1,8 @@
 //! BigQuery's writes: each one statement, which commits on its own.
 
+use crate::adapters::bigquery::_helpers::dialect::layout::{
+    partition_column, partition_filter, pruned,
+};
 use crate::adapters::contract::main::_keyed_merge::keyed_merge;
 use crate::adapters::contract::models::{TableName, WriteMode, WriteStatementsRequest};
 use crate::adapters::contract::types::SqlAdapter;
@@ -12,7 +15,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     staging: &TableName,
 ) -> Vec<String> {
     if let Some(indexes) = request.built {
-        return adapter.render_swap(request.table, staging, indexes);
+        return adapter.render_swap(request.table, staging, indexes, request.layout);
     }
     let target = adapter.render_qualified_name(request.table);
     let source = adapter.render_qualified_name(staging);
@@ -37,7 +40,8 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             adapter.render_replace_table_from_relation(request, &source, &values)
         }
         WriteMode::Merge { unique_key, .. } => {
-            vec![adapter.render_merge(request, unique_key, &source, &values)]
+            let merge = adapter.render_merge(request, unique_key, &source, &values);
+            vec![prune(request, unique_key, (&source, &values), merge)]
         }
         WriteMode::Append => vec![format!(
             "INSERT INTO {target} ({}) SELECT {} FROM {source}",
@@ -59,22 +63,46 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
             cursor_column,
             replace_key,
             ..
-        } if !replace_key.is_empty() => vec![keyed_merge(
-            adapter,
-            request,
-            (&source, &values),
-            (
-                replace_key,
-                cursor_column
-                    .as_ref()
-                    .map(|_| range_condition(adapter, request)),
-            ),
-        )],
+        } if !replace_key.is_empty() => {
+            let merge = keyed_merge(
+                adapter,
+                request,
+                (&source, &values),
+                (
+                    replace_key,
+                    cursor_column
+                        .as_ref()
+                        .map(|_| range_condition(adapter, request)),
+                ),
+            );
+            vec![prune(request, replace_key, (&source, &values), merge)]
+        }
         WriteMode::DeleteInsert { .. } => vec![insert_and_delete(
             (&target, &source),
             (&names, &values),
             range_condition(adapter, request),
         )],
+    }
+}
+
+/// `merge` kept to the partitions its staged rows fall in, where the table is partitioned by a column among `keys`; as it is otherwise.
+fn prune(
+    request: &WriteStatementsRequest<'_>,
+    keys: &[String],
+    (source, values): (&str, &[String]),
+    merge: String,
+) -> String {
+    let staged = partition_column(request.layout).and_then(|partitioned| {
+        request
+            .columns
+            .iter()
+            .zip(values)
+            .find(|(column, _)| column.name == partitioned)
+            .map(|(_, value)| value.as_str())
+    });
+    match staged.and_then(|staged| partition_filter(request.layout, keys, (staged, source))) {
+        Some(filter) => pruned(filter, merge),
+        None => merge,
     }
 }
 

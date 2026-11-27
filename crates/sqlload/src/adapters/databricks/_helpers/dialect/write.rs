@@ -14,7 +14,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     staging: &TableName,
 ) -> Vec<String> {
     if let Some(indexes) = request.built {
-        return adapter.render_swap(request.table, staging, indexes);
+        return adapter.render_swap(request.table, staging, indexes, request.layout);
     }
     let target = adapter.render_qualified_name(request.table);
     let source = adapter.render_qualified_name(staging);

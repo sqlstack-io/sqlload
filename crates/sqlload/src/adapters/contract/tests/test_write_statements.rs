@@ -5,6 +5,7 @@ use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::{TombstonesTestCase, WriteStatementsTestCase};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
+use crate::loader::models::TableLayout;
 
 const SF_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const DUCK_INSERT: &str = "INSERT INTO \"raw\".\"app__accounts\" (\"id\", \"profile\", \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\") SELECT \"id\", CAST(\"profile\" AS JSON), \"updated_at\", \"_sqlload_load_id\", \"_sqlload_loaded_at\" FROM \"raw\".\"app__accounts__sqlload_staging_load1\"";
@@ -479,6 +480,7 @@ fn given_a_write_mode_when_building_statements_then_each_write_is_atomic() {
             columns: &columns,
             mode: &test_case.mode,
             hashed: &[],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         };

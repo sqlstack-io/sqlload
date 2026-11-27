@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::adapters::duckdb::models::{DuckDbConnection, DuckDbDestination};
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnOrigin, DesiredColumn};
 
 /// The connection of a destination on SQLLoad's own DuckDB.
@@ -282,6 +283,7 @@ pub(crate) fn merged_rows(
             columns: &columns,
             mode: &mode,
             hashed: &[],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         },
