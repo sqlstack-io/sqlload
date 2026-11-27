@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.88.0](https://github.com/sqlstack-io/sqlload/compare/v0.87.0...v0.88.0) (2026-11-27)
+
+
+### Features
+
+* **bigquery:** sign in without a key ([#372](https://github.com/sqlstack-io/sqlload/issues/372)) ([9998d2c](https://github.com/sqlstack-io/sqlload/commit/9998d2c4e9a3201bf584c9c8fe79f381a665c8f5))
+
 ## [0.87.0](https://github.com/sqlstack-io/sqlload/compare/v0.86.0...v0.87.0) (2026-11-27)
 
 
