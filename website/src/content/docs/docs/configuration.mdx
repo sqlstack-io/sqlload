@@ -393,16 +393,18 @@ How a table's settings combine is checked when the project is read, before anyth
 | `transform` | none | Files and `google_sheets` sources. The name a Python function was registered under with `@sl.transform` (its own name, or the one given as `@sl.transform("kpis")`) in a module under `python_paths`, run on each file's or range's rows before they load. `plan` fails on a name no function has, or two do. Needs `python_paths` and the `sqlload` Python package. An `sl.http` job takes [`transform=`](/docs/sources/python/#transforming-each-page) instead. See [Transforming each file](/docs/sources/files/#transforming-each-file) and [Transforming each range](/docs/sources/google-sheets/#transforming-each-range). |
 | `column_names` | none | The columns' names, in order, for data without a header row: CSV and Excel files with `header = false`, and `google_sheets` ranges with `header = false`. The count must match the data's columns. See [Naming headerless columns](/docs/sources/files/#naming-headerless-columns). |
 
-ClickHouse targets also take these, for the tables SQLLoad creates. Other targets refuse them, and
-Python tables don't take them. See [Table layout](/docs/targets/clickhouse/#table-layout).
+ClickHouse and BigQuery targets also take these, for the tables SQLLoad creates. Other targets
+refuse them, and Python tables don't take them. See [Table layout](/docs/targets/clickhouse/#table-layout)
+and [Partitioning and clustering](/docs/targets/bigquery/#partitioning-and-clustering).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `engine` | `MergeTree` | The table engine with its arguments, of the `MergeTree` family. |
-| `order_by` | the `unique_key`, else unsorted | The sorting key: an expression or a list of them. |
-| `partition_by` | none | The partitioning expression, such as `"toYYYYMM(updated_at)"`. |
-| `primary_key` | none | A prefix of `order_by`. |
-| `table_settings` | none | Table settings by name, such as `{ index_granularity = 4096 }`. |
+| `engine` | `MergeTree` | ClickHouse. The table engine with its arguments, of the `MergeTree` family. |
+| `order_by` | the `unique_key`, else unsorted | ClickHouse. The sorting key: an expression or a list of them. |
+| `partition_by` | none | The partitioning expression, such as `"toYYYYMM(updated_at)"` on ClickHouse or `"DATE(updated_at)"` on BigQuery. |
+| `cluster_by` | none | BigQuery. Up to 4 columns the table is clustered by. |
+| `primary_key` | none | ClickHouse. A prefix of `order_by`. |
+| `table_settings` | none | Table settings by name, such as `{ index_granularity = 4096 }` on ClickHouse or `{ require_partition_filter = true }` on BigQuery. |
 
 Only in a table entry:
 

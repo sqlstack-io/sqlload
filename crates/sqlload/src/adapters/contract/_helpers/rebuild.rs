@@ -7,6 +7,7 @@ pub(crate) fn rebuild_statement<A: SqlAdapter + ?Sized>(
     adapter: &A,
     target: &str,
     (live, rebuilt): (&[LiveColumn], &[(&str, &str)]),
+    layout: &crate::loader::models::TableLayout,
 ) -> String {
     let kept = |column: &&LiveColumn| !rebuilt.iter().any(|(name, _)| *name == column.name);
     let typed = !live
@@ -24,7 +25,7 @@ pub(crate) fn rebuild_statement<A: SqlAdapter + ?Sized>(
         .iter()
         .map(|column| rebuilt_column(adapter, column, (rebuilt, typed)))
         .collect();
-    adapter.render_rebuild_table(target, (&select.join(", "), &columns.join(", ")))
+    adapter.render_rebuild_table(target, (&select.join(", "), &columns.join(", ")), layout)
 }
 
 /// `column` as the rebuilt table declares it, `name TYPE`, with its type from `rebuilt` when it is one of them.

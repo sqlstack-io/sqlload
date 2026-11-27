@@ -39,6 +39,7 @@ pub(in crate::adapters) fn dropped_ordinals<A: SqlAdapter + ?Sized>(
         columns: &columns,
         mode: request.mode,
         hashed: request.hashed,
+        layout: request.layout,
         built: request.built,
         spared_load: request.spared_load,
     };

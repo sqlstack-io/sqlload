@@ -314,15 +314,25 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         create_table(self, table, columns)
     }
 
-    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `primary_key`, `table_settings`), which only ClickHouse takes.
+    /// Problems with a table's layout settings (`engine`, `order_by`, `partition_by`, `cluster_by`, `primary_key`, `table_settings`), which only ClickHouse and BigQuery take.
     fn layout_problems(&self, layout: &TableLayout) -> Vec<String> {
         match layout.is_empty() {
             true => Vec::new(),
             false => vec![format!(
-                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; {} tables take none",
+                "engine, order_by, partition_by, cluster_by, primary_key and table_settings lay out ClickHouse and BigQuery tables; {} tables take none",
                 self.warehouse()
             )],
         }
+    }
+
+    /// Why `spec`'s table can't load with its layout and the loaded `columns`, such as a partition column of a type the warehouse can't partition by; nothing where the layout names nothing it checks.
+    fn layout_table_problems(&self, _spec: &TableSpec, _columns: &[DesiredColumn]) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The condition a query reading every row of a table laid out as `layout` must carry, matching every row: a BigQuery table's partition filter under `require_partition_filter`; none by default.
+    fn render_whole_table_filter(&self, _layout: &TableLayout) -> Option<String> {
+        None
     }
 
     /// `CREATE TABLE IF NOT EXISTS` for a loaded table: the table `spec` names with `columns`, laid out as it says where the warehouse takes a layout.
@@ -381,14 +391,15 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         format!("ALTER TABLE {target} ALTER COLUMN {column} TYPE {sql_type}")
     }
 
-    /// The statements applying `changes` to `table`, whose current columns are `live`.
+    /// The statements applying `changes` to `table`, whose current columns are `live` and whose layout is `layout`, for a warehouse whose rebuild must lay the table out again.
     fn render_change_columns(
         &self,
         table: &TableName,
         changes: &[ColumnChange],
         live: &[LiveColumn],
+        layout: &TableLayout,
     ) -> Vec<String> {
-        alter_statements(self, table, changes, live)
+        alter_statements(self, table, (changes, live), layout)
     }
 
     /// The select-list entry keeping column `name` of `column_type` in a rebuild that declares each column's type, where its value must coerce to that type.
@@ -396,8 +407,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         name.to_owned()
     }
 
-    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters.
-    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
+    /// The statement rewriting `target` from its own rows through `select`, in place and keeping its grants; `columns` defines each column as it is to be, `name TYPE`, for a warehouse whose query results lose a type's parameters, and `layout` is the table's, for a warehouse whose rewrite must lay it out again.
+    fn render_rebuild_table(
+        &self,
+        target: &str,
+        (select, _columns): (&str, &str),
+        _layout: &TableLayout,
+    ) -> String {
         format!("CREATE OR REPLACE TABLE {target} COPY GRANTS AS SELECT {select} FROM {target}")
     }
 
@@ -421,12 +437,13 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
         staging_changes(self, staging, columns, built)
     }
 
-    /// Promote the finished build table in place of `target` with no row copied (sqlbuild's staged promotion): by default the old table is dropped and the new one renamed in one transaction, then `indexes` are re-created.
+    /// Promote the finished build table in place of `target` with no row copied (sqlbuild's staged promotion): by default the old table is dropped and the new one renamed in one transaction, then `indexes` are re-created. `layout` is the table's as its config says.
     fn render_swap(
         &self,
         target: &TableName,
         build: &TableName,
         indexes: &[String],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         drop_and_rename(self, target, build, indexes)
     }
@@ -628,11 +645,11 @@ pub trait SqlAdapter: Sync + std::fmt::Debug {
     /// `SELECT DISTINCT file || '|' || version`; without a version column, just the file names.
     fn render_loaded_files_query(
         &self,
-        table: &TableName,
+        (table, layout): (&TableName, &TableLayout),
         file_column: &str,
         version_column: Option<&str>,
     ) -> String {
-        loaded_files_query(self, table, file_column, version_column)
+        loaded_files_query(self, (table, layout), file_column, version_column)
     }
 
     /// The condition choosing staging tables a crashed load may have left, by name (`_` matches any character).

@@ -554,6 +554,12 @@ fn unknown_setting_columns(
             &defaults.primary_key,
             true,
         ),
+        (
+            "cluster_by",
+            &settings.cluster_by,
+            &defaults.cluster_by,
+            false,
+        ),
     ];
     let mut named: Vec<(&'static str, &str)> = Vec::new();
     for (setting, own, inherited, layout) in lists {
@@ -929,7 +935,7 @@ pub(crate) fn loaded_overrides(
     }
 }
 
-/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, newest_by columns, checks, and the bare column names among ClickHouse's `order_by`, `primary_key` and `partition_by`.
+/// `settings` with every column they name as the column loads (`name`): the unique and replace keys, cursor, constant columns, newest_by columns, checks, BigQuery's `cluster_by`, and the bare column names among the `order_by`, `primary_key` and `partition_by` expressions.
 pub(crate) fn loaded_settings(
     settings: &TableSettings,
     name: &dyn Fn(&str) -> String,
@@ -971,6 +977,7 @@ pub(crate) fn loaded_settings(
         order_by: settings.order_by.as_ref().map(keys),
         primary_key: settings.primary_key.as_ref().map(keys),
         partition_by: settings.partition_by.as_deref().map(keyed),
+        cluster_by: settings.cluster_by.as_ref().map(names),
         ..settings.clone()
     }
 }

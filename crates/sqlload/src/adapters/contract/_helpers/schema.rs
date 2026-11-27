@@ -6,6 +6,7 @@ use crate::adapters::contract::constants::STAGING_SUFFIX;
 use crate::adapters::contract::models::TableName;
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnChange, DesiredColumn, LiveColumn};
 
 /// `CREATE SCHEMA IF NOT EXISTS` for `table`'s schema.
@@ -106,12 +107,12 @@ pub(crate) fn build_table<A: SqlAdapter + ?Sized>(
     )]
 }
 
-/// The statements applying `changes` to `table`, whose current columns are `live`: added columns, in-place widening, and one rewrite for the columns that need it.
+/// The statements applying `changes` to `table`, whose current columns are `live`: added columns, in-place widening, and one rewrite for the columns that need it, laid out as `layout`.
 pub(crate) fn alter_statements<A: SqlAdapter + ?Sized>(
     adapter: &A,
     table: &TableName,
-    changes: &[ColumnChange],
-    live: &[LiveColumn],
+    (changes, live): (&[ColumnChange], &[LiveColumn]),
+    layout: &TableLayout,
 ) -> Vec<String> {
     let target = adapter.render_qualified_name(table);
     let mut statements: Vec<String> = Vec::new();
@@ -135,7 +136,10 @@ pub(crate) fn alter_statements<A: SqlAdapter + ?Sized>(
         }
     }
     if !rebuilt.is_empty() {
-        statements.insert(0, rebuild_statement(adapter, &target, (live, &rebuilt)));
+        statements.insert(
+            0,
+            rebuild_statement(adapter, &target, (live, &rebuilt), layout),
+        );
     }
     statements
 }
@@ -199,7 +203,10 @@ pub(crate) fn staging_changes<A: SqlAdapter + ?Sized>(
                 .iter()
                 .map(|(name, sql_type)| (name.as_str(), sql_type.as_str()))
                 .collect();
-            statements.insert(0, rebuild_statement(adapter, &target, (&live, &casts)));
+            statements.insert(
+                0,
+                rebuild_statement(adapter, &target, (&live, &casts), &TableLayout::default()),
+            );
         }
         (false, false) => statements.extend(rebuilt.iter().map(|(name, sql_type)| {
             adapter.render_alter_column_type(

@@ -934,13 +934,16 @@ pub struct TableSettings {
     /// The sorting key a created table gets (ClickHouse): an expression or a list of them.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub order_by: Option<Vec<String>>,
-    /// The partitioning expression a created table gets (ClickHouse).
+    /// The partitioning expression a created table gets (ClickHouse or BigQuery).
     #[serde(default)]
     pub partition_by: Option<String>,
+    /// The columns a created table is clustered by (BigQuery), up to four.
+    #[serde(default, deserialize_with = "deserialize_optional_keys")]
+    pub cluster_by: Option<Vec<String>>,
     /// The primary key a created table gets (ClickHouse), a prefix of `order_by`.
     #[serde(default, deserialize_with = "deserialize_optional_keys")]
     pub primary_key: Option<Vec<String>>,
-    /// Table settings a created table gets (ClickHouse), by name.
+    /// Table settings a created table gets (ClickHouse, or BigQuery's `require_partition_filter`), by name.
     #[serde(default)]
     pub table_settings: Option<BTreeMap<String, LayoutSetting>>,
     /// Whether a sheet's range starts with a header row (`google_sheets`); `column_1`, `column_2`, … without one.

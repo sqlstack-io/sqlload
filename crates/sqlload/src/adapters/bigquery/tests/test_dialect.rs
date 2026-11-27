@@ -6,6 +6,7 @@ use crate::adapters::contract::models::{
 };
 use crate::adapters::contract::types::SqlAdapter;
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnChange, ColumnOrigin, DesiredColumn, LiveColumn};
 
 #[test]
@@ -44,6 +45,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                     columns: &keyed,
                     mode: &deduped,
                     hashed: &[],
+                    layout: &TableLayout::default(),
                     built: None,
                     spared_load: None,
                 },
@@ -93,6 +95,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                         fraction_digits: None,
                     },
                 ],
+                &TableLayout::default(),
             ),
             expected_statements: &[
                 "CREATE OR REPLACE TABLE `p`.`raw`.`orders` (`amount` NUMERIC(20,2), `total` BIGNUMERIC(38,10), `qty` FLOAT64) AS SELECT CAST(`amount` AS NUMERIC) AS `amount`, CAST(`total` AS BIGNUMERIC) AS `total`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
@@ -120,6 +123,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
                         fraction_digits: None,
                     },
                 ],
+                &TableLayout::default(),
             ),
             expected_statements: &[
                 "CREATE OR REPLACE TABLE `p`.`raw`.`orders` AS SELECT `meta`, CAST(`qty` AS FLOAT64) AS `qty` FROM `p`.`raw`.`orders`",
@@ -137,7 +141,7 @@ fn given_bigquery_sql_when_rendering_names_options_and_queries_then_googlesql_re
         },
         RenderedTestCase {
             description: "the build table's rows replace the table in one statement, its columns' precision, scale and length kept from the build table, then the build table is dropped",
-            rendered: adapter.render_swap(&orders(), &build, &[]),
+            rendered: adapter.render_swap(&orders(), &build, &[], &TableLayout::default()),
             expected_statements: &[
                 "CREATE OR REPLACE TABLE `p`.`raw`.`orders` LIKE `p`.`raw`.`orders__sqlload_staging_load1` AS SELECT * FROM `p`.`raw`.`orders__sqlload_staging_load1`",
                 "DROP TABLE IF EXISTS `p`.`raw`.`orders__sqlload_staging_load1`",

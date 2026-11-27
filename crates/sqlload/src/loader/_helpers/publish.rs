@@ -594,14 +594,11 @@ impl Publisher {
                     .filter(|_| table.mode == WriteMode::Recreate);
                 let adapter = sql_adapter(table.spec.warehouse);
                 let build = adapter.staging_relation_name(&table.spec.destination, &id);
+                let definition = shape.as_ref().map(|shape| shape.definition.as_str());
                 let create = adapter.render_create_build_table(
                     &build,
                     &table.spec.destination,
-                    (
-                        &table.schema.write_columns,
-                        differing,
-                        shape.as_ref().map(|shape| shape.definition.as_str()),
-                    ),
+                    (&table.schema.write_columns, differing, definition),
                 );
                 execute_ddl(&destination, create).await?;
                 Some(build)
@@ -1226,6 +1223,7 @@ impl Publisher {
                 columns: &self.table.schema.write_columns,
                 mode: &mode,
                 hashed: &[],
+                layout: &spec.layout,
                 built: self.builds.then_some(self.indexes.as_slice()),
                 spared_load: (self.pieces.committed > 0).then_some((
                     metadata_name(spec.compat, MetadataRole::LoadId),
@@ -1464,6 +1462,7 @@ impl Publisher {
             ..files_source
         });
         widened.approved = spec.approved;
+        widened.layout.relayout = spec.layout.relayout;
         let replanned_columns = replan_columns(
             &widened,
             (&self.destination, self.table.live.as_deref()),

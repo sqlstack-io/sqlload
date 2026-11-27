@@ -14,7 +14,7 @@ pub(crate) fn write_statements<A: SqlAdapter + ?Sized>(
     staging: &TableName,
 ) -> Vec<String> {
     if let Some(indexes) = request.built {
-        return adapter.render_swap(request.table, staging, indexes);
+        return adapter.render_swap(request.table, staging, indexes, request.layout);
     }
     let target = adapter.render_qualified_name(request.table);
     let source = adapter.render_qualified_name(staging);
@@ -175,7 +175,11 @@ pub(crate) fn change_statements<A: SqlAdapter + ?Sized>(
             .iter()
             .map(|column| rebuilt_column(adapter, column, &rebuilt))
             .collect();
-        statements.push(adapter.render_rebuild_table(&target, (&select.join(", "), "")));
+        statements.push(adapter.render_rebuild_table(
+            &target,
+            (&select.join(", "), ""),
+            &crate::loader::models::TableLayout::default(),
+        ));
     }
     let mut features: Vec<&str> = Vec::new();
     if added.iter().any(|column| column.ends_with(TIMESTAMP_NTZ)) {

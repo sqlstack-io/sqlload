@@ -5,6 +5,7 @@ use crate::adapters::contract::tests::helpers::{accounts, columns};
 use crate::adapters::contract::tests::test_types::CommitStatementsTestCase;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
+use crate::loader::models::TableLayout;
 
 const SF_INSERT: &str = "INSERT INTO \"RAW\".\"APP__ACCOUNTS\" (\"ID\", \"PROFILE\", \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\") SELECT \"ID\", PARSE_JSON(\"PROFILE\"), \"UPDATED_AT\", \"_SQLLOAD_LOAD_ID\", \"_SQLLOAD_LOADED_AT\" FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
 const SF_EMPTY: &str = "DELETE FROM \"RAW\".\"APP__ACCOUNTS__SQLLOAD_STAGING_LOAD1\"";
@@ -183,6 +184,7 @@ fn given_a_batch_commit_when_building_its_statements_then_the_write_record_and_e
             columns: &columns,
             mode: &test_case.mode,
             hashed: &[],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         };

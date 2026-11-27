@@ -226,6 +226,7 @@ impl SnowflakeWriter {
                             hashed,
                             built: None,
                             spared_load: None,
+                            layout: &crate::loader::models::TableLayout::default(),
                         },
                         from,
                         (None, true),

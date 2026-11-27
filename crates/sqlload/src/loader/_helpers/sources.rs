@@ -1301,7 +1301,7 @@ pub(crate) async fn plan_files(
             LoadedSource::Query(destination) => {
                 let version = live_has(SOURCE_VERSION_COLUMN).then_some(SOURCE_VERSION_COLUMN);
                 let query = sql_adapter(spec.warehouse).render_loaded_files_query(
-                    &spec.destination,
+                    (&spec.destination, &spec.layout),
                     SOURCE_FILE_COLUMN,
                     version,
                 );

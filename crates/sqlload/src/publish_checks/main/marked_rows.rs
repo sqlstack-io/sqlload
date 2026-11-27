@@ -3,6 +3,7 @@
 use crate::adapters::contract::models::{MarkWrite, WriteMode, WriteStatementsRequest};
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::loader::errors::LoaderError;
+use crate::loader::models::TableLayout;
 use crate::number_text::main::thousands::thousands;
 use crate::publish_checks::_helpers::failures::single_count;
 use crate::publish_checks::constants::PERCENT;
@@ -16,6 +17,7 @@ pub async fn marked_rows(commit: &CheckedCommit<'_>, mark: &MarkWrite) -> Result
         columns: commit.columns,
         mode: &mode,
         hashed: &[],
+        layout: &TableLayout::default(),
         built: None,
         spared_load: None,
     };

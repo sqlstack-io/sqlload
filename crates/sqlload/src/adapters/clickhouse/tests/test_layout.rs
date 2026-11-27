@@ -29,11 +29,13 @@ fn given_a_table_layout_when_creating_a_clickhouse_table_then_its_engine_keys_an
                 engine: Some("ReplacingMergeTree".to_owned()),
                 order_by: Some(vec!["event_id".to_owned(), "toDate(event_time)".to_owned()]),
                 partition_by: Some("toYYYYMM(event_date)".to_owned()),
+                cluster_by: None,
                 primary_key: Some(vec!["event_id".to_owned()]),
                 table_settings: BTreeMap::from([
                     ("index_granularity".to_owned(), LayoutSetting::Integer(4096)),
                     ("allow_nullable_key".to_owned(), LayoutSetting::Bool(false)),
                 ]),
+                relayout: false,
             },
             unique_key: &["id"],
             expected_clauses: "ENGINE = ReplacingMergeTree ORDER BY (event_id, toDate(event_time)) PARTITION BY toYYYYMM(event_date) PRIMARY KEY (event_id) SETTINGS allow_nullable_key = 0, index_granularity = 4096",
@@ -113,7 +115,7 @@ fn given_a_layout_when_planning_then_only_clickhouse_takes_it_and_only_with_a_me
                 ..TableLayout::default()
             },
             expected_problem: Some(
-                "engine, order_by, partition_by, primary_key and table_settings lay out ClickHouse tables; Snowflake tables take none",
+                "engine, order_by, partition_by, cluster_by, primary_key and table_settings lay out ClickHouse and BigQuery tables; Snowflake tables take none",
             ),
         },
         LayoutProblemsTestCase {

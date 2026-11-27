@@ -61,6 +61,7 @@ fn given_a_cursor_when_rendering_its_maximum_query_then_only_constant_columns_sc
             column_type: &ColumnType::TimestampTz,
             lookback: None,
             scope: &test_case.scope,
+            layout: &crate::loader::models::TableLayout::default(),
         });
         assert_eq!(
             query.map(|read| read.sql).as_deref(),

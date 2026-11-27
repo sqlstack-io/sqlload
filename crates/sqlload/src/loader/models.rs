@@ -348,10 +348,14 @@ pub struct TableLayout {
     pub order_by: Option<Vec<String>>,
     /// The partitioning expression.
     pub partition_by: Option<String>,
+    /// The columns the table is clustered by (BigQuery).
+    pub cluster_by: Option<Vec<String>>,
     /// Primary key expressions, a prefix of the sorting key.
     pub primary_key: Option<Vec<String>>,
     /// Table settings by name.
     pub table_settings: std::collections::BTreeMap<String, crate::project::models::LayoutSetting>,
+    /// Set by the plan, not the config: the live table is laid out otherwise and `--reload` lays it out anew, which BigQuery cannot do in place, so the swap drops it first.
+    pub relayout: bool,
 }
 
 impl TableLayout {

@@ -22,3 +22,7 @@ pub const STREAM_NOT_FOUND: i32 = 3;
 pub const READ_SERVICE: &str = "google.cloud.bigquery.storage.v1.BigQueryRead";
 /// How many streams a read session with rows is split into.
 pub const READ_STREAMS: usize = 2;
+/// How many days before today the Storage Write API streams rows into a date partition.
+pub const STREAMED_DAYS_PAST: i64 = 3650;
+/// How many days after today the Storage Write API streams rows into a date partition.
+pub const STREAMED_DAYS_AHEAD: i64 = 366;

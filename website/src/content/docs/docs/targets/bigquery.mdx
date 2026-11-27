@@ -240,15 +240,94 @@ Each statement is its own query job and commits on its own. The run record commi
 ```
 
 The new table takes its description from the config, so a description set outside SQLLoad is
-lost, as are labels, column descriptions and policy tags. BigQuery won't replace a partitioned or
-clustered table with one that isn't, so `replace` fails on such a table and leaves it as it was.
-So does a type change that rewrites the table, such as `int` to `float`. That rewrite keeps each
+lost, as are labels, column descriptions and policy tags. The build table is unpartitioned, as
+the Storage Write API refuses rows of a date partition more than 10 years back or a year ahead;
+the swap lays the table out as the config says, so it keeps its [layout](#partitioning-and-clustering)
+and takes rows of any date.
+A type change that rewrites the table, such as `int` to `float`, keeps the layout too, and each
 column's type, except that a `BIGNUMERIC` whose digits fit a `NUMERIC`, such as `BIGNUMERIC(20,2)`,
 becomes `NUMERIC(20,2)`. In a table with a column whose type SQLLoad can't name again, a `STRUCT`,
 `RANGE`, `GEOGRAPHY`, `INTERVAL` or a `BIGNUMERIC` of more than 38 digits, the rewrite takes its
 types from the query, so its columns lose their precision, scale and length.
 The build table holds only the table's own columns, so a column a
 [contract](/docs/concepts/contracts/) or `on_schema_change = "ignore"` leaves out isn't loaded.
+
+## Partitioning and clustering
+
+SQLLoad creates a table partitioned and clustered as its config says:
+
+```toml
+[sources.app.tables."public.events"]
+write_strategy = "merge"
+unique_key = ["id", "day"]
+cursor_column = "updated_at"
+partition_by = "day"
+cluster_by = ["id"]
+```
+
+| Key | Meaning |
+|-----|---------|
+| `partition_by` | A `DATE` column; `DATE(col)` of a `TIMESTAMP` or `DATETIME`; `DATE_TRUNC(col, MONTH\|YEAR)` of a `DATE`; `TIMESTAMP_TRUNC(col, HOUR\|DAY\|MONTH\|YEAR)` of a `TIMESTAMP`; `DATETIME_TRUNC(col, ...)` of a `DATETIME`; or `RANGE_BUCKET(col, GENERATE_ARRAY(start, end, interval))` of an integer, of at most 10,000 ranges. |
+| `cluster_by` | Up to 4 columns, not `FLOAT64`, `TIME`, `JSON`, `BYTES` or an array. |
+| `table_settings` | Only `{ require_partition_filter = true }`, which needs `partition_by`. |
+
+`plan` refuses what BigQuery would, naming the fix, such as a partition column the table doesn't
+load or of another type, or `engine`, `order_by` and `primary_key`, which lay out ClickHouse
+tables. `replace` and `--reload` build the new table with the same layout.
+
+A table whose config sets no layout keeps the layout it has, so removing `partition_by` and
+`cluster_by` from a config stops SQLLoad managing it. A `replace` of such a table that was
+partitioned or clustered by hand fails, as BigQuery won't replace it with one laid out otherwise;
+set its layout in the config.
+
+### Which writes prune
+
+A `merge` scans only the partitions its batch's rows fall in when the partition column is part of
+`unique_key`. So does a `delete_insert` by `replace_key` when `replace_key` holds it. A key's
+rows then always share a partition, so a key's older row can't sit outside the batch's partitions.
+Rows whose partition column is NULL are scanned too. Without the partition column in the key, the
+write scans the whole table, as a key's old row may sit in any partition: a `merge` on `id` of a
+table partitioned by `updated_at` must find the row wherever it was. A `delete_insert` by its
+cursor scans only the range it replaces when the cursor is the partition column.
+
+Tested on 1,000,000 rows (152 MB), loading 200 changed rows that fall in 4 days:
+
+| Write | Bytes processed | Bytes billed |
+|-------|----------------:|-------------:|
+| `merge` on `["id", "day"]`, partitioned by `day`, clustered by `id` | 1.7 MB | 20 MB |
+| the same `merge`, unpartitioned | 152 MB | 152 MB |
+| `delete_insert` on cursor `day`, partitioned by `day` | 0.4 MB | 20 MB |
+| the same `delete_insert`, unpartitioned | 152 MB | 152 MB |
+
+BigQuery bills at least 10 MB for each table a query reads, here the table and its staging table.
+A batch that touches every partition, such as a first load, scans the whole table.
+
+### Tables that require a partition filter
+
+A table with `require_partition_filter` loads by `append`, `replace`, `delete_insert` by cursor,
+and `merge` or `delete_insert` by key when the key holds the partition column; every query SQLLoad
+runs on it filters on that column. `plan` refuses a key without it, and `deletes`,
+`checks.max_row_drop`, `newest_by` and `unnest`, whose queries can't filter:
+
+```console
+└── reason  require_partition_filter: a merge filters on the partition column only when unique_key holds it, and unique_key lacks day; set table_settings.require_partition_filter = false, or add day to unique_key
+```
+
+### A table laid out otherwise
+
+BigQuery can't change a table's partitioning or clustering in place. When the live table is laid
+out otherwise than the layout its config sets, `plan` fails the table:
+
+```console
+Errors (1)
+└── raw.app__events
+    └── reason  the table is unpartitioned, unclustered, but its config lays it out partitioned by DAY of day, unclustered; load with --reload to rebuild it as configured, or change the config to match
+```
+
+`sqlload load --reload` rebuilds it laid out as configured, and `plan --reload` warns that it
+will. It renames the table to `<table>__sqlload_relayout`, creates the new one from the rebuilt
+rows, then drops the renamed table, so the table is missing for a moment. If the load fails in
+between, the old rows stay in `<table>__sqlload_relayout`.
 
 ## Staging cleanup
 

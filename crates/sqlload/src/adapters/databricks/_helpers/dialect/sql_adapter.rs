@@ -9,6 +9,7 @@ use crate::adapters::databricks::_helpers::dialect::type_names::{
 use crate::adapters::databricks::_helpers::dialect::write::{change_statements, write_statements};
 use crate::adapters::databricks::models::DatabricksSql;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnChange, LiveColumn};
 
 impl SqlAdapter for DatabricksSql {
@@ -90,7 +91,12 @@ impl SqlAdapter for DatabricksSql {
         }
     }
 
-    fn render_rebuild_table(&self, target: &str, (select, _columns): (&str, &str)) -> String {
+    fn render_rebuild_table(
+        &self,
+        target: &str,
+        (select, _columns): (&str, &str),
+        _layout: &TableLayout,
+    ) -> String {
         format!("CREATE OR REPLACE TABLE {target} AS SELECT {select} FROM {target}")
     }
 
@@ -99,6 +105,7 @@ impl SqlAdapter for DatabricksSql {
         table: &TableName,
         changes: &[ColumnChange],
         live: &[LiveColumn],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         change_statements(self, table, changes, live)
     }
@@ -113,6 +120,7 @@ impl SqlAdapter for DatabricksSql {
         target: &TableName,
         build: &TableName,
         _indexes: &[String],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         let (old, new) = (
             self.render_qualified_name(target),

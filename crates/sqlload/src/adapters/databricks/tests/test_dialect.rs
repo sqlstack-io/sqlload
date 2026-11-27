@@ -4,6 +4,7 @@ use crate::adapters::databricks::models::DatabricksSql;
 use crate::adapters::databricks::tests::helpers::{added, live, table};
 use crate::adapters::databricks::tests::test_types::{ChangeColumnsTestCase, RenderedTestCase};
 use crate::column_types::models::ColumnType;
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::ColumnChange;
 
 #[test]
@@ -76,7 +77,12 @@ fn given_column_changes_when_rendering_them_for_delta_then_the_table_features_th
     ];
     for test_case in test_cases {
         assert_eq!(
-            DatabricksSql.render_change_columns(&table(), &test_case.changes, &test_case.live),
+            DatabricksSql.render_change_columns(
+                &table(),
+                &test_case.changes,
+                &test_case.live,
+                &TableLayout::default(),
+            ),
             test_case.expected_statements,
             "{}",
             test_case.description

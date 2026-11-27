@@ -4,6 +4,7 @@ use crate::adapters::contract::tests::helpers::{accounts, columns, writes};
 use crate::adapters::contract::tests::test_types::ContractTestCase;
 use crate::adapters::dispatch::main::dialect::_every_warehouse::every_warehouse;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
+use crate::loader::models::TableLayout;
 
 #[test]
 fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_table_changes_atomically()
@@ -83,6 +84,7 @@ fn given_any_sql_adapter_when_a_load_commits_then_rows_are_written_once_and_the_
                     columns: &columns(),
                     mode: &test_case.mode,
                     hashed: &[],
+                    layout: &TableLayout::default(),
                     built: test_case.built.then_some(&[]),
                     spared_load: None,
                 },

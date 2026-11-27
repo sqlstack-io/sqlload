@@ -5,6 +5,7 @@ use crate::adapters::contract::tests::helpers::{accounts, between, columns, mixe
 use crate::adapters::contract::tests::test_types::KeyMatchTestCase;
 use crate::adapters::dispatch::main::dialect::sql_adapter::sql_adapter;
 use crate::column_types::models::Warehouse;
+use crate::loader::models::TableLayout;
 
 #[test]
 fn given_merge_keys_that_may_be_null_when_rendering_the_write_then_each_warehouse_matches_a_null_with_a_null()
@@ -82,6 +83,7 @@ fn given_merge_keys_that_may_be_null_when_rendering_the_write_then_each_warehous
             columns: &columns,
             mode: &test_case.mode,
             hashed: &[],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         };

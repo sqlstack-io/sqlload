@@ -250,6 +250,7 @@ impl SqlAdapter for ClickHouseSql {
         target: &TableName,
         build: &TableName,
         _indexes: &[String],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         swap_statements(self, target, build)
     }

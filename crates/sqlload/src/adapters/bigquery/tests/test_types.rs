@@ -53,3 +53,38 @@ pub(crate) struct SelectedInsertTestCase {
     pub(crate) merge_key: Vec<&'static str>,
     pub(crate) expected_insert: &'static str,
 }
+
+pub(crate) struct PruneTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) partition_by: &'static str,
+    pub(crate) mode: crate::adapters::contract::models::WriteMode,
+    /// Text the one statement must contain.
+    pub(crate) expected_pieces: &'static [&'static str],
+    /// It declares the staged partitions and keeps to them.
+    pub(crate) expected_pruned: bool,
+}
+
+pub(crate) struct DriftTestCase {
+    pub(crate) description: &'static str,
+    /// `tables.get`'s answer for the live table.
+    pub(crate) found: serde_json::Value,
+    pub(crate) layout: crate::loader::models::TableLayout,
+    pub(crate) expected_drift: Option<&'static str>,
+}
+
+pub(crate) struct LayoutProblemsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) layout: crate::loader::models::TableLayout,
+    /// How each problem starts, in order.
+    pub(crate) expected_problems: &'static [&'static str],
+}
+
+pub(crate) struct PartitionFilterTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) strategy: crate::project::models::WriteStrategy,
+    pub(crate) unique_key: &'static [&'static str],
+    pub(crate) newest_by: &'static [&'static str],
+    /// TOML under the table's entry.
+    pub(crate) settings: &'static str,
+    pub(crate) expected_problems: &'static [&'static str],
+}

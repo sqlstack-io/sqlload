@@ -29,6 +29,89 @@ fn name_after<'a>(statement: &'a str, prefix: &str) -> Option<&'a str> {
     Some(rest.split(' ').next().unwrap_or(rest))
 }
 
+/// What a `CREATE TABLE` writes after its column list: its `PARTITION BY`, `CLUSTER BY` and `OPTIONS` clauses, `AS SELECT …` left out; empty for none.
+fn layout_after_columns(statement: &str) -> String {
+    let head = statement.split(" AS SELECT ").next().unwrap_or_default();
+    let Some(columns) = parenthesised(head) else {
+        return String::new();
+    };
+    let end = head
+        .find(columns)
+        .map_or(0, |start| start + columns.len() + 1);
+    head.get(end..).unwrap_or_default().trim().to_owned()
+}
+
+/// The text of `layout`'s clause opened by `name` (such as `PARTITION BY `), up to the next clause.
+fn layout_clause<'a>(layout: &'a str, name: &str) -> Option<&'a str> {
+    let (_, rest) = layout.split_once(name)?;
+    let end = ["PARTITION BY ", "CLUSTER BY ", "OPTIONS ("]
+        .iter()
+        .filter_map(|next| rest.find(next))
+        .min()
+        .unwrap_or(rest.len());
+    Some(rest[..end].trim())
+}
+
+/// Where `statement` (lower-cased) reads `quoted`, the table's name: after `FROM` or `MERGE INTO`.
+fn read_at(statement: &str, quoted: &str) -> Option<usize> {
+    let reads = |at: &usize| {
+        let before = statement[..*at].trim_end_matches(|character: char| character != ' ');
+        before.ends_with(" from ") || before.ends_with("merge into ")
+    };
+    statement
+        .match_indices(quoted)
+        .map(|(at, _)| at)
+        .find(reads)
+}
+
+/// What `statement` says from its first `WHERE` or `ON` after `start` on, its filter; empty for none.
+fn filter_after(statement: &str, start: usize) -> &str {
+    let after = &statement[start..];
+    let found: Vec<usize> = [" where ", " on "]
+        .iter()
+        .filter_map(|keyword| after.find(keyword))
+        .collect();
+    found.iter().min().map_or("", |start| &after[*start..])
+}
+
+/// `tables.get`'s `timePartitioning`, `rangePartitioning`, `clustering` and `requirePartitionFilter` for a table laid out as `layout`.
+pub(crate) fn layout_fields(layout: &str) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::new();
+    let clause = |name: &str| layout_clause(layout, name);
+    let unquoted = |text: &str| text.trim().trim_matches('`').to_owned();
+    if let Some(partition) = clause("PARTITION BY ") {
+        let inner = parenthesised(partition);
+        let mut arguments = inner.unwrap_or(partition).splitn(2, ',');
+        let column = unquoted(arguments.next().unwrap_or_default());
+        let rest = arguments.next().unwrap_or_default().trim();
+        if partition.starts_with("RANGE_BUCKET") {
+            let numbers: Vec<&str> = parenthesised(rest)
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .collect();
+            fields.insert("rangePartitioning".to_owned(), json!({ "field": column, "range": { "start": numbers.first(), "end": numbers.get(1), "interval": numbers.get(2) } }));
+        } else {
+            let unit = match rest {
+                "" => "DAY",
+                unit => unit,
+            };
+            fields.insert(
+                "timePartitioning".to_owned(),
+                json!({ "type": unit, "field": column }),
+            );
+        }
+    }
+    if let Some(clustered) = clause("CLUSTER BY ") {
+        let columns: Vec<String> = clustered.split(',').map(unquoted).collect();
+        fields.insert("clustering".to_owned(), json!({ "fields": columns }));
+    }
+    if layout.contains("require_partition_filter = TRUE") {
+        fields.insert("requirePartitionFilter".to_owned(), json!(true));
+    }
+    fields
+}
+
 /// The text between the first `(` and its matching `)`.
 fn parenthesised(text: &str) -> Option<&str> {
     let open = text.find('(')?;
@@ -136,12 +219,16 @@ pub(crate) fn table_metadata(state: &SharedState, dataset: &str, table: &str) ->
         .iter()
         .map(|(name, sql_type)| schema_field(name, sql_type))
         .collect();
-    Ok(json!({
+    let mut answer = json!({
         "tableReference": { "datasetId": dataset, "tableId": table },
         "type": "TABLE",
         "numRows": found.rows.len().to_string(),
         "schema": { "fields": fields },
-    }))
+    });
+    if let Some(object) = answer.as_object_mut() {
+        object.extend(layout_fields(&found.layout));
+    }
+    Ok(answer)
 }
 
 /// `datasets.list`: every dataset that holds a table, in one page.
@@ -213,7 +300,29 @@ fn done() -> Answer {
 }
 
 impl FakeState {
+    /// BigQuery's refusal of `statement` where it reads a table with `require_partition_filter` (its name after `FROM` or `MERGE INTO`) without naming the partition column after a `WHERE` or `ON`.
+    fn unfiltered(&self, statement: &str) -> Option<String> {
+        self.tables.iter().find_map(|(key, table)| {
+            let fields = layout_fields(&table.layout);
+            fields.get("requirePartitionFilter")?;
+            let partitioning = fields
+                .get("timePartitioning")
+                .or_else(|| fields.get("rangePartitioning"))?;
+            let column = partitioning["field"].as_str()?.to_ascii_lowercase();
+            let (dataset, name) = key.split_once('.')?;
+            let quoted = format!("`{dataset}`.`{name}`");
+            let lowered = statement.to_ascii_lowercase();
+            let filter = filter_after(&lowered, read_at(&lowered, &quoted)?);
+            (!filter.contains(&format!("`{column}`"))).then(|| format!(
+                "Cannot query over table '{key}' without a filter over column(s) '{column}' that can be used for partition elimination"
+            ))
+        })
+    }
+
     fn answer(&mut self, statement: &str) -> Answer {
+        if let Some(refusal) = self.unfiltered(statement) {
+            return Err(refusal);
+        }
         if let Some(name) = name_after(statement, "CREATE TABLE IF NOT EXISTS ") {
             let columns = parenthesised(statement)
                 .map(column_list)
@@ -221,14 +330,37 @@ impl FakeState {
             self.tables.entry(table_key(name)).or_insert(FakeTable {
                 columns,
                 rows: Vec::new(),
+                layout: layout_after_columns(statement),
             });
             return done();
         }
         if let Some(name) = name_after(statement, "CREATE OR REPLACE TABLE ") {
             return self.replace_table(statement, name);
         }
+        if let Some(name) = name_after(statement, "CREATE TABLE ") {
+            if self.tables.contains_key(&table_key(name)) {
+                return Err(format!("Already Exists: Table {name}"));
+            }
+            return self.replace_table(statement, name);
+        }
         if let Some(name) = name_after(statement, "DROP TABLE IF EXISTS ") {
             self.tables.remove(&table_key(name));
+            return done();
+        }
+        if let Some(name) = name_after(statement, "DROP TABLE ") {
+            return (self.tables.remove(&table_key(name)))
+                .map(|_| (Vec::new(), Vec::new()))
+                .ok_or_else(|| format!("Not found: Table {name}"));
+        }
+        if let Some(name) = name_after(statement, "ALTER TABLE ")
+            && let Some((_, renamed)) = statement.split_once(" RENAME TO ")
+        {
+            let key = table_key(name);
+            let table =
+                (self.tables.remove(&key)).ok_or_else(|| format!("Not found: Table {name}"))?;
+            let dataset = key.split_once('.').map_or("", |(dataset, _)| dataset);
+            self.tables
+                .insert(format!("{dataset}.{}", table_key(renamed)), table);
             return done();
         }
         if let Some(name) = name_after(statement, "ALTER TABLE ") {
@@ -322,7 +454,7 @@ impl FakeState {
         done()
     }
 
-    /// `CREATE OR REPLACE TABLE t (...)` makes an empty table; `CREATE OR REPLACE TABLE t AS SELECT ... FROM b` takes `b`'s columns and rows.
+    /// `CREATE OR REPLACE TABLE t (...)` makes an empty table; `CREATE OR REPLACE TABLE t AS SELECT ... FROM b` takes `b`'s columns and rows, and with `LIKE b` its layout too, plus any clauses written after it; as BigQuery, it refuses to replace a table partitioned or clustered otherwise.
     fn replace_table(&mut self, statement: &str, name: &str) -> Answer {
         let key = table_key(name);
         if !statement.contains(" AS SELECT ") {
@@ -334,6 +466,7 @@ impl FakeState {
                 FakeTable {
                     columns,
                     rows: Vec::new(),
+                    layout: layout_after_columns(statement),
                 },
             );
             return done();
@@ -342,11 +475,31 @@ impl FakeState {
             .rsplit_once(" FROM ")
             .map(|(_, source)| table_key(source.split(' ').next().unwrap_or(source)))
             .unwrap_or_default();
-        let found = self
+        let mut found = self
             .tables
             .get(&source)
             .cloned()
             .ok_or_else(|| format!("Not found: Table {source}"))?;
+        let head = statement.split(" AS SELECT ").next().unwrap_or_default();
+        found.layout = match head.split_once(" LIKE ") {
+            Some((_, like)) => {
+                let added = like
+                    .split_once(' ')
+                    .map_or("", |(_, clauses)| clauses.trim());
+                format!("{} {added}", found.layout).trim().to_owned()
+            }
+            None => layout_after_columns(head),
+        };
+        let partitioning = |layout: &str| {
+            let fields = layout_fields(layout);
+            ["timePartitioning", "rangePartitioning", "clustering"]
+                .map(|field| fields.get(field).cloned())
+        };
+        if let Some(replaced) = self.tables.get(&key)
+            && partitioning(&replaced.layout) != partitioning(&found.layout)
+        {
+            return Err("Cannot replace a table with a different partitioning spec. Instead, DROP the table, and then recreate it.".to_owned());
+        }
         self.tables.insert(key, found);
         done()
     }

@@ -1151,6 +1151,7 @@ async fn replan(
     };
     inferred.python = spec.python.clone();
     inferred.approved = true;
+    inferred.layout.relayout = spec.layout.relayout;
     inferred.name_rules = spec.name_rules.clone();
     inferred.names = LoadedNames {
         columns: names.columns.clone(),
@@ -1205,6 +1206,7 @@ async fn replan(
         .checks
         .iter()
         .flat_map(|checks| check_column_problems(checks, &loaded))
+        .chain(adapter.layout_table_problems(&columns.spec, &columns.schema.write_columns))
         .collect();
     if !problems.is_empty() {
         return Err(LoaderError::Invalid(problems.join("; ")));
@@ -1690,6 +1692,7 @@ impl ChildTables {
             columns: &parent.schema.write_columns,
             mode,
             hashed: &[],
+            layout: &TableLayout::default(),
             built: None,
             spared_load: None,
         };
@@ -1746,14 +1749,11 @@ impl ChildTables {
                 table,
                 ..spec.destination.clone()
             };
-            let has_root = live_columns(destination, &name)
-                .await?
-                .is_some_and(|columns| {
-                    columns
-                        .iter()
-                        .any(|column| column.name.eq_ignore_ascii_case(root_name))
-                });
-            if has_root {
+            let live = live_columns(destination, &name).await?.unwrap_or_default();
+            if live
+                .iter()
+                .any(|column| column.name.eq_ignore_ascii_case(root_name))
+            {
                 rooted.push((index, name));
             }
         }

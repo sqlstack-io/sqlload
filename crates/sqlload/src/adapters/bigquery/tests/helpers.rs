@@ -120,3 +120,47 @@ pub(crate) fn decimal_lists(
     )
     .map_err(|error| error.to_string())
 }
+
+/// A BigQuery layout: partitioned by `partition_by` (none when empty), clustered by `cluster_by`, and with `require_partition_filter` when `filtered`.
+pub(crate) fn layout_of(
+    partition_by: &str,
+    cluster_by: &[&str],
+    filtered: bool,
+) -> crate::loader::models::TableLayout {
+    crate::loader::models::TableLayout {
+        partition_by: (!partition_by.is_empty()).then(|| partition_by.to_owned()),
+        cluster_by: (!cluster_by.is_empty()).then(|| names(cluster_by)),
+        table_settings: filtered
+            .then(|| {
+                (
+                    "require_partition_filter".to_owned(),
+                    crate::project::models::LayoutSetting::Bool(true),
+                )
+            })
+            .into_iter()
+            .collect(),
+        ..crate::loader::models::TableLayout::default()
+    }
+}
+
+/// `orders`' build table, `` `p`.`raw`.`orders__sqlload_staging_load1` ``.
+pub(crate) fn orders_build() -> TableName {
+    TableName {
+        table: "orders__sqlload_staging_load1".to_owned(),
+        ..orders()
+    }
+}
+
+/// `names` as owned strings.
+pub(crate) fn names(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| (*name).to_owned()).collect()
+}
+
+/// A merge on `key`, without dedupe.
+pub(crate) fn merge_on(key: &[&str]) -> crate::adapters::contract::models::WriteMode {
+    crate::adapters::contract::models::WriteMode::Merge {
+        unique_key: names(key),
+        not_null_keys: Vec::new(),
+        dedupe: None,
+    }
+}

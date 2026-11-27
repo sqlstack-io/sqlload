@@ -9,6 +9,7 @@ use crate::adapters::duckdb::models::DuckDbSql;
 use crate::column_types::constants::VARIANT_TYPE;
 use crate::column_types::main::is_variant::is_variant;
 use crate::column_types::models::{ColumnType, LiveColumnType, Warehouse, WarehouseType};
+use crate::loader::models::TableLayout;
 use crate::schema_plan::models::{ColumnChange, LiveColumn};
 
 impl SqlAdapter for DuckDbSql {
@@ -74,6 +75,7 @@ impl SqlAdapter for DuckDbSql {
         table: &TableName,
         changes: &[ColumnChange],
         live: &[LiveColumn],
+        _layout: &TableLayout,
     ) -> Vec<String> {
         rebuilt_in_place(self, table, changes, live)
     }

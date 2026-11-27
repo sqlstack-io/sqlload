@@ -13,8 +13,10 @@ use tonic::server::{Grpc, NamedService};
 use tonic::{Request, Response, Status, Streaming};
 use tonic_prost::ProstCodec;
 
+use crate::fake_bigquery::_helpers::statements::layout_fields;
 use crate::fake_bigquery::constants::{
-    INVALID_STREAM_STATE, OUT_OF_RANGE, STREAM_NOT_FOUND, TOKEN_PREFIX, WRITE_SERVICE,
+    INVALID_STREAM_STATE, OUT_OF_RANGE, STREAM_NOT_FOUND, STREAMED_DAYS_AHEAD, STREAMED_DAYS_PAST,
+    TOKEN_PREFIX, WRITE_SERVICE,
 };
 use crate::fake_bigquery::models::{FakeState, FakeStream, SharedState};
 
@@ -188,6 +190,31 @@ fn has_column(columns: &[(String, String)], name: &str) -> bool {
         .any(|(column, _)| column.eq_ignore_ascii_case(name))
 }
 
+/// The first date, as days since 1970-01-01, a row of `rows` gives its `field` partition that the Storage Write API won't stream into: over [`STREAMED_DAYS_PAST`] days before today or [`STREAMED_DAYS_AHEAD`] after.
+fn unstreamable_day(rows: &[Value], field: &str) -> Option<i64> {
+    let today = chrono::Utc::now().date_naive();
+    rows.iter()
+        .filter_map(|row| partition_date(row, field))
+        .find(|date| {
+            (today - *date).num_days() > STREAMED_DAYS_PAST
+                || (*date - today).num_days() > STREAMED_DAYS_AHEAD
+        })
+        .map(|date| (date - chrono::NaiveDate::default()).num_days())
+}
+
+/// The date `row`'s `field` starts with (`YYYY-MM-DD`), matched case-insensitively as BigQuery does; `None` when it is null or no date.
+fn partition_date(row: &Value, field: &str) -> Option<chrono::NaiveDate> {
+    let (_, value) = row
+        .as_object()?
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(field))?;
+    let text = value.as_str()?.get(..10)?;
+    match chrono::NaiveDate::parse_from_str(text, "%Y-%m-%d") {
+        Ok(date) => Some(date),
+        Err(_) => None,
+    }
+}
+
 /// Every row of an Arrow IPC schema and record batch message, each value as its display text or null.
 fn decoded_rows(schema: &[u8], rows: &[u8]) -> Result<Vec<Value>, String> {
     let mut bytes = schema.to_vec();
@@ -285,10 +312,10 @@ impl FakeState {
         if let Some(schema) = data.writer_schema {
             stream.schema = schema.serialized_schema;
         }
-        let columns = self
+        let (columns, layout) = self
             .tables
             .get(&stream.table)
-            .map(|table| table.columns.clone())
+            .map(|table| (table.columns.clone(), table.layout.clone()))
             .unwrap_or_default();
         let extra = extra_fields(&stream.schema, &columns);
         if !extra.is_empty() {
@@ -308,6 +335,15 @@ impl FakeState {
             Ok(rows) => rows,
             Err(error) => return rejected(name, tonic::Code::InvalidArgument, error),
         };
+        let refused = refused.or_else(|| {
+            let field = layout_fields(&layout)
+                .get("timePartitioning")?
+                .get("field")?
+                .as_str()?
+                .to_owned();
+            let day = unstreamable_day(&rows, &field)?;
+            Some(format!("Value {day} for partition column {field} of the destination table {} is outside the allowed bounds. You can only stream to partitions of date range within {STREAMED_DAYS_PAST} days in the past and {STREAMED_DAYS_AHEAD} days in the future relative to the current date.", stream.table))
+        });
         if let Some(message) = refused {
             return AppendRowsResponse {
                 row_errors: vec![RefusedRow {
