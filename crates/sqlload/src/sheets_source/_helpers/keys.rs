@@ -3,10 +3,24 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
+use crate::google_identity::main::environment_credentials::environment_credentials;
 use crate::google_identity::models::{GoogleCredentials, Signer};
 use crate::http::errors::ApiError;
 use crate::sheets_source::constants::CREDENTIALS_VARIABLE;
 use crate::sheets_source::models::KeySource;
+
+/// Whoever the file `GOOGLE_APPLICATION_CREDENTIALS` names signs in as, when it can read Sheets; an error saying how to sign in when the variable is unset.
+pub(crate) fn environment_sheets_credentials() -> Result<GoogleCredentials, ApiError> {
+    if std::env::var(CREDENTIALS_VARIABLE)
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return Err(ApiError::Auth(format!(
+            "no service-account key: set service_account_file, service_account_json or service_account_json_base64 on the connection, or {CREDENTIALS_VARIABLE}"
+        )));
+    }
+    sheets_readable(environment_credentials(None, None).map_err(ApiError::Auth)?)
+}
 
 /// `credentials`, when they can ask for a token with the Sheets scope: workload identity federation can only by impersonating a service account, since Google STS's own tokens don't reach the Sheets API.
 pub(crate) fn sheets_readable(

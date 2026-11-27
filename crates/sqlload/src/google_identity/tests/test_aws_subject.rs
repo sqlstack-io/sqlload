@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::auth::models::Secret;
 use crate::google_identity::_helpers::federation::aws_subject_token;
@@ -67,19 +67,29 @@ fn given_aws_keys_when_making_googles_subject_token_then_it_is_get_caller_identi
             .map(|(_, value)| value.into_owned())
             .unwrap_or_default();
         let request: Value = serde_json::from_str(&decoded).map_err(|error| error.to_string())?;
-        let expected: Vec<Value> = test_case
-            .expected_headers
-            .iter()
-            .map(|(key, value)| json!({ "key": key, "value": value }))
+        let headers: Vec<(&str, &str)> = request["headers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|pair| {
+                (
+                    pair["key"].as_str().unwrap_or_default(),
+                    pair["value"].as_str().unwrap_or_default(),
+                )
+            })
             .collect();
         assert_eq!(
-            (&request["method"], &request["url"], &request["headers"]),
             (
-                &json!("POST"),
-                &json!(
+                request["method"].as_str(),
+                request["url"].as_str(),
+                headers.as_slice()
+            ),
+            (
+                Some("POST"),
+                Some(
                     "https://sts.us-east-1.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
                 ),
-                &json!(expected)
+                test_case.expected_headers
             ),
             "{}",
             test_case.description
