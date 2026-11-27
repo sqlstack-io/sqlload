@@ -34,7 +34,7 @@ loader_schema = "raw"
 | `location` | Where query jobs run and datasets are created, such as `EU` or `europe-west2`. Required. |
 | `service_account_key` | A service-account key file's JSON text, not its path. Without it, SQLLoad signs in as [Authentication](#authentication) describes. |
 | `impersonate_service_account` | A service account's email to act as, such as `loader@my-project.iam.gserviceaccount.com`, whichever identity signs in. |
-| `project` | The project tables load into and jobs run in. Default: the key's or impersonated account's project, else the credentials file's `quota_project_id`, else `GOOGLE_CLOUD_PROJECT`. |
+| `project` | The project tables load into and jobs run in. Default: the project of `service_account_key`; without one, `GOOGLE_CLOUD_PROJECT`, else the credentials' own project (a key's `project_id`, the impersonated account's project, or the file's `quota_project_id`). On a VM or Cloud Run, set `project` or `GOOGLE_CLOUD_PROJECT`. |
 
 The target's `loader_schema` is the dataset tables load into; a source's `destination_schema` overrides it.
 `sqlload apply` creates the dataset when it doesn't exist.

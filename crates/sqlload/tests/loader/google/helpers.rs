@@ -86,6 +86,26 @@ pub(crate) fn executable(base_url: &str, _: &std::path::Path) -> Result<Value, S
     )
 }
 
+/// A federated file whose command prints a fresh subject token, beside an output file holding a stale one without an `expiration_time`.
+pub(crate) fn executable_with_stale_output(
+    base_url: &str,
+    directory: &std::path::Path,
+) -> Result<Value, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_secs();
+    let answer = directory.join("answer.json");
+    let stale = directory.join("stale.json");
+    let fresh = json!({"version": 1, "success": true, "token_type": "urn:ietf:params:oauth:token-type:jwt", "id_token": "command-subject", "expiration_time": now + 3600});
+    std::fs::write(&answer, fresh.to_string()).map_err(|error| error.to_string())?;
+    let cached = json!({"version": 1, "success": true, "token_type": "urn:ietf:params:oauth:token-type:jwt", "id_token": "stale-subject"});
+    std::fs::write(&stale, cached.to_string()).map_err(|error| error.to_string())?;
+    Ok(
+        json!({"type": "external_account", "audience": PROVIDER, "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": format!("{base_url}/v1/token"), "credential_source": {"executable": {"command": format!("/bin/cat {}", answer.display()), "output_file": stale}}}),
+    )
+}
+
 /// A workforce pool file.
 pub(crate) fn workforce(base_url: &str, directory: &std::path::Path) -> Result<Value, String> {
     let mut file = token_file(base_url, directory)?;

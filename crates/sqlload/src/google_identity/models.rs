@@ -91,7 +91,7 @@ pub enum SubjectSource {
     /// Fetched from a URL with these headers, its text or one field of its JSON.
     Url {
         url: String,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Secret)>,
         field: Option<String>,
     },
     /// Printed by a command, as Google's executable-sourced credentials define.
@@ -178,6 +178,16 @@ impl GoogleCredentials {
         match &self.impersonate {
             Some(target) => format!("{signer}{origin}, impersonating {}", target.account),
             None => format!("{signer}{origin}"),
+        }
+    }
+
+    /// The project jobs run in when the connection names none: a connection key's `project_id`; else `environment` (`GOOGLE_CLOUD_PROJECT`), which Google's libraries read before the credentials for application default credentials; else the credentials' own [`project`](Self::project).
+    pub fn default_project(&self, environment: Option<String>) -> Option<String> {
+        match (&self.origin, &self.signer) {
+            (CredentialOrigin::Connection, Signer::ServiceAccount(key)) => {
+                Some(key.project_id.clone())
+            }
+            _ => environment.or_else(|| self.project()),
         }
     }
 

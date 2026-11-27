@@ -1,7 +1,7 @@
 use crate::google_helpers::{
-    IMPERSONATED, aws, azure, denied, executable, gcloud, impersonated_user, missing, named,
-    no_file, nothing, nowhere, refused_refresh, refused_subject, short_tokens, sign_in, token_file,
-    user_file, workforce,
+    IMPERSONATED, aws, azure, denied, executable, executable_with_stale_output, gcloud,
+    impersonated_user, missing, named, no_file, nothing, nowhere, refused_refresh, refused_subject,
+    short_tokens, sign_in, token_file, user_file, workforce,
 };
 use crate::test_types::SignInTestCase;
 
@@ -149,6 +149,16 @@ fn given_google_application_default_credentials_when_bigquery_signs_in_then_each
             file: executable,
             place: named,
             expected_error: "needs GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1",
+            ..BASE
+        },
+        SignInTestCase {
+            description: "with GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1 the command runs, since an output file without an expiration_time counts as expired",
+            file: executable_with_stale_output,
+            place: named,
+            environment: &[("GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES", "1")],
+            expected_sign_ins: &[
+                "sts audience=//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/sqlload-provider type=urn:ietf:params:oauth:token-type:jwt scope=https://www.googleapis.com/auth/cloud-platform subject=command-subject",
+            ],
             ..BASE
         },
         SignInTestCase {

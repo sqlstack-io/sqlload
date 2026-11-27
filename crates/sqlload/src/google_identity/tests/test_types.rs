@@ -7,6 +7,8 @@ pub(crate) struct CredentialsTestCase<'a> {
     /// The start of `describe()`; empty when it fails.
     pub(crate) expected_description: &'static str,
     pub(crate) expected_project: Option<&'static str>,
+    /// The project jobs run in with `GOOGLE_CLOUD_PROJECT=from-environment` and none on the connection.
+    pub(crate) expected_default_project: Option<&'static str>,
     /// Text the error contains; empty when the credentials are found.
     pub(crate) expected_error: &'static str,
 }
@@ -18,4 +20,12 @@ pub(crate) struct KeyFileTestCase {
     pub(crate) fields: serde_json::Value,
     /// The assertion's claims, signed at `iat` 1000, or why the key does not read.
     pub(crate) expected_claims: Result<serde_json::Value, &'static str>,
+}
+
+/// AWS keys signing Google's AWS subject token, with or without a session token.
+pub(crate) struct AwsSubjectTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) session_token: Option<&'static str>,
+    /// The signed request's headers, in order.
+    pub(crate) expected_headers: &'static [(&'static str, &'static str)],
 }

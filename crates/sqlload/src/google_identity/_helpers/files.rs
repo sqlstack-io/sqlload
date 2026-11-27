@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use crate::auth::models::Secret;
 use crate::google_identity::constants::{
-    AWS_ENVIRONMENT, EXECUTABLE_TIMEOUT_MS, IMPERSONATED_LIFETIME_SECS, TOKEN_URL,
+    ALLOW_EXECUTABLES_VARIABLE, AWS_ENVIRONMENT, EXECUTABLE_TIMEOUT_MS, IMPERSONATED_LIFETIME_SECS,
+    TOKEN_URL,
 };
 use crate::google_identity::models::{
     AuthorizedUser, AwsKeys, AwsSource, ExternalAccount, Impersonation, ServiceAccountKey, Signer,
@@ -155,11 +156,16 @@ fn subject_source(
         return Ok(SubjectSource::File { path, field });
     }
     if let Some(url) = optional_text(source, "url") {
-        let headers: Vec<(String, String)> = source["headers"]
+        let headers: Vec<(String, Secret)> = source["headers"]
             .as_object()
             .into_iter()
             .flatten()
-            .map(|(name, value)| (name.clone(), value.as_str().unwrap_or_default().to_owned()))
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    Secret(value.as_str().unwrap_or_default().to_owned()),
+                )
+            })
             .collect();
         return Ok(SubjectSource::Url {
             url,
@@ -169,6 +175,11 @@ fn subject_source(
     }
     if source["executable"].is_object() {
         let executable = &source["executable"];
+        if variable(ALLOW_EXECUTABLES_VARIABLE).as_deref() != Some("1") {
+            return Err(format!(
+                "{what} runs a command for its subject token, which needs {ALLOW_EXECUTABLES_VARIABLE}=1 in the environment"
+            ));
+        }
         return Ok(SubjectSource::Executable {
             command: text_field(executable, "command", what)?,
             timeout_ms: executable["timeout_millis"]

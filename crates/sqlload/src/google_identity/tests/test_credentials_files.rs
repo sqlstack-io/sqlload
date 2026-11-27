@@ -36,6 +36,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: None,
             expected_description: "the service-account key of loader@demo.iam.gserviceaccount.com (the connection's service_account_key)",
             expected_project: Some("demo"),
+            expected_default_project: Some("demo"),
             expected_error: "",
         },
         CredentialsTestCase {
@@ -45,6 +46,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: Some(&user),
             expected_description: "a gcloud user login (authorized_user) (GOOGLE_APPLICATION_CREDENTIALS, ",
             expected_project: Some("other"),
+            expected_default_project: Some("from-environment"),
             expected_error: "",
         },
         CredentialsTestCase {
@@ -54,6 +56,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: Some(&aws),
             expected_description: "workload identity federation with the EC2 instance role's AWS keys, by a signed GetCallerIdentity, through provider //iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/aws (GOOGLE_APPLICATION_CREDENTIALS, ",
             expected_project: Some("demo"),
+            expected_default_project: Some("from-environment"),
             expected_error: "",
         },
         CredentialsTestCase {
@@ -63,6 +66,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: Some(&url),
             expected_description: "workload identity federation with a token from https://tokens.example.com/oidc, through provider //iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/sqlload-pool/providers/oidc (GOOGLE_APPLICATION_CREDENTIALS, ",
             expected_project: None,
+            expected_default_project: Some("from-environment"),
             expected_error: "",
         },
         CredentialsTestCase {
@@ -72,6 +76,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: Some(&aws),
             expected_description: "",
             expected_project: None,
+            expected_default_project: None,
             expected_error: "both name a service account to impersonate",
         },
         CredentialsTestCase {
@@ -81,6 +86,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: None,
             expected_description: "",
             expected_project: None,
+            expected_default_project: None,
             expected_error: "the connection's service_account_key is a \"authorized_user\" credentials file; it takes a service-account key",
         },
         CredentialsTestCase {
@@ -90,6 +96,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: Some(&workforce),
             expected_description: "",
             expected_project: None,
+            expected_default_project: None,
             expected_error: "is a \"gdch_service_account\" credentials file, which SQLLoad cannot sign in with",
         },
         CredentialsTestCase {
@@ -99,6 +106,7 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             named: None,
             expected_description: "the machine's service account, from its metadata server (metadata.google.internal)",
             expected_project: None,
+            expected_default_project: Some("from-environment"),
             expected_error: "",
         },
     ];
@@ -119,6 +127,9 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             .as_ref()
             .ok()
             .and_then(|credentials| credentials.project());
+        let default_project = found.as_ref().ok().and_then(|credentials| {
+            credentials.default_project(Some("from-environment".to_owned()))
+        });
         let error = found.err().unwrap_or_default();
         assert!(
             described.starts_with(test_case.expected_description),
@@ -126,8 +137,11 @@ fn given_a_connection_and_its_environment_when_finding_how_it_signs_in_then_debu
             test_case.description
         );
         assert_eq!(
-            project.as_deref(),
-            test_case.expected_project,
+            (project.as_deref(), default_project.as_deref()),
+            (
+                test_case.expected_project,
+                test_case.expected_default_project
+            ),
             "{}",
             test_case.description
         );

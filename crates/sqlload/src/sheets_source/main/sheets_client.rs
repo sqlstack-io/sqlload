@@ -3,7 +3,7 @@
 use crate::auth::models::Secret;
 use crate::google_identity::main::environment_credentials::environment_credentials;
 use crate::http::errors::ApiError;
-use crate::sheets_source::_helpers::keys::key_text;
+use crate::sheets_source::_helpers::keys::{key_text, sheets_readable};
 use crate::sheets_source::constants::{BASE_URL, CREDENTIALS_VARIABLE, SERVICE_ACCOUNT_TYPE};
 use crate::sheets_source::models::{KeySource, SheetsClient, SheetsCredential};
 
@@ -23,7 +23,7 @@ pub fn sheets_client(
                     "no service-account key: set service_account_file, service_account_json or service_account_json_base64 on the connection, or {CREDENTIALS_VARIABLE}"
                 )));
             }
-            environment_credentials(None, None).map_err(ApiError::Auth)?
+            sheets_readable(environment_credentials(None, None).map_err(ApiError::Auth)?)?
         }
         _ => {
             let text = key_text(source)?;

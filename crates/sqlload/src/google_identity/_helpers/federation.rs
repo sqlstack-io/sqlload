@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::auth::models::Secret;
 use crate::google_identity::_helpers::exchange::{access_token, answer, excerpt};
 use crate::google_identity::constants::{
-    ACCESS_TOKEN_TYPE, ALLOW_EXECUTABLES_VARIABLE, CLOUD_PLATFORM_SCOPE, TOKEN_EXCHANGE_GRANT,
+    ACCESS_TOKEN_TYPE, CLOUD_PLATFORM_SCOPE, TOKEN_EXCHANGE_GRANT,
 };
 use crate::google_identity::models::{AwsKeys, AwsSource, ExternalAccount, SubjectSource};
 use crate::http::errors::ApiError;
@@ -62,20 +62,21 @@ async fn subject_token(
             headers,
             field,
         } => {
-            let step = format!("fetching the subject token from {url}");
+            let shown = url.split(['?', '#']).next().unwrap_or_default();
+            let step = format!("fetching the subject token from {shown}");
             let mut request = http.get(url);
             for (name, value) in headers {
-                request = request.header(name, value);
+                request = request.header(name, value.expose());
             }
             let response = request
                 .send()
                 .await
-                .map_err(|error| ApiError::Transport(format!("{step}: {error}")))?;
+                .map_err(|error| ApiError::Transport(format!("{step}: {}", error.without_url())))?;
             let status = response.status();
             let text = response
                 .text()
                 .await
-                .map_err(|error| ApiError::Transport(format!("{step}: {error}")))?;
+                .map_err(|error| ApiError::Transport(format!("{step}: {}", error.without_url())))?;
             if !status.is_success() {
                 return Err(ApiError::Auth(format!(
                     "{step} refused (HTTP {}): {}",
@@ -131,20 +132,16 @@ fn token_in(text: &str, field: Option<&str>, what: &str) -> Result<Secret, ApiEr
     }
 }
 
-/// The subject token a credentials file's command prints, as Google's executable-sourced credentials define: allowed only with `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1`, read from its output file while that holds an unexpired answer, and refused when the command reports a failure.
+/// The subject token a credentials file's command prints, as Google's executable-sourced credentials define (which `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1` allowed when the file was read): read from its output file while that holds an answer with an `expiration_time` still to come, and refused when the command reports a failure.
 async fn executable_token(
     account: &ExternalAccount,
     (command, timeout_ms, output_file): (&str, u64, Option<&str>),
     now_ms: i64,
 ) -> Result<Secret, ApiError> {
-    if std::env::var(ALLOW_EXECUTABLES_VARIABLE).as_deref() != Ok("1") {
-        return Err(ApiError::Auth(format!(
-            "the workload identity credentials run a command for their subject token, which needs {ALLOW_EXECUTABLES_VARIABLE}=1 in the environment"
-        )));
-    }
     if let Some(path) = output_file
         && let Ok(text) = std::fs::read_to_string(path)
-        && let Ok(token) = executable_answer(&text, now_ms, &format!("the output file {path}"))
+        && let Ok(token) =
+            executable_answer(&text, now_ms, &format!("the output file {path}"), true)
     {
         return Ok(token);
     }
@@ -181,11 +178,16 @@ async fn executable_token(
             excerpt(&String::from_utf8_lossy(&output.stderr))
         )));
     }
-    executable_answer(&text, now_ms, &step)
+    executable_answer(&text, now_ms, &step, output_file.is_some())
 }
 
-/// The token in an executable's JSON answer, unless it reports a failure or has expired.
-fn executable_answer(text: &str, now_ms: i64, what: &str) -> Result<Secret, ApiError> {
+/// The token in an executable's JSON answer, unless it reports a failure or has expired; with `needs_expiry` (the credentials name an output file), an answer without an `expiration_time` is refused too, as Google's libraries refuse it.
+fn executable_answer(
+    text: &str,
+    now_ms: i64,
+    what: &str,
+    needs_expiry: bool,
+) -> Result<Secret, ApiError> {
     let parsed: Value = serde_json::from_str(text)
         .map_err(|error| ApiError::Auth(format!("{what} printed no JSON answer: {error}")))?;
     if parsed["success"].as_bool() != Some(true) {
@@ -193,6 +195,11 @@ fn executable_answer(text: &str, now_ms: i64, what: &str) -> Result<Secret, ApiE
             "{what} reported a failure: {} {}",
             parsed["code"].as_str().unwrap_or_default(),
             parsed["message"].as_str().unwrap_or_default()
+        )));
+    }
+    if needs_expiry && !parsed["expiration_time"].is_i64() {
+        return Err(ApiError::Auth(format!(
+            "{what} gave no expiration_time, which the answer needs when the credentials name an output_file"
         )));
     }
     if let Some(expires) = parsed["expiration_time"].as_i64()

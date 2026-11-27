@@ -41,3 +41,11 @@ pub(crate) struct A1RangeTestCase {
     /// The sheet, columns and rows read, or why the range is refused.
     pub(crate) expected_range: Result<&'static str, &'static str>,
 }
+
+/// A credentials file `GOOGLE_APPLICATION_CREDENTIALS` names, for a google_sheets connection.
+pub(crate) struct SheetsCredentialsTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) file: serde_json::Value,
+    /// Text the refusal contains; empty when the credentials can read Sheets.
+    pub(crate) expected_error: &'static str,
+}
