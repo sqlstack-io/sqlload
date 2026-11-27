@@ -14,6 +14,12 @@ pub struct ClickHouseDestination {
     pub ddl: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
+/// A caller's ClickHouse session as the runner of a write's statements and publish steps.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionSteps<'a> {
+    pub destination: &'a crate::adapters::session::models::SessionDestination,
+}
+
 /// A table's ClickHouse write session: Arrow rows gathered into inserts of a few dozen megabytes, each sent while the next fills.
 #[derive(Debug)]
 pub struct ClickHouseWriter {

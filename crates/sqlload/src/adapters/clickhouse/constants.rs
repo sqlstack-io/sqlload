@@ -26,6 +26,9 @@ pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// The header carrying the code of the error a request failed with.
 pub const EXCEPTION_CODE_HEADER: &str = "X-ClickHouse-Exception-Code";
 
+/// What precedes the error code in a ClickHouse exception's text, `Code: 48. DB::Exception: ...`.
+pub const EXCEPTION_CODE_PREFIX: &str = "Code: ";
+
 /// The header carrying a finished query's progress, such as the rows it wrote.
 pub const SUMMARY_HEADER: &str = "X-ClickHouse-Summary";
 

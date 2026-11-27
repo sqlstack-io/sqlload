@@ -6,6 +6,7 @@ use sqlload::adapters::session::errors::SessionError;
 use sqlload::adapters::session::models::SessionConnection;
 use sqlload::adapters::session::types::{CallerConnection, CallerSession};
 use sqlload::column_types::models::Warehouse;
+use sqlload::http::main::install_tls_provider::install_tls_provider;
 use sqlload::loader::main::apply_project::apply_project;
 use sqlload::loader::main::connect_targets::connect_targets;
 use sqlload::loader::main::load_tables::load_tables;
@@ -13,9 +14,14 @@ use sqlload::loader::main::plan_project::plan_project;
 use sqlload::loader::models::{LoadRun, PlanOptions};
 use sqlload::project::main::parse_python_project::parse_python_project;
 use sqlload::project::models::ProjectConfig;
+use sqlload_testkit::clickhouse::constants::{
+    PASSWORD as CLICKHOUSE_PASSWORD, USER as CLICKHOUSE_USER,
+};
 use sqlload_testkit::postgres::constants::{DATABASE, PASSWORD, USER};
 
-use crate::test_types::{PostgresCaller, PostgresCallerSession};
+use crate::test_types::{
+    ClickHouseCaller, ClickHouseCallerSession, PostgresCaller, PostgresCallerSession,
+};
 
 impl CallerConnection for PostgresCaller {
     fn open(&self) -> Result<Arc<dyn CallerSession>, SessionError> {
@@ -217,4 +223,140 @@ pub(crate) async fn load(project: &ProjectConfig) -> Result<String, String> {
         })
         .collect::<Vec<String>>()
         .join("\n"))
+}
+
+impl CallerConnection for ClickHouseCaller {
+    fn open(&self) -> Result<Arc<dyn CallerSession>, SessionError> {
+        install_tls_provider();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| SessionError::new(error.to_string()))?;
+        Ok(Arc::new(ClickHouseCallerSession {
+            runtime: Some(runtime),
+            http: reqwest::Client::new(),
+            port: self.port,
+        }))
+    }
+
+    fn describe(&self) -> String {
+        format!("{CLICKHOUSE_USER} on a test server")
+    }
+}
+
+impl Drop for ClickHouseCallerSession {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+impl ClickHouseCallerSession {
+    /// Send `body` to the server, a statement, or the data of `query`: its answer, or its exception's text (`Code: N. DB::Exception: ...`) as the error, as a ClickHouse client reports it.
+    fn send(&self, query: Option<&str>, body: Vec<u8>) -> Result<String, SessionError> {
+        on_own_thread(|| {
+            let runtime = self
+                .runtime
+                .as_ref()
+                .ok_or_else(|| SessionError::new("the session is closed"))?;
+            runtime.block_on(async {
+                let failed = |error: reqwest::Error| SessionError::transient(error.to_string());
+                let response = self
+                    .http
+                    .post(format!("http://127.0.0.1:{}/", self.port))
+                    .query(&query.map(|query| [("query", query)]).unwrap_or_default())
+                    .header("X-ClickHouse-User", CLICKHOUSE_USER)
+                    .header("X-ClickHouse-Key", CLICKHOUSE_PASSWORD)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(failed)?;
+                let status = response.status();
+                let text = response.text().await.map_err(failed)?;
+                match status.is_success() {
+                    true => Ok(text),
+                    false => Err(SessionError::new(text.trim().to_owned())),
+                }
+            })
+        })
+    }
+}
+
+impl CallerSession for ClickHouseCallerSession {
+    fn execute(&self, statement: &str) -> Result<(), SessionError> {
+        self.send(None, statement.as_bytes().to_vec()).map(|_| ())
+    }
+
+    fn query_text(&self, query: &str) -> Result<Vec<Vec<Option<String>>>, SessionError> {
+        let answer = self.send(None, format!("{query} FORMAT JSONCompact").into_bytes())?;
+        let answer: serde_json::Value = serde_json::from_str(&answer)
+            .map_err(|error| SessionError::new(format!("not JSON: {error}")))?;
+        let text = |value: &serde_json::Value| match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(text) => Some(text.clone()),
+            other => Some(other.to_string()),
+        };
+        Ok(answer["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|row| row.as_array().into_iter().flatten().map(text).collect())
+            .collect())
+    }
+
+    fn load_parquet(&self, table: &TableName, file: &std::path::Path) -> Result<(), SessionError> {
+        let data = std::fs::read(file).map_err(|error| SessionError::new(error.to_string()))?;
+        let insert = format!(
+            "INSERT INTO `{}`.`{}` FORMAT Parquet",
+            table.schema, table.table
+        );
+        self.send(Some(&insert), data).map(|_| ())
+    }
+}
+
+/// The project loading `public.accounts` from the Postgres on `postgres_port` into the database `raw` of the ClickHouse on `clickhouse_port`, through a caller's session on it, with `settings`.
+pub(crate) fn clickhouse_session_project(
+    postgres_port: u16,
+    clickhouse_port: u16,
+    settings: &str,
+) -> Result<ProjectConfig, String> {
+    let text = format!(
+        r#"default_target = "raw"
+
+[connections.app_pg]
+kind = "postgres"
+host = "127.0.0.1"
+port = {postgres_port}
+user = "{USER}"
+password = "{PASSWORD}"
+database = "{DATABASE}"
+
+[targets.raw]
+connection = "caller"
+loader_schema = "raw"
+
+[sources.app]
+kind = "postgres"
+connection = "app_pg"
+include = ["public.accounts"]
+table_name = "{{table}}"
+
+[sources.app.tables."public.accounts"]
+description = "Test accounts."
+{settings}
+"#
+    );
+    let sessions = BTreeMap::from([(
+        "caller".to_owned(),
+        SessionConnection {
+            warehouse: Warehouse::ClickHouse,
+            motherduck: false,
+            database: None,
+            caller: Arc::new(ClickHouseCaller {
+                port: clickhouse_port,
+            }),
+        },
+    )]);
+    parse_python_project(&text, &|_| None, (&[], sessions)).map_err(|error| error.to_string())
 }
