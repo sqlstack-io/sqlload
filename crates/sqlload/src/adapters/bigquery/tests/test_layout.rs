@@ -304,6 +304,17 @@ fn given_a_bigquery_layout_when_checking_it_then_what_bigquery_refuses_is_named(
             ],
         },
         LayoutProblemsTestCase {
+            description: "bounds whose span overflows a 64-bit integer are counted, not wrapped",
+            layout: layout_of(
+                "RANGE_BUCKET(n, GENERATE_ARRAY(-5000000000000000000, 5000000000000000000, 1))",
+                &[],
+                false,
+            ),
+            expected_problems: &[
+                "partition_by \"RANGE_BUCKET(n, GENERATE_ARRAY(-5000000000000000000, 5000000000000000000, 1))\" makes 10000000000000000000 ranges; BigQuery takes at most 10000, so widen the interval",
+            ],
+        },
+        LayoutProblemsTestCase {
             description: "exactly 10,000 ranges",
             layout: layout_of("RANGE_BUCKET(n, GENERATE_ARRAY(0, 100000, 10))", &[], false),
             expected_problems: &[],

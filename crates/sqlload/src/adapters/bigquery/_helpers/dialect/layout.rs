@@ -128,6 +128,12 @@ pub(crate) fn requires_partition_filter(layout: &TableLayout) -> bool {
     )
 }
 
+/// How many ranges `GENERATE_ARRAY(start, end, interval)` makes, rounded up, in `i128` so no `i64` bounds overflow.
+fn range_count(start: i64, end: i64, interval: i64) -> i128 {
+    let (span, interval) = (i128::from(end) - i128::from(start), i128::from(interval));
+    (span + interval - 1) / interval
+}
+
 /// Why BigQuery can't lay out a table as `layout` says, each naming the fix; nothing for a layout it takes.
 pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
     let mut problems: Vec<String> = Vec::new();
@@ -141,11 +147,11 @@ pub(crate) fn layout_problems(layout: &TableLayout) -> Vec<String> {
             end,
             interval,
             ..
-        })) if (end - start + interval - 1) / interval > MAX_PARTITIONS => {
+        })) if range_count(start, end, interval) > i128::from(MAX_PARTITIONS) => {
             problems.push(format!(
                 "partition_by {:?} makes {} ranges; BigQuery takes at most {MAX_PARTITIONS}, so widen the interval",
                 layout.partition_by.as_deref().unwrap_or_default(),
-                (end - start + interval - 1) / interval
+                range_count(start, end, interval)
             ));
         }
         Some(Ok(_)) | None => {}

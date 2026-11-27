@@ -189,6 +189,13 @@ fn given_a_bigquery_target_when_loading_files_then_rows_stream_into_staging_and_
             ..BASE
         },
         BigQueryLoadTestCase {
+            description: "require_partition_filter: a files delete_insert by replace_key, whose check of the files holding each key reads the table unfiltered, fails at plan, as no files delete_insert loads into BigQuery",
+            settings: "write_strategy = \"delete_insert\"\nreplace_key = [\"id\", \"day\"]\npartition_by = \"day\"\ntable_settings = { require_partition_filter = true }",
+            prepare: orders_filtered,
+            expected_error: "delete_insert from a files source loads into DuckDB and Postgres targets so far, not BigQuery",
+            ..BLOCKED
+        },
+        BigQueryLoadTestCase {
             description: "clustering by a float column fails at plan",
             settings: "write_strategy = \"append\"\ncluster_by = [\"score\"]",
             expected_error: "which BigQuery can't cluster by",
