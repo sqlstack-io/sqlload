@@ -40,3 +40,21 @@ pub(crate) struct ExactCastErrorTestCase {
     /// Text the error must contain.
     pub(crate) expected_message: &'static str,
 }
+
+/// A portable type a warehouse creates as a type that reads back as another, on purpose.
+pub(crate) struct RoundTripException {
+    /// Why the warehouse stores it as another type.
+    pub(crate) description: &'static str,
+    pub(crate) column_type: ColumnType,
+    /// The warehouse's type for `column_type`.
+    pub(crate) expected_rendered: &'static str,
+    /// What that type reads back as, for a table loading only into the warehouse.
+    pub(crate) expected_read_back: ColumnType,
+}
+
+/// A warehouse whose types a declaration takes, and the portable types it creates as types that read back as others.
+pub(crate) struct RoundTripTestCase {
+    pub(crate) description: &'static str,
+    pub(crate) warehouse: Warehouse,
+    pub(crate) expected_exceptions: Vec<RoundTripException>,
+}

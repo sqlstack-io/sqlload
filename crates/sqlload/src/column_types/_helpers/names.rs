@@ -1,7 +1,6 @@
 use crate::column_types::_helpers::syntax::TypeSyntax;
 use crate::column_types::constants::{
-    AMBIGUOUS_TIMESTAMP_NAME, MAX_DECIMAL_PRECISION, MAX_FRACTIONAL_SECONDS_DIGITS,
-    TIME_PRECISION_DIGITS,
+    MAX_DECIMAL_PRECISION, MAX_FRACTIONAL_SECONDS_DIGITS, TIME_PRECISION_DIGITS,
 };
 use crate::column_types::errors::TypeError;
 use crate::column_types::models::ColumnType;
@@ -157,11 +156,6 @@ pub(crate) fn resolve_name(
             reason: (*reason).to_owned(),
         });
     }
-    if syntax.name == AMBIGUOUS_TIMESTAMP_NAME {
-        return Err(TypeError::AmbiguousTimestamp {
-            written: written.to_owned(),
-        });
-    }
     match syntax.args.as_deref() {
         None => match PLAIN_NAMES.iter().find(|(name, _, _)| *name == syntax.name) {
             Some((_, column_type, kind)) => Ok(Some((column_type.clone(), *kind))),
@@ -235,7 +229,7 @@ fn resolve_with_args(
     Ok(Some(resolved))
 }
 
-fn decimal(args: &[String], written: &str) -> Result<ColumnType, TypeError> {
+pub(crate) fn decimal(args: &[String], written: &str) -> Result<ColumnType, TypeError> {
     let malformed = |reason: String| TypeError::Malformed {
         written: written.to_owned(),
         reason,
@@ -285,7 +279,7 @@ fn is_max(args: &[String]) -> bool {
 }
 
 /// A time type that may carry a fractional-seconds precision, which SQLLoad fixes at microseconds.
-fn precision_only(
+pub(crate) fn precision_only(
     args: &[String],
     written: &str,
     column_type: ColumnType,

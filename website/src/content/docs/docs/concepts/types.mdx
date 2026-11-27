@@ -125,11 +125,49 @@ one.
 Warehouse-specific names, such as Snowflake's `NUMBER` or `VARIANT` or Postgres's `jsonb`, are
 accepted only when every destination of the table is that warehouse.
 
+### Names each warehouse reads its own way
+
+`TIMESTAMP` and BigQuery's `BIGNUMERIC(p,s)` mean different types in different warehouses. Such a
+name is accepted when every destination of the table reads it as the same type:
+
+| Written | Snowflake | Databricks | BigQuery | Postgres | DuckDB |
+|---------|-----------|------------|----------|----------|--------|
+| `timestamp`, `timestamp(n)` | refused ⁵ | `timestamp_tz` | `timestamp_tz` | `timestamp_ntz` | `timestamp_ntz` |
+| `bignumeric(p,s)`, `bignumeric(p)` | refused | refused | `decimal(p,s)`, p up to 38 | refused | refused |
+
+⁵ Snowflake's `TIMESTAMP` follows the account's `TIMESTAMP_TYPE_MAPPING`, so it has no fixed type.
+
+A `BIGNUMERIC` without a precision is BigQuery's `BIGNUMERIC(76.76,38)`, which has more digits than
+any `decimal`, so it is refused everywhere. On a table whose destinations disagree, the error names
+each one's reading:
+
+```text
+"TIMESTAMP" is timestamp_tz in BigQuery, but timestamp_ntz in DuckDB and Postgres; use "timestamp_tz" (with a time zone) or "timestamp_ntz" (without)
+```
+
+### Declaring the types SQLLoad creates
+
+The type SQLLoad creates in a warehouse, written as a column's declared type for a table loading
+only into that warehouse, reads back as the same portable type, apart from these:
+
+| Warehouse | Type | Created as | Reads back as | Why |
+|-----------|------|------------|---------------|-----|
+| Snowflake | `smallint`, `int` | `NUMBER(38,0)` | `decimal(38,0)` | Snowflake's integers are all `NUMBER(38,0)` |
+| Snowflake | `uuid` | `VARCHAR(36)` | `varchar(36)` | stored as text |
+| DuckDB, Databricks | `varchar(n)` | `VARCHAR`, `STRING` | `text` | the length isn't enforced |
+| Databricks | `time`, `uuid` | `STRING` | `text` | stored as text |
+| BigQuery | `smallint` | `INT64` | `int` | BigQuery's only integer is `INT64` |
+| BigQuery | `uuid` | `STRING` | `text` | stored as text |
+| BigQuery | `decimal(p,p)` | `NUMERIC(p+1,p)` | `decimal(p+1,p)` | `NUMERIC` keeps a digit before the point |
+
+SQLLoad creates each ClickHouse column as `Nullable(...)`, which a declaration doesn't take, and
+Parquet columns as Arrow types; declare the portable type for those. An array is declared as
+`array(T)` for every warehouse.
+
 Some names are rejected because they mean different things in different places:
 
 | Name | Use instead |
 |------|-------------|
-| `timestamp` | `timestamp_tz` or `timestamp_ntz` |
 | `timestamp_ltz` | `timestamp_tz` (it depends on each session's time zone) |
 | `real` | `float` (64-bit) |
 | `tinyint` | `smallint` |
