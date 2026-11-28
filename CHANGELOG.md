@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.89.2](https://github.com/sqlstack-io/sqlload/compare/v0.89.1...v0.89.2) (2026-11-28)
+
+
+### Documentation
+
+* **website:** simpler dark social card ([#379](https://github.com/sqlstack-io/sqlload/issues/379)) ([3be4915](https://github.com/sqlstack-io/sqlload/commit/3be4915bd354b81b0442a7e62eef285bbce3dbf7))
+
 ## [0.89.1](https://github.com/sqlstack-io/sqlload/compare/v0.89.0...v0.89.1) (2026-11-27)
 
 
